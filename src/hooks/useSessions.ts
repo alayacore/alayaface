@@ -141,11 +141,36 @@ export function createEventHandlers(dispatch: React.Dispatch<SessionAction>) {
   const handleSystemMsg = (s: SessionState, sm: { type?: string; data?: Record<string, unknown> }): SessionState => {
     const d = sm.data || {};
     switch (sm.type) {
+      case "version": {
+        const vd = d as { message_version?: number };
+        return { ...s, messageVersion: vd.message_version };
+      }
       case "task": {
         const td = d as Record<string, unknown>;
         const tokens = (td.context ?? td.tokens ?? td.context_tokens ?? td.usage) as number | undefined;
         const done = !(td.in_progress as boolean);
-        return { ...s, taskRunning: !done, contextTokens: tokens ?? s.contextTokens, statusMsg: done ? "Task complete" : "Task in progress…", sendPending: done ? false : s.sendPending };
+        const step = td.current_step as number | undefined;
+        const maxSteps = td.max_steps as number | undefined;
+        const taskError = td.task_error as boolean | undefined;
+        let statusMsg: string;
+        if (taskError) {
+          statusMsg = "Task failed";
+        } else if (done) {
+          statusMsg = "Task complete";
+        } else if (step !== undefined && maxSteps !== undefined) {
+          statusMsg = `Step ${step}/${maxSteps}…`;
+        } else {
+          statusMsg = "Task in progress…";
+        }
+        return {
+          ...s,
+          taskRunning: !done && !taskError,
+          taskCurrentStep: step ?? s.taskCurrentStep,
+          taskMaxSteps: maxSteps ?? s.taskMaxSteps,
+          contextTokens: tokens ?? s.contextTokens,
+          statusMsg,
+          sendPending: done || taskError ? false : s.sendPending,
+        };
       }
       case "error": {
         const ed = d as { text?: string };
@@ -165,9 +190,56 @@ export function createEventHandlers(dispatch: React.Dispatch<SessionAction>) {
         const tokens = (md.context_tokens ?? md.context ?? md.tokens) as number | undefined;
         return { ...s, activeModelId: (md.active_id as number) ?? s.activeModelId, activeModelName: (md.active_name as string) ?? s.activeModelName, contextLimit: (md.context_limit as number) ?? s.contextLimit, contextTokens: tokens ?? s.contextTokens };
       }
+      case "theme": {
+        const td = d as { name?: string };
+        return { ...s, activeTheme: td.name || s.activeTheme };
+      }
+      case "theme_list": {
+        const tld = d as { themes?: Array<{ name: string; theme?: Record<string, string> }> };
+        if (tld.themes) return { ...s, themes: tld.themes };
+        return s;
+      }
+      case "reasoning": {
+        const rd = d as { level?: number };
+        return { ...s, reasoningLevel: rd.level ?? s.reasoningLevel };
+      }
+      case "video_config": {
+        const vd = d as { fps?: number; res?: number };
+        return { ...s, videoFps: vd.fps ?? s.videoFps, videoRes: vd.res ?? s.videoRes };
+      }
       case "tool_confirm": {
         const cd = d as { id?: string };
         return { ...s, messages: [...s.messages, { id: `confirm-${Date.now()}`, role: "system" as const, content: `🔧 Tool confirmation: ${cd.id}` }] };
+      }
+      case "mcp": {
+        const md = d as { status?: string; server?: string; url?: string; error?: string };
+        const server = md.server ? ` ${md.server}` : "";
+        let text: string;
+        let notifType: "notify" | "error" = "notify";
+        switch (md.status) {
+          case "connecting":
+            text = `🔄 Connecting to MCP${server}…`;
+            break;
+          case "auth_confirm":
+            text = md.url ? `🔐 MCP${server} requires authentication: ${md.url}` : `🔐 MCP${server} requires authentication`;
+            break;
+          case "auth_running":
+            text = `🔑 MCP${server} authentication in progress…`;
+            break;
+          case "connected":
+            text = `✅ Connected to MCP${server}`;
+            break;
+          case "failed":
+            text = `❌ MCP${server} failed: ${md.error || "unknown error"}`;
+            notifType = "error";
+            break;
+          case "done":
+            text = `✅ MCP initialization complete`;
+            break;
+          default:
+            text = `ℹ MCP${server}: ${md.status}`;
+        }
+        return { ...s, notifications: [...s.notifications, { id: `mcp-${Date.now()}`, type: notifType, text, timestamp: Date.now() }] };
       }
     }
     return s;
@@ -181,7 +253,8 @@ export function createEventHandlers(dispatch: React.Dispatch<SessionAction>) {
     if (td.name) {
       newToolCalls.set(toolId, { id: toolId, name: td.name, started: true, input_received: false });
       newMsgs.push({ id: `tool-${toolId}`, role: "tool" as const, content: `🔧 **${td.name}**`, tool_id: toolId, tool_name: td.name, history_id: history_id || undefined });
-    } else if (td.input) {
+    }
+    if (td.input) {
       const tc = newToolCalls.get(toolId);
       if (tc) { tc.input = td.input; tc.input_received = true; }
       const idx = newMsgs.findIndex((m) => m.tool_id === toolId);

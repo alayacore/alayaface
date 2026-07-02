@@ -75,6 +75,8 @@ export interface SessionState {
   activeModelId: number | null;
   activeModelName: string;
   taskRunning: boolean;
+  taskCurrentStep: number;
+  taskMaxSteps: number;
   contextTokens: number;
   contextLimit: number;
   historyContents: Map<string, string>;
@@ -89,6 +91,18 @@ export interface SessionState {
   sendPending: boolean;
   /** History IDs of user echo frames already processed (dedup guard). */
   processedEchoIds: Set<string>;
+  /** Protocol message version from version SM */
+  messageVersion?: number;
+  /** Current reasoning level (0=off, 1=low, 2=high) */
+  reasoningLevel?: number;
+  /** Active theme name */
+  activeTheme?: string;
+  /** Available theme list */
+  themes?: Array<{ name: string; theme?: Record<string, string> }>;
+  /** Video FPS config */
+  videoFps?: number;
+  /** Video resolution config (0=low, 1=high) */
+  videoRes?: number;
 }
 
 export interface PendingUserPart {
@@ -206,6 +220,8 @@ export function createSessionState(id: string): SessionState {
     activeModelId: null,
     activeModelName: "",
     taskRunning: false,
+    taskCurrentStep: 0,
+    taskMaxSteps: 0,
     contextTokens: 0,
     contextLimit: 0,
     historyContents: new Map(),

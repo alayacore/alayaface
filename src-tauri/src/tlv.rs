@@ -11,9 +11,14 @@
 //!   UE → stdin   User message end — flushes staged content
 //!   AT ← stdout  Assistant text delta (\x00<id>\x00<content>)
 //!   AR ← stdout  Assistant reasoning delta (\x00<id>\x00<content>)
-//!   AF ← stdout  Function/tool lifecycle (JSON)
-//!   UF ← stdout  Function/tool result (JSON)
+//!   AF ← stdout  Function/tool lifecycle (\x00<id>\x00<JSON>)
+//!   UF ← stdout  Function/tool result (\x00<id>\x00<JSON>)
 //!   SM ← stdout  System message (JSON: {"type":"...","data":{...}})
+//!   UT ← stdout  User text echo (\x00<id>\x00<content>)
+//!   UI ← stdout  User image echo (\x00<id>\x00<data URI or URL>)
+//!   UV ← stdout  User video echo (\x00<id>\x00<data URI or URL>)
+//!   UA ← stdout  User audio echo (\x00<id>\x00<data URI or URL>)
+//!   UD ← stdout  User document echo (\x00<id>\x00<data URI or URL>)
 
 #![allow(dead_code)]
 
