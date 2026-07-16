@@ -921,7 +921,9 @@ html {
   border: none;
   border-radius: 50%;
   cursor: pointer;
-  font-size: 0;
+  font-size: 1.1rem;
+  font-weight: 700;
+  line-height: 1;
   transition: background 0.15s, color 0.15s;
   flex-shrink: 0;
   margin-left: 10px;
@@ -941,17 +943,6 @@ html {
   color: white;
 }
 .hs-send-btn.cancel:hover { background: #b91c1c; }
-
-/* Arrow icon (Send) */
-.hs-send-btn svg.arrow {
-  display: block;
-}
-/* Stop icon (Cancel) */
-.hs-send-btn svg.stop {
-  display: none;
-}
-.hs-send-btn.cancel svg.arrow { display: none; }
-.hs-send-btn.cancel svg.stop { display: block; }
 
 /* ─── Log Panel ────────────────────────────────────────────────────── */
 

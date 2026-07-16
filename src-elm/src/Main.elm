@@ -1074,41 +1074,29 @@ viewNotifications model =
 
 svgMinimize : Html Msg
 svgMinimize =
-    Html.node "svg" [ Attr.width 12, Attr.height 12, Attr.attribute "viewBox" "0 0 12 12" ]
-        [ Html.node "line" [ Attr.attribute "x1" "2", Attr.attribute "y1" "6", Attr.attribute "x2" "10", Attr.attribute "y2" "6", Attr.attribute "stroke" "currentColor", Attr.attribute "stroke-width" "1.5", Attr.attribute "stroke-linecap" "round" ] [] ]
+    Html.text "🗕"
 
 
 svgMaximize : Html Msg
 svgMaximize =
-    Html.node "svg" [ Attr.width 12, Attr.height 12, Attr.attribute "viewBox" "0 0 12 12" ]
-        [ Html.node "rect" [ Attr.attribute "x" "2", Attr.attribute "y" "2.5", Attr.width 8, Attr.height 7, Attr.attribute "rx" "1", Attr.attribute "fill" "none", Attr.attribute "stroke" "currentColor", Attr.attribute "stroke-width" "1.3" ] [] ]
+    Html.text "🗖"
 
 
 svgRestore : Html Msg
 svgRestore =
-    Html.node "svg" [ Attr.width 12, Attr.height 12, Attr.attribute "viewBox" "0 0 12 12" ]
-        [ Html.node "rect" [ Attr.attribute "x" "4", Attr.attribute "y" "1", Attr.width 7, Attr.height 7, Attr.attribute "rx" "0.8", Attr.attribute "fill" "none", Attr.attribute "stroke" "currentColor", Attr.attribute "stroke-width" "1.3" ] []
-        , Html.node "rect" [ Attr.attribute "x" "1", Attr.attribute "y" "4", Attr.width 7, Attr.height 7, Attr.attribute "rx" "0.8", Attr.attribute "fill" "none", Attr.attribute "stroke" "currentColor", Attr.attribute "stroke-width" "1.3" ] []
-        ]
+    Html.text "🗗"
 
 
 svgClose : Html Msg
 svgClose =
-    Html.node "svg" [ Attr.width 12, Attr.height 12, Attr.attribute "viewBox" "0 0 12 12" ]
-        [ Html.node "line" [ Attr.attribute "x1" "3", Attr.attribute "y1" "3", Attr.attribute "x2" "9", Attr.attribute "y2" "9", Attr.attribute "stroke" "currentColor", Attr.attribute "stroke-width" "1.5", Attr.attribute "stroke-linecap" "round" ] []
-        , Html.node "line" [ Attr.attribute "x1" "9", Attr.attribute "y1" "3", Attr.attribute "x2" "3", Attr.attribute "y2" "9", Attr.attribute "stroke" "currentColor", Attr.attribute "stroke-width" "1.5", Attr.attribute "stroke-linecap" "round" ] []
-        ]
+    Html.text "✕"
 
 
 svgArrow : Html Msg
 svgArrow =
-    Html.node "svg" [ Attr.class "arrow", Attr.width 16, Attr.height 16, Attr.attribute "viewBox" "0 0 24 24", Attr.attribute "fill" "none", Attr.attribute "stroke" "currentColor", Attr.attribute "stroke-width" "2.5", Attr.attribute "stroke-linecap" "round", Attr.attribute "stroke-linejoin" "round" ]
-        [ Html.node "line" [ Attr.attribute "x1" "12", Attr.attribute "y1" "20", Attr.attribute "x2" "12", Attr.attribute "y2" "4" ] []
-        , Html.node "polyline" [ Attr.attribute "points" "6 10 12 4 18 10" ] []
-        ]
+    Html.text "↑"
 
 
 svgStop : Html Msg
 svgStop =
-    Html.node "svg" [ Attr.class "stop", Attr.width 14, Attr.height 14, Attr.attribute "viewBox" "0 0 24 24", Attr.attribute "fill" "currentColor" ]
-        [ Html.node "rect" [ Attr.attribute "x" "6", Attr.attribute "y" "6", Attr.width 12, Attr.height 12, Attr.attribute "rx" "2" ] [] ]
+    Html.text "■"
