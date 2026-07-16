@@ -433,15 +433,10 @@ function handleToolResultFrame(
   if (idx >= 0) {
     const prefix = isError ? `❌ **${toolName}** (error)` : `✅ **${toolName}**`;
 
-    // Use stored tc.input (parsed JSON from AF input frame) — clean, no nesting
+    // Use stored tc.input (parsed JSON from AF input frame) — clean, no _delta
     const hasCleanInput = tc?.input_received && tc?.input !== undefined;
     const inputStr = hasCleanInput
-      ? JSON.stringify(
-          Object.fromEntries(
-            Object.entries(tc!.input as Record<string, unknown>).filter(([k]) => k !== "_delta")
-          ),
-          null, 2
-        )
+      ? JSON.stringify(tc!.input, null, 2)
       : "";
 
     const newContent = inputStr && inputStr !== "{}"
@@ -474,12 +469,9 @@ function handleToolDeltaFrame(
   const tc = newToolCalls.get(toolId);
   if (!tc) return s;
 
-  // Accumulate JSON delta string
-  const currentInput = tc.input || {};
-  const accumulated = ((currentInput as Record<string, unknown>)["_delta"] as string) || "";
-  const newAccumulated = accumulated + delta;
-  (currentInput as Record<string, unknown>)["_delta"] = newAccumulated;
-  tc.input = currentInput;
+  // Accumulate raw JSON delta string on dedicated field
+  const accumulated = (tc.accumulatedDelta || "") + delta;
+  tc.accumulatedDelta = accumulated;
   newToolCalls.set(toolId, tc);
 
   const newMsgs = [...s.messages];
@@ -487,7 +479,7 @@ function handleToolDeltaFrame(
   if (idx >= 0) {
     newMsgs[idx] = {
       ...newMsgs[idx],
-      content: `🔧 **${tc.name || "Tool"}**\n\`\`\`json\n${newAccumulated}\n\`\`\``,
+      content: `🔧 **${tc.name || "Tool"}**\n\`\`\`json\n${accumulated}\n\`\`\``,
     };
   }
 

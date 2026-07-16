@@ -36,6 +36,8 @@ export interface ToolCall {
   is_error?: boolean;
   started: boolean;
   input_received: boolean;
+  /** Accumulated raw JSON delta from Af frames (replaces _delta hacks). */
+  accumulatedDelta?: string;
 }
 
 export interface NotificationItem {
