@@ -161,7 +161,6 @@ type Msg
       -- Internal
     | NoOp
     | FocusNow
-    | GrowInput
     | ScrollPosition Float Float Float
 
 
@@ -492,7 +491,10 @@ update msg model =
                     in
                     case s of
                         Just sess ->
-                            ( { model | sessions = Dict.insert sid { sess | input = val } model.sessions }
+                            ( { model
+                                | sessions = Dict.insert sid { sess | input = val } model.sessions
+                                , inputRows = clamp 1 3 (List.length (String.lines val))
+                              }
                             , Cmd.none
                             )
 
@@ -501,7 +503,6 @@ update msg model =
 
                 Nothing ->
                     ( model, Cmd.none )
-
         SwitchSession id ->
             ( { model | activeId = Just id }, Task.attempt (\_ -> NoOp) (Dom.focus "msg-input") )
 
@@ -651,9 +652,6 @@ update msg model =
 
         FocusNow ->
             ( model, Task.attempt (\_ -> NoOp) (Dom.focus "msg-input") )
-
-        GrowInput ->
-            ( { model | inputRows = min 3 (model.inputRows + 1) }, Cmd.none )
 
         ScrollPosition scrollTop scrollHeight clientHeight ->
             let
@@ -942,7 +940,7 @@ viewInputBar model session =
                             if key == "Enter" && not ctrl && not shift then
                                 ( SendPrompt, True )
                             else if key == "Enter" && shift then
-                                ( GrowInput, False )
+                                ( NoOp, False )
                             else
                                 ( NoOp, False )
                         ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "shiftKey" D.bool)
