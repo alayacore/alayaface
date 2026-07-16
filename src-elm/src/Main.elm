@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Browser
 import Browser.Dom as Dom
+import Browser.Events as Evts
 import Task
 import Dict exposing (Dict)
 import Set exposing (Set)
@@ -729,6 +730,14 @@ subscriptions _ =
         , Ports.onFsHomeDir (\home -> FsHomeDirResult home)
         , Ports.onFsReadFileDataUri (\uri -> FsReadFileResult uri)
         , Ports.onFsResolvePath (\result -> FsResolvePathResult result)
+        , Ports.onWindowMaximized (\v -> WindowMaximized v)
+        , Evts.onKeyDown <|
+            D.map2 (\key ctrl ->
+                if key == "g" && ctrl then
+                    CancelTask
+                else
+                    NoOp
+            ) (D.field "key" D.string) (D.field "ctrlKey" D.bool)
         ]
 
 

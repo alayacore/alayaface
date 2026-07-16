@@ -1591,11 +1591,6 @@ html {
 
 .input-bubble {
   padding: 0 !important;
-  background: #1e293b;
-}
-
-@media (prefers-color-scheme: light) {
-  .input-bubble { background: #e2e8f0; }
 }
 
 .input-text {
@@ -1642,6 +1637,7 @@ html {
 
 .send-btn {
   padding: 5px 16px;
+  min-width: 72px;
   border: none;
   border-radius: 8px;
   font-size: 0.85rem;
@@ -1650,6 +1646,7 @@ html {
   transition: background 0.15s;
   background: #2563eb;
   color: white;
+  text-align: center;
 }
 
 .send-btn:hover { background: #1d4ed8; }
