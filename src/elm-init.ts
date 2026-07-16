@@ -111,8 +111,10 @@ function init() {
 
   // Focus / Scroll
   on<object>("focusInput", () => {
-    const el = document.getElementById("msg-input") as HTMLTextAreaElement | null;
-    el?.focus();
+    requestAnimationFrame(() => {
+      const el = document.getElementById("msg-input") as HTMLTextAreaElement | null;
+      el?.focus();
+    });
   });
   on<object>("scrollToBottom", () => {
     window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "auto" });
