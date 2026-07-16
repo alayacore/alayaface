@@ -24,7 +24,9 @@ function ConfirmDialog({
   onCancelAll,
   onClose,
 }: ConfirmDialogProps) {
-  const pending = kind === "tool" ? session.pendingConfirm : session.pendingMcpAuth;
+  const pending = kind === "tool"
+    ? (session.pendingConfirm.length > 0 ? session.pendingConfirm[0] : null)
+    : session.pendingMcpAuth;
   const ref = useRef<HTMLDivElement>(null);
 
   // Focus trap + keyboard

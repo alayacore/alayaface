@@ -5,7 +5,7 @@
 
 import type { DeltaEvent, FrameEvent } from "./protocol";
 import { isUserEchoTag } from "./protocol";
-import type { SessionState, Message, MediaItem } from "./session";
+import type { SessionState, Message, MediaItem, PendingConfirm } from "./session";
 import { echoTagToMediaType } from "./session";
 
 // ─── Type for updater functions used by the reducer ────────────────
@@ -311,13 +311,14 @@ function handleSystemMsgToolConfirm(s: SessionState, d: Record<string, unknown>)
   if (!cd.id) return s;
   // Find tool info from existing tool calls
   const tc = s.toolCalls.get(cd.id);
+  const item: PendingConfirm = {
+    id: cd.id,
+    toolName: tc?.name,
+    toolInput: tc?.input ? JSON.stringify(tc.input, null, 2) : undefined,
+  };
   return {
     ...s,
-    pendingConfirm: {
-      id: cd.id,
-      toolName: tc?.name,
-      toolInput: tc?.input ? JSON.stringify(tc.input, null, 2) : undefined,
-    },
+    pendingConfirm: [...s.pendingConfirm, item],
   };
 }
 

@@ -97,8 +97,8 @@ export interface SessionState {
   videoRes?: number;
   /** Per-session collapsed message IDs (for tool/reasoning folding). */
   collapsedMsgIds: Set<string>;
-  /** Pending tool confirmation (null if none). */
-  pendingConfirm: PendingConfirm | null;
+  /** Pending tool confirmations queue (concurrent multi-tool support). */
+  pendingConfirm: PendingConfirm[];
   /** Pending MCP auth confirmation (null if none). */
   pendingMcpAuth: PendingConfirm | null;
   /** MCP initialization status (null if idle, string otherwise). */
@@ -132,7 +132,7 @@ export function createSessionState(id: string): SessionState {
     sendPending: false,
     processedEchoIds: new Set(),
     collapsedMsgIds: new Set(),
-    pendingConfirm: null,
+    pendingConfirm: [],
     pendingMcpAuth: null,
     mcpStatus: null,
   };

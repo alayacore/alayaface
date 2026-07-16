@@ -202,7 +202,11 @@ function App() {
     try {
       await transportRef.current.confirmTool(activeId, id, allowed);
     } catch { /* */ }
-    dispatch({ type: "UPDATE_SESSION", sessionId: activeId, updater: (s) => ({ ...s, pendingConfirm: null }) });
+    // Shift first item from queue
+    dispatch({ type: "UPDATE_SESSION", sessionId: activeId, updater: (s) => ({
+      ...s,
+      pendingConfirm: s.pendingConfirm.length > 0 ? s.pendingConfirm.slice(1) : [],
+    }) });
   }, [activeId, dispatch]);
 
   const handleMcpCancelAll = useCallback(async () => {
@@ -218,7 +222,7 @@ function App() {
   const handleCloseConfirm = useCallback(() => {
     if (!activeId) return;
     dispatch({ type: "UPDATE_SESSION", sessionId: activeId, updater: (s) => ({
-      ...s, pendingConfirm: null, pendingMcpAuth: null,
+      ...s, pendingConfirm: [], pendingMcpAuth: null,
     }) });
   }, [activeId, dispatch]);
 
@@ -491,7 +495,7 @@ function App() {
         />
       )}
 
-      {activeSess?.pendingConfirm && (
+      {activeSess?.pendingConfirm.length > 0 && (
         <ConfirmDialog
           session={activeSess}
           kind="tool"
