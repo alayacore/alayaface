@@ -11,9 +11,11 @@ import { useSessions } from "./hooks/useSessions";
 import { TauriTransport } from "./transport/tauri";
 import { tauriPlatform } from "./platform/tauri";
 import type { Platform } from "./core/platform";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import InputBar from "./components/InputBar";
 import UrlModal from "./components/UrlModal";
 import SessionManager from "./components/SessionManager";
+import ConfirmDialog from "./components/ConfirmDialog";
 import "./App.css";
 import "./components/HomeScreen.css";
 
@@ -190,6 +192,32 @@ function App() {
     } catch (err) {
       dispatch({ type: "UPDATE_SESSION", sessionId: activeId, updater: (s) => ({ ...s, statusMsg: `Model switch failed: ${err}` }) });
     }
+  }, [activeId, dispatch]);
+
+  // ─── Tool Confirm / MCP Auth handlers ──────────────────────────────
+  const handleToolConfirm = useCallback(async (id: string, allowed: boolean) => {
+    if (!activeId) return;
+    try {
+      await transportRef.current.confirmTool(activeId, id, allowed);
+    } catch { /* */ }
+    dispatch({ type: "UPDATE_SESSION", sessionId: activeId, updater: (s) => ({ ...s, pendingConfirm: null }) });
+  }, [activeId, dispatch]);
+
+  const handleMcpCancelAll = useCallback(async () => {
+    if (!activeId) return;
+    try {
+      await transportRef.current.sendCommand(activeId, ":mcp_cancel");
+    } catch { /* */ }
+    dispatch({ type: "UPDATE_SESSION", sessionId: activeId, updater: (s) => ({
+      ...s, pendingMcpAuth: null, mcpStatus: null,
+    }) });
+  }, [activeId, dispatch]);
+
+  const handleCloseConfirm = useCallback(() => {
+    if (!activeId) return;
+    dispatch({ type: "UPDATE_SESSION", sessionId: activeId, updater: (s) => ({
+      ...s, pendingConfirm: null, pendingMcpAuth: null,
+    }) });
   }, [activeId, dispatch]);
 
   // ─── Staged media handling ──────────────────────────────────────────
@@ -427,6 +455,36 @@ function App() {
       )}
 
       {showUrlModal && <UrlModal initialType={typeof showUrlModal === "string" ? showUrlModal : "image"} onClose={() => setShowUrlModal(false)} onConfirm={handleConfirmUrl} />}
+
+      {activeSess?.pendingConfirm && (
+        <ConfirmDialog
+          session={activeSess}
+          kind="tool"
+          onConfirm={(id) => handleToolConfirm(id, true)}
+          onDeny={(id) => handleToolConfirm(id, false)}
+          onCancelAll={null}
+          onClose={handleCloseConfirm}
+        />
+      )}
+
+      {activeSess?.pendingMcpAuth && (
+        <ConfirmDialog
+          session={activeSess}
+          kind="mcp_auth"
+          onConfirm={() => {
+            const url = activeSess?.pendingMcpAuth?.toolInput;
+            if (url?.startsWith("http")) openUrl(url).catch(() => {});
+            dispatch({ type: "UPDATE_SESSION", sessionId: activeId!, updater: (s) => ({ ...s, pendingMcpAuth: null }) });
+          }}
+          onDeny={() => {
+            const server = activeSess?.pendingMcpAuth?.id;
+            if (server) transportRef.current.sendCommand(activeId!, `:mcp_auth ${server}`).catch(() => {});
+            dispatch({ type: "UPDATE_SESSION", sessionId: activeId!, updater: (s) => ({ ...s, pendingMcpAuth: null }) });
+          }}
+          onCancelAll={handleMcpCancelAll}
+          onClose={handleCloseConfirm}
+        />
+      )}
 
       {showSessionManager && (
         <SessionManager

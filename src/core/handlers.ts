@@ -308,25 +308,49 @@ function handleSystemMsgVideoConfig(s: SessionState, d: Record<string, unknown>)
 
 function handleSystemMsgToolConfirm(s: SessionState, d: Record<string, unknown>): SessionState {
   const cd = d as { id?: string };
+  if (!cd.id) return s;
+  // Find tool info from existing tool calls
+  const tc = s.toolCalls.get(cd.id);
   return {
     ...s,
-    messages: [
-      ...s.messages,
-      { id: `confirm-${Date.now()}`, role: "system" as const, content: `🔧 Tool confirmation: ${cd.id}` },
-    ],
+    pendingConfirm: {
+      id: cd.id,
+      toolName: tc?.name,
+      toolInput: tc?.input ? JSON.stringify(tc.input, null, 2) : undefined,
+    },
   };
 }
 
 function handleSystemMsgMcp(s: SessionState, d: Record<string, unknown>): SessionState {
   const md = d as { status?: string; server?: string; url?: string; error?: string };
+
+  // Auth confirm → set pendingMcpAuth for interactive dialog
+  if (md.status === "auth_confirm" && md.server) {
+    return {
+      ...s,
+      pendingMcpAuth: { id: md.server, toolName: md.server, toolInput: md.url },
+      mcpStatus: "auth_confirm",
+    };
+  }
+
+  // Init progress → update mcpStatus, show notification as before
   const { text, type: notifType } = formatMcpNotification(md);
-  return {
+  const result: SessionState = {
     ...s,
+    mcpStatus: md.status || s.mcpStatus,
     notifications: [
       ...s.notifications,
       { id: `mcp-${Date.now()}`, type: notifType, text, timestamp: Date.now() },
     ],
   };
+
+  // Clear pendingMcpAuth on done/failed
+  if (md.status === "done" || md.status === "failed") {
+    result.pendingMcpAuth = null;
+    result.mcpStatus = md.status === "done" ? null : s.mcpStatus;
+  }
+
+  return result;
 }
 
 function formatMcpNotification(md: {

@@ -55,6 +55,15 @@ export interface PendingUserPart {
   media_type?: "image" | "audio" | "video" | "document";
 }
 
+// ─── Pending Confirm ─────────────────────────────────────────────────
+
+/** Pending tool confirmation from alayacore (SM type "tool_confirm"). */
+export interface PendingConfirm {
+  id: string;
+  toolName?: string;
+  toolInput?: string;
+}
+
 // ─── Session State ───────────────────────────────────────────────────
 
 export interface SessionState {
@@ -88,6 +97,12 @@ export interface SessionState {
   videoRes?: number;
   /** Per-session collapsed message IDs (for tool/reasoning folding). */
   collapsedMsgIds: Set<string>;
+  /** Pending tool confirmation (null if none). */
+  pendingConfirm: PendingConfirm | null;
+  /** Pending MCP auth confirmation (null if none). */
+  pendingMcpAuth: PendingConfirm | null;
+  /** MCP initialization status (null if idle, string otherwise). */
+  mcpStatus: string | null;
 }
 
 // ─── Factory ─────────────────────────────────────────────────────────
@@ -117,6 +132,9 @@ export function createSessionState(id: string): SessionState {
     sendPending: false,
     processedEchoIds: new Set(),
     collapsedMsgIds: new Set(),
+    pendingConfirm: null,
+    pendingMcpAuth: null,
+    mcpStatus: null,
   };
 }
 

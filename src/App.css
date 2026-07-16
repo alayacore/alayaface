@@ -1116,6 +1116,106 @@ html {
 .modal-confirm:disabled { opacity: 0.4; cursor: not-allowed; }
 .modal-confirm:hover:not(:disabled) { background: #1d4ed8; }
 
+/* ─── Confirm Dialog ────────────────────────────────────────────────── */
+
+.confirm-overlay {
+  z-index: 200;
+}
+
+.confirm-dialog {
+  background: #1e1e2e;
+  border: 1px solid #f59e0b;
+  border-radius: 14px;
+  padding: 24px;
+  min-width: 380px;
+  max-width: 540px;
+  color: #eee;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+  outline: none;
+}
+
+.confirm-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #fbbf24;
+  margin-bottom: 12px;
+}
+
+.confirm-input {
+  background: #0d0d1a;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 16px;
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid #333;
+}
+
+.confirm-input pre {
+  font-family: "Courier New", monospace;
+  font-size: 0.78rem;
+  color: #aaa;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+}
+
+.confirm-buttons {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.confirm-btn {
+  padding: 8px 20px;
+  border-radius: 8px;
+  border: none;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.confirm-btn-allow {
+  background: #16a34a;
+  color: white;
+}
+.confirm-btn-allow:hover { background: #15803d; }
+
+.confirm-btn-deny {
+  background: #dc2626;
+  color: white;
+}
+.confirm-btn-deny:hover { background: #b91c1c; }
+
+.confirm-btn-cancel-all {
+  background: #444;
+  color: #ddd;
+  margin-left: auto;
+}
+.confirm-btn-cancel-all:hover { background: #555; }
+
+.confirm-hint {
+  font-size: 0.78rem;
+  color: #888;
+  margin-top: 10px;
+  text-align: center;
+}
+
+@media (prefers-color-scheme: light) {
+  .confirm-dialog {
+    background: #f0f0f5;
+    border-color: #d97706;
+    color: #1a1a2e;
+  }
+  .confirm-title { color: #b45309; }
+  .confirm-input { background: #e8e8ee; border-color: #ccc; }
+  .confirm-input pre { color: #666; }
+  .confirm-btn-cancel-all { background: #ccc; color: #555; }
+  .confirm-btn-cancel-all:hover { background: #bbb; }
+  .confirm-hint { color: #999; }
+}
+
 /* ─── Light Mode ───────────────────────────────────────────────────── */
 
 @media (prefers-color-scheme: light) {
