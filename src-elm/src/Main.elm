@@ -881,7 +881,15 @@ viewMessage msg =
             Html.div
                 [ Attr.class ("message message-" ++ T.roleToString msg.role) ]
                 [ Html.div [ Attr.class "message-content" ]
-                    [ Markdown.toHtml [ Attr.class "md" ] msg.content ]
+                    [ Markdown.toHtmlWith
+                        { githubFlavored = Just { tables = True, breaks = True }
+                        , defaultHighlighting = Nothing
+                        , sanitize = False
+                        , smartypants = False
+                        }
+                        [ Attr.class "md" ]
+                        msg.content
+                    ]
                 ]
 
         T.Reasoning ->
