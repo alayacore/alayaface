@@ -40,6 +40,7 @@ port module Ports exposing
     , scrollToBottom
     , onScroll
     , onWindowMaximized
+    , getStderrLog
     )
 
 import Json.Decode as D

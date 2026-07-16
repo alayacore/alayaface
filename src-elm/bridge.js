@@ -18,9 +18,12 @@
     // 1. Create Elm app
     var app = Elm.Main.init({ flags: null, node: root });
 
-    // Helper: typed subscribe
+    // Helper: typed subscribe with safety check
     function on(port, cb) {
-      app.ports[port].subscribe(function (v) { cb(v); });
+      var p = app.ports[port];
+      if (!p) { console.warn("[bridge] port not found:", port); return; }
+      if (!p.subscribe) { console.warn("[bridge] port has no subscribe:", port); return; }
+      p.subscribe(function (v) { cb(v); });
     }
 
     // 2. Subscribe to all Elm ports SYNCHRONOUSLY
