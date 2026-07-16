@@ -909,7 +909,14 @@ viewMessage msg =
                     [ Html.text msg.content ]
                 ]
 
-        _ ->
+        T.User ->
+            Html.div
+                [ Attr.class ("message message-" ++ T.roleToString msg.role) ]
+                [ Html.div [ Attr.class "message-content" ]
+                    [ Html.text msg.content ]
+                ]
+
+        T.System ->
             Html.div
                 [ Attr.class ("message message-" ++ T.roleToString msg.role) ]
                 [ Html.div [ Attr.class "message-content" ]
