@@ -171,14 +171,32 @@ update msg model =
 
                 newSessions =
                     Dict.insert id newSession model.sessions
+
+                -- Only auto-switch on initial creation (activeId was Nothing)
+                -- If user is already viewing a session, don't steal focus
+                newActiveId =
+                    case model.activeId of
+                        Nothing ->
+                            Just id
+
+                        Just _ ->
+                            model.activeId
+
+                cmds =
+                    case model.activeId of
+                        Nothing ->
+                            Cmd.batch [ Ports.focusInput {}, Ports.scrollToBottom {} ]
+
+                        Just _ ->
+                            Cmd.none
             in
             ( { model
                 | sessions = newSessions
-                , activeId = Just id
+                , activeId = newActiveId
                 , initializing = False
                 , atBottom = True
               }
-            , Cmd.batch [ Ports.focusInput {}, Ports.scrollToBottom {} ]
+            , cmds
             )
 
         CloseSession id ->
