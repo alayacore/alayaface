@@ -838,6 +838,13 @@ viewInputBar model session =
                     , Attr.placeholder "Type a message…"
                     , Attr.value session.input
                     , Ev.onInput SetInput
+                    , Ev.preventDefaultOn "keydown" <|
+                        D.map3 (\key ctrl shift ->
+                            if key == "Enter" && not ctrl && not shift then
+                                ( SendPrompt, True )
+                            else
+                                ( NoOp, False )
+                        ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "shiftKey" D.bool)
                     , Attr.disabled (not session.connected)
                     , Attr.rows 1
                     ]
