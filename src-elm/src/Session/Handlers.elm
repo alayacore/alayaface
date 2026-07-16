@@ -353,14 +353,65 @@ handleSystemVersion s data =
 handleSystemTask : SessionState -> D.Value -> SessionState
 handleSystemTask s data =
     let
+        inProgress =
+            D.decodeValue (D.field "in_progress" D.bool) data
+                |> Result.toMaybe
+                |> Maybe.withDefault False
+
+        step =
+            D.decodeValue (D.field "current_step" D.int) data
+                |> Result.toMaybe
+
+        maxSteps =
+            D.decodeValue (D.field "max_steps" D.int) data
+                |> Result.toMaybe
+
+        taskError =
+            D.decodeValue (D.field "task_error" D.bool) data
+                |> Result.toMaybe
+                |> Maybe.withDefault False
+
         tokens =
             D.decodeValue (D.field "context_tokens" D.int) data
                 |> Result.toMaybe
                 |> Maybe.map (\v -> v)
 
-        -- This is simplified; full implementation would match TS version
+        context =
+            D.decodeValue (D.field "context" D.int) data
+                |> Result.toMaybe
+
+        contextTokens =
+            case tokens of
+                Just t ->
+                    t
+
+                Nothing ->
+                    Maybe.withDefault s.contextTokens context
+
+        done =
+            not inProgress
+
+        statusMsg =
+            if taskError then
+                "Task failed"
+            else if done then
+                "Task complete"
+            else
+                case ( step, maxSteps ) of
+                    ( Just st, Just ms ) ->
+                        "Step " ++ String.fromInt st ++ "/" ++ String.fromInt ms ++ "…"
+
+                    _ ->
+                        "Task in progress…"
     in
-    { s | statusMsg = "Task updated" }
+    { s
+        | taskRunning = not done && not taskError
+        , taskCurrentStep = Maybe.withDefault s.taskCurrentStep step
+        , taskMaxSteps = Maybe.withDefault s.taskMaxSteps maxSteps
+        , contextTokens = contextTokens
+        , statusMsg = statusMsg
+        , sendPending = if done || taskError then False else s.sendPending
+    }
 
 
 handleSystemError : SessionState -> D.Value -> SessionState
