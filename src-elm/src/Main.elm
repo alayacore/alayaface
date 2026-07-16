@@ -62,6 +62,7 @@ type alias Model =
     , prevMsgCount : Int
     , sessionOrder : List String
     , pendingSwitchOnCreate : Bool
+    , inputRows : Int
     }
 
 
@@ -102,6 +103,7 @@ init _ =
       , prevMsgCount = 0
       , sessionOrder = []
       , pendingSwitchOnCreate = False
+      , inputRows = 1
       }
     , Ports.createSession { toolConfirm = Just "execute_command" }
     )
@@ -159,6 +161,7 @@ type Msg
       -- Internal
     | NoOp
     | FocusNow
+    | GrowInput
     | ScrollPosition Float Float Float
 
 
@@ -330,7 +333,8 @@ update msg model =
 
                     else
                         ( { model
-                            | sessions = Dict.insert s.id
+                            | inputRows = 1
+                            , sessions = Dict.insert s.id
                                 { s
                                     | input = ""
                                     , staged = []
@@ -648,6 +652,9 @@ update msg model =
         FocusNow ->
             ( model, Task.attempt (\_ -> NoOp) (Dom.focus "msg-input") )
 
+        GrowInput ->
+            ( { model | inputRows = min 3 (model.inputRows + 1) }, Cmd.none )
+
         ScrollPosition scrollTop scrollHeight clientHeight ->
             let
                 atBottom =
@@ -934,11 +941,13 @@ viewInputBar model session =
                         D.map3 (\key ctrl shift ->
                             if key == "Enter" && not ctrl && not shift then
                                 ( SendPrompt, True )
+                            else if key == "Enter" && shift then
+                                ( GrowInput, False )
                             else
                                 ( NoOp, False )
                         ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "shiftKey" D.bool)
                     , Attr.disabled (not session.connected)
-                    , Attr.rows 1
+                    , Attr.rows model.inputRows
                     ]
                     []
                 ]
