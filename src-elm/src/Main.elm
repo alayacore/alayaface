@@ -931,7 +931,7 @@ viewInputBar model session =
                 , Html.div [ Attr.class "hs-search-controls" ]
                     [ Html.div [ Attr.class "hs-controls-right" ]
                         [ Html.button
-                            [ Attr.class "hs-send-btn"
+                            [ Attr.class ("hs-send-btn" ++ (if session.taskRunning then " cancel" else ""))
                             , Ev.onClick
                                 (if session.taskRunning then CancelTask else SendPrompt)
                             , Attr.disabled (not session.connected)
@@ -1102,7 +1102,7 @@ svgClose =
 
 svgArrow : Html Msg
 svgArrow =
-    Html.node "svg" [ Attr.width 16, Attr.height 16, Attr.attribute "viewBox" "0 0 24 24", Attr.attribute "fill" "none", Attr.attribute "stroke" "currentColor", Attr.attribute "stroke-width" "2.5", Attr.attribute "stroke-linecap" "round", Attr.attribute "stroke-linejoin" "round" ]
+    Html.node "svg" [ Attr.class "arrow", Attr.width 16, Attr.height 16, Attr.attribute "viewBox" "0 0 24 24", Attr.attribute "fill" "none", Attr.attribute "stroke" "currentColor", Attr.attribute "stroke-width" "2.5", Attr.attribute "stroke-linecap" "round", Attr.attribute "stroke-linejoin" "round" ]
         [ Html.node "line" [ Attr.attribute "x1" "12", Attr.attribute "y1" "20", Attr.attribute "x2" "12", Attr.attribute "y2" "4" ] []
         , Html.node "polyline" [ Attr.attribute "points" "6 10 12 4 18 10" ] []
         ]
@@ -1110,5 +1110,5 @@ svgArrow =
 
 svgStop : Html Msg
 svgStop =
-    Html.node "svg" [ Attr.width 14, Attr.height 14, Attr.attribute "viewBox" "0 0 24 24", Attr.attribute "fill" "currentColor" ]
+    Html.node "svg" [ Attr.class "stop", Attr.width 14, Attr.height 14, Attr.attribute "viewBox" "0 0 24 24", Attr.attribute "fill" "currentColor" ]
         [ Html.node "rect" [ Attr.attribute "x" "6", Attr.attribute "y" "6", Attr.width 12, Attr.height 12, Attr.attribute "rx" "2" ] [] ]
