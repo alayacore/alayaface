@@ -1582,6 +1582,13 @@ html {
 .input-container {
   width: 100%;
   max-width: 864px;
+  background: #0f0f1a;
+  border-radius: 12px;
+  padding: 8px;
+}
+
+@media (prefers-color-scheme: light) {
+  .input-container { background: #f8f8f8; }
 }
 
 .input-bubble {
