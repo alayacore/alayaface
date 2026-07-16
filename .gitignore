@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Elm
+src-elm/elm-stuff/
+src-elm/elm.js
+public/elm.js
