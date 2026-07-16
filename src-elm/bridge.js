@@ -1,139 +1,186 @@
 // ─── Elm-Tauri Bridge ────────────────────────────────────────────────
 //
-// Connects Elm Ports to Tauri's invoke() and listen() APIs.
-// This module is loaded after elm.js and wires up all communication.
+// Plain JS bridge (no npm, no modules). Uses window.__TAURI__ global
+// API (enabled by app.withGlobalTauri in tauri.conf.json).
+//
+// To port to web/VS Code: replace __TAURI__ calls accordingly.
 
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { openUrl } from "@tauri-apps/plugin-opener";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+(function () {
+  "use strict";
 
-export function initBridge(app) {
-  // ─── Inbound: Tauri events → Elm subscriptions ──────────────────
+  const invoke = window.__TAURI__.core.invoke;
+  const listen = window.__TAURI__.event.listen;
 
-  listen("tlv-delta", (ev) => {
-    app.ports.onDelta.send(ev.payload);
-  });
+  function init() {
+    var root = document.getElementById("root");
+    if (!root) { console.error("No #root element"); return; }
 
-  listen("tlv-frame", (ev) => {
-    app.ports.onFrame.send(ev.payload);
-  });
+    // 1. Create Elm app
+    var app = Elm.Main.init({ flags: null, node: root });
 
-  listen("core-status", (ev) => {
-    app.ports.onStatus.send(ev.payload);
-  });
+    // Helper: typed subscribe
+    function on(port, cb) {
+      app.ports[port].subscribe(function (v) { cb(v); });
+    }
 
-  // ─── Outbound: Elm commands → Tauri invoke ──────────────────────
+    // 2. Subscribe to all Elm ports SYNCHRONOUSLY
 
-  app.ports.createSession.subscribe(({ toolConfirm }) => {
-    invoke("create_session", {
-      binaryPath: "",
-      configPath: "",
-      toolConfirm: toolConfirm || null,
-    }).then((id) => app.ports.onSessionCreated.send(id));
-  });
-
-  app.ports.closeSession.subscribe(({ sessionId }) => {
-    invoke("close_session", { sessionId }).then(() => {
-      app.ports.onSessionClosed.send(sessionId);
+    on("createSession", function (data) {
+      invoke("create_session", {
+        binaryPath: "", configPath: "",
+        toolConfirm: data.toolConfirm || null,
+      }).then(function (id) { app.ports.onSessionCreated.send(id); });
     });
-  });
 
-  app.ports.sendPrompt.subscribe(({ sessionId, text, media }) => {
-    invoke("alayacore_send_prompt", { sessionId, text, media });
-  });
-
-  app.ports.cancelTask.subscribe(({ sessionId }) => {
-    invoke("alayacore_cancel", { sessionId });
-  });
-
-  app.ports.setModel.subscribe(({ sessionId, modelId }) => {
-    invoke("alayacore_model_set", { sessionId, modelId });
-  });
-
-  app.ports.confirmTool.subscribe(({ sessionId, id, allowed }) => {
-    invoke("alayacore_confirm", { sessionId, id, allowed });
-  });
-
-  app.ports.sendCommand.subscribe(({ sessionId, command }) => {
-    invoke("alayacore_send_message", { sessionId, text: command });
-  });
-
-  app.ports.forkSession.subscribe(({ sourceSessionId, historyId }) => {
-    invoke("fork_session", {
-      sourceSessionId,
-      historyId,
-      binaryPath: "",
-    }).then((id) => app.ports.onSessionCreated.send(id));
-  });
-
-  app.ports.resumeSession.subscribe(({ sessionId }) => {
-    invoke("resume_session", { sessionId, binaryPath: "" });
-  });
-
-  app.ports.listSessionDirs.subscribe(() => {
-    invoke("list_session_dirs").then((dirs) => {
-      app.ports.onSessionDirs.send(dirs);
+    on("closeSession", function (data) {
+      invoke("close_session", { sessionId: data.sessionId });
     });
-  });
 
-  app.ports.deleteSessionDir.subscribe(({ sessionId }) => {
-    invoke("delete_session_dir", { sessionId });
-  });
-
-  app.ports.isSessionConnected.subscribe(({ sessionId }) => {
-    invoke("session_connected", { sessionId });
-  });
-
-  app.ports.listModels.subscribe(() => {
-    invoke("list_models", { binaryPath: "", configPath: "" });
-  });
-
-  // ─── File System ────────────────────────────────────────────────
-
-  app.ports.fsListDir.subscribe(({ path }) => {
-    invoke("fs_list_dir", { path }).then((entries) => {
-      app.ports.onFsListDir.send(entries);
+    on("sendPrompt", function (data) {
+      invoke("alayacore_send_prompt", {
+        sessionId: data.sessionId, text: data.text, media: data.media,
+      });
     });
-  });
 
-  app.ports.fsHomeDir.subscribe(() => {
-    invoke("fs_home_dir").then((home) => {
-      app.ports.onFsHomeDir.send(home);
+    on("cancelTask", function (data) {
+      invoke("alayacore_cancel", { sessionId: data.sessionId });
     });
-  });
 
-  app.ports.fsResolvePath.subscribe(({ path }) => {
-    invoke("fs_resolve_path", { path }).then((resolved) => {
-      app.ports.onFsResolvePath.send(resolved);
+    on("setModel", function (data) {
+      invoke("alayacore_model_set", {
+        sessionId: data.sessionId, modelId: data.modelId,
+      });
     });
-  });
 
-  app.ports.fsReadFileDataUri.subscribe(({ path }) => {
-    invoke("fs_read_file_data_uri", { path }).then((uri) => {
-      app.ports.onFsReadFileDataUri.send(uri);
+    on("confirmTool", function (data) {
+      invoke("alayacore_confirm", {
+        sessionId: data.sessionId, id: data.id, allowed: data.allowed,
+      });
     });
-  });
 
-  // ─── Window Operations ──────────────────────────────────────────
+    on("sendCommand", function (data) {
+      invoke("alayacore_send_message", {
+        sessionId: data.sessionId, text: data.command,
+      });
+    });
 
-  app.ports.openUrl.subscribe(({ url }) => {
-    openUrl(url);
-  });
+    on("forkSession", function (data) {
+      invoke("fork_session", {
+        sourceSessionId: data.sourceSessionId,
+        historyId: data.historyId,
+        binaryPath: "",
+      }).then(function (id) { app.ports.onSessionCreated.send(id); });
+    });
 
-  app.ports.minimizeWindow.subscribe(() => {
-    getCurrentWindow().minimize();
-  });
+    on("resumeSession", function (data) {
+      invoke("resume_session", {
+        sessionId: data.sessionId, binaryPath: "",
+      });
+    });
 
-  app.ports.toggleMaximize.subscribe(() => {
-    getCurrentWindow().toggleMaximize();
-  });
+    on("listSessionDirs", function () {
+      invoke("list_session_dirs").then(function (dirs) {
+        app.ports.onSessionDirs.send(dirs);
+      });
+    });
 
-  app.ports.closeWindow.subscribe(() => {
-    getCurrentWindow().close();
-  });
+    on("deleteSessionDir", function (data) {
+      invoke("delete_session_dir", { sessionId: data.sessionId });
+    });
 
-  app.ports.startDragging.subscribe(() => {
-    getCurrentWindow().startDragging();
-  });
-}
+    on("fsListDir", function (data) {
+      invoke("fs_list_dir", { path: data.path }).then(function (entries) {
+        app.ports.onFsListDir.send(entries);
+      });
+    });
+
+    on("fsHomeDir", function () {
+      invoke("fs_home_dir").then(function (home) {
+        app.ports.onFsHomeDir.send(home);
+      });
+    });
+
+    on("fsResolvePath", function (data) {
+      invoke("fs_resolve_path", { path: data.path }).then(function (res) {
+        app.ports.onFsResolvePath.send(res);
+      });
+    });
+
+    on("fsReadFileDataUri", function (data) {
+      invoke("fs_read_file_data_uri", { path: data.path }).then(function (uri) {
+        app.ports.onFsReadFileDataUri.send(uri);
+      });
+    });
+
+    on("openUrl", function (data) {
+      var w = window.__TAURI__;
+      if (w.plugins && w.plugins.opener) {
+        w.plugins.opener.openUrl(data.url);
+      } else {
+        window.open(data.url, "_blank");
+      }
+    });
+
+    on("minimizeWindow", function () {
+      window.__TAURI__.window.getCurrentWindow().minimize();
+    });
+
+    on("toggleMaximize", function () {
+      window.__TAURI__.window.getCurrentWindow().toggleMaximize();
+    });
+
+    on("closeWindow", function () {
+      window.__TAURI__.window.getCurrentWindow().close();
+    });
+
+    on("startDragging", function () {
+      window.__TAURI__.window.getCurrentWindow().startDragging();
+    });
+
+    on("scrollToBottom", function () {
+      window.scrollTo({
+        top: document.documentElement.scrollHeight,
+        behavior: "auto",
+      });
+    });
+
+    on("getStderrLog", function (data) {
+      invoke("get_stderr_log", { sessionId: data.sessionId }).then(function (lines) {
+        app.ports.onStderrLog.send(lines);
+      });
+    });
+
+    // 3. Register Tauri event listeners
+    listen("tlv-delta", function (ev) { app.ports.onDelta.send(ev.payload); });
+    listen("tlv-frame", function (ev) { app.ports.onFrame.send(ev.payload); });
+    listen("core-status", function (ev) { app.ports.onStatus.send(ev.payload); });
+
+    // 4. Scroll tracking: send scroll data to Elm
+    function sendScroll() {
+      app.ports.onScroll.send({
+        scrollTop: window.scrollY,
+        scrollHeight: document.documentElement.scrollHeight,
+        clientHeight: window.innerHeight,
+      });
+    }
+    sendScroll();
+    window.addEventListener("scroll", sendScroll, { passive: true });
+
+    // 5. Window maximize state
+    window.__TAURI__.window.getCurrentWindow().isMaximized().then(function (v) {
+      app.ports.onWindowMaximized.send(v);
+    });
+    window.__TAURI__.window.getCurrentWindow().onResized(function () {
+      window.__TAURI__.window.getCurrentWindow().isMaximized().then(function (v) {
+        app.ports.onWindowMaximized.send(v);
+      });
+    });
+  }
+
+  // Wait for DOM + __TAURI__ to be ready
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
+})();

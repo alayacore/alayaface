@@ -26,4 +26,3 @@ dist-ssr
 # Elm
 src-elm/elm-stuff/
 src-elm/elm.js
-public/elm.js

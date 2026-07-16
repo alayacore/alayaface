@@ -4,12 +4,12 @@
   "version": "0.1.0",
   "identifier": "org.alayacore.alayaface",
   "build": {
-    "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
-    "frontendDist": "../dist"
+    "beforeDevCommand": "cd src-elm && elm make src/Main.elm --output=elm.js",
+    "beforeBuildCommand": "cd src-elm && elm make src/Main.elm --output=elm.js",
+    "frontendDist": "../src-elm"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "title": "alayaface",

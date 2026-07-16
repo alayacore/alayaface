@@ -39,6 +39,7 @@ port module Ports exposing
     , onStderrLog
     , scrollToBottom
     , onScroll
+    , onWindowMaximized
     )
 
 import Json.Decode as D
@@ -97,3 +98,7 @@ port onStderrLog : (List String -> msg) -> Sub msg
 
 port scrollToBottom : {} -> Cmd msg
 port onScroll : ({ scrollTop : Float, scrollHeight : Float, clientHeight : Float } -> msg) -> Sub msg
+
+-- Window state
+
+port onWindowMaximized : (Bool -> msg) -> Sub msg
