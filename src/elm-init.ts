@@ -109,6 +109,26 @@ function init() {
   on<object>("closeWindow", () => { getCurrentWindow().close(); });
   on<object>("startDragging", () => { getCurrentWindow().startDragging(); });
 
+  // Focus / Scroll
+  on<object>("focusInput", () => {
+    const el = document.getElementById("msg-input") as HTMLTextAreaElement | null;
+    el?.focus();
+  });
+  on<object>("scrollToBottom", () => {
+    window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "auto" });
+  });
+
+  // Scroll position: send data TO Elm on every scroll
+  const sendScroll = () => {
+    app.ports.onScroll.send({
+      scrollTop: window.scrollY,
+      scrollHeight: document.documentElement.scrollHeight,
+      clientHeight: window.innerHeight,
+    });
+  };
+  sendScroll(); // initial position
+  window.addEventListener("scroll", sendScroll, { passive: true });
+
   // 3. Register Tauri event listeners (async — ports already subscribed)
   Promise.all([
     listen("tlv-delta", (ev) => app.ports.onDelta.send(ev.payload)),
