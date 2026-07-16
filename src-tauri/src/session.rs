@@ -70,10 +70,11 @@ pub async fn create(
     session_dir: PathBuf,
     sessions: &SessionMap,
     model_cache: &ModelCache,
+    tool_confirm: &str,
 ) -> Result<String, String> {
     let session_id = Uuid::new_v4().to_string();
 
-    let proc = alayacore::spawn(bin, config_path, session_file)
+    let proc = alayacore::spawn(bin, config_path, session_file, tool_confirm)
         .map_err(|e| format!("Failed to start alayacore: {e}"))?;
 
     let connected = Arc::new(AtomicBool::new(true));

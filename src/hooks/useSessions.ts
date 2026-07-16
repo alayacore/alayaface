@@ -135,7 +135,7 @@ export function useSessions(transport: Transport): UseSessionsReturn {
     // Auto-create initial session
     (async () => {
       try {
-        const id = await t.createSession();
+        const id = await t.createSession(undefined, undefined, "execute_command");
         createdId = id;
         if (!cancelled) {
           dispatch({ type: "ADD_SESSION", session: createSessionState(id) });

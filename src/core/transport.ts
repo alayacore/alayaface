@@ -25,7 +25,7 @@ export interface Transport {
   connect(cbs: TransportCallbacks): () => void;
 
   /** Initialize and connect. Returns the created session ID. */
-  createSession(binaryPath?: string, configPath?: string): Promise<string>;
+  createSession(binaryPath?: string, configPath?: string, toolConfirm?: string): Promise<string>;
 
   /** Resume an existing session from disk. */
   resumeSession(sessionId: string, binaryPath?: string): Promise<string>;

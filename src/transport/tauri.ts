@@ -70,10 +70,11 @@ export class TauriTransport implements Transport {
 
   // ─── Session Lifecycle ─────────────────────────────────────────────
 
-  async createSession(binaryPath?: string, configPath?: string): Promise<string> {
+  async createSession(binaryPath?: string, configPath?: string, toolConfirm?: string): Promise<string> {
     return invoke("create_session", {
       binaryPath: binaryPath || "",
       configPath: configPath || "",
+      toolConfirm: toolConfirm || null,
     });
   }
 

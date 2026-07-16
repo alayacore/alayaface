@@ -34,6 +34,7 @@ pub async fn create_session(
     app: AppHandle,
     binary_path: String,
     config_path: String,
+    tool_confirm: Option<String>,
     sessions: State<'_, SessionMap>,
     model_cache: State<'_, ModelCache>,
 ) -> Result<String, String> {
@@ -50,9 +51,13 @@ pub async fn create_session(
     };
     let session_file = session_dir.join("session.md").to_string_lossy().to_string();
 
+    let tc = tool_confirm.unwrap_or_default();
     eprintln!("[alayaface] Spawning: {} --rawio --config-path {} --session {}", &bin, &effective_config, &session_file);
+    if !tc.is_empty() {
+        eprintln!("[alayaface]   with --tool-confirm={}", &tc);
+    }
 
-    session::create(&app, &bin, &effective_config, &session_file, session_dir, &sessions, &model_cache).await
+    session::create(&app, &bin, &effective_config, &session_file, session_dir, &sessions, &model_cache, &tc).await
 }
 
 #[tauri::command]
@@ -86,7 +91,7 @@ pub async fn resume_session(
     let config_path = config_dir.to_string_lossy().to_string();
     let session_path = session_file.to_string_lossy().to_string();
 
-    session::create(&app, &bin, &config_path, &session_path, sessions_dir, &sessions, &model_cache).await
+    session::create(&app, &bin, &config_path, &session_path, sessions_dir, &sessions, &model_cache, "").await
 }
 
 #[tauri::command]
@@ -197,7 +202,7 @@ pub async fn fork_session(
     wait_for_file(&target_file).await?;
 
     let bin = resolve_binary(&binary_path);
-    session::create(&app, &bin, &config_path, &target_file, new_session_dir, &sessions, &model_cache).await
+    session::create(&app, &bin, &config_path, &target_file, new_session_dir, &sessions, &model_cache, "").await
 }
 
 async fn wait_for_file(path: &str) -> Result<(), String> {

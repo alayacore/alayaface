@@ -17,7 +17,8 @@ pub struct CoreProcess {
 /// Start alayacore with `--rawio` and return the process + pipes.
 /// If `config_path` is non-empty, passes `--config-path <config_path>`.
 /// If `session_path` is non-empty, passes `--session <session_path>`.
-pub fn spawn(binary_path: &str, config_path: &str, session_path: &str) -> io::Result<CoreProcess> {
+/// If `tool_confirm` is non-empty, passes `--tool-confirm=<tool_confirm>`.
+pub fn spawn(binary_path: &str, config_path: &str, session_path: &str, tool_confirm: &str) -> io::Result<CoreProcess> {
     let mut cmd = Command::new(binary_path);
     cmd.arg("--rawio");
     if !config_path.is_empty() {
@@ -27,6 +28,9 @@ pub fn spawn(binary_path: &str, config_path: &str, session_path: &str) -> io::Re
     if !session_path.is_empty() {
         cmd.arg("--session");
         cmd.arg(session_path);
+    }
+    if !tool_confirm.is_empty() {
+        cmd.arg(format!("--tool-confirm={}", tool_confirm));
     }
     let mut child = cmd
         .stdin(Stdio::piped())
