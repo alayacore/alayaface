@@ -1,14 +1,13 @@
 // ─── useSessions Hook ────────────────────────────────────────────────
 //
 // Thin React hook that wires the platform-agnostic session core
-// to the Tauri transport layer. For web/VS Code ports, swap the
-// transport import.
+// to the provided Transport implementation. For web/VS Code ports,
+// inject a different transport.
 
-import { useEffect, useRef, useReducer, useCallback } from "react";
+import { useEffect, useRef, useReducer, useCallback, useState } from "react";
 import type { SessionState, StagedMedia } from "../core/session";
 import { createSessionState } from "../core/session";
 import { handleDeltaEvent, handleFrameEvent } from "../core/handlers";
-import { TauriTransport } from "../transport/tauri";
 import type { Transport } from "../core/transport";
 import type { DeltaEvent, FrameEvent, StatusEvent } from "../core/protocol";
 
@@ -23,6 +22,7 @@ export type SessionAction =
 interface SessionReducerState {
   sessions: SessionState[];
   activeId: string | null;
+  /** Buffer for events that arrive before ADD_SESSION resolves. */
   pendingUpdates: Map<string, Array<(s: SessionState) => SessionState>>;
 }
 
@@ -31,6 +31,7 @@ function sessionReducer(state: SessionReducerState, action: SessionAction): Sess
     case "UPDATE_SESSION": {
       const exists = state.sessions.some((s) => s.id === action.sessionId);
       if (!exists) {
+        // Session not yet created — buffer the update
         const pending = new Map(state.pendingUpdates);
         const arr = pending.get(action.sessionId) || [];
         pending.set(action.sessionId, [...arr, action.updater]);
@@ -60,6 +61,7 @@ function sessionReducer(state: SessionReducerState, action: SessionAction): Sess
       };
     }
     case "ADD_SESSION": {
+      // Flush any buffered updates onto the new session
       const pending = new Map(state.pendingUpdates);
       const updates = pending.get(action.session.id) || [];
       pending.delete(action.session.id);
@@ -83,7 +85,6 @@ export interface UseSessionsReturn {
   sessions: SessionState[];
   activeId: string | null;
   activeSess: SessionState | undefined;
-  transport: Transport;
   dispatch: React.Dispatch<SessionAction>;
   initializing: boolean;
   initError: string | null;
@@ -95,15 +96,15 @@ export interface UseSessionsReturn {
   removeStaged: (id: string) => void;
 }
 
-export function useSessions(): UseSessionsReturn {
+export function useSessions(transport: Transport): UseSessionsReturn {
   const [{ sessions, activeId }, dispatch] = useReducer(sessionReducer, {
     sessions: [],
     activeId: null,
     pendingUpdates: new Map(),
   });
-  const [initializing, setInitializing] = useReducer((_: boolean) => false, true);
-  const [initError, setInitError] = useReducer((_: string | null, err: string | null) => err, null);
-  const transportRef = useRef<TauriTransport>(new TauriTransport());
+  const [initializing, setInitializing] = useState(true);
+  const [initError, setInitError] = useState<string | null>(null);
+  const transportRef = useRef(transport);
 
   const activeSess = sessions.find((s) => s.id === activeId);
 
@@ -111,12 +112,11 @@ export function useSessions(): UseSessionsReturn {
   useEffect(() => {
     let cancelled = false;
     let createdId: string | null = null;
-    const transport = transportRef.current;
+    const t = transportRef.current;
 
-    // connect() is now synchronous — no more StrictMode race.
-    // It registers React callbacks into the module-level subscriber sets.
-    // Tauri event listeners were already registered at module import time.
-    const unsubscribe = transport.connect({
+    // connect() is synchronous — no StrictMode race.
+    // Registers React callbacks into module-level subscriber sets.
+    const unsubscribe = t.connect({
       onDelta: (ev: DeltaEvent) => {
         dispatch({ type: "UPDATE_SESSION", sessionId: ev.session_id, updater: (s) => handleDeltaEvent(s, ev) });
       },
@@ -132,15 +132,15 @@ export function useSessions(): UseSessionsReturn {
       },
     });
 
-    // Auto-create the initial session
+    // Auto-create initial session
     (async () => {
       try {
-        const id = await transport.createSession();
+        const id = await t.createSession();
         createdId = id;
         if (!cancelled) {
           dispatch({ type: "ADD_SESSION", session: createSessionState(id) });
         } else {
-          try { await transport.closeSession(id); } catch { /* */ }
+          try { await t.closeSession(id); } catch { /* */ }
         }
       } catch (err) {
         if (!cancelled) {
@@ -148,18 +148,18 @@ export function useSessions(): UseSessionsReturn {
           setInitError(String(err));
         }
       } finally {
-        if (!cancelled) setInitializing();
+        if (!cancelled) setInitializing(false);
       }
     })();
 
     return () => {
       cancelled = true;
-      unsubscribe(); // Just removes callbacks from subscriber sets
+      unsubscribe(); // Removes callbacks from subscriber sets
       if (createdId) {
-        transport.closeSession(createdId).catch(() => {});
+        t.closeSession(createdId).catch(() => {});
       }
     };
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Actions ───────────────────────────────────────────────────────
 
@@ -230,7 +230,6 @@ export function useSessions(): UseSessionsReturn {
     sessions,
     activeId,
     activeSess,
-    transport: transportRef.current,
     dispatch,
     initializing,
     initError,
