@@ -58,6 +58,7 @@ type alias Model =
     , atBottom : Bool
     , prevMsgCount : Int
     , sessionOrder : List String
+    , pendingSwitchOnCreate : Bool
     }
 
 
@@ -97,6 +98,7 @@ init _ =
       , atBottom = True
       , prevMsgCount = 0
       , sessionOrder = []
+      , pendingSwitchOnCreate = False
       }
     , Ports.createSession { toolConfirm = Just "execute_command" }
     )
@@ -164,7 +166,9 @@ update msg model =
     case msg of
         -- Session Lifecycle
         CreateSession ->
-            ( model, Ports.createSession { toolConfirm = Just "execute_command" } )
+            ( { model | pendingSwitchOnCreate = True }
+            , Ports.createSession { toolConfirm = Just "execute_command" }
+            )
 
         SessionCreated id ->
             let
@@ -177,20 +181,16 @@ update msg model =
                 -- Only auto-switch on initial creation (activeId was Nothing)
                 -- If user is already viewing a session, don't steal focus
                 newActiveId =
-                    case model.activeId of
-                        Nothing ->
-                            Just id
-
-                        Just _ ->
-                            model.activeId
+                    if model.pendingSwitchOnCreate || model.activeId == Nothing then
+                        Just id
+                    else
+                        model.activeId
 
                 cmds =
-                    case model.activeId of
-                        Nothing ->
-                            Cmd.batch [ Ports.focusInput {}, Ports.scrollToBottom {} ]
-
-                        Just _ ->
-                            Cmd.none
+                    if model.pendingSwitchOnCreate || model.activeId == Nothing then
+                        Cmd.batch [ Ports.focusInput {}, Ports.scrollToBottom {} ]
+                    else
+                        Cmd.none
             in
             ( { model
                 | sessions = newSessions
@@ -198,6 +198,7 @@ update msg model =
                 , initializing = False
                 , atBottom = True
                 , sessionOrder = model.sessionOrder ++ [ id ]
+                , pendingSwitchOnCreate = False
               }
             , cmds
             )
@@ -495,7 +496,7 @@ update msg model =
                     ( model, Cmd.none )
 
         SwitchSession id ->
-            ( { model | activeId = Just id }, Cmd.none )
+            ( { model | activeId = Just id }, Ports.focusInput {} )
 
         -- File Picker
         OpenFilePicker mt ->
