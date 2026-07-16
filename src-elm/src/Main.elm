@@ -55,6 +55,8 @@ type alias Model =
     , statusMsg : String
     , notifications : List ( String, String )  -- (id, text)
     , nextNotifId : Int
+    , atBottom : Bool
+    , prevMsgCount : Int
     }
 
 
@@ -91,6 +93,8 @@ init _ =
       , statusMsg = ""
       , notifications = []
       , nextNotifId = 0
+      , atBottom = True
+      , prevMsgCount = 0
       }
     , Ports.createSession { toolConfirm = Just "execute_command" }
     )
@@ -147,6 +151,8 @@ type Msg
     | CloseWindow
       -- Internal
     | NoOp
+    | FocusNow
+    | ScrollPosition Float Float Float
 
 
 -- UPDATE
@@ -170,8 +176,9 @@ update msg model =
                 | sessions = newSessions
                 , activeId = Just id
                 , initializing = False
+                , atBottom = True
               }
-            , Cmd.none
+            , Cmd.batch [ Ports.focusInput {}, Ports.scrollToBottom {} ]
             )
 
         CloseSession id ->
@@ -192,8 +199,24 @@ update msg model =
                 Ok ev ->
                     case Dict.get ev.sessionId model.sessions of
                         Just session ->
-                            ( { model | sessions = Dict.insert ev.sessionId (H.handleDeltaEvent session ev) model.sessions }
-                            , Cmd.none
+                            let
+                                newSession =
+                                    H.handleDeltaEvent session ev
+
+                                cmds =
+                                    if model.atBottom then
+                                        Cmd.batch
+                                            [ Ports.scrollToBottom {}
+                                            , Ports.focusInput {}
+                                            ]
+                                    else
+                                        Cmd.none
+                            in
+                            ( { model
+                                | sessions = Dict.insert ev.sessionId newSession model.sessions
+                                , prevMsgCount = List.length newSession.messages
+                              }
+                            , cmds
                             )
 
                         Nothing ->
@@ -207,8 +230,27 @@ update msg model =
                 Ok ev ->
                     case Dict.get ev.sessionId model.sessions of
                         Just session ->
-                            ( { model | sessions = Dict.insert ev.sessionId (H.handleFrameEvent session ev) model.sessions }
-                            , Cmd.none
+                            let
+                                newSession =
+                                    H.handleFrameEvent session ev
+
+                                msgCountChanged =
+                                    List.length newSession.messages /= model.prevMsgCount
+
+                                cmds =
+                                    if msgCountChanged && model.atBottom then
+                                        Cmd.batch
+                                            [ Ports.scrollToBottom {}
+                                            , Ports.focusInput {}
+                                            ]
+                                    else
+                                        Cmd.none
+                            in
+                            ( { model
+                                | sessions = Dict.insert ev.sessionId newSession model.sessions
+                                , prevMsgCount = List.length newSession.messages
+                              }
+                            , cmds
                             )
 
                         Nothing ->
@@ -577,6 +619,16 @@ update msg model =
         CloseWindow ->
             ( model, Ports.closeWindow {} )
 
+        FocusNow ->
+            ( model, Ports.focusInput {} )
+
+        ScrollPosition scrollTop scrollHeight clientHeight ->
+            let
+                atBottom =
+                    scrollTop + clientHeight >= scrollHeight - 5
+            in
+            ( { model | atBottom = atBottom }, Cmd.none )
+
         NoOp ->
             ( model, Cmd.none )
 
@@ -634,7 +686,10 @@ filterEntries model =
 subscriptions : Model -> Sub Msg
 subscriptions _ =
     Sub.batch
-        [ Ports.onDelta (\raw -> DeltaEvent raw)
+        [ Ports.onScroll (\{ scrollTop, scrollHeight, clientHeight } ->
+            ScrollPosition scrollTop scrollHeight clientHeight
+          )
+        , Ports.onDelta (\raw -> DeltaEvent raw)
         , Ports.onFrame (\raw -> FrameEvent raw)
         , Ports.onStatus (\raw -> StatusEvent raw)
         , Ports.onSessionCreated (\id -> SessionCreated id)
@@ -834,7 +889,8 @@ viewInputBar model session =
         [ Html.div [ Attr.class "hs-search-wrapper" ]
             [ Html.div [ Attr.class "hs-search-form" ]
                 [ Html.textarea
-                    [ Attr.class "hs-search-input"
+                    [ Attr.id "msg-input"
+                    , Attr.class "hs-search-input"
                     , Attr.placeholder "Type a message…"
                     , Attr.value session.input
                     , Ev.onInput SetInput

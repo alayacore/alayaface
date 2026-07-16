@@ -36,6 +36,10 @@ port module Ports exposing
     , onFsHomeDir
     , onFsReadFileDataUri
     , onFsResolvePath
+    , onStderrLog
+    , focusInput
+    , scrollToBottom
+    , onScroll
     )
 
 import Json.Decode as D
@@ -89,3 +93,9 @@ port onFsReadFileDataUri : (String -> msg) -> Sub msg
 
 port getStderrLog : { sessionId : String } -> Cmd msg
 port onStderrLog : (List String -> msg) -> Sub msg
+
+-- Focus / Scroll
+
+port focusInput : {} -> Cmd msg
+port scrollToBottom : {} -> Cmd msg
+port onScroll : ({ scrollTop : Float, scrollHeight : Float, clientHeight : Float } -> msg) -> Sub msg
