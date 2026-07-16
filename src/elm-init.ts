@@ -1,17 +1,20 @@
 // ─── Elm App Initialization ──────────────────────────────────────────
 //
-// Replaces React main.tsx. Loads the compiled Elm runtime and connects
-// it to Tauri's invoke/listen APIs via the bridge.
-//
-// For web/VS Code ports: replace bridge import with platform-specific
-// connection layer.
+// Loads the Elm runtime, subscribes to ports synchronously (before any
+// await), then registers Tauri event listeners. This ordering is critical:
+// Elm's init fires port messages immediately, so subscribers must be
+// registered before returning control to the event loop.
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
-// Elm is loaded as a global via <script src="/elm.js">
+// Load CSS — Vite processes these imports
+import "./App.css";
+import "./components/HomeScreen.css";
+
+// Elm global (loaded via <script src="/elm.js"> in index.html)
 declare const Elm: {
   Main: {
     init: (opts: { flags: unknown; node: HTMLElement }) => {
@@ -20,24 +23,23 @@ declare const Elm: {
   };
 };
 
-async function init() {
+function init() {
   const root = document.getElementById("root");
-  if (!root) throw new Error("No #root element");
+  if (!root) {
+    console.error("No #root element");
+    return;
+  }
 
-  // Initialize Elm app
+  // 1. Create Elm app (synchronous — init runs in same tick)
   const app = Elm.Main.init({ flags: null, node: root });
-
-  // Initialize Tauri event listeners
-  await listen("tlv-delta", (ev) => app.ports.onDelta.send(ev.payload));
-  await listen("tlv-frame", (ev) => app.ports.onFrame.send(ev.payload));
-  await listen("core-status", (ev) => app.ports.onStatus.send(ev.payload));
 
   // Helper: typed subscribe
   function on<T>(port: string, cb: (v: T) => void) {
     app.ports[port].subscribe((v: unknown) => cb(v as T));
   }
 
-  // ─── Outbound: Elm commands → Tauri invoke ──────────────────────
+  // 2. Subscribe to all Elm ports SYNCHRONOUSLY (no await between)
+  //    This ensures port messages from Elm's init() are not lost.
 
   on<{ toolConfirm?: string | null }>("createSession", ({ toolConfirm }) => {
     invoke("create_session", { binaryPath: "", configPath: "", toolConfirm: toolConfirm || null })
@@ -85,8 +87,6 @@ async function init() {
     invoke("delete_session_dir", { sessionId });
   });
 
-  // ─── File System ────────────────────────────────────────────────
-
   on<{ path: string }>("fsListDir", ({ path }) => {
     invoke("fs_list_dir", { path }).then((entries) => app.ports.onFsListDir.send(entries));
   });
@@ -103,25 +103,18 @@ async function init() {
     invoke("fs_read_file_data_uri", { path }).then((uri) => app.ports.onFsReadFileDataUri.send(uri));
   });
 
-  // ─── Window Operations ──────────────────────────────────────────
-
   on<{ url: string }>("openUrl", ({ url }) => { openUrl(url); });
   on<object>("minimizeWindow", () => { getCurrentWindow().minimize(); });
   on<object>("toggleMaximize", () => { getCurrentWindow().toggleMaximize(); });
   on<object>("closeWindow", () => { getCurrentWindow().close(); });
   on<object>("startDragging", () => { getCurrentWindow().startDragging(); });
+
+  // 3. Register Tauri event listeners (async — ports already subscribed)
+  Promise.all([
+    listen("tlv-delta", (ev) => app.ports.onDelta.send(ev.payload)),
+    listen("tlv-frame", (ev) => app.ports.onFrame.send(ev.payload)),
+    listen("core-status", (ev) => app.ports.onStatus.send(ev.payload)),
+  ]).catch((err) => console.error("Tauri listen failed:", err));
 }
 
-// Error boundary — render error state if init fails
-init().catch((err) => {
-  console.error("Failed to initialize Elm app:", err);
-  const root = document.getElementById("root");
-  if (root) {
-    root.innerHTML = `
-      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#0f0f1a;color:#ef4444;font-family:sans-serif;">
-        <h2>⚠ Failed to start</h2>
-        <pre style="color:#aaa;font-size:14px;">${String(err)}</pre>
-      </div>
-    `;
-  }
-});
+init();
