@@ -1,4 +1,14 @@
 /* ─── Layout ───────────────────────────────────────────────────────── */
+//
+// Auto-scroll depends on `html` being the single scroll container.
+// html { overflow: auto } ensures scroll events fire on window.
+// body and #root use min-height so they grow with content without
+// becoming scroll containers themselves. The app container uses
+// min-height: 100vh to fill the viewport when content is short.
+//
+// Auto-scroll logic in App.tsx:
+//   atBottom = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight
+// This works correctly when html is the scroll container.
 
 :root {
   font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
