@@ -1,155 +1,38 @@
-// ─── TLV Protocol Types ──────────────────────────────────────────────
+// ─── Re-exports from core modules for backward compatibility ─────────
+//
+// Components import from "./types" — this file forwards to the
+// platform-agnostic core modules. Keeps the migration zero-impact.
 
-export interface DeltaEvent {
-  session_id: string;
-  history_id: string;
-  content: string;
-  tag: "AT" | "AR";
-}
+export {
+  isUserEchoTag,
+} from "./core/protocol";
 
-export interface FrameEvent {
-  session_id: string;
-  tag: string;
-  raw_value: string;
-  history_id: string | null;
-  content: string | null;
-  json: Record<string, unknown> | null;
-  user_content_type: string | null;
-}
+export {
+  echoTagToMediaType,
+  echoTagToLabel,
+} from "./core/session";
 
-export interface StatusEvent {
-  session_id: string;
-  connected: boolean;
-  message: string;
-}
+export type {
+  DeltaEvent,
+  FrameEvent,
+  StatusEvent,
+} from "./core/protocol";
 
-// ─── Media Types ─────────────────────────────────────────────────────
+export type {
+  MediaItem,
+  StagedMedia,
+  Message,
+  ToolCall,
+  NotificationItem,
+  PendingUserPart,
+  SessionState,
+} from "./core/session";
 
-export interface MediaItem {
-  media_type: "image" | "audio" | "video" | "document";
-  uri: string;
-  name?: string;
-}
+export {
+  createSessionState,
+} from "./core/session";
 
-export interface StagedMedia extends MediaItem {
-  id: string;
-}
-
-// ─── Message Types ───────────────────────────────────────────────────
-
-export interface Message {
-  id: string;
-  role: "user" | "assistant" | "tool" | "system" | "reasoning";
-  content: string;
-  tool_id?: string;
-  tool_name?: string;
-  is_error?: boolean;
-  history_id?: string;
-  media?: MediaItem[];
-}
-
-export interface ToolCall {
-  id: string;
-  name: string;
-  input?: Record<string, unknown>;
-  output?: string;
-  is_error?: boolean;
-  started: boolean;
-  input_received: boolean;
-}
-
-export interface NotificationItem {
-  id: string;
-  type: "notify" | "error";
-  text: string;
-  timestamp: number;
-}
-
-export interface SessionState {
-  id: string;
-  connected: boolean;
-  statusMsg: string;
-  messages: Message[];
-  staged: StagedMedia[];
-  models: { id: number; name: string }[];
-  activeModelId: number | null;
-  activeModelName: string;
-  taskRunning: boolean;
-  taskCurrentStep: number;
-  taskMaxSteps: number;
-  contextTokens: number;
-  contextLimit: number;
-  historyContents: Map<string, string>;
-  historyRoles: Map<string, "assistant" | "reasoning">;
-  toolCalls: Map<string, ToolCall>;
-  stderrLines: string[];
-  notifications: NotificationItem[];
-  input: string;
-  /** Pending user content being accumulated from echo frames */
-  pendingUserParts: PendingUserPart[];
-  /** Whether we're waiting for user echoes after sending */
-  sendPending: boolean;
-  /** History IDs of user echo frames already processed (dedup guard). */
-  processedEchoIds: Set<string>;
-  /** Protocol message version from version SM */
-  messageVersion?: number;
-  /** Current reasoning level (0=off, 1=low, 2=high) */
-  reasoningLevel?: number;
-  /** Active theme name */
-  activeTheme?: string;
-  /** Available theme list */
-  themes?: Array<{ name: string; theme?: Record<string, string> }>;
-  /** Video FPS config */
-  videoFps?: number;
-  /** Video resolution config (0=low, 1=high) */
-  videoRes?: number;
-}
-
-export interface PendingUserPart {
-  id: string;
-  historyId: string;
-  tag: string;
-  content: string;
-  media_type?: "image" | "audio" | "video" | "document";
-}
-
-// ─── Media Helpers ───────────────────────────────────────────────────
-
-export const MEDIA_ACCEPT: Record<string, string> = {
-  image: "image/*",
-  audio: "audio/*",
-  video: "video/*",
-  document: ".pdf,.txt,.md,.json,.csv,.xml,.yaml,.yml,.toml,.html,.css,.js,.ts,.rs,.py,.go,.java,.c,.cpp,.h,.hpp",
-};
-
-export const MEDIA_ICON: Record<string, string> = {
-  image: "🖼", audio: "🎵", video: "🎬", document: "📄",
-};
-
-export const uploadItems = [
-  { icon: "🖼", label: "Image", accept: MEDIA_ACCEPT.image, type: "image" as const },
-  { icon: "🎵", label: "Audio", accept: MEDIA_ACCEPT.audio, type: "audio" as const },
-  { icon: "🎬", label: "Video", accept: MEDIA_ACCEPT.video, type: "video" as const },
-  { icon: "📄", label: "Document", accept: MEDIA_ACCEPT.document, type: "document" as const },
-  { icon: "🔗", label: "From URL", accept: "", type: "url" as const },
-];
-
-export function shortName(uri: string, name?: string): string {
-  if (name) return name;
-  if (uri.startsWith("data:")) {
-    const mime = uri.split(";")[0]?.replace("data:", "") || "file";
-    return `[${mime}]`;
-  }
-  try {
-    const u = new URL(uri);
-    const parts = u.pathname.split("/").filter(Boolean);
-    return parts.pop() || uri;
-  } catch {
-    return uri.length > 40 ? uri.slice(0, 40) + "…" : uri;
-  }
-}
-
-// ─── MIME handling ────────────────────────────────────────────────────
+// ─── MIME handling (UI-specific, stays here) ─────────────────────────
 
 const MIME_ALIAS: Record<string, string> = {
   "audio/vnd.wave": "audio/wav",
@@ -207,60 +90,38 @@ export function fileToDataUri(file: File): Promise<string> {
   });
 }
 
-// ─── Session Factory ─────────────────────────────────────────────────
+// ─── Media helpers (UI-specific) ─────────────────────────────────────
 
-export function createSessionState(id: string): SessionState {
-  return {
-    id,
-    connected: true,
-    statusMsg: "Connected",
-    messages: [],
-    staged: [],
-    models: [],
-    activeModelId: null,
-    activeModelName: "",
-    taskRunning: false,
-    taskCurrentStep: 0,
-    taskMaxSteps: 0,
-    contextTokens: 0,
-    contextLimit: 0,
-    historyContents: new Map(),
-    historyRoles: new Map(),
-    toolCalls: new Map(),
-    stderrLines: [],
-    notifications: [],
-    input: "",
-    pendingUserParts: [],
-    sendPending: false,
-    processedEchoIds: new Set(),
-  };
-}
+export const MEDIA_ACCEPT: Record<string, string> = {
+  image: "image/*",
+  audio: "audio/*",
+  video: "video/*",
+  document: ".pdf,.txt,.md,.json,.csv,.xml,.yaml,.yml,.toml,.html,.css,.js,.ts,.rs,.py,.go,.java,.c,.cpp,.h,.hpp",
+};
 
-// ─── User echo tag detection ─────────────────────────────────────────
+export const MEDIA_ICON: Record<string, string> = {
+  image: "🖼", audio: "🎵", video: "🎬", document: "📄",
+};
 
-const USER_ECHO_TAGS = new Set(["UT", "UI", "UV", "UA", "UD"]);
+export const uploadItems = [
+  { icon: "🖼", label: "Image", accept: MEDIA_ACCEPT.image, type: "image" as const },
+  { icon: "🎵", label: "Audio", accept: MEDIA_ACCEPT.audio, type: "audio" as const },
+  { icon: "🎬", label: "Video", accept: MEDIA_ACCEPT.video, type: "video" as const },
+  { icon: "📄", label: "Document", accept: MEDIA_ACCEPT.document, type: "document" as const },
+  { icon: "🔗", label: "From URL", accept: "", type: "url" as const },
+];
 
-export function isUserEchoTag(tag: string): boolean {
-  return USER_ECHO_TAGS.has(tag);
-}
-
-export function echoTagToMediaType(tag: string): MediaItem["media_type"] | null {
-  switch (tag) {
-    case "UI": return "image" as const;
-    case "UV": return "video" as const;
-    case "UA": return "audio" as const;
-    case "UD": return "document" as const;
-    default: return null;
+export function shortName(uri: string, name?: string): string {
+  if (name) return name;
+  if (uri.startsWith("data:")) {
+    const mime = uri.split(";")[0]?.replace("data:", "") || "file";
+    return `[${mime}]`;
   }
-}
-
-export function echoTagToLabel(tag: string): string {
-  switch (tag) {
-    case "UT": return "text";
-    case "UI": return "📎 Image";
-    case "UV": return "🎬 Video";
-    case "UA": return "🎵 Audio";
-    case "UD": return "📄 Document";
-    default: return tag;
+  try {
+    const u = new URL(uri);
+    const parts = u.pathname.split("/").filter(Boolean);
+    return parts.pop() || uri;
+  } catch {
+    return uri.length > 40 ? uri.slice(0, 40) + "…" : uri;
   }
 }

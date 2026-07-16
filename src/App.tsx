@@ -8,6 +8,7 @@ import {
   shortName,
   createSessionState,
 } from "./types";
+import { toggleCollapsedMsg, setCollapsedMsgs } from "./core/ui";
 import { useSessions } from "./hooks/useSessions";
 import InputBar from "./components/InputBar";
 import UrlModal from "./components/UrlModal";
@@ -26,7 +27,6 @@ function App() {
   const [showUrlModal, setShowUrlModal] = useState<string | false>(false);
   const [showSessionManager, setShowSessionManager] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
-  const [collapsedMsgs, setCollapsedMsgs] = useState<Set<string>>(new Set());
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; message: Message } | null>(null);
   const sendingRef = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -64,7 +64,6 @@ function App() {
   useEffect(() => {
     if (!activeSess || activeSess.messages.length === 0) return;
     const ids = new Set<string>();
-    // Only check the last few messages (new arrivals are at the end)
     const startIdx = Math.max(0, activeSess.messages.length - 5);
     for (let i = startIdx; i < activeSess.messages.length; i++) {
       const msg = activeSess.messages[i];
@@ -72,28 +71,31 @@ function App() {
       if (msg.role === "reasoning" && msg.content.split("\n").length > 2) ids.add(msg.id);
     }
     if (ids.size === 0) return;
-    setCollapsedMsgs(prev => {
-      const next = new Set(prev);
-      let changed = false;
-      for (const id of ids) { if (!next.has(id)) { next.add(id); changed = true; } }
-      return changed ? next : prev;
+    dispatch({
+      type: "UPDATE_SESSION",
+      sessionId: activeSess.id,
+      updater: (s) => setCollapsedMsgs(s, ids),
     });
   }, [activeSess?.messages]);
 
   // ─── Auto-scroll ────────────────────────────────────────────────────
+  // User scrolls away → disable auto-follow.
+  // User scrolls to bottom → re-enable auto-follow.
   const userScrolledAwayRef = useRef(false);
-  const messagesContainerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    const container = messagesContainerRef.current;
-    if (!container) return;
     const onScroll = () => {
-      const maxScroll = container.scrollHeight - container.clientHeight;
-      userScrolledAwayRef.current = container.scrollTop < maxScroll - 1;
+      const atBottom = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight;
+      userScrolledAwayRef.current = !atBottom;
     };
-    container.addEventListener("scroll", onScroll, { passive: true });
-    if (!userScrolledAwayRef.current) messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
-    return () => container.removeEventListener("scroll", onScroll);
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  useEffect(() => {
+    if (!userScrolledAwayRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+    }
   }, [activeSess?.messages]);
 
   // ─── Close ctx menu on outside click ────────────────────────────────
@@ -336,29 +338,29 @@ function App() {
 
       <div className={`chat-area ${activeSess.messages.length === 0 ? "chat-area-centered" : ""}`}>
         {activeSess.messages.length > 0 && (
-          <div ref={messagesContainerRef} className="messages">
-            {activeSess.messages.map((msg) =>
-              msg.role === "reasoning" ? (
+          <div className="messages">
+            {activeSess.messages.map((msg) => {
+              const isCollapsed = activeSess.collapsedMsgIds.has(msg.id);
+              return (
+                msg.role === "reasoning" ? (
                 <div key={msg.id} className="message-reasoning-wrap">
                   <div className="reasoning-header" onClick={() => {
                     const lines = msg.content.split("\n").length;
                     if (lines <= 2) return;
-                    const next = new Set(collapsedMsgs);
-                    if (next.has(msg.id)) next.delete(msg.id); else next.add(msg.id);
-                    setCollapsedMsgs(next);
+                    dispatch({ type: "UPDATE_SESSION", sessionId: activeId!, updater: (s) => toggleCollapsedMsg(s, msg.id) });
                   }}>
                     {msg.content.split("\n").length > 2 && (
-                      <span className="reasoning-toggle">{collapsedMsgs.has(msg.id) ? '▶' : '▼'}</span>
+                      <span className="reasoning-toggle">{isCollapsed ? '▶' : '▼'}</span>
                     )}
                     {msg.content.split("\n").length <= 2 && <span className="reasoning-toggle">▼</span>}
                     <span className="reasoning-label">Reasoning</span>
                   </div>
-                  <div className={`message message-reasoning${msg.content.split("\n").length > 2 && collapsedMsgs.has(msg.id) ? ' reasoning-collapsed' : ''}`}
-                       onClick={() => { if (collapsedMsgs.has(msg.id)) { const next = new Set(collapsedMsgs); next.delete(msg.id); setCollapsedMsgs(next); } }}>
+                  <div className={`message message-reasoning${msg.content.split("\n").length > 2 && isCollapsed ? ' reasoning-collapsed' : ''}`}
+                       onClick={() => { if (isCollapsed) { dispatch({ type: "UPDATE_SESSION", sessionId: activeId!, updater: (s) => toggleCollapsedMsg(s, msg.id) }); } }}>
                     {(() => {
                       const MAX_LINES = 3;
                       const lines = msg.content.split("\n");
-                      if (collapsedMsgs.has(msg.id) && lines.length > MAX_LINES) {
+                      if (isCollapsed && lines.length > MAX_LINES) {
                         const tail = lines.slice(-MAX_LINES);
                         return <><span className="reasoning-truncated">…</span>{tail.map((line, i) => <span key={i}>{line}{i < tail.length - 1 && <br />}</span>)}</>;
                       }
@@ -369,15 +371,13 @@ function App() {
               ) : msg.role === "tool" ? (
                 <div key={msg.id} className="message-reasoning-wrap">
                   <div className="reasoning-header" onClick={() => {
-                    const next = new Set(collapsedMsgs);
-                    if (next.has(msg.id)) next.delete(msg.id); else next.add(msg.id);
-                    setCollapsedMsgs(next);
+                    dispatch({ type: "UPDATE_SESSION", sessionId: activeId!, updater: (s) => toggleCollapsedMsg(s, msg.id) });
                   }}>
-                    <span className="reasoning-toggle">{collapsedMsgs.has(msg.id) ? '▶' : '▼'}</span>
+                    <span className="reasoning-toggle">{isCollapsed ? '▶' : '▼'}</span>
                     <span className={`tool-icon ${msg.is_error ? 'tool-error' : 'tool-ok'}`}>{msg.is_error ? '✗' : '✓'}</span>
                     <span className="reasoning-label">{msg.tool_name || "Tool"}</span>
                   </div>
-                  {!collapsedMsgs.has(msg.id) && (
+                  {!isCollapsed && (
                     <div className="message-tool-content">{(() => { const lines = msg.content.split("\n"); return lines.slice(1).join("\n"); })()}</div>
                   )}
                 </div>
@@ -389,6 +389,8 @@ function App() {
                   </div>
                 </div>
               )
+              )
+            }
             )}
             {activeSess.sendPending && <div className="message message-assistant cursor-blink">▊</div>}
             <div ref={messagesEndRef} />

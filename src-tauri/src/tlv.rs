@@ -2,25 +2,28 @@
 //!
 //! Wire format: [2-byte tag][4-byte big-endian length][N bytes of value]
 //!
-//! Tags:
-//!   UT → stdin   User text
-//!   UI → stdin   User image (data:image/...;base64,... or URL)
-//!   UV → stdin   User video
-//!   UA → stdin   User audio
-//!   UD → stdin   User document
-//!   UE → stdin   User message end — flushes staged content
-//!   AT ← stdout  Assistant text delta (\x00<id>\x00<content>)
-//!   AR ← stdout  Assistant reasoning delta (\x00<id>\x00<content>)
-//!   AF ← stdout  Function/tool lifecycle (\x00<id>\x00<JSON>)
-//!   UF ← stdout  Function/tool result (\x00<id>\x00<JSON>)
-//!   SM ← stdout  System message (JSON: {"type":"...","data":{...}})
-//!   UT ← stdout  User text echo (\x00<id>\x00<content>)
-//!   UI ← stdout  User image echo (\x00<id>\x00<data URI or URL>)
-//!   UV ← stdout  User video echo (\x00<id>\x00<data URI or URL>)
-//!   UA ← stdout  User audio echo (\x00<id>\x00<data URI or URL>)
-//!   UD ← stdout  User document echo (\x00<id>\x00<data URI or URL>)
-
-#![allow(dead_code)]
+//! Tags (stdin → agent):
+//!   UT   User text
+//!   UI   User image (data:image/...;base64,... or URL)
+//!   UV   User video
+//!   UA   User audio
+//!   UD   User document
+//!   UE   User message end — flushes staged content
+//!
+//! Tags (stdout ← agent):
+//!   At   Assistant text streaming delta (\x00<id>\x00<content>)
+//!   Ar   Assistant reasoning streaming delta (\x00<id>\x00<content>)
+//!   Af   Function/tool argument streaming delta (\x00<id>\x00<JSON delta>)
+//!   AT   Assistant text complete/authoritative (\x00<id>\x00<content>; empty if deltas preceded it)
+//!   AR   Assistant reasoning complete/authoritative (\x00<id>\x00<content>; empty if deltas preceded it)
+//!   AF   Function/tool lifecycle (\x00<id>\x00<JSON>)
+//!   UF   Function/tool result (\x00<id>\x00<JSON>)
+//!   SM   System message (JSON: {"type":"...","data":{...}})
+//!   UT   User text echo (\x00<id>\x00<content>)
+//!   UI   User image echo (\x00<id>\x00<data URI or URL>)
+//!   UV   User video echo (\x00<id>\x00<data URI or URL>)
+//!   UA   User audio echo (\x00<id>\x00<data URI or URL>)
+//!   UD   User document echo (\x00<id>\x00<data URI or URL>)
 
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
@@ -41,6 +44,12 @@ pub const TAG_ASSISTANT_REASONING: &str = "AR";
 pub const TAG_ASSISTANT_TOOL: &str = "AF";
 pub const TAG_USER_TOOL_RESULT: &str = "UF";
 pub const TAG_SYSTEM_MSG: &str = "SM";
+
+// ─── Delta/Streaming Tags (lowercase) ──────────────────────────────
+
+pub const TAG_ASSISTANT_TEXT_DELTA: &str = "At";
+pub const TAG_ASSISTANT_REASONING_DELTA: &str = "Ar";
+pub const TAG_TOOL_ARG_DELTA: &str = "Af";
 
 /// Encode a TLV frame into bytes.
 /// Format: [2-byte tag][4-byte length (big-endian)][value bytes]
@@ -96,22 +105,21 @@ pub fn write_frame<W: Write>(writer: &mut W, tag: &str, value: &str) -> io::Resu
 
 // ─── Delta Message Handling ─────────────────────────────────────────
 //
-// AT and AR deltas use NUL-delimited history IDs:
+// At, Ar, Af use NUL-delimited history IDs:
 //   \x00<history-id>\x00<content>
 //
-// Same history ID → continuation; Different → new history block.
+// Same history ID → continuation; Different → new content block.
 
-/// Unwrap a delta value: split \x00<id>\x00<content> into (id, content).
-/// Returns (id, content, true) on success, or ("", full_value, false).
+/// Parse a NUL-delimited history ID prefix from a value.
+/// Returns `(id, content, true)` on success, or `("", full_value, false)`.
 pub fn unwrap_delta(value: &str) -> (String, String, bool) {
     let bytes = value.as_bytes();
     if bytes.is_empty() || bytes[0] != 0u8 {
         return (String::new(), value.to_string(), false);
     }
 
-    // Find the second NUL byte (index 0 is the first NUL)
     if let Some(end_idx) = bytes[1..].iter().position(|&b| b == 0u8) {
-        let end_idx = end_idx + 1; // adjust for slice offset
+        let end_idx = end_idx + 1;
         let id = String::from_utf8_lossy(&bytes[1..end_idx]).to_string();
         if id.is_empty() {
             return (String::new(), value.to_string(), false);
@@ -124,13 +132,14 @@ pub fn unwrap_delta(value: &str) -> (String, String, bool) {
 }
 
 /// Wrap content with a NUL-delimited history ID prefix: \x00<id>\x00<content>
+#[allow(dead_code)]
 pub fn wrap_delta(id: &str, content: &str) -> String {
     format!("\x00{}\x00{}", id, content)
 }
 
 // ─── JSON Payload Types ──────────────────────────────────────────────
 
-/// Tool input data (AF tag).
+/// Tool input data (AF frame payload).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolInputData {
     pub id: String,
@@ -138,9 +147,12 @@ pub struct ToolInputData {
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input: Option<serde_json::Value>,
+    /// Present in Af (tool argument delta) frames.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delta: Option<String>,
 }
 
-/// Tool output data (UF tag).
+/// Tool output data (UF frame payload).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolOutputData {
     pub id: String,
@@ -153,28 +165,10 @@ fn is_false(b: &bool) -> bool {
     !b
 }
 
-/// System message envelope (SM tag).
+/// System message envelope (SM frame payload).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemMsgEnvelope {
     #[serde(rename = "type")]
     pub msg_type: String,
     pub data: serde_json::Value,
-}
-
-// ─── Streaming Mode (frame-by-frame reading) ────────────────────────
-
-/// A streaming reader that yields TLV frames one at a time.
-pub struct TlvReader<R: Read> {
-    reader: R,
-}
-
-impl<R: Read> TlvReader<R> {
-    pub fn new(reader: R) -> Self {
-        Self { reader }
-    }
-
-    /// Read the next frame. Returns None on clean EOF.
-    pub fn next_frame(&mut self) -> io::Result<Option<Frame>> {
-        read_frame(&mut self.reader)
-    }
 }
