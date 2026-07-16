@@ -80,6 +80,10 @@ fn dispatch_frame(
     let tag = &frame.tag;
     let raw_value = &frame.value;
 
+    // Log every incoming frame for debugging
+    let preview: String = raw_value.chars().take(200).collect();
+    eprintln!("[tlv] << {} {} {}b {}", sid, tag, raw_value.len(), preview);
+
     // Cache model_list from SM frames (always, before any other processing)
     if tag == "SM" {
         if let Ok(env) = serde_json::from_str::<tlv::SystemMsgEnvelope>(raw_value) {

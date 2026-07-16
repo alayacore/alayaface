@@ -84,3 +84,8 @@ port onFsListDir : (List E.Value -> msg) -> Sub msg
 port onFsHomeDir : (String -> msg) -> Sub msg
 port onFsResolvePath : (E.Value -> msg) -> Sub msg
 port onFsReadFileDataUri : (String -> msg) -> Sub msg
+
+-- Debug / Logging
+
+port getStderrLog : { sessionId : String } -> Cmd msg
+port onStderrLog : (List String -> msg) -> Sub msg

@@ -245,6 +245,11 @@ async fn send_raw(
     let mut stdin = handle.stdin.lock().await;
     tlv::write_frame(&mut *stdin, tag, value).map_err(|e| format!("Write error: {e}"))?;
     stdin.flush().map_err(|e| format!("Flush error: {e}"))?;
+
+    // Log outgoing frame for debugging
+    let preview: String = value.chars().take(200).collect();
+    eprintln!("[tlv] >> {} {} {}b {}", session_id, tag, value.len(), preview);
+
     Ok(())
 }
 
