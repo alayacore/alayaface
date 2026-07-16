@@ -1637,7 +1637,7 @@ html {
 
 .send-btn {
   padding: 5px 16px;
-  min-width: 72px;
+  width: 80px;
   border: none;
   border-radius: 8px;
   font-size: 0.85rem;
