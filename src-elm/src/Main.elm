@@ -861,12 +861,7 @@ viewChatArea model session =
         [ if hasMessages then
             Html.div [ Attr.class "messages" ]
                 (List.map viewMessage session.messages
-                    ++ (if session.sendPending then
-                            [ Html.div [ Attr.class "message message-assistant cursor-blink" ] [ Html.text "▊" ] ]
 
-                        else
-                            []
-                       )
                     ++ [ Html.div [] [] ]
                 )
 
