@@ -57,6 +57,10 @@ pub fn run() {
             commands::alayacore_send_raw_frame,
             commands::get_stderr_log,
             commands::list_models,
+            commands::fs_list_dir,
+            commands::fs_home_dir,
+            commands::fs_resolve_path,
+            commands::fs_read_file_data_uri,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

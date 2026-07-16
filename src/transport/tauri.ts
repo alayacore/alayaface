@@ -182,4 +182,22 @@ export class TauriTransport implements Transport {
       configPath: configPath || "",
     });
   }
+
+  // ─── File System ───────────────────────────────────────────────────
+
+  async fsListDir(path: string): Promise<Array<{ name: string; isDir: boolean }>> {
+    return invoke("fs_list_dir", { path });
+  }
+
+  async fsHomeDir(): Promise<string> {
+    return invoke("fs_home_dir");
+  }
+
+  async fsResolvePath(path: string): Promise<{ resolved: string; exists: boolean; isDir: boolean }> {
+    return invoke("fs_resolve_path", { path });
+  }
+
+  async fsReadFileDataUri(path: string): Promise<string> {
+    return invoke("fs_read_file_data_uri", { path });
+  }
 }

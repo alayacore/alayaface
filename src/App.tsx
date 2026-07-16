@@ -16,6 +16,7 @@ import InputBar from "./components/InputBar";
 import UrlModal from "./components/UrlModal";
 import SessionManager from "./components/SessionManager";
 import ConfirmDialog from "./components/ConfirmDialog";
+import FilePicker from "./components/FilePicker";
 import "./App.css";
 import "./components/HomeScreen.css";
 
@@ -34,6 +35,7 @@ function App() {
 
   const [showUrlModal, setShowUrlModal] = useState<string | false>(false);
   const [showSessionManager, setShowSessionManager] = useState(false);
+  const [showFilePicker, setShowFilePicker] = useState<false | { mediaType: string }>(false);
   const [isMaximized, setIsMaximized] = useState(false);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; message: Message } | null>(null);
   const sendingRef = useRef(false);
@@ -223,12 +225,36 @@ function App() {
   // ─── Staged media handling ──────────────────────────────────────────
   const handleAddStaged = useCallback((item: StagedMedia) => {
     if (item.uri === "") {
-      setShowUrlModal("image");
+      // URL pending — open file picker
+      setShowFilePicker({ mediaType: item.media_type });
       return;
     }
     if (!activeId) return;
     dispatch({ type: "UPDATE_SESSION", sessionId: activeId, updater: (s) => ({ ...s, staged: [...s.staged, item] }) });
   }, [activeId, dispatch]);
+
+  const handleFilePickerFile = useCallback(async (path: string) => {
+    if (!activeId) return;
+    try {
+      const uri = await transportRef.current.fsReadFileDataUri(path);
+      const mediaType = showFilePicker && typeof showFilePicker !== "boolean" ? showFilePicker.mediaType : "image";
+      const newItem: StagedMedia = { id: crypto.randomUUID(), media_type: mediaType as StagedMedia["media_type"], uri, name: path.split("/").pop() || path };
+      dispatch({ type: "UPDATE_SESSION", sessionId: activeId, updater: (s) => ({ ...s, staged: [...s.staged, newItem] }) });
+    } catch (err) {
+      dispatch({ type: "UPDATE_SESSION", sessionId: activeId, updater: (s) => ({
+        ...s, messages: [...s.messages, { id: `err-${Date.now()}`, role: "system" as const, content: `⚠ Failed to read file: ${err}` }],
+      }) });
+    }
+    setShowFilePicker(false);
+  }, [activeId, showFilePicker, dispatch]);
+
+  const handleFilePickerUrl = useCallback((url: string) => {
+    if (!activeId) return;
+    const mediaType = showFilePicker && typeof showFilePicker !== "boolean" ? showFilePicker.mediaType : "image";
+    const newItem: StagedMedia = { id: crypto.randomUUID(), media_type: mediaType as StagedMedia["media_type"], uri: url, name: url };
+    dispatch({ type: "UPDATE_SESSION", sessionId: activeId, updater: (s) => ({ ...s, staged: [...s.staged, newItem] }) });
+    setShowFilePicker(false);
+  }, [activeId, showFilePicker, dispatch]);
 
   const handleConfirmUrl = useCallback((url: string, type: string) => {
     if (!activeId) return;
@@ -455,6 +481,15 @@ function App() {
       )}
 
       {showUrlModal && <UrlModal initialType={typeof showUrlModal === "string" ? showUrlModal : "image"} onClose={() => setShowUrlModal(false)} onConfirm={handleConfirmUrl} />}
+
+      {showFilePicker && (
+        <FilePicker
+          transport={transportRef.current}
+          onAddFile={handleFilePickerFile}
+          onAddUrl={handleFilePickerUrl}
+          onClose={() => setShowFilePicker(false)}
+        />
+      )}
 
       {activeSess?.pendingConfirm && (
         <ConfirmDialog

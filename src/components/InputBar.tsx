@@ -6,7 +6,6 @@ import {
   MEDIA_ICON,
   uploadItems,
   shortName,
-  fileToDataUri,
 } from "../types";
 
 interface InputBarProps {
@@ -56,37 +55,15 @@ function InputBar({
     }
   }, [onSend]);
 
-  const handleUploadClick = useCallback((accept: string, type: string) => {
+  const handleUploadClick = useCallback((_accept: string, type: string) => {
     setShowUploadMenu(false);
     if (type === "url") {
-      // Let parent handle URL modal
+      // URL → open FilePicker in URL mode
       onAddStaged({ id: `url-pending-${Date.now()}`, media_type: "image", uri: "", name: "" });
       return;
     }
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = accept;
-    input.style.display = "none";
-
-    const cleanup = () => {
-      input.onchange = null;
-      if (input.parentNode) input.parentNode.removeChild(input);
-    };
-
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (file) {
-        try {
-          const uri = await fileToDataUri(file);
-          const newItem: StagedMedia = { id: crypto.randomUUID(), media_type: type as MediaItem["media_type"], uri, name: file.name };
-          onAddStaged(newItem);
-        } catch { /* */ }
-      }
-      cleanup();
-    };
-    input.addEventListener("cancel", cleanup);
-    document.body.appendChild(input);
-    input.click();
+    // Local file → open FilePicker in local mode
+    onAddStaged({ id: `file-pending-${Date.now()}`, media_type: type as MediaItem["media_type"], uri: "", name: "" });
   }, [onAddStaged]);
 
   const handleModelClick = useCallback(() => {

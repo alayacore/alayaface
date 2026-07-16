@@ -95,4 +95,18 @@ export interface Transport {
 
   /** List available models. */
   listModels(binaryPath?: string, configPath?: string): Promise<Record<string, unknown>[]>;
+
+  // ─── File System (platform-specific) ──────────────────────────────
+
+  /** List directory contents. */
+  fsListDir(path: string): Promise<Array<{ name: string; isDir: boolean }>>;
+
+  /** Get home directory path. */
+  fsHomeDir(): Promise<string>;
+
+  /** Resolve a path (~, ., ..) and return info. */
+  fsResolvePath(path: string): Promise<{ resolved: string; exists: boolean; isDir: boolean }>;
+
+  /** Read a file and return as data URI. */
+  fsReadFileDataUri(path: string): Promise<string>;
 }
