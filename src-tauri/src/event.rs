@@ -20,15 +20,11 @@ pub struct FrameEvent {
     pub session_id: String,
     pub tag: String,
     pub raw_value: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub history_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub json: Option<serde_json::Value>,
     /// Set for user-role echo frames (UT/UI/UV/UA/UD on stdout)
     /// so the frontend can distinguish direction and content type.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub user_content_type: Option<String>,
 }
 
