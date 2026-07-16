@@ -14,6 +14,7 @@ import Time
 import Session.Types as T
 import Session.Protocol as P
 import Session.Handlers as H
+import Markdown
 import Ports
 import Fuzzy
 
@@ -876,6 +877,13 @@ viewChatArea model session =
 viewMessage : T.Message -> Html Msg
 viewMessage msg =
     case msg.role of
+        T.Assistant ->
+            Html.div
+                [ Attr.class ("message message-" ++ T.roleToString msg.role) ]
+                [ Html.div [ Attr.class "message-content" ]
+                    [ Markdown.toHtml [ Attr.class "md" ] msg.content ]
+                ]
+
         T.Reasoning ->
             Html.div [ Attr.class "message-reasoning-wrap" ]
                 [ Html.div [ Attr.class "message message-reasoning" ]
