@@ -38,15 +38,15 @@ port module Ports exposing
     , onFsResolvePath
     )
 
+import Json.Decode as D
 import Json.Encode as E
-import Session.Protocol exposing (DeltaEvent, FrameEvent, StatusEvent)
 
 
--- Inbound events (Tauri → Elm via JS bridge)
+-- Inbound events (Tauri → Elm via JS bridge, use E.Value for custom decoding)
 
-port onDelta : (DeltaEvent -> msg) -> Sub msg
-port onFrame : (FrameEvent -> msg) -> Sub msg
-port onStatus : (StatusEvent -> msg) -> Sub msg
+port onDelta : (E.Value -> msg) -> Sub msg
+port onFrame : (E.Value -> msg) -> Sub msg
+port onStatus : (E.Value -> msg) -> Sub msg
 
 
 -- Outbound commands (Elm → Tauri via JS bridge)

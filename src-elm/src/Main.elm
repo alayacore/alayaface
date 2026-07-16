@@ -104,9 +104,9 @@ type Msg
     | SessionCreated String
     | CloseSession String
       -- Transport events
-    | DeltaEvent P.DeltaEvent
-    | FrameEvent P.FrameEvent
-    | StatusEvent P.StatusEvent
+    | DeltaEvent E.Value
+    | FrameEvent E.Value
+    | StatusEvent E.Value
       -- User actions
     | SendPrompt
     | CancelTask
@@ -187,41 +187,56 @@ update msg model =
             )
 
         -- Transport Events
-        DeltaEvent ev ->
-            case Dict.get ev.sessionId model.sessions of
-                Just session ->
-                    ( { model | sessions = Dict.insert ev.sessionId (H.handleDeltaEvent session ev) model.sessions }
-                    , Cmd.none
-                    )
+        DeltaEvent raw ->
+            case D.decodeValue P.deltaEventDecoder raw of
+                Ok ev ->
+                    case Dict.get ev.sessionId model.sessions of
+                        Just session ->
+                            ( { model | sessions = Dict.insert ev.sessionId (H.handleDeltaEvent session ev) model.sessions }
+                            , Cmd.none
+                            )
 
-                Nothing ->
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                Err _ ->
                     ( model, Cmd.none )
 
-        FrameEvent ev ->
-            case Dict.get ev.sessionId model.sessions of
-                Just session ->
-                    ( { model | sessions = Dict.insert ev.sessionId (H.handleFrameEvent session ev) model.sessions }
-                    , Cmd.none
-                    )
+        FrameEvent raw ->
+            case D.decodeValue P.frameEventDecoder raw of
+                Ok ev ->
+                    case Dict.get ev.sessionId model.sessions of
+                        Just session ->
+                            ( { model | sessions = Dict.insert ev.sessionId (H.handleFrameEvent session ev) model.sessions }
+                            , Cmd.none
+                            )
 
-                Nothing ->
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                Err _ ->
                     ( model, Cmd.none )
 
-        StatusEvent ev ->
-            case Dict.get ev.sessionId model.sessions of
-                Just session ->
-                    ( { model
-                        | sessions = Dict.insert ev.sessionId
-                            { session
-                                | connected = ev.connected
-                                , statusMsg = ev.message
-                            }
-                            model.sessions
-                      }
-                    , Cmd.none
-                    )
+        StatusEvent raw ->
+            case D.decodeValue P.statusEventDecoder raw of
+                Ok ev ->
+                    case Dict.get ev.sessionId model.sessions of
+                        Just session ->
+                            ( { model
+                                | sessions = Dict.insert ev.sessionId
+                                    { session
+                                        | connected = ev.connected
+                                        , statusMsg = ev.message
+                                    }
+                                    model.sessions
+                              }
+                            , Cmd.none
+                            )
 
-                Nothing ->
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                Err _ ->
                     ( model, Cmd.none )
 
         -- User Actions
@@ -619,9 +634,9 @@ filterEntries model =
 subscriptions : Model -> Sub Msg
 subscriptions _ =
     Sub.batch
-        [ Ports.onDelta (\ev -> DeltaEvent ev)
-        , Ports.onFrame (\ev -> FrameEvent ev)
-        , Ports.onStatus (\ev -> StatusEvent ev)
+        [ Ports.onDelta (\raw -> DeltaEvent raw)
+        , Ports.onFrame (\raw -> FrameEvent raw)
+        , Ports.onStatus (\raw -> StatusEvent raw)
         , Ports.onSessionCreated (\id -> SessionCreated id)
         , Ports.onSessionDirs (\dirs -> SessionDirsResult dirs)
         , Ports.onFsListDir (\entries -> FsListDirResult entries)
