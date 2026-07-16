@@ -57,6 +57,7 @@ type alias Model =
     , nextNotifId : Int
     , atBottom : Bool
     , prevMsgCount : Int
+    , sessionOrder : List String
     }
 
 
@@ -95,6 +96,7 @@ init _ =
       , nextNotifId = 0
       , atBottom = True
       , prevMsgCount = 0
+      , sessionOrder = []
       }
     , Ports.createSession { toolConfirm = Just "execute_command" }
     )
@@ -195,6 +197,7 @@ update msg model =
                 , activeId = newActiveId
                 , initializing = False
                 , atBottom = True
+                , sessionOrder = model.sessionOrder ++ [ id ]
               }
             , cmds
             )
@@ -202,9 +205,10 @@ update msg model =
         CloseSession id ->
             ( { model
                 | sessions = Dict.remove id model.sessions
+                , sessionOrder = List.filter (\k -> k /= id) model.sessionOrder
                 , activeId =
                     if model.activeId == Just id then
-                        List.head (List.reverse (Dict.keys model.sessions |> List.filter (\k -> k /= id)))
+                        List.head (List.reverse (List.filter (\k -> k /= id) model.sessionOrder))
                     else
                         model.activeId
               }
@@ -795,7 +799,7 @@ viewHeader : Model -> T.SessionState -> Html Msg
 viewHeader model session =
     let
         sessionKeys =
-            Dict.keys model.sessions
+            model.sessionOrder
     in
     Html.header [ Attr.class "app-header", Attr.attribute "data-tauri-drag-region" "" ]
         [ Html.div [ Attr.class "header-top" ] []
