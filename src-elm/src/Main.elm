@@ -779,7 +779,7 @@ viewChatArea model session =
             not (List.isEmpty session.messages)
     in
     Html.div
-        [ Attr.class ("chat-area" ++ (if not hasMessages then " chat-area-centered" else "")) ]
+        [ Attr.class "chat-area" ]
         [ if hasMessages then
             Html.div [ Attr.class "messages" ]
                 (List.map viewMessage session.messages
@@ -823,26 +823,35 @@ viewMessage msg =
 
 viewInputBar : Model -> T.SessionState -> Html Msg
 viewInputBar model session =
-    Html.div [ Attr.class "hs-search-wrapper" ]
-        [ Html.div [ Attr.class "hs-search-form" ]
-            [ Html.textarea
-                [ Attr.class "hs-search-input"
-                , Attr.placeholder "Type a message…"
-                , Attr.value session.input
-                , Ev.onInput SetInput
-                , Attr.disabled (not session.connected)
-                , Attr.rows 1
-                ]
-                []
-            , Html.div [ Attr.class "hs-search-controls" ]
-                [ Html.div [ Attr.class "hs-controls-right" ]
-                    [ Html.button
-                        [ Attr.class "hs-send-btn"
-                        , Ev.onClick
-                            (if session.taskRunning then CancelTask else SendPrompt)
-                        , Attr.disabled (not session.connected)
+    let
+        hasMessages =
+            not (List.isEmpty session.messages)
+
+        inputClass =
+            "session-input-bar" ++ (if not hasMessages then " session-input-bar-centered" else "")
+    in
+    Html.div [ Attr.class inputClass ]
+        [ Html.div [ Attr.class "hs-search-wrapper" ]
+            [ Html.div [ Attr.class "hs-search-form" ]
+                [ Html.textarea
+                    [ Attr.class "hs-search-input"
+                    , Attr.placeholder "Type a message…"
+                    , Attr.value session.input
+                    , Ev.onInput SetInput
+                    , Attr.disabled (not session.connected)
+                    , Attr.rows 1
+                    ]
+                    []
+                , Html.div [ Attr.class "hs-search-controls" ]
+                    [ Html.div [ Attr.class "hs-controls-right" ]
+                        [ Html.button
+                            [ Attr.class "hs-send-btn"
+                            , Ev.onClick
+                                (if session.taskRunning then CancelTask else SendPrompt)
+                            , Attr.disabled (not session.connected)
+                            ]
+                            [ if session.taskRunning then svgStop else svgArrow ]
                         ]
-                        [ if session.taskRunning then svgStop else svgArrow ]
                     ]
                 ]
             ]
