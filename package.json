@@ -5,9 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "elm make src-elm/src/Main.elm --output=public/elm.js && tsc && vite build",
+    "elm": "elm make src-elm/src/Main.elm --output=public/elm.js",
+    "elm:watch": "elm-watch",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "tauri:dev": "elm make src-elm/src/Main.elm --output=public/elm.js && tauri dev",
+    "tauri:build": "elm make src-elm/src/Main.elm --output=public/elm.js && tauri build"
   },
   "dependencies": {
     "react": "^19.1.0",
