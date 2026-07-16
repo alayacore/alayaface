@@ -186,6 +186,13 @@
   // Wait for DOM + __TAURI__ to be ready
   function waitForTauri(cb) {
     if (window.__TAURI__ && window.__TAURI__.core) {
+      console.log("[bridge] __TAURI__ available, keys:",
+        Object.keys(window.__TAURI__).join(", "));
+      if (window.__TAURI__.event) {
+        console.log("[bridge] event API available");
+      } else {
+        console.warn("[bridge] event API NOT available");
+      }
       cb();
     } else {
       setTimeout(function () { waitForTauri(cb); }, 10);
