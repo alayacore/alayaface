@@ -1590,12 +1590,12 @@ html {
 }
 
 .input-bubble {
-  padding: 0 !important;
+  padding: 10px 14px;
 }
 
 .input-text {
   width: 100%;
-  padding: 10px 14px;
+  padding: 0;
   border: none;
   background: transparent;
   color: inherit;
@@ -1605,7 +1605,9 @@ html {
   outline: none;
   resize: none;
   box-sizing: border-box;
-  min-height: 44px;
+  min-height: 1.5em;
+  max-height: calc(1.5em * 3);
+  overflow-y: auto;
 }
 
 .input-text::placeholder {
