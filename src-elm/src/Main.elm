@@ -922,10 +922,10 @@ viewInputBar model session =
             "session-input-bar" ++ (if not hasMessages then " session-input-bar-centered" else "")
     in
     Html.div [ Attr.class inputClass ]
-        [ Html.div [ Attr.class "input-panel" ]
+        [ Html.div [ Attr.class "message message-user input-wrap" ]
             [ Html.textarea
                 [ Attr.id "msg-input"
-                , Attr.class "input-textarea"
+                , Attr.class "input-area"
                 , Attr.placeholder "Type a message…"
                 , Attr.value session.input
                 , Ev.onInput SetInput
@@ -940,18 +940,14 @@ viewInputBar model session =
                 , Attr.rows 2
                 ]
                 []
-            , Html.div [ Attr.class "input-toolbar" ]
-                [ Html.div [ Attr.class "input-toolbar-left" ]
-                    [ Html.span [ Attr.class "input-hint" ] [ Html.text "Ctrl+Enter for newline" ] ]
-                , Html.div [ Attr.class "input-toolbar-right" ]
-                    [ Html.button
-                        [ Attr.class ("send-btn" ++ (if session.taskRunning then " cancel" else ""))
-                        , Ev.onClick
-                            (if session.taskRunning then CancelTask else SendPrompt)
-                        , Attr.disabled (not session.connected)
-                        ]
-                        [ if session.taskRunning then Html.text "■ Cancel" else Html.text "↑ Send" ]
+            , Html.div [ Attr.class "input-actions" ]
+                [ Html.button
+                    [ Attr.class ("send-btn" ++ (if session.taskRunning then " cancel" else ""))
+                    , Ev.onClick
+                        (if session.taskRunning then CancelTask else SendPrompt)
+                    , Attr.disabled (not session.connected)
                     ]
+                    [ if session.taskRunning then Html.text "■" else Html.text "↑" ]
                 ]
             ]
         ]
