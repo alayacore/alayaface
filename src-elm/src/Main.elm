@@ -1,6 +1,8 @@
 module Main exposing (main)
 
 import Browser
+import Browser.Dom as Dom
+import Task
 import Dict exposing (Dict)
 import Set exposing (Set)
 import Html exposing (Html, Attribute)
@@ -188,7 +190,7 @@ update msg model =
 
                 cmds =
                     if model.pendingSwitchOnCreate || model.activeId == Nothing then
-                        Cmd.batch [ Ports.focusInput {}, Ports.scrollToBottom {} ]
+                        Cmd.batch [ Task.attempt (\_ -> NoOp) (Dom.focus "msg-input"), Ports.scrollToBottom {} ]
                     else
                         Cmd.none
             in
@@ -230,7 +232,7 @@ update msg model =
                                     if model.atBottom then
                                         Cmd.batch
                                             [ Ports.scrollToBottom {}
-                                            , Ports.focusInput {}
+                                            , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
                                             ]
                                     else
                                         Cmd.none
@@ -264,7 +266,7 @@ update msg model =
                                     if msgCountChanged && model.atBottom then
                                         Cmd.batch
                                             [ Ports.scrollToBottom {}
-                                            , Ports.focusInput {}
+                                            , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
                                             ]
                                     else
                                         Cmd.none
@@ -496,7 +498,7 @@ update msg model =
                     ( model, Cmd.none )
 
         SwitchSession id ->
-            ( { model | activeId = Just id }, Ports.focusInput {} )
+            ( { model | activeId = Just id }, Task.attempt (\_ -> NoOp) (Dom.focus "msg-input") )
 
         -- File Picker
         OpenFilePicker mt ->
@@ -643,7 +645,7 @@ update msg model =
             ( model, Ports.closeWindow {} )
 
         FocusNow ->
-            ( model, Ports.focusInput {} )
+            ( model, Task.attempt (\_ -> NoOp) (Dom.focus "msg-input") )
 
         ScrollPosition scrollTop scrollHeight clientHeight ->
             let

@@ -109,13 +109,7 @@ function init() {
   on<object>("closeWindow", () => { getCurrentWindow().close(); });
   on<object>("startDragging", () => { getCurrentWindow().startDragging(); });
 
-  // Focus / Scroll
-  on<object>("focusInput", () => {
-    requestAnimationFrame(() => {
-      const el = document.getElementById("msg-input") as HTMLTextAreaElement | null;
-      el?.focus();
-    });
-  });
+  // Scroll
   on<object>("scrollToBottom", () => {
     window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "auto" });
   });

@@ -37,7 +37,6 @@ port module Ports exposing
     , onFsReadFileDataUri
     , onFsResolvePath
     , onStderrLog
-    , focusInput
     , scrollToBottom
     , onScroll
     )
@@ -96,6 +95,5 @@ port onStderrLog : (List String -> msg) -> Sub msg
 
 -- Focus / Scroll
 
-port focusInput : {} -> Cmd msg
 port scrollToBottom : {} -> Cmd msg
 port onScroll : ({ scrollTop : Float, scrollHeight : Float, clientHeight : Float } -> msg) -> Sub msg
