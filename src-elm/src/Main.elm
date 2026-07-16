@@ -922,32 +922,38 @@ viewInputBar model session =
             "session-input-bar" ++ (if not hasMessages then " session-input-bar-centered" else "")
     in
     Html.div [ Attr.class inputClass ]
-        [ Html.div [ Attr.class "message message-user input-wrap" ]
-            [ Html.textarea
-                [ Attr.id "msg-input"
-                , Attr.class "input-area"
-                , Attr.placeholder "Type a message…"
-                , Attr.value session.input
-                , Ev.onInput SetInput
-                , Ev.preventDefaultOn "keydown" <|
-                    D.map3 (\key ctrl shift ->
-                        if key == "Enter" && not ctrl && not shift then
-                            ( SendPrompt, True )
-                        else
-                            ( NoOp, False )
-                    ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "shiftKey" D.bool)
-                , Attr.disabled (not session.connected)
-                , Attr.rows 2
-                ]
-                []
-            , Html.div [ Attr.class "input-actions" ]
-                [ Html.button
-                    [ Attr.class ("send-btn" ++ (if session.taskRunning then " cancel" else ""))
-                    , Ev.onClick
-                        (if session.taskRunning then CancelTask else SendPrompt)
+        [ Html.div [ Attr.class "input-container" ]
+            [ Html.div [ Attr.class "message message-user input-bubble" ]
+                [ Html.textarea
+                    [ Attr.id "msg-input"
+                    , Attr.class "input-text"
+                    , Attr.placeholder "Type a message…"
+                    , Attr.value session.input
+                    , Ev.onInput SetInput
+                    , Ev.preventDefaultOn "keydown" <|
+                        D.map3 (\key ctrl shift ->
+                            if key == "Enter" && not ctrl && not shift then
+                                ( SendPrompt, True )
+                            else
+                                ( NoOp, False )
+                        ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "shiftKey" D.bool)
                     , Attr.disabled (not session.connected)
+                    , Attr.rows 2
                     ]
-                    [ if session.taskRunning then Html.text "■" else Html.text "↑" ]
+                    []
+                ]
+            , Html.div [ Attr.class "input-footer" ]
+                [ Html.div [ Attr.class "input-footer-left" ]
+                    [ Html.span [ Attr.class "input-hint" ] [ Html.text "Ctrl+Enter ↵" ] ]
+                , Html.div [ Attr.class "input-footer-right" ]
+                    [ Html.button
+                        [ Attr.class ("send-btn" ++ (if session.taskRunning then " cancel" else ""))
+                        , Ev.onClick
+                            (if session.taskRunning then CancelTask else SendPrompt)
+                        , Attr.disabled (not session.connected)
+                        ]
+                        [ if session.taskRunning then Html.text "Cancel" else Html.text "Send" ]
+                    ]
                 ]
             ]
         ]

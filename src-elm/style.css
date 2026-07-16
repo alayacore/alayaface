@@ -1577,16 +1577,18 @@ html {
   .md hr { border-top-color: #ddd; }
 }
 
-/* ─── Input Area (user-message style) ──────────────────────────────── */
+/* ─── Input Container ──────────────────────────────────────────────── */
 
-.input-wrap {
-  padding: 0 !important;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+.input-container {
+  width: 100%;
+  max-width: 864px;
 }
 
-.input-area {
+.input-bubble {
+  padding: 0 !important;
+}
+
+.input-text {
   width: 100%;
   padding: 10px 14px;
   border: none;
@@ -1601,30 +1603,41 @@ html {
   min-height: 48px;
 }
 
-.input-area::placeholder {
+.input-text::placeholder {
   color: #666;
 }
 
-.input-actions {
+.input-footer {
   display: flex;
-  justify-content: flex-end;
-  padding: 2px 8px 6px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 4px 0;
+}
+
+.input-footer-left {
+  display: flex;
+  align-items: center;
+}
+
+.input-hint {
+  font-size: 0.72rem;
+  color: #666;
+}
+
+.input-footer-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .send-btn {
-  width: 32px;
-  height: 32px;
-  padding: 0;
+  padding: 5px 16px;
   border: none;
-  border-radius: 50%;
-  font-size: 1rem;
-  font-weight: 700;
-  line-height: 1;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
   cursor: pointer;
   transition: background 0.15s;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   background: #2563eb;
   color: white;
 }
@@ -1634,6 +1647,9 @@ html {
 .send-btn.cancel:hover { background: #b91c1c; }
 .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
+@media (prefers-color-scheme: light) {
+  .input-text { background: transparent; color: #1a1a2e; }
+}
 @media (prefers-color-scheme: light) {
   .input-area { background: transparent; color: #1a1a2e; }
 }
