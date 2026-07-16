@@ -1,6 +1,4 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   type Message,
   type StagedMedia,
@@ -10,11 +8,19 @@ import {
 } from "./types";
 import { toggleCollapsedMsg, setCollapsedMsgs } from "./core/ui";
 import { useSessions } from "./hooks/useSessions";
+import { TauriTransport } from "./transport/tauri";
+import { tauriPlatform } from "./platform/tauri";
+import type { Platform } from "./core/platform";
 import InputBar from "./components/InputBar";
 import UrlModal from "./components/UrlModal";
 import SessionManager from "./components/SessionManager";
 import "./App.css";
 import "./components/HomeScreen.css";
+
+// Platform-agnostic transport and platform instances.
+// For web/VS Code: replace TauriTransport/tauriPlatform with alternatives.
+const transport = new TauriTransport();
+const platform: Platform = tauriPlatform;
 
 function App() {
   const {
@@ -22,7 +28,7 @@ function App() {
     initializing, initError,
     handleCreateSession, handleCloseSession, switchSession,
     setInput, removeStaged,
-  } = useSessions();
+  } = useSessions(transport);
 
   const [showUrlModal, setShowUrlModal] = useState<string | false>(false);
   const [showSessionManager, setShowSessionManager] = useState(false);
@@ -33,15 +39,16 @@ function App() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const ctxMenuRef = useRef<HTMLDivElement>(null);
   const notificationTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const transportRef = useRef(transport);
 
   // ─── Window maximize state ──────────────────────────────────────────
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     (async () => {
       try {
-        setIsMaximized(await getCurrentWindow().isMaximized());
-        unlisten = await getCurrentWindow().onResized(() => {
-          getCurrentWindow().isMaximized().then(setIsMaximized);
+        setIsMaximized(await platform.isMaximized());
+        unlisten = await platform.onResized(() => {
+          platform.isMaximized().then(setIsMaximized);
         });
       } catch { /* */ }
     })();
@@ -54,7 +61,7 @@ function App() {
     const onMouseDown = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
       if (target.closest('button, .tab, .tab-close, .tab-new, .win-btn')) return;
-      getCurrentWindow().startDragging();
+      platform.startDragging();
     };
     el.addEventListener('mousedown', onMouseDown);
     return () => el.removeEventListener('mousedown', onMouseDown);
@@ -79,8 +86,6 @@ function App() {
   }, [activeSess?.messages]);
 
   // ─── Auto-scroll ────────────────────────────────────────────────────
-  // User scrolls away → disable auto-follow.
-  // User scrolls to bottom → re-enable auto-follow.
   const userScrolledAwayRef = useRef(false);
 
   useEffect(() => {
@@ -144,7 +149,7 @@ function App() {
     })});
 
     try {
-      await invoke("alayacore_send_prompt", { sessionId: activeSess.id, text, media: mediaItems });
+      await transportRef.current.sendPrompt(activeSess.id, text, mediaItems);
     } catch (err) {
       dispatch({ type: "UPDATE_SESSION", sessionId: activeSess.id, updater: (s) => ({
         ...s, statusMsg: `Send error: ${err}`, sendPending: false,
@@ -159,7 +164,7 @@ function App() {
     if (!activeId) return;
     try {
       dispatch({ type: "UPDATE_SESSION", sessionId: activeId, updater: (s) => ({ ...s, statusMsg: "Cancelling…" }) });
-      await invoke("alayacore_cancel", { sessionId: activeId });
+      await transportRef.current.cancel(activeId);
     } catch (err) {
       dispatch({ type: "UPDATE_SESSION", sessionId: activeId, updater: (s) => ({ ...s, statusMsg: `Cancel error: ${err}` }) });
     }
@@ -169,7 +174,7 @@ function App() {
     const hid = msg.history_id;
     if (!hid || !activeId || !/^\d+$/.test(hid)) return;
     try {
-      const newId = await invoke<string>("fork_session", { sourceSessionId: activeId, historyId: hid, binaryPath: "" });
+      const newId = await transportRef.current.forkSession(activeId, hid);
       dispatch({ type: "UPDATE_SESSION", sessionId: activeId, updater: (s) => ({ ...s, statusMsg: `Forked up to history ${hid}` }) });
       dispatch({ type: "ADD_SESSION", session: createSessionState(newId) });
     } catch (err) {
@@ -181,7 +186,7 @@ function App() {
     if (!activeId) return;
     try {
       dispatch({ type: "UPDATE_SESSION", sessionId: activeId, updater: (s) => ({ ...s, statusMsg: "Switching model…" }) });
-      await invoke("alayacore_model_set", { sessionId: activeId, modelId });
+      await transportRef.current.setModel(activeId, modelId);
     } catch (err) {
       dispatch({ type: "UPDATE_SESSION", sessionId: activeId, updater: (s) => ({ ...s, statusMsg: `Model switch failed: ${err}` }) });
     }
@@ -190,7 +195,6 @@ function App() {
   // ─── Staged media handling ──────────────────────────────────────────
   const handleAddStaged = useCallback((item: StagedMedia) => {
     if (item.uri === "") {
-      // URL pending — open modal
       setShowUrlModal("image");
       return;
     }
@@ -254,17 +258,17 @@ function App() {
           <div className="header-top">
             <button onClick={handleCreateSession} className="connect-btn">+ New Session</button>
             <div className="window-controls">
-              <button className="win-btn" onClick={() => getCurrentWindow().minimize()} title="Minimize">
+              <button className="win-btn" onClick={() => platform.minimize()} title="Minimize">
                 <svg width="12" height="12" viewBox="0 0 12 12"><line x1="2" y1="6" x2="10" y2="6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
               </button>
-              <button className="win-btn" onClick={() => { getCurrentWindow().toggleMaximize(); setIsMaximized((v) => !v); }} title={isMaximized ? "Restore" : "Maximize"}>
+              <button className="win-btn" onClick={() => { platform.toggleMaximize(); setIsMaximized((v) => !v); }} title={isMaximized ? "Restore" : "Maximize"}>
                 {isMaximized ? (
                   <svg width="12" height="12" viewBox="0 0 12 12"><rect x="4" y="1" width="7" height="7" rx="0.8" fill="none" stroke="currentColor" strokeWidth="1.3"/><rect x="1" y="4" width="7" height="7" rx="0.8" fill="none" stroke="currentColor" strokeWidth="1.3"/></svg>
                 ) : (
                   <svg width="12" height="12" viewBox="0 0 12 12"><rect x="2" y="2.5" width="8" height="7" rx="1" fill="none" stroke="currentColor" strokeWidth="1.3"/></svg>
                 )}
               </button>
-              <button className="win-btn win-close" onClick={() => getCurrentWindow().close()} title="Close">
+              <button className="win-btn win-close" onClick={() => platform.close()} title="Close">
                 <svg width="12" height="12" viewBox="0 0 12 12"><line x1="3" y1="3" x2="9" y2="9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/><line x1="9" y1="3" x2="3" y2="9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
               </button>
             </div>
@@ -313,17 +317,17 @@ function App() {
             <button className="tab-new" onClick={handleCreateSession} title="New session">+</button>
             <button className="tab-btn" onClick={() => setShowSessionManager(true)} title="Session manager">☰</button>
             <div className="window-controls">
-              <button className="win-btn" onClick={() => getCurrentWindow().minimize()} title="Minimize">
+              <button className="win-btn" onClick={() => platform.minimize()} title="Minimize">
                 <svg width="12" height="12" viewBox="0 0 12 12"><line x1="2" y1="6" x2="10" y2="6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
               </button>
-              <button className="win-btn" onClick={() => { getCurrentWindow().toggleMaximize(); setIsMaximized((v) => !v); }} title={isMaximized ? "Restore" : "Maximize"}>
+              <button className="win-btn" onClick={() => { platform.toggleMaximize(); setIsMaximized((v) => !v); }} title={isMaximized ? "Restore" : "Maximize"}>
                 {isMaximized ? (
                   <svg width="12" height="12" viewBox="0 0 12 12"><rect x="4" y="1" width="7" height="7" rx="0.8" fill="none" stroke="currentColor" strokeWidth="1.3"/><rect x="1" y="4" width="7" height="7" rx="0.8" fill="none" stroke="currentColor" strokeWidth="1.3"/></svg>
                 ) : (
                   <svg width="12" height="12" viewBox="0 0 12 12"><rect x="2" y="2.5" width="8" height="7" rx="1" fill="none" stroke="currentColor" strokeWidth="1.3"/></svg>
                 )}
               </button>
-              <button className="win-btn win-close" onClick={() => getCurrentWindow().close()} title="Close">
+              <button className="win-btn win-close" onClick={() => platform.close()} title="Close">
                 <svg width="12" height="12" viewBox="0 0 12 12"><line x1="3" y1="3" x2="9" y2="9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/><line x1="9" y1="3" x2="3" y2="9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
               </button>
             </div>
@@ -426,6 +430,7 @@ function App() {
 
       {showSessionManager && (
         <SessionManager
+          transport={transport}
           onOpenSession={(id) => {
             switchSession(id);
             setShowSessionManager(false);

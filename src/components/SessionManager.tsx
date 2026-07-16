@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useState, useEffect, useCallback } from "react";
+import type { Transport } from "../core/transport";
 import "./SessionManager.css";
 
 interface SessionDirInfo {
@@ -9,6 +9,7 @@ interface SessionDirInfo {
 }
 
 interface SessionManagerProps {
+  transport: Transport;
   onOpenSession: (sessionId: string) => void;
   onNewSession: () => void;
   onClose: () => void;
@@ -23,7 +24,7 @@ function formatDate(unixTs: string): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-function SessionManager({ onOpenSession, onNewSession, onClose, activeSessionIds }: SessionManagerProps) {
+function SessionManager({ transport, onOpenSession, onNewSession, onClose, activeSessionIds }: SessionManagerProps) {
   const [sessions, setSessions] = useState<SessionDirInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -31,20 +32,19 @@ function SessionManager({ onOpenSession, onNewSession, onClose, activeSessionIds
   const [batchDeleting, setBatchDeleting] = useState(false);
   const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
   const [openingId, setOpeningId] = useState<string | null>(null);
-  const listRef = useRef<HTMLDivElement>(null);
 
   const loadSessions = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const dirs = await invoke<SessionDirInfo[]>("list_session_dirs");
+      const dirs = await transport.listSessionDirs();
       setSessions(dirs);
     } catch (err) {
       setError(String(err));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [transport]);
 
   useEffect(() => {
     loadSessions();
@@ -86,7 +86,7 @@ function SessionManager({ onOpenSession, onNewSession, onClose, activeSessionIds
     try {
       for (const id of toDelete) {
         try {
-          await invoke("delete_session_dir", { sessionId: id });
+          await transport.deleteSessionDir(id);
         } catch { /* skip individual failures */ }
       }
       setSelectedIds(new Set());
@@ -95,31 +95,28 @@ function SessionManager({ onOpenSession, onNewSession, onClose, activeSessionIds
     } catch { /* */ } finally {
       setBatchDeleting(false);
     }
-  }, [selectedIds, deletableIds, loadSessions]);
+  }, [selectedIds, deletableIds, loadSessions, transport]);
 
   const handleOpen = useCallback(async (id: string) => {
     setOpeningId(id);
     try {
-      const resumedId = await invoke<string>("resume_session", {
-        sessionId: id,
-        binaryPath: "",
-      });
+      const resumedId = await transport.resumeSession(id);
       onOpenSession(resumedId);
     } catch (err) {
       setError(String(err));
     } finally {
       setOpeningId(null);
     }
-  }, [onOpenSession]);
+  }, [transport, onOpenSession]);
 
   const handleSingleDelete = useCallback(async (id: string) => {
     try {
-      await invoke("delete_session_dir", { sessionId: id });
+      await transport.deleteSessionDir(id);
       await loadSessions();
     } catch (err) {
       setError(String(err));
     }
-  }, [loadSessions]);
+  }, [loadSessions, transport]);
 
   return (
     <div className="sm-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -201,7 +198,7 @@ function SessionManager({ onOpenSession, onNewSession, onClose, activeSessionIds
             <div className="sm-empty-sub">Create a new session to get started</div>
           </div>
         ) : (
-          <div className="sm-list" ref={listRef}>
+          <div className="sm-list">
             {sessions.map((s) => {
               const active = isActive(s.id);
               const selected = selectedIds.has(s.id);
