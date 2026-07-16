@@ -151,9 +151,15 @@
     });
 
     // 3. Register Tauri event listeners
-    listen("tlv-delta", function (ev) { app.ports.onDelta.send(ev.payload); });
-    listen("tlv-frame", function (ev) { app.ports.onFrame.send(ev.payload); });
-    listen("core-status", function (ev) { app.ports.onStatus.send(ev.payload); });
+    Promise.all([
+      listen("tlv-delta", function (ev) { app.ports.onDelta.send(ev.payload); }),
+      listen("tlv-frame", function (ev) { app.ports.onFrame.send(ev.payload); }),
+      listen("core-status", function (ev) { app.ports.onStatus.send(ev.payload); }),
+    ]).then(function () {
+      console.log("[bridge] Tauri event listeners ready");
+    }).catch(function (e) {
+      console.error("[bridge] listen() failed:", e);
+    });
 
     // 4. Scroll tracking: send scroll data to Elm
     function sendScroll() {
@@ -178,9 +184,16 @@
   }
 
   // Wait for DOM + __TAURI__ to be ready
+  function waitForTauri(cb) {
+    if (window.__TAURI__ && window.__TAURI__.core) {
+      cb();
+    } else {
+      setTimeout(function () { waitForTauri(cb); }, 10);
+    }
+  }
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init);
+    document.addEventListener("DOMContentLoaded", function () { waitForTauri(init); });
   } else {
-    init();
+    waitForTauri(init);
   }
 })();
