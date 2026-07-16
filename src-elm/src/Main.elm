@@ -938,7 +938,7 @@ viewInputBar model session =
                                 ( NoOp, False )
                         ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "shiftKey" D.bool)
                     , Attr.disabled (not session.connected)
-                    , Attr.rows 2
+                    , Attr.rows 1
                     ]
                     []
                 ]

@@ -1600,7 +1600,9 @@ html {
   outline: none;
   resize: none;
   box-sizing: border-box;
-  min-height: 48px;
+  min-height: 44px;
+  max-height: 76px;
+  overflow-y: auto;
 }
 
 .input-text::placeholder {
