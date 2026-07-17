@@ -645,13 +645,28 @@ update msg model =
             case getActiveSession model of
                 Just s ->
                     let
+                        -- Clamp selection to filtered list
+                        filteredLen =
+                            List.length (filterEntries { s | filePickerInput = val })
+
+                        clampedIdx =
+                            if s.filePickerSelected >= filteredLen then
+                                max 0 (filteredLen - 1)
+                            else
+                                s.filePickerSelected
+
                         cmd =
                             if String.startsWith "/" val || String.startsWith "~" val || String.contains "/" val || val == ".." then
                                 Ports.fsResolvePath { path = val }
                             else
                                 Cmd.none
                     in
-                    ( updateActiveSession model (\sess -> { sess | filePickerInput = val })
+                    ( updateActiveSession model (\sess ->
+                        { sess
+                            | filePickerInput = val
+                            , filePickerSelected = clampedIdx
+                        }
+                      )
                     , cmd
                     )
 
