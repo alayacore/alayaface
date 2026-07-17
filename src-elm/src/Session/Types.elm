@@ -197,6 +197,7 @@ type alias SessionState =
     , filePickerType : MediaType
     , filePickerMode : FileMode
     , filePickerInput : String
+    , filePickerFilter : String
     , filePickerEntries : List DirEntry
     , filePickerDir : String
     , filePickerBaseDir : String
@@ -267,6 +268,7 @@ emptySession id =
     , filePickerType = Image
     , filePickerMode = Local
     , filePickerInput = ""
+    , filePickerFilter = ""
     , filePickerEntries = []
     , filePickerDir = ""
     , filePickerBaseDir = ""
