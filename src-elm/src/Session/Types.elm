@@ -16,6 +16,8 @@ module Session.Types exposing
     , ThemeInfo
     , emptySession
     , PendingConfirm
+    , FileMode(..)
+    , DirEntry
     )
 
 import Dict exposing (Dict)
@@ -50,6 +52,19 @@ mediaTypeFromString s =
         "video" -> Just Video
         "document" -> Just Document
         _ -> Nothing
+
+
+-- File Picker Types
+
+type FileMode
+    = Local
+    | Url
+
+
+type alias DirEntry =
+    { name : String
+    , isDir : Bool
+    }
 
 
 type alias MediaItem =
@@ -177,13 +192,35 @@ type alias SessionState =
     , collapsedMsgIds : Set.Set String
     , pendingConfirm : List PendingConfirm
     , pendingMcpAuth : Maybe PendingConfirm
+    , pendingMcpAuths : List PendingConfirm
+    , showFilePicker : Bool
+    , filePickerType : MediaType
+    , filePickerMode : FileMode
+    , filePickerInput : String
+    , filePickerEntries : List DirEntry
+    , filePickerDir : String
+    , filePickerBaseDir : String
+    , filePickerSelected : Int
+    , filePickerLoading : Bool
+    , filePickerError : Maybe String
+    , pendingFileName : String
     , mcpStatus : Maybe String
+    , mcpServers : List String
     , messageVersion : Maybe Int
     , reasoningLevel : Maybe Int
     , activeTheme : Maybe String
     , themes : Maybe (List ThemeInfo)
     , videoFps : Maybe Int
     , videoRes : Maybe Int
+      -- Overlay state (per-session)
+    , showModelSelector : Bool
+    , modelSelectorInput : String
+    , modelSelectorSelected : Int
+    , modelSelectorScroll : Int
+    , showHelpWindow : Bool
+    , helpFilter : String
+    , helpSelected : Int
+    , helpScroll : Int
     }
 
 
@@ -225,11 +262,32 @@ emptySession id =
     , collapsedMsgIds = Set.empty
     , pendingConfirm = []
     , pendingMcpAuth = Nothing
+    , pendingMcpAuths = []
+    , showFilePicker = False
+    , filePickerType = Image
+    , filePickerMode = Local
+    , filePickerInput = ""
+    , filePickerEntries = []
+    , filePickerDir = ""
+    , filePickerBaseDir = ""
+    , filePickerSelected = 0
+    , filePickerLoading = False
+    , filePickerError = Nothing
+    , pendingFileName = ""
     , mcpStatus = Nothing
+    , mcpServers = []
     , messageVersion = Nothing
     , reasoningLevel = Nothing
     , activeTheme = Nothing
     , themes = Nothing
     , videoFps = Nothing
     , videoRes = Nothing
+    , showModelSelector = False
+    , modelSelectorInput = ""
+    , modelSelectorSelected = 0
+    , modelSelectorScroll = 0
+    , showHelpWindow = False
+    , helpFilter = ""
+    , helpSelected = 0
+    , helpScroll = 0
     }

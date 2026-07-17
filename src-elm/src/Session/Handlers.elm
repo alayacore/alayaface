@@ -2,6 +2,7 @@ module Session.Handlers exposing
     ( handleDeltaEvent
     , handleFrameEvent
     , handleSystemMsg
+    , modelInfoDecoder
     )
 
 import Dict exposing (Dict)
@@ -9,6 +10,15 @@ import Set exposing (Set)
 import Json.Decode as D
 import Session.Types exposing (..)
 import Session.Protocol exposing (..)
+
+
+-- Model Info Decoder
+
+modelInfoDecoder : D.Decoder ModelInfo
+modelInfoDecoder =
+    D.map2 ModelInfo
+        (D.field "id" D.int)
+        (D.field "name" D.string)
 
 
 -- Delta Event Handler (At/Ar)
@@ -451,12 +461,40 @@ handleSystemNotify s data =
 
 handleSystemModelList : SessionState -> D.Value -> SessionState
 handleSystemModelList s data =
-    s -- Simplified; full implementation would parse models array
+    let
+        modelsResult =
+            D.decodeValue (D.field "models" (D.list modelInfoDecoder)) data
+    in
+    case modelsResult of
+        Ok models ->
+            { s | models = models }
+
+        Err _ ->
+            s
 
 
 handleSystemModel : SessionState -> D.Value -> SessionState
 handleSystemModel s data =
-    s
+    let
+        idResult =
+            D.decodeValue (D.field "active_id" D.int) data
+
+        nameResult =
+            D.decodeValue (D.field "active_name" D.string) data
+
+        contextResult =
+            D.decodeValue (D.field "context_limit" D.int) data
+    in
+    case ( idResult, nameResult ) of
+        ( Ok mid, Ok mname ) ->
+            { s
+                | activeModelId = Just mid
+                , activeModelName = mname
+                , contextLimit = Result.withDefault s.contextLimit contextResult
+            }
+
+        _ ->
+            s
 
 
 handleSystemTheme : SessionState -> D.Value -> SessionState
@@ -506,21 +544,64 @@ handleSystemMcp : SessionState -> D.Value -> SessionState
 handleSystemMcp s data =
     let
         status =
-            D.decodeValue (D.field "status" D.string) data
-                |> Result.toMaybe
+            D.decodeValue (D.field "status" D.string) data |> Result.toMaybe
+
+        server =
+            D.decodeValue (D.field "server" D.string) data |> Result.toMaybe |> Maybe.withDefault ""
+
+        url =
+            D.decodeValue (D.field "url" D.string) data |> Result.toMaybe
     in
     case status of
-        Just "auth_confirm" ->
+        Just "connecting" ->
+            -- Add server to list if not already present
             let
-                server =
-                    D.decodeValue (D.field "server" D.string) data |> Result.toMaybe |> Maybe.withDefault ""
+                newServers =
+                    if List.member server s.mcpServers then
+                        s.mcpServers
+                    else
+                        s.mcpServers ++ [ server ]
+            in
+            { s | mcpStatus = Just "connecting", mcpServers = newServers }
 
-                url =
-                    D.decodeValue (D.field "url" D.string) data |> Result.toMaybe
+        Just "connected" ->
+            -- Remove server from list
+            { s
+                | mcpStatus = Just "connecting"
+                , mcpServers = List.filter (\n -> n /= server) s.mcpServers
+            }
+
+        Just "failed" ->
+            -- Remove from list; if list empty, mcp init is done
+            let
+                remaining =
+                    List.filter (\n -> n /= server) s.mcpServers
             in
             { s
-                | pendingMcpAuth = Just { id = server, toolName = Just server, toolInput = url }
+                | mcpStatus = Just (if List.isEmpty remaining then "failed" else "connecting")
+                , mcpServers = remaining
+            }
+
+        Just "auth_confirm" ->
+            let
+                newPending =
+                    { id = server, toolName = Just server, toolInput = url }
+            in
+            { s
+                | pendingMcpAuths = s.pendingMcpAuths ++ [ newPending ]
+                , pendingMcpAuth = Just newPending
                 , mcpStatus = Just "auth_confirm"
+            }
+
+        Just "auth_running" ->
+            { s | mcpStatus = Just "auth_running" }
+
+        Just "done" ->
+            { s
+                | mcpStatus = Nothing
+                , mcpServers = []
+                , pendingMcpAuth = Nothing
+                , pendingMcpAuths = []
             }
 
         Just st ->

@@ -153,6 +153,14 @@
       });
     });
 
+    on("startMcpAuthFlow", function (data) {
+      invoke("start_mcp_auth_flow", {
+        sessionId: data.sessionId,
+        serverName: data.serverName,
+        authUrl: data.authUrl,
+      });
+    });
+
     // 3. Register Tauri event listeners
     Promise.all([
       listen("tlv-delta", function (ev) { app.ports.onDelta.send(ev.payload); }),

@@ -43,16 +43,6 @@ type alias Model =
     , activeId : Maybe String
     , initializing : Bool
     , initError : Maybe String
-    , showFilePicker : Bool
-    , filePickerType : T.MediaType
-    , filePickerMode : FileMode
-    , filePickerInput : String
-    , filePickerEntries : List DirEntry
-    , filePickerDir : String
-    , filePickerBaseDir : String
-    , filePickerSelected : Int
-    , filePickerLoading : Bool
-    , filePickerError : Maybe String
     , showSessionManager : Bool
     , sessionDirs : List E.Value
     , isMaximized : Bool
@@ -67,33 +57,12 @@ type alias Model =
     }
 
 
-type FileMode
-    = Local
-    | Url
-
-
-type alias DirEntry =
-    { name : String
-    , isDir : Bool
-    }
-
-
 init : Flags -> ( Model, Cmd Msg )
 init _ =
     ( { sessions = Dict.empty
       , activeId = Nothing
       , initializing = True
       , initError = Nothing
-      , showFilePicker = False
-      , filePickerType = T.Image
-      , filePickerMode = Local
-      , filePickerInput = ""
-      , filePickerEntries = []
-      , filePickerDir = ""
-      , filePickerBaseDir = ""
-      , filePickerSelected = 0
-      , filePickerLoading = False
-      , filePickerError = Nothing
       , showSessionManager = False
       , sessionDirs = []
       , isMaximized = False
@@ -108,6 +77,38 @@ init _ =
       }
     , Ports.createSession { toolConfirm = Just "execute_command" }
     )
+
+
+-- Helpers
+
+updateSession : Model -> String -> (T.SessionState -> T.SessionState) -> Model
+updateSession model sid fn =
+    case Dict.get sid model.sessions of
+        Just s ->
+            { model | sessions = Dict.insert sid (fn s) model.sessions }
+
+        Nothing ->
+            model
+
+
+updateActiveSession : Model -> (T.SessionState -> T.SessionState) -> Model
+updateActiveSession model fn =
+    case model.activeId of
+        Just sid ->
+            updateSession model sid fn
+
+        Nothing ->
+            model
+
+
+getActiveSession : Model -> Maybe T.SessionState
+getActiveSession model =
+    case model.activeId of
+        Just sid ->
+            Dict.get sid model.sessions
+
+        Nothing ->
+            Nothing
 
 
 -- MSG
@@ -130,17 +131,19 @@ type Msg
     | McpAuthDeny String
     | McpCancelAll
     | CloseConfirm
+    | CloseMcpInit
     | ForkMessage String
+    | RemoveStaged String
+    | ConfirmFilePickerUrl
     | SetInput String
     | SwitchSession String
       -- File picker
-    | OpenFilePicker T.MediaType
+    | OpenFilePicker
     | CloseFilePicker
     | SetFilePickerInput String
     | FilePickerNavigateDir String
     | FilePickerSelectItem Int
     | FilePickerConfirmItem
-    | FilePickerToggleMode
     | FilePickerKeyDown Int
     | FsListDirResult (List E.Value)
     | FsHomeDirResult String
@@ -159,9 +162,22 @@ type Msg
     | Minimize
     | ToggleMaximize
     | CloseWindow
+      -- Model Selector
+    | OpenModelSelector
+    | CloseModelSelector
+    | SetModelSelectorInput String
+    | ModelSelectorSelectItem Int
+    | ModelSelectorConfirmItem
+      -- Help Window
+    | OpenHelpWindow
+    | CloseHelpWindow
+    | SetHelpFilter String
+    | HelpSelectItem Int
+    | HelpCmdMsg String
       -- Internal
     | NoOp
     | FocusNow
+    | KeyDown String Bool Bool
     | ScrollPosition Float Float Float
 
 
@@ -312,7 +328,7 @@ update msg model =
 
         -- User Actions
         SendPrompt ->
-            case activeSession model of
+            case getActiveSession model of
                 Just s ->
                     let
                         text =
@@ -382,21 +398,26 @@ update msg model =
                     ( model, Cmd.none )
 
         McpAuthConfirm ->
-            case activeSession model of
+            case getActiveSession model of
                 Just s ->
                     case s.pendingMcpAuth of
                         Just auth ->
                             let
                                 newSessions =
                                     Dict.insert s.id { s | pendingMcpAuth = Nothing } model.sessions
+
+                                authUrl =
+                                    Maybe.withDefault "" auth.toolInput
+
+                                serverName =
+                                    Maybe.withDefault "" auth.toolName
                             in
                             ( { model | sessions = newSessions }
-                            , case auth.toolInput of
-                                Just url ->
-                                    Ports.openUrl { url = url }
-
-                                Nothing ->
-                                    Cmd.none
+                            , Ports.startMcpAuthFlow
+                                { sessionId = s.id
+                                , serverName = serverName
+                                , authUrl = authUrl
+                                }
                             )
 
                         Nothing ->
@@ -450,17 +471,29 @@ update msg model =
         CloseConfirm ->
             case model.activeId of
                 Just sid ->
-                    let
-                        s =
-                            Dict.get sid model.sessions
-                    in
-                    case s of
+                    case Dict.get sid model.sessions of
                         Just sess ->
+                            -- Pop next pending MCP auth from queue if any
+                            let
+                                nextAuth =
+                                    case sess.pendingMcpAuths of
+                                        next :: rest ->
+                                            Just next
+
+                                        [] ->
+                                            Nothing
+
+                                newQueue =
+                                    case sess.pendingMcpAuths of
+                                        _ :: rest -> rest
+                                        [] -> []
+                            in
                             ( { model
                                 | sessions = Dict.insert sid
                                     { sess
                                         | pendingConfirm = []
-                                        , pendingMcpAuth = Nothing
+                                        , pendingMcpAuth = nextAuth
+                                        , pendingMcpAuths = newQueue
                                     }
                                     model.sessions
                               }
@@ -473,12 +506,69 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
+        CloseMcpInit ->
+            update McpCancelAll model
+
         ForkMessage historyId ->
             case model.activeId of
                 Just sid ->
                     ( model
                     , Ports.forkSession { sourceSessionId = sid, historyId = historyId }
                     )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        RemoveStaged stagedId ->
+            case model.activeId of
+                Just sid ->
+                    case Dict.get sid model.sessions of
+                        Just s ->
+                            let
+                                newStaged =
+                                    List.filter (\m -> m.id /= stagedId) s.staged
+                            in
+                            ( { model | sessions = Dict.insert sid { s | staged = newStaged } model.sessions }
+                            , Cmd.none
+                            )
+
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        ConfirmFilePickerUrl ->
+            case getActiveSession model of
+                Just s ->
+                    let
+                        url =
+                            String.trim s.filePickerInput
+                    in
+                    if url == "" then
+                        ( model, Cmd.none )
+
+                    else
+                        let
+                            detectedType =
+                                detectMediaType url
+
+                            newItem =
+                                { id = "url-" ++ String.fromInt (List.length s.staged)
+                                , mediaType = detectedType
+                                , uri = url
+                                , name = Just (String.left 60 url)
+                                }
+                        in
+                        ( updateActiveSession model (\sess ->
+                            { sess
+                                | staged = sess.staged ++ [ newItem ]
+                                , showFilePicker = False
+                                , filePickerInput = ""
+                            }
+                          )
+                        , Cmd.none
+                        )
 
                 Nothing ->
                     ( model, Cmd.none )
@@ -508,84 +598,114 @@ update msg model =
             ( { model | activeId = Just id }, Task.attempt (\_ -> NoOp) (Dom.focus "msg-input") )
 
         -- File Picker
-        OpenFilePicker mt ->
-            ( { model
-                | showFilePicker = True
-                , filePickerType = mt
-                , filePickerMode = Local
-                , filePickerInput = ""
-                , filePickerSelected = 0
-                , filePickerLoading = True
-              }
-            , Ports.fsHomeDir {}
-            )
-
-        CloseFilePicker ->
-            ( { model | showFilePicker = False }, Cmd.none )
-
-        SetFilePickerInput val ->
-            let
-                newModel =
-                    { model | filePickerInput = val }
-            in
-            if String.startsWith "/" val || String.startsWith "~" val || String.contains "/" val || val == ".." then
-                ( newModel
-                , Ports.fsResolvePath { path = val }
-                )
-
-            else
-                ( newModel, Cmd.none )
-
-        FilePickerNavigateDir name ->
-            let
-                newPath =
-                    if model.filePickerDir == "" then
-                        name
-                    else
-                        model.filePickerDir ++ "/" ++ name
-            in
-            ( { model | filePickerLoading = True }
-            , Ports.fsResolvePath { path = newPath }
-            )
-
-        FilePickerSelectItem idx ->
-            ( { model | filePickerSelected = idx }, Cmd.none )
-
-        FilePickerConfirmItem ->
-            let
-                entries =
-                    filterEntries model
-            in
-            case List.head (List.drop model.filePickerSelected entries) of
-                Just entry ->
-                    if entry.isDir then
-                        update (FilePickerNavigateDir entry.name) model
-
-                    else
-                        let
-                            fullPath =
-                                if model.filePickerDir == "" then
-                                    entry.name
-                                else
-                                    model.filePickerDir ++ "/" ++ entry.name
-                        in
-                        ( { model | filePickerLoading = True }
-                        , Ports.fsReadFileDataUri { path = fullPath }
-                        )
+        OpenFilePicker ->
+            case getActiveSession model of
+                Just _ ->
+                    ( updateActiveSession model (\s ->
+                        { s
+                            | showFilePicker = True
+                            , filePickerInput = ""
+                            , filePickerSelected = 0
+                            , filePickerLoading = True
+                        }
+                      )
+                    , Ports.fsHomeDir {}
+                    )
 
                 Nothing ->
                     ( model, Cmd.none )
 
-        FilePickerToggleMode ->
-            ( { model
-                | filePickerMode =
-                    case model.filePickerMode of
-                        Local -> Url
-                        Url -> Local
-                , filePickerInput = ""
-              }
+        CloseFilePicker ->
+            ( updateActiveSession model (\s -> { s | showFilePicker = False })
             , Cmd.none
             )
+
+        SetFilePickerInput val ->
+            case getActiveSession model of
+                Just s ->
+                    let
+                        cmd =
+                            if String.startsWith "/" val || String.startsWith "~" val || String.contains "/" val || val == ".." then
+                                Ports.fsResolvePath { path = val }
+                            else
+                                Cmd.none
+                    in
+                    ( updateActiveSession model (\sess -> { sess | filePickerInput = val })
+                    , cmd
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        FilePickerNavigateDir name ->
+            case getActiveSession model of
+                Just s ->
+                    let
+                        newPath =
+                            if s.filePickerDir == "" then
+                                name
+                            else
+                                s.filePickerDir ++ "/" ++ name
+
+                        newInput =
+                            if String.startsWith "/" s.filePickerInput || String.startsWith "~" s.filePickerInput then
+                                -- Keep the path prefix + directory name
+                                s.filePickerInput ++ "/" ++ name
+                            else
+                                -- Relative navigation from list
+                                name ++ "/"
+                    in
+                    ( updateActiveSession model (\sess ->
+                        { sess
+                            | filePickerLoading = True
+                            , filePickerInput = newInput
+                        }
+                      )
+                    , Ports.fsResolvePath { path = newPath }
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        FilePickerSelectItem idx ->
+            ( updateActiveSession model (\s -> { s | filePickerSelected = idx })
+            , Cmd.none
+            )
+
+        FilePickerConfirmItem ->
+            case getActiveSession model of
+                Just s ->
+                    let
+                        entries =
+                            filterEntries s
+                    in
+                    case List.head (List.drop s.filePickerSelected entries) of
+                        Just entry ->
+                            if entry.isDir then
+                                update (FilePickerNavigateDir entry.name) model
+
+                            else
+                                let
+                                    fullPath =
+                                        if s.filePickerDir == "" then
+                                            entry.name
+                                        else
+                                            s.filePickerDir ++ "/" ++ entry.name
+                                in
+                                ( updateActiveSession model (\sess ->
+                                    { sess
+                                        | filePickerLoading = True
+                                        , pendingFileName = entry.name
+                                    }
+                                  )
+                                , Ports.fsReadFileDataUri { path = fullPath }
+                                )
+
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
 
         FilePickerKeyDown _ ->
             ( model, Cmd.none )
@@ -595,26 +715,82 @@ update msg model =
                 parsed =
                     List.filterMap decodeDirEntry entries
             in
-            ( { model
-                | filePickerEntries = parsed
-                , filePickerLoading = False
-                , filePickerError = Nothing
-              }
+            ( updateActiveSession model (\s ->
+                { s
+                    | filePickerEntries = parsed
+                    , filePickerLoading = False
+                    , filePickerError = Nothing
+                }
+              )
             , Cmd.none
             )
 
         FsHomeDirResult home ->
-            ( { model | filePickerBaseDir = home, filePickerDir = home, filePickerLoading = True }
+            ( updateActiveSession model (\s ->
+                { s
+                    | filePickerBaseDir = home
+                    , filePickerDir = home
+                    , filePickerLoading = True
+                }
+              )
             , Ports.fsListDir { path = home }
             )
 
-        FsReadFileResult _ ->
-            -- File read as data URI, add to staged
-            ( { model | showFilePicker = False }, Cmd.none )
+        FsReadFileResult uri ->
+            case getActiveSession model of
+                Just s ->
+                    let
+                        name =
+                            if s.pendingFileName /= "" then
+                                Just s.pendingFileName
+                            else
+                                Nothing
 
-        FsResolvePathResult _ ->
-            -- Simplified for now
-            ( model, Cmd.none )
+                        detectedType =
+                            case name of
+                                Just n -> detectMediaType n
+                                Nothing -> T.Document
+
+                        newItem =
+                            { id = "file-" ++ String.fromInt (List.length s.staged)
+                            , mediaType = detectedType
+                            , uri = uri
+                            , name = name
+                            }
+                    in
+                    ( updateActiveSession model (\sess ->
+                        { sess
+                            | showFilePicker = False
+                            , filePickerInput = ""
+                            , pendingFileName = ""
+                            , staged = sess.staged ++ [ newItem ]
+                        }
+                      )
+                    , Cmd.none
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        FsResolvePathResult result ->
+            case D.decodeValue resolvePathResultDecoder result of
+                Ok rp ->
+                    if rp.exists && rp.isDir then
+                        ( updateActiveSession model (\s ->
+                            { s
+                                | filePickerDir = rp.resolved
+                                , filePickerSelected = 0
+                                , filePickerLoading = True
+                            }
+                          )
+                        , Ports.fsListDir { path = rp.resolved }
+                        )
+
+                    else
+                        ( model, Cmd.none )
+
+                Err _ ->
+                    ( model, Cmd.none )
 
         -- Session Manager
         OpenSessionManager ->
@@ -651,6 +827,128 @@ update msg model =
         CloseWindow ->
             ( model, Ports.closeWindow {} )
 
+        -- Model Selector
+        OpenModelSelector ->
+            ( updateActiveSession model (\s ->
+                { s
+                    | showModelSelector = True
+                    , modelSelectorInput = ""
+                    , modelSelectorSelected = 0
+                    , modelSelectorScroll = 0
+                }
+              )
+            , Cmd.none
+            )
+
+        CloseModelSelector ->
+            ( updateActiveSession model (\s -> { s | showModelSelector = False })
+            , Cmd.none
+            )
+
+        SetModelSelectorInput val ->
+            ( updateActiveSession model (\s ->
+                let
+                    filtered =
+                        filterModels s.models val
+
+                    -- Clamp selected index if filter reduces list
+                    clampedSelected =
+                        if List.length filtered <= s.modelSelectorSelected then
+                            max 0 (List.length filtered - 1)
+                        else
+                            s.modelSelectorSelected
+                in
+                { s
+                    | modelSelectorInput = val
+                    , modelSelectorSelected = clampedSelected
+                }
+              )
+            , Cmd.none
+            )
+
+        ModelSelectorSelectItem idx ->
+            ( updateActiveSession model (\s -> { s | modelSelectorSelected = idx })
+            , Cmd.none
+            )
+
+        ModelSelectorConfirmItem ->
+            case getActiveSession model of
+                Just s ->
+                    let
+                        filtered =
+                            filterModels s.models s.modelSelectorInput
+
+                        selectedModel =
+                            List.head (List.drop s.modelSelectorSelected filtered)
+                    in
+                    case selectedModel of
+                        Just m ->
+                            ( updateActiveSession model (\sess -> { sess | showModelSelector = False, modelSelectorInput = "" })
+                            , Ports.setModel { sessionId = s.id, modelId = m.id }
+                            )
+
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        -- Help Window
+        OpenHelpWindow ->
+            ( updateActiveSession model (\s ->
+                { s
+                    | showHelpWindow = True
+                    , helpFilter = ""
+                    , helpSelected = 0
+                    , helpScroll = 0
+                }
+              )
+            , Cmd.none
+            )
+
+        CloseHelpWindow ->
+            ( updateActiveSession model (\s -> { s | showHelpWindow = False })
+            , Cmd.none
+            )
+
+        SetHelpFilter val ->
+            ( updateActiveSession model (\s -> { s | helpFilter = val })
+            , Cmd.none
+            )
+
+        HelpSelectItem idx ->
+            ( updateActiveSession model (\s -> { s | helpSelected = idx })
+            , Cmd.none
+            )
+
+        HelpCmdMsg cmd ->
+            case model.activeId of
+                Just sid ->
+                    let
+                        -- Focus input and insert the command prefix
+                        newSessions =
+                            Dict.update sid
+                                (\maybeS ->
+                                    case maybeS of
+                                        Just s ->
+                                            Just
+                                                { s
+                                                    | showHelpWindow = False
+                                                    , input = cmd ++ " "
+                                                }
+
+                                        Nothing ->
+                                            maybeS
+                                )
+                                model.sessions
+                    in
+                    ( { model | sessions = newSessions }
+                    , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
         FocusNow ->
             ( model, Task.attempt (\_ -> NoOp) (Dom.focus "msg-input") )
 
@@ -661,21 +959,51 @@ update msg model =
             in
             ( { model | atBottom = atBottom }, Cmd.none )
 
+        KeyDown key ctrl alt ->
+            -- Escape closes any open overlay
+            if key == "Escape" then
+                case getActiveSession model of
+                    Just s ->
+                        if s.showModelSelector then
+                            update CloseModelSelector model
+                        else if s.showHelpWindow then
+                            update CloseHelpWindow model
+                        else if s.showFilePicker then
+                            update CloseFilePicker model
+                        else
+                            ( model, Cmd.none )
+
+                    Nothing ->
+                        ( model, Cmd.none )
+
+            else if key == "g" && ctrl then
+                update CancelTask model
+
+            else if key == "l" && ctrl && not alt then
+                update OpenModelSelector model
+
+            else if key == "h" && ctrl && not alt then
+                update OpenHelpWindow model
+
+            else if key == "a" && ctrl && not alt && not model.showSessionManager then
+                case getActiveSession model of
+                    Just s ->
+                        if not s.showFilePicker then
+                            update OpenFilePicker model
+                        else
+                            ( model, Cmd.none )
+
+                    Nothing ->
+                        ( model, Cmd.none )
+
+            else
+                ( model, Cmd.none )
+
         NoOp ->
             ( model, Cmd.none )
 
 
--- Helpers
-
-activeSession : Model -> Maybe T.SessionState
-activeSession model =
-    case model.activeId of
-        Just id ->
-            Dict.get id model.sessions
-
-        Nothing ->
-            Nothing
-
+-- ─── Helpers ──────────────────────────────────────────────────────────
 
 updateAfterConfirm : Model -> String -> Model
 updateAfterConfirm model sid =
@@ -693,30 +1021,223 @@ updateAfterConfirm model sid =
             model
 
 
-decodeDirEntry : E.Value -> Maybe DirEntry
+decodeDirEntry : E.Value -> Maybe T.DirEntry
 decodeDirEntry val =
-    case D.decodeValue (D.map2 DirEntry (D.field "name" D.string) (D.field "isDir" D.bool)) val of
+    case D.decodeValue (D.map2 T.DirEntry (D.field "name" D.string) (D.field "isDir" D.bool)) val of
         Ok entry -> Just entry
         Err _ -> Nothing
 
 
-filterEntries : Model -> List DirEntry
-filterEntries model =
+filterEntries : T.SessionState -> List T.DirEntry
+filterEntries session =
     let
         term =
-            String.trim (String.toLower model.filePickerInput)
+            String.trim session.filePickerInput
     in
     if String.isEmpty term then
-        model.filePickerEntries
+        session.filePickerEntries
+
+    else if isPath term then
+        -- Path input like /etc, ~/.config, ../src — show all files in current dir
+        session.filePickerEntries
 
     else
-        List.filter (\e -> Fuzzy.fuzzyMatch term (String.toLower e.name)) model.filePickerEntries
+        List.filter (\e -> Fuzzy.fuzzyMatch term (String.toLower e.name)) session.filePickerEntries
+
+
+isPath : String -> Bool
+isPath s =
+    String.startsWith "/" s || String.startsWith "~" s || String.contains "/" s || s == ".."
+
+
+-- File Picker Helpers
+
+type alias ResolvedPathResult =
+    { resolved : String
+    , exists : Bool
+    , isDir : Bool
+    }
+
+
+resolvePathResultDecoder : D.Decoder ResolvedPathResult
+resolvePathResultDecoder =
+    D.map3 ResolvedPathResult
+        (D.field "resolved" D.string)
+        (D.field "exists" D.bool)
+        (D.field "isDir" D.bool)
+
+
+isUrl : String -> Bool
+isUrl s =
+    String.startsWith "http://" s || String.startsWith "https://" s
+
+
+detectMediaType : String -> T.MediaType
+detectMediaType name =
+    let
+        ext =
+            String.toLower (Maybe.withDefault "" (List.head (List.reverse (String.split "." name))))
+    in
+    case ext of
+        "jpg" -> T.Image
+        "jpeg" -> T.Image
+        "png" -> T.Image
+        "gif" -> T.Image
+        "webp" -> T.Image
+        "bmp" -> T.Image
+        "svg" -> T.Image
+        "mp3" -> T.Audio
+        "wav" -> T.Audio
+        "ogg" -> T.Audio
+        "flac" -> T.Audio
+        "m4a" -> T.Audio
+        "mp4" -> T.Video
+        "webm" -> T.Video
+        "avi" -> T.Video
+        "mov" -> T.Video
+        "mkv" -> T.Video
+        "pdf" -> T.Document
+        "txt" -> T.Document
+        "md" -> T.Document
+        "json" -> T.Document
+        "csv" -> T.Document
+        "html" -> T.Document
+        "htm" -> T.Document
+        _ -> T.Document
+
+
+shortenPath : String -> String
+shortenPath path =
+    if path == "" then
+        ""
+
+    else
+        let
+            home =
+                Maybe.withDefault "~" (Maybe.map (\_ -> "~") (String.indexes "/home/" path |> List.head))
+
+            parts =
+                String.split "/" path
+
+            numParts =
+                List.length parts
+        in
+        if numParts <= 4 then
+            path
+
+        else
+            let
+                first =
+                    Maybe.withDefault "" (List.head parts)
+
+                lastFew =
+                    List.drop (numParts - 3) parts |> String.join "/"
+            in
+            first ++ "/…/" ++ lastFew
+
+
+-- ─── Model Selector Helpers ──────────────────────────────────────────
+
+filterModels : List T.ModelInfo -> String -> List T.ModelInfo
+filterModels models term =
+    let
+        trimmed =
+            String.trim term
+    in
+    if String.isEmpty trimmed then
+        models
+
+    else
+        List.filter (\m -> Fuzzy.fuzzyMatch (String.toLower trimmed) (String.toLower m.name)) models
+
+
+-- ─── Help Items ──────────────────────────────────────────────────────
+
+type alias HelpItem =
+    { id : Int
+    , key : String
+    , desc : String
+    , isSection : Bool
+    , isCommand : Bool
+    }
+
+
+helpItems : List HelpItem
+helpItems =
+    [ { id = 1, key = "Commands", desc = "", isSection = True, isCommand = False }
+    , { id = 2, key = ":confirm <id> <yes|no>", desc = "Confirm or deny pending tool", isSection = False, isCommand = True }
+    , { id = 3, key = ":mcp_auth <server> <code> <redirect_uri>", desc = "Confirm OAuth authorization", isSection = False, isCommand = True }
+    , { id = 4, key = ":mcp_auth <server>", desc = "Decline OAuth authorization", isSection = False, isCommand = True }
+    , { id = 5, key = ":mcp_cancel", desc = "Cancel MCP initialization", isSection = False, isCommand = True }
+    , { id = 6, key = ":continue", desc = "Retry last prompt", isSection = False, isCommand = True }
+    , { id = 7, key = ":reason <0|1|2>", desc = "Set reasoning level", isSection = False, isCommand = True }
+    , { id = 8, key = ":cancel", desc = "Cancel current task", isSection = False, isCommand = True }
+    , { id = 9, key = ":summarize", desc = "Summarize & compress history", isSection = False, isCommand = True }
+    , { id = 10, key = ":theme_set <name>", desc = "Switch theme by name", isSection = False, isCommand = True }
+    , { id = 11, key = ":model_set <id>", desc = "Switch model by ID", isSection = False, isCommand = True }
+    , { id = 12, key = ":model_load", desc = "Reload model config", isSection = False, isCommand = True }
+    , { id = 13, key = ":model_sync", desc = "Apply edited model config", isSection = False, isCommand = True }
+    , { id = 14, key = ":save [filename]", desc = "Save session", isSection = False, isCommand = True }
+    , { id = 15, key = ":fork <id> <filename>", desc = "Fork session up to content", isSection = False, isCommand = True }
+    , { id = 16, key = ":video_config <fps> <0|1>", desc = "Set video FPS and resolution", isSection = False, isCommand = True }
+    , { id = 17, key = ":suspend", desc = "Suspend process", isSection = False, isCommand = True }
+    , { id = 18, key = ":quit", desc = "Exit application", isSection = False, isCommand = True }
+    , { id = 19, key = ":help", desc = "Open help window", isSection = False, isCommand = True }
+    , { id = 20, key = "Global Shortcuts", desc = "", isSection = True, isCommand = False }
+    , { id = 21, key = "Tab", desc = "Toggle focus display/input", isSection = False, isCommand = False }
+    , { id = 22, key = "Enter", desc = "Submit prompt or command", isSection = False, isCommand = False }
+    , { id = 23, key = "Ctrl+H", desc = "Open help window", isSection = False, isCommand = False }
+    , { id = 24, key = "Ctrl+G", desc = "Cancel current task", isSection = False, isCommand = False }
+    , { id = 25, key = "Ctrl+C", desc = "Clear text", isSection = False, isCommand = False }
+    , { id = 26, key = "Ctrl+S", desc = "Save session", isSection = False, isCommand = False }
+    , { id = 27, key = "Ctrl+A", desc = "Open attachment picker", isSection = False, isCommand = False }
+    , { id = 28, key = "Ctrl+L", desc = "Open model selector", isSection = False, isCommand = False }
+    , { id = 29, key = "Ctrl+R", desc = "Force redraw screen", isSection = False, isCommand = False }
+    , { id = 30, key = "Ctrl+P", desc = "Open theme selector", isSection = False, isCommand = False }
+    , { id = 31, key = "Ctrl+Z", desc = "Suspend process", isSection = False, isCommand = False }
+    , { id = 32, key = "Display Mode", desc = "", isSection = True, isCommand = False }
+    , { id = 33, key = "j/k", desc = "Move window cursor", isSection = False, isCommand = False }
+    , { id = 34, key = "J/K", desc = "Scroll one line", isSection = False, isCommand = False }
+    , { id = 35, key = "Ctrl+D/U", desc = "Scroll half screen", isSection = False, isCommand = False }
+    , { id = 36, key = "g", desc = "Go to first window", isSection = False, isCommand = False }
+    , { id = 37, key = "G", desc = "Follow the last window", isSection = False, isCommand = False }
+    , { id = 38, key = "H/L/M", desc = "Cursor top/btm/mid", isSection = False, isCommand = False }
+    , { id = 39, key = "e", desc = "Open in editor", isSection = False, isCommand = False }
+    , { id = 40, key = "f/b", desc = "Next/prev prompt", isSection = False, isCommand = False }
+    , { id = 41, key = ":", desc = "Enter command mode", isSection = False, isCommand = False }
+    , { id = 42, key = "Space", desc = "Toggle window fold", isSection = False, isCommand = False }
+    , { id = 43, key = "Ctrl+F", desc = "Fork session from cursor", isSection = False, isCommand = False }
+    ]
+
+
+filterHelpItems : String -> List HelpItem -> List HelpItem
+filterHelpItems term items =
+    let
+        trimmed =
+            String.trim term
+    in
+    if String.isEmpty trimmed then
+        items
+
+    else
+        let
+            lower =
+                String.toLower trimmed
+        in
+        List.filter
+            (\item ->
+                if item.isSection then
+                    True
+                else
+                    Fuzzy.fuzzyMatch lower (String.toLower (item.key ++ " " ++ item.desc))
+            )
+            items
 
 
 -- SUBSCRIPTIONS
 
 subscriptions : Model -> Sub Msg
-subscriptions _ =
+subscriptions model =
     Sub.batch
         [ Ports.onScroll (\{ scrollTop, scrollHeight, clientHeight } ->
             ScrollPosition scrollTop scrollHeight clientHeight
@@ -732,12 +1253,10 @@ subscriptions _ =
         , Ports.onFsResolvePath (\result -> FsResolvePathResult result)
         , Ports.onWindowMaximized (\v -> WindowMaximized v)
         , Evts.onKeyDown <|
-            D.map2 (\key ctrl ->
-                if key == "g" && ctrl then
-                    CancelTask
-                else
-                    NoOp
-            ) (D.field "key" D.string) (D.field "ctrlKey" D.bool)
+            D.map3 KeyDown
+                (D.field "key" D.string)
+                (D.field "ctrlKey" D.bool)
+                (D.field "altKey" D.bool)
         ]
 
 
@@ -745,7 +1264,7 @@ subscriptions _ =
 
 view : Model -> Html Msg
 view model =
-    case activeSession model of
+    case getActiveSession model of
         Just session ->
             viewMain model session
 
@@ -796,8 +1315,11 @@ viewMain model session =
         , viewNotifications model
         , viewHeader model session
         , viewChatArea model session
-        , viewConfirmDialog session
-        , viewFilePicker model
+        , viewConfirmOverlay session
+        , viewMcpInitOverlay session
+        , viewFilePickerOverlay model
+        , viewModelSelectorOverlay model
+        , viewHelpWindowOverlay model
         ]
 
 
@@ -939,12 +1461,21 @@ viewInputBar model session =
         hasMessages =
             not (List.isEmpty session.messages)
 
+        hasStaged =
+            not (List.isEmpty session.staged)
+
         inputClass =
             "session-input-bar" ++ (if not hasMessages then " session-input-bar-centered" else "")
     in
     Html.div [ Attr.class inputClass ]
         [ Html.div [ Attr.class "input-container" ]
-            [ Html.div [ Attr.class "message message-user input-bubble" ]
+            [ if hasStaged then
+                Html.div [ Attr.class "hs-staged-row" ]
+                    (List.map viewStagedChip session.staged)
+
+              else
+                Html.text ""
+            , Html.div [ Attr.class "message message-user input-bubble" ]
                 [ Html.textarea
                     [ Attr.id "msg-input"
                     , Attr.class "input-text"
@@ -967,7 +1498,14 @@ viewInputBar model session =
                 ]
             , Html.div [ Attr.class "input-footer" ]
                 [ Html.div [ Attr.class "input-footer-left" ]
-                    [ Html.span [ Attr.class "input-hint" ] [ Html.text "Ctrl+Enter ↵" ] ]
+                    [ Html.button
+                        [ Attr.class "attach-btn-small"
+                        , Ev.onClick OpenFilePicker
+                        , Attr.title "Attach media (Ctrl+A)"
+                        , Attr.disabled (not session.connected)
+                        ]
+                        [ Html.text "📎" ]
+                    , Html.span [ Attr.class "input-hint" ] [ Html.text "Ctrl+L Model  ·  Ctrl+H Help  ·  ↵ Send" ] ]
                 , Html.div [ Attr.class "input-footer-right" ]
                     [ Html.button
                         [ Attr.class ("send-btn" ++ (if session.taskRunning then " cancel" else ""))
@@ -982,101 +1520,258 @@ viewInputBar model session =
         ]
 
 
-viewConfirmDialog : T.SessionState -> Html Msg
-viewConfirmDialog session =
+-- ─── Staged Media Chips ──────────────────────────────────────────────
+
+viewStagedChip : T.StagedMedia -> Html Msg
+viewStagedChip item =
+    Html.div [ Attr.class "hs-staged-chip" ]
+        [ Html.span [ Attr.class "hs-staged-icon" ]
+            [ Html.text (mediaTypeIcon item.mediaType) ]
+        , Html.span [ Attr.class "hs-staged-name" ]
+            [ Html.text (Maybe.withDefault (String.left 40 item.uri) item.name) ]
+        , Html.button
+            [ Attr.class "hs-staged-remove"
+            , Ev.onClick (RemoveStaged item.id)
+            , Attr.title "Remove"
+            ]
+            [ Html.text "✕" ]
+        ]
+
+
+mediaTypeIcon : T.MediaType -> String
+mediaTypeIcon mt =
+    case mt of
+        T.Image -> "🖼"
+        T.Audio -> "🎵"
+        T.Video -> "🎬"
+        T.Document -> "📄"
+
+
+-- ─── Overlay ──────────────────────────────────────────────────────────
+
+viewOverlay : Msg -> List (Html Msg) -> Html Msg
+viewOverlay onBackdropClick children =
+    Html.div [ Attr.class "overlay", Ev.onClick onBackdropClick ]
+        [ Html.div [ Attr.class "overlay-page", Ev.stopPropagationOn "click" (D.succeed ( NoOp, True )) ]
+            children
+        ]
+
+
+-- ─── Confirm Overlay ─────────────────────────────────────────────────
+
+viewConfirmOverlay : T.SessionState -> Html Msg
+viewConfirmOverlay session =
     let
-        pending =
+        -- Check tool confirm first (higher priority)
+        toolPending =
             case session.pendingConfirm of
                 first :: _ ->
                     Just first
 
                 [] ->
-                    session.pendingMcpAuth
-    in
-    case pending of
-        Just p ->
-            Html.div [ Attr.class "modal-overlay confirm-overlay", Ev.onClick CloseConfirm ]
-                [ Html.div [ Attr.class "confirm-dialog" ]
-                    [ Html.div [ Attr.class "confirm-title" ]
-                        [ Html.text ("Allow \"" ++ Maybe.withDefault "Tool" p.toolName ++ "\" to run?") ]
-                    , case p.toolInput of
-                        Just input ->
-                            Html.div [ Attr.class "confirm-input" ]
-                                [ Html.pre [] [ Html.text input ] ]
+                    Nothing
 
-                        Nothing ->
-                            Html.text ""
-                    , Html.div [ Attr.class "confirm-buttons" ]
-                        [ Html.button
-                            [ Attr.class "confirm-btn confirm-btn-allow"
-                            , Ev.onClick (ConfirmTool p.id True)
-                            ]
-                            [ Html.text "✓ Allow" ]
-                        , Html.button
-                            [ Attr.class "confirm-btn confirm-btn-deny"
-                            , Ev.onClick (ConfirmTool p.id False)
-                            ]
-                            [ Html.text "✕ Deny" ]
-                        ]
-                    ]
+        -- Then check MCP auth
+        authPending =
+            session.pendingMcpAuth
+    in
+    case ( toolPending, authPending ) of
+        ( Just p, _ ) ->
+            viewOverlay CloseConfirm [ viewConfirmToolPage p ]
+
+        ( _, Just auth ) ->
+            viewOverlay CloseConfirm [ viewConfirmMcpAuthPage auth ]
+
+        ( _, _ ) ->
+            Html.text ""
+
+
+viewConfirmToolPage : T.PendingConfirm -> Html Msg
+viewConfirmToolPage p =
+    Html.div [ Attr.class "confirm-page" ]
+        [ Html.div [ Attr.class "confirm-page-title" ]
+            [ Html.text ("Allow \"" ++ Maybe.withDefault "Tool" p.toolName ++ "\" to run?") ]
+        , case p.toolInput of
+            Just input ->
+                Html.div [ Attr.class "confirm-page-input" ]
+                    [ Html.text input ]
+
+            Nothing ->
+                Html.text ""
+        , Html.div [ Attr.class "confirm-page-buttons" ]
+            [ Html.button
+                [ Attr.class "confirm-page-btn confirm-page-btn-allow"
+                , Ev.onClick (ConfirmTool p.id True)
                 ]
+                [ Html.text "✓ Allow" ]
+            , Html.button
+                [ Attr.class "confirm-page-btn confirm-page-btn-deny"
+                , Ev.onClick (ConfirmTool p.id False)
+                ]
+                [ Html.text "✕ Deny" ]
+            ]
+        ]
+
+
+viewConfirmMcpAuthPage : T.PendingConfirm -> Html Msg
+viewConfirmMcpAuthPage auth =
+    Html.div [ Attr.class "confirm-page" ]
+        [ Html.div [ Attr.class "confirm-page-title" ]
+            [ Html.text ("Authorize MCP server \"" ++ Maybe.withDefault "?" auth.toolName ++ "\"?") ]
+        , case auth.toolInput of
+            Just url ->
+                Html.div [ Attr.class "confirm-page-input" ]
+                    [ Html.text url ]
+
+            Nothing ->
+                Html.text ""
+        , Html.div [ Attr.class "confirm-page-buttons" ]
+            [ Html.button
+                [ Attr.class "confirm-page-btn confirm-page-btn-cancel-all"
+                , Ev.onClick McpCancelAll
+                ]
+                [ Html.text "✕ Cancel All" ]
+            , Html.button
+                [ Attr.class "confirm-page-btn confirm-page-btn-allow"
+                , Ev.onClick McpAuthConfirm
+                ]
+                [ Html.text "✓ Authorize" ]
+            , Html.button
+                [ Attr.class "confirm-page-btn confirm-page-btn-deny"
+                , Ev.onClick (McpAuthDeny (Maybe.withDefault "" auth.toolName))
+                ]
+                [ Html.text "✕ Deny" ]
+            ]
+        ]
+
+
+-- ─── MCP Init Overlay ────────────────────────────────────────────────
+
+viewMcpInitOverlay : T.SessionState -> Html Msg
+viewMcpInitOverlay session =
+    case session.mcpStatus of
+        Just "connecting" ->
+            if List.isEmpty session.mcpServers then
+                Html.text ""
+            else
+                viewOverlay CloseMcpInit [ viewMcpInitPage session ]
+
+        Just "auth_running" ->
+            viewOverlay CloseMcpInit [ viewMcpInitPage session ]
+
+        Just "failed" ->
+            viewOverlay CloseMcpInit [ viewMcpInitPage session ]
+
+        _ ->
+            Html.text ""
+
+
+viewMcpInitPage : T.SessionState -> Html Msg
+viewMcpInitPage session =
+    let
+        statusText =
+            case session.mcpStatus of
+                Just "connecting" ->
+                    if List.isEmpty session.mcpServers then
+                        "Initializing MCP servers…"
+                    else
+                        "Connecting to MCP servers:"
+
+                Just "auth_running" ->
+                    "Waiting for OAuth authorization…"
+
+                Just "failed" ->
+                    "MCP initialization failed."
+
+                _ ->
+                    "Initializing MCP servers…"
+    in
+    Html.div [ Attr.class "mcp-init-page" ]
+        [ Html.div [ Attr.class "confirm-page-title" ]
+            [ Html.text "Initializing MCP Servers" ]
+        , Html.div [ Attr.class "mcp-init-status" ]
+            [ Html.text statusText ]
+        , if not (List.isEmpty session.mcpServers) then
+            Html.div [ Attr.class "mcp-init-list" ]
+                (List.map (\s -> Html.div [ Attr.class "mcp-init-server" ]
+                    [ Html.span [ Attr.class "mcp-init-dot" ] [ Html.text "⟳" ]
+                    , Html.span [ Attr.class "mcp-init-name" ] [ Html.text s ]
+                    ]
+                ) session.mcpServers)
+
+          else
+            Html.text ""
+        , Html.div [ Attr.class "mcp-init-hint" ]
+            [ Html.text "Press Ctrl+G to cancel MCP initialization." ]
+        ]
+
+
+-- ─── File Picker Overlay ──────────────────────────────────────────────
+
+viewFilePickerOverlay : Model -> Html Msg
+viewFilePickerOverlay model =
+    case getActiveSession model of
+        Just s ->
+            if s.showFilePicker then
+                viewOverlay CloseFilePicker [ viewFilePickerPage s ]
+            else
+                Html.text ""
 
         Nothing ->
             Html.text ""
 
 
-viewFilePicker : Model -> Html Msg
-viewFilePicker model =
-    if not model.showFilePicker then
-        Html.text ""
+viewFilePickerPage : T.SessionState -> Html Msg
+viewFilePickerPage s =
+    let
+        entries =
+            filterEntries s
 
-    else
-        let
-            entries =
-                filterEntries model
-        in
-        Html.div [ Attr.class "modal-overlay fp-overlay", Ev.onClick CloseFilePicker ]
-            [ Html.div [ Attr.class "fp-dialog" ]
-                [ Html.div [ Attr.class "fp-header" ]
-                    [ Html.span [ Attr.class "fp-title" ] [ Html.text "Attach File" ]
-                    , Html.button [ Attr.class "fp-close", Ev.onClick CloseFilePicker ] [ Html.text "✕" ]
-                    ]
-                , Html.div [ Attr.class "fp-mode-bar" ]
-                    [ Html.span
-                        [ Attr.class ("fp-mode-tab" ++ (if model.filePickerMode == Local then " fp-mode-active" else ""))
-                        , Ev.onClick (SetFilePickerInput "")
-                        ]
-                        [ Html.text "📁 Local" ]
-                    , Html.span
-                        [ Attr.class ("fp-mode-tab" ++ (if model.filePickerMode == Url then " fp-mode-active" else ""))
-                        , Ev.onClick FilePickerToggleMode
-                        ]
-                        [ Html.text "🔗 URL" ]
-                    ]
-                , Html.div [ Attr.class "fp-input-row" ]
-                    [ Html.input
-                        [ Attr.class "fp-input"
-                        , Attr.type_ "text"
-                        , Attr.value model.filePickerInput
-                        , Ev.onInput SetFilePickerInput
-                        , Attr.placeholder "Search files…"
-                        ]
-                        []
-                    ]
-                , if model.filePickerLoading then
-                    Html.div [ Attr.class "fp-loading" ] [ Html.text "Loading…" ]
-
-                  else
-                    Html.div [ Attr.class "fp-list" ]
-                        (List.indexedMap (\i e -> viewFileEntry i e model) entries)
+        inputIsUrl =
+            isUrl (String.trim s.filePickerInput)
+    in
+    Html.div [ Attr.class "fp-page" ]
+        [ Html.div [ Attr.class "fp-page-input-row" ]
+            [ Html.input
+                [ Attr.class "fp-page-input"
+                , Attr.type_ "text"
+                , Attr.value s.filePickerInput
+                , Ev.onInput SetFilePickerInput
+                , Attr.placeholder "Type a file name or paste URL…"
+                , Attr.autofocus True
+                , Ev.preventDefaultOn "keydown" <|
+                    D.map2 (\key ctrl ->
+                        if key == "Enter" && not ctrl && not inputIsUrl then
+                            ( FilePickerConfirmItem, True )
+                        else if key == "Enter" && not ctrl && inputIsUrl then
+                            ( ConfirmFilePickerUrl, True )
+                        else
+                            ( NoOp, False )
+                    ) (D.field "key" D.string) (D.field "ctrlKey" D.bool)
                 ]
+                []
             ]
+        , Html.div [ Attr.class "fp-page-dir" ]
+            [ Html.text (shortenPath s.filePickerDir) ]
+        , if s.filePickerLoading then
+            Html.div [ Attr.class "fp-page-status" ] [ Html.text "Loading…" ]
+
+          else if inputIsUrl then
+            Html.div [ Attr.class "fp-page-status" ] [ Html.text "Press Enter to attach URL" ]
+
+          else if List.isEmpty entries then
+            Html.div [ Attr.class "fp-page-status" ] [ Html.text "No files found" ]
+
+          else
+            Html.div [ Attr.class "fp-page-list" ]
+                (List.indexedMap (\i e -> viewFilePickerPageEntry i e s) entries)
+        ]
 
 
-viewFileEntry : Int -> DirEntry -> Model -> Html Msg
-viewFileEntry idx entry model =
+viewFilePickerPageEntry : Int -> T.DirEntry -> T.SessionState -> Html Msg
+viewFilePickerPageEntry idx entry s =
     Html.div
-        [ Attr.class ("fp-item" ++ (if idx == model.filePickerSelected then " fp-item-selected" else ""))
+        [ Attr.class ("fp-page-item" ++ (if idx == s.filePickerSelected then " fp-page-item-selected" else ""))
         , Ev.onClick
             (if entry.isDir then
                 FilePickerNavigateDir entry.name
@@ -1086,14 +1781,223 @@ viewFileEntry idx entry model =
             )
         , Ev.onMouseEnter (FilePickerSelectItem idx)
         ]
-        [ Html.span [ Attr.class "fp-item-icon" ] [ Html.text (if entry.isDir then "📁" else "📄") ]
-        , Html.span [ Attr.class "fp-item-name" ] [ Html.text entry.name ]
-        , if entry.isDir then
-            Html.span [ Attr.class "fp-item-dir-slash" ] [ Html.text "/" ]
+        [ Html.span [ Attr.class "fp-page-item-icon" ] [ Html.text (if entry.isDir then "📁" else "📄") ]
+        , Html.span [ Attr.class "fp-page-item-name" ] [ Html.text entry.name ]
+        ]
+
+
+-- ─── Model Selector Overlay ──────────────────────────────────────────
+
+viewModelSelectorOverlay : Model -> Html Msg
+viewModelSelectorOverlay model =
+    case getActiveSession model of
+        Just s ->
+            if s.showModelSelector then
+                viewOverlay CloseModelSelector [ viewModelSelectorPage s ]
+            else
+                Html.text ""
+
+        Nothing ->
+            Html.text ""
+
+
+viewModelSelectorPage : T.SessionState -> Html Msg
+viewModelSelectorPage s =
+    let
+        filtered =
+            filterModels s.models s.modelSelectorInput
+    in
+    Html.div [ Attr.class "sel-page" ]
+        [ Html.div [ Attr.class "sel-page-title" ] [ Html.text "Model Selector" ]
+        , Html.div [ Attr.class "sel-page-input-row" ]
+            [ Html.input
+                [ Attr.class "sel-page-input"
+                , Attr.type_ "text"
+                , Attr.value s.modelSelectorInput
+                , Ev.onInput SetModelSelectorInput
+                , Attr.placeholder "Search models…"
+                , Attr.autofocus True
+                , Ev.preventDefaultOn "keydown" <|
+                    D.map4 (\key ctrl alt shift ->
+                        let
+                            filteredLen =
+                                List.length filtered
+                        in
+                        if key == "Enter" && not ctrl then
+                            ( ModelSelectorConfirmItem, True )
+                        else if key == "ArrowDown" || (key == "j" && not ctrl && not alt && not shift) then
+                            let
+                                newIdx =
+                                    min (s.modelSelectorSelected + 1) (max 0 (filteredLen - 1))
+                            in
+                            ( ModelSelectorSelectItem newIdx, True )
+                        else if key == "ArrowUp" || (key == "k" && not ctrl && not alt && not shift) then
+                            let
+                                newIdx =
+                                    max 0 (s.modelSelectorSelected - 1)
+                            in
+                            ( ModelSelectorSelectItem newIdx, True )
+                        else if key == "Escape" then
+                            ( CloseModelSelector, True )
+                        else
+                            ( NoOp, False )
+                    ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool)
+                ]
+                []
+            ]
+        , if s.activeModelName /= "" then
+            Html.div [ Attr.class "sel-page-current" ]
+                [ Html.span [ Attr.class "sel-page-current-label" ] [ Html.text "Current: " ]
+                , Html.span [ Attr.class "sel-page-current-name" ] [ Html.text s.activeModelName ]
+                ]
 
           else
             Html.text ""
+        , if List.isEmpty s.models then
+            Html.div [ Attr.class "sel-page-status" ] [ Html.text "No models configured." ]
+
+          else if List.isEmpty filtered then
+            Html.div [ Attr.class "sel-page-status" ] [ Html.text "No models match your search." ]
+
+          else
+            Html.div [ Attr.class "sel-page-list" ]
+                (List.indexedMap (\i m -> viewModelSelectorItem i m s) filtered)
         ]
+
+
+viewModelSelectorItem : Int -> T.ModelInfo -> T.SessionState -> Html Msg
+viewModelSelectorItem idx model s =
+    let
+        isSelected =
+            idx == s.modelSelectorSelected
+
+        isActive =
+            s.activeModelId == Just model.id
+    in
+    Html.div
+        [ Attr.class ("sel-page-item"
+            ++ (if isSelected then " sel-page-item-selected" else "")
+            ++ (if isActive then " sel-page-item-active" else "")
+          )
+        , Ev.onClick (ModelSelectorSelectItem idx)
+        , Ev.onDoubleClick ModelSelectorConfirmItem
+        , Ev.onMouseEnter (ModelSelectorSelectItem idx)
+        ]
+        [ Html.span [ Attr.class "sel-page-item-id" ] [ Html.text (String.fromInt model.id) ]
+        , Html.span [ Attr.class "sel-page-item-name" ] [ Html.text model.name ]
+        , Html.span [ Attr.class "sel-page-item-check" ]
+            [ if isActive then Html.text "●" else Html.text "" ]
+        ]
+
+
+-- ─── Help Window Overlay ─────────────────────────────────────────────
+
+viewHelpWindowOverlay : Model -> Html Msg
+viewHelpWindowOverlay model =
+    case getActiveSession model of
+        Just s ->
+            if s.showHelpWindow then
+                viewOverlay CloseHelpWindow [ viewHelpWindowPage s ]
+            else
+                Html.text ""
+
+        Nothing ->
+            Html.text ""
+
+
+viewHelpWindowPage : T.SessionState -> Html Msg
+viewHelpWindowPage s =
+    let
+        allItems =
+            helpItems
+
+        filtered =
+            filterHelpItems s.helpFilter allItems
+
+        filteredLen =
+            List.length filtered
+    in
+    Html.div [ Attr.class "help-page" ]
+        [ Html.div [ Attr.class "sel-page-title" ] [ Html.text "Help" ]
+        , Html.div [ Attr.class "sel-page-input-row" ]
+            [ Html.input
+                [ Attr.class "sel-page-input"
+                , Attr.type_ "text"
+                , Attr.value s.helpFilter
+                , Ev.onInput SetHelpFilter
+                , Attr.placeholder "Filter command or key…"
+                , Attr.autofocus True
+                , Ev.preventDefaultOn "keydown" <|
+                    D.map4 (\key ctrl alt shift ->
+                        if key == "Enter" && not ctrl then
+                            let
+                                selectedItem =
+                                    List.head (List.drop s.helpSelected filtered)
+                            in
+                            case selectedItem of
+                                Just item ->
+                                    if item.isCommand then
+                                        ( HelpCmdMsg item.key, True )
+                                    else
+                                        ( NoOp, False )
+
+                                Nothing ->
+                                    ( NoOp, False )
+                        else if key == "ArrowDown" || (key == "j" && not ctrl && not alt && not shift) then
+                            let
+                                newIdx =
+                                    min (s.helpSelected + 1) (max 0 (filteredLen - 1))
+                            in
+                            ( HelpSelectItem newIdx, True )
+                        else if key == "ArrowUp" || (key == "k" && not ctrl && not alt && not shift) then
+                            let
+                                newIdx =
+                                    max 0 (s.helpSelected - 1)
+                            in
+                            ( HelpSelectItem newIdx, True )
+                        else if key == "Escape" then
+                            ( CloseHelpWindow, True )
+                        else
+                            ( NoOp, False )
+                    ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool)
+                ]
+                []
+            ]
+        , if List.isEmpty filtered then
+            Html.div [ Attr.class "sel-page-status" ] [ Html.text "No matching commands or keys." ]
+
+          else
+            Html.div [ Attr.class "sel-page-list" ]
+                (List.indexedMap (\i item -> viewHelpItem i item s.helpSelected) filtered)
+        ]
+
+
+viewHelpItem : Int -> HelpItem -> Int -> Html Msg
+viewHelpItem idx item selectedIdx =
+    let
+        isSelected =
+            idx == selectedIdx
+    in
+    if item.isSection then
+        Html.div [ Attr.class "help-page-section" ]
+            [ Html.text ("── " ++ item.key) ]
+
+    else
+        Html.div
+            [ Attr.class ("help-page-item"
+                ++ (if isSelected then " help-page-item-selected" else "")
+              )
+            , Ev.onMouseEnter (HelpSelectItem idx)
+            , Ev.onClick
+                (if item.isCommand then
+                    HelpCmdMsg item.key
+                 else
+                    NoOp
+                )
+            ]
+            [ Html.span [ Attr.class "help-page-item-key" ] [ Html.text item.key ]
+            , Html.span [ Attr.class "help-page-item-desc" ] [ Html.text item.desc ]
+            ]
 
 
 viewNotifications : Model -> Html Msg

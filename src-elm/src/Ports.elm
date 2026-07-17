@@ -28,6 +28,8 @@ port module Ports exposing
       -- Existence
     , isSessionConnected
     , listModels
+    , -- MCP Auth Flow
+      startMcpAuthFlow
       -- Inbound subscriptions (Tauri → Elm responses)
     , onSessionCreated
     , onSessionClosed
@@ -78,6 +80,7 @@ port closeWindow : {} -> Cmd msg
 port startDragging : {} -> Cmd msg
 port isSessionConnected : { sessionId : String } -> Cmd msg
 port listModels : {} -> Cmd msg
+port startMcpAuthFlow : { sessionId : String, serverName : String, authUrl : String } -> Cmd msg
 
 
 -- Inbound responses (Tauri → Elm for command results)

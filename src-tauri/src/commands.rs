@@ -10,6 +10,7 @@ use crate::dirs;
 use crate::ModelCache;
 
 use serde::Serialize;
+use std::io::BufRead;
 use std::io::Write;
 use tauri::{AppHandle, State};
 use uuid::Uuid;
@@ -420,6 +421,160 @@ pub async fn alayacore_confirm(
     let answer = if allowed { "yes" } else { "no" };
     send_raw(&map, &session_id, tlv::TAG_USER_TEXT, &format!(":confirm {} {}", id, answer)).await?;
     send_raw(&map, &session_id, tlv::TAG_USER_END, "").await
+}
+
+// ─── MCP OAuth Flow ──────────────────────────────────────────────────
+
+/// Start the MCP OAuth flow: launch callback server, open browser, wait for
+/// callback, then send the authorization code to alayacore.
+///
+/// This runs entirely in the Rust backend — the frontend just triggers it.
+/// The callback server listens on 127.0.0.1:0 (random port).
+#[tauri::command]
+pub async fn start_mcp_auth_flow(
+    session_id: String,
+    server_name: String,
+    auth_url: String,
+    sessions: State<'_, SessionMap>,
+) -> Result<(), String> {
+    // Clone the Arc to pass to background thread
+    let sessions_arc = sessions.0.clone();
+
+    // Generate random state for CSRF protection (128-bit hex)
+    let state = {
+        let u1: u64 = rand::random();
+        let u2: u64 = rand::random();
+        format!("{:016x}{:016x}", u1, u2)
+    };
+
+    // Start callback server
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")
+        .map_err(|e| format!("Failed to bind callback server: {e}"))?;
+    let port = listener.local_addr().map_err(|e| format!("Failed to get port: {e}"))?.port();
+    let redirect_uri = format!("http://127.0.0.1:{}/callback", port);
+
+    // Fill the auth URL with redirect_uri and state
+    let encoded_redirect = urlencoding::encode(&redirect_uri);
+    let filled_url = auth_url
+        .replace("{{redirect_uri}}", &encoded_redirect)
+        .replace("{{state}}", &state);
+
+    eprintln!("[mcp_auth] Starting OAuth flow for {} on port {}", server_name, port);
+    eprintln!("[mcp_auth] Opening URL: {}", filled_url);
+
+    // Open browser
+    open::that(&filled_url).map_err(|e| format!("Failed to open browser: {e}"))?;
+
+    // Accept callback in a background thread
+    std::thread::spawn(move || {
+        // Accept one connection (the OAuth callback)
+        match listener.accept() {
+            Ok((mut stream, addr)) => {
+                eprintln!("[mcp_auth] Callback received from {}", addr);
+                let mut reader = std::io::BufReader::new(&stream);
+                let mut request_line = String::new();
+                if reader.read_line(&mut request_line).is_err() {
+                    eprintln!("[mcp_auth] Failed to read request line");
+                    let _ = send_mcp_result(&sessions_arc, &session_id, &server_name, &redirect_uri, None);
+                    return;
+                }
+
+                // Parse the request URI
+                let parts: Vec<&str> = request_line.split_whitespace().collect();
+                let path = if parts.len() >= 2 { parts[1] } else { "/" };
+
+                // Parse query parameters from the path
+                let query_str = path.split('?').nth(1).unwrap_or("");
+                let params: std::collections::HashMap<String, String> = 
+                    url::form_urlencoded::parse(query_str.as_bytes())
+                        .into_owned()
+                        .collect();
+
+                // Write a simple HTTP response to close the browser tab
+                let http_response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n\
+                    <!DOCTYPE html><html><body style='display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;'>\
+                    <div style='text-align:center;'><h2>Authorization {}!</h2>\
+                    <p style='color:#666;'>You can close this window.</p></div></body></html>",
+                    if params.contains_key("code") { "Successful" } else { "Failed" }
+                );
+                let _ = stream.write_all(http_response.as_bytes());
+
+                // Check for errors
+                if let Some(err) = params.get("error") {
+                    let desc = params.get("error_description").map(|s| s.as_str()).unwrap_or("");
+                    eprintln!("[mcp_auth] Auth error: {}: {}", err, desc);
+                    let _ = send_mcp_result(&sessions_arc, &session_id, &server_name, &redirect_uri, None);
+                    return;
+                }
+
+                // Validate state
+                match params.get("state") {
+                    Some(returned_state) if returned_state == &state => {}
+                    _ => {
+                        eprintln!("[mcp_auth] State mismatch");
+                        let _ = send_mcp_result(&sessions_arc, &session_id, &server_name, &redirect_uri, None);
+                        return;
+                    }
+                }
+
+                // Get the authorization code
+                match params.get("code") {
+                    Some(code) => {
+                        eprintln!("[mcp_auth] Authorization code received");
+                        let _ = send_mcp_result(&sessions_arc, &session_id, &server_name, &redirect_uri, Some(code));
+                    }
+                    None => {
+                        eprintln!("[mcp_auth] No authorization code in callback");
+                        let _ = send_mcp_result(&sessions_arc, &session_id, &server_name, &redirect_uri, None);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("[mcp_auth] Accept error: {}", e);
+                let _ = send_mcp_result(&sessions_arc, &session_id, &server_name, &redirect_uri, None);
+            }
+        }
+    });
+
+    Ok(())
+}
+
+/// Send MCP auth result to alayacore via TLV.
+/// Runs synchronously in a background thread using tokio::runtime::Runtime.
+fn send_mcp_result(
+    sessions_arc: &std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<String, session::SessionHandle>>>,
+    session_id: &str,
+    server_name: &str,
+    redirect_uri: &str,
+    code: Option<&str>,
+) -> Result<(), String> {
+    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("Runtime error: {e}"))?;
+    rt.block_on(async {
+        let map = sessions_arc.lock().await;
+        let handle = session::get(&map, session_id)?;
+        let mut stdin = handle.stdin.lock().await;
+
+        match code {
+            Some(c) => {
+                let cmd = format!(":mcp_auth {} {} {}", server_name, c, redirect_uri);
+                eprintln!("[mcp_auth] Sending: {}", cmd);
+                tlv::write_frame(&mut *stdin, tlv::TAG_USER_TEXT, &cmd)
+                    .map_err(|e| format!("Write error: {e}"))?;
+                tlv::write_frame(&mut *stdin, tlv::TAG_USER_END, "")
+                    .map_err(|e| format!("Write error: {e}"))?;
+            }
+            None => {
+                eprintln!("[mcp_auth] Auth failed/cancelled — sending :mcp_cancel");
+                tlv::write_frame(&mut *stdin, tlv::TAG_USER_TEXT, ":mcp_cancel")
+                    .map_err(|e| format!("Write error: {e}"))?;
+                tlv::write_frame(&mut *stdin, tlv::TAG_USER_END, "")
+                    .map_err(|e| format!("Write error: {e}"))?;
+            }
+        }
+        stdin.flush().map_err(|e| format!("Flush error: {e}"))?;
+        Ok(())
+    })
 }
 
 #[tauri::command]

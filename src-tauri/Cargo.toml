@@ -27,4 +27,8 @@ uuid = { version = "1", features = ["v4"] }
 log = "0.4"
 libdbus-sys = { version = "0.2", features = ["vendored"] }
 base64 = "0.22"
+open = "5"
+url = "2"
+urlencoding = "2"
+rand = "0.8"
 

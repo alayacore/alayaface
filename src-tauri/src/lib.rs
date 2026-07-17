@@ -61,6 +61,7 @@ pub fn run() {
             commands::fs_home_dir,
             commands::fs_resolve_path,
             commands::fs_read_file_data_uri,
+            commands::start_mcp_auth_flow,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
