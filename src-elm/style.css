@@ -1257,6 +1257,7 @@ html {
 .fp-page-input-row {
   display: flex;
   align-items: center;
+  gap: 6px;
   flex-shrink: 0;
 }
 
@@ -1274,6 +1275,18 @@ html {
 }
 .fp-page-input::placeholder { color: #555; }
 .fp-page-input:focus { border-color: #6366f1; }
+
+.fp-page-mode {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6366f1;
+  background: rgba(99, 102, 241, 0.1);
+  padding: 4px 8px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
 
 .fp-page-dir {
   font-size: 0.72rem;

@@ -149,6 +149,8 @@ type Msg
     | FilePickerSelectItem Int
     | FilePickerConfirmItem
     | FilePickerKeyDown Int
+    | FilePickerToggleMode
+    | FilePickerNavigateUp
     | FsListDirResult (List E.Value)
     | FsHomeDirResult String
     | FsReadFileResult String
@@ -622,6 +624,7 @@ update msg model =
                     ( updateActiveSession model (\s ->
                         { s
                             | showFilePicker = True
+                            , filePickerMode = T.Local
                             , filePickerInput = ""
                             , filePickerSelected = 0
                             , filePickerLoading = True
@@ -721,6 +724,56 @@ update msg model =
 
                         Nothing ->
                             ( model, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        FilePickerToggleMode ->
+            ( updateActiveSession model (\s ->
+                { s
+                    | filePickerMode =
+                        case s.filePickerMode of
+                            T.Local -> T.Url
+                            T.Url -> T.Local
+                    , filePickerInput = ""
+                }
+              )
+            , Cmd.none
+            )
+
+        FilePickerNavigateUp ->
+            case getActiveSession model of
+                Just s ->
+                    if s.filePickerDir /= "" && s.filePickerBaseDir /= "" then
+                        let
+                            cleanPath =
+                                if String.endsWith "/" s.filePickerDir then
+                                    String.dropRight 1 s.filePickerDir
+                                else
+                                    s.filePickerDir
+
+                            parts =
+                                String.split "/" cleanPath
+
+                            parentDir =
+                                case List.reverse parts of
+                                    _ :: rest ->
+                                        String.join "/" (List.reverse rest)
+
+                                    [] ->
+                                        "/"
+                        in
+                        ( updateActiveSession model (\sess ->
+                            { sess
+                                | filePickerLoading = True
+                                , filePickerInput = ".."
+                            }
+                          )
+                        , Ports.fsResolvePath { path = parentDir }
+                        )
+
+                    else
+                        ( model, Cmd.none )
 
                 Nothing ->
                     ( model, Cmd.none )
@@ -2027,6 +2080,21 @@ viewFilePickerPage s =
 
         inputIsUrl =
             isUrl (String.trim s.filePickerInput)
+
+        isUrlMode =
+            s.filePickerMode == T.Url
+
+        placeholder =
+            if isUrlMode then
+                "Paste a URL…"
+            else
+                "Type a file name or path…"
+
+        modeLabel =
+            if isUrlMode then "URL" else "Local"
+
+        filteredLen =
+            List.length entries
     in
     Html.div [ Attr.class "fp-page" ]
         [ Html.div [ Attr.class "fp-page-input-row" ]
@@ -2035,26 +2103,56 @@ viewFilePickerPage s =
                 , Attr.type_ "text"
                 , Attr.value s.filePickerInput
                 , Ev.onInput SetFilePickerInput
-                , Attr.placeholder "Type a file name or paste URL…"
+                , Attr.placeholder placeholder
                 , Attr.autofocus True
                 , Ev.preventDefaultOn "keydown" <|
-                    D.map2 (\key ctrl ->
-                        if key == "Enter" && not ctrl && not inputIsUrl then
-                            ( FilePickerConfirmItem, True )
-                        else if key == "Enter" && not ctrl && inputIsUrl then
-                            ( ConfirmFilePickerUrl, True )
+                    D.map4 (\key ctrl alt shift ->
+                        -- Ctrl+A toggles mode
+                        if key == "a" && ctrl && not alt then
+                            ( FilePickerToggleMode, True )
+                        -- Enter confirms (URL mode or local file)
+                        else if key == "Enter" && not ctrl then
+                            if isUrlMode then
+                                ( ConfirmFilePickerUrl, True )
+                            else
+                                ( FilePickerConfirmItem, True )
+                        -- j/k navigate list
+                        else if (key == "j" || key == "ArrowDown") && not ctrl && not alt && not shift && not isUrlMode then
+                            let
+                                newIdx =
+                                    min (s.filePickerSelected + 1) (max 0 (filteredLen - 1))
+                            in
+                            ( FilePickerSelectItem newIdx, True )
+                        else if (key == "k" || key == "ArrowUp") && not ctrl && not alt && not shift && not isUrlMode then
+                            let
+                                newIdx =
+                                    max 0 (s.filePickerSelected - 1)
+                            in
+                            ( FilePickerSelectItem newIdx, True )
+                        -- Escape: close picker, or go up a directory
+                        else if key == "Escape" then
+                            if not isUrlMode && s.filePickerDir /= "" then
+                                ( FilePickerNavigateUp, True )
+                            else
+                                ( CloseFilePicker, True )
                         else
                             ( NoOp, False )
-                    ) (D.field "key" D.string) (D.field "ctrlKey" D.bool)
+                    ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool)
                 ]
                 []
+            , Html.div [ Attr.class "fp-page-mode" ]
+                [ Html.text modeLabel ]
             ]
         , Html.div [ Attr.class "fp-page-dir" ]
-            [ Html.text (shortenPath s.filePickerDir) ]
+            [ if isUrlMode then
+                Html.text "Paste a URL and press Enter to attach"
+              else
+                Html.text (shortenPath s.filePickerDir)
+            ]
         , if s.filePickerLoading then
             Html.div [ Attr.class "fp-page-status" ] [ Html.text "Loading…" ]
 
-          else if inputIsUrl then
+          else if isUrlMode then
             Html.div [ Attr.class "fp-page-status" ] [ Html.text "Press Enter to attach URL" ]
 
           else if List.isEmpty entries then
