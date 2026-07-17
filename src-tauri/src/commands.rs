@@ -425,20 +425,41 @@ pub async fn alayacore_confirm(
 
 // ─── MCP OAuth Flow ──────────────────────────────────────────────────
 
-/// Start the MCP OAuth flow: launch callback server, open browser, wait for
-/// callback, then send the authorization code to alayacore.
-///
-/// This runs entirely in the Rust backend — the frontend just triggers it.
-/// The callback server listens on 127.0.0.1:0 (random port).
+/// Start the MCP OAuth flow: launch callback server, fill URL, open browser.
+/// Returns the filled URL so the frontend can also copy it.
 #[tauri::command]
 pub async fn start_mcp_auth_flow(
     session_id: String,
     server_name: String,
     auth_url: String,
     sessions: State<'_, SessionMap>,
-) -> Result<(), String> {
-    // Clone the Arc to pass to background thread
+) -> Result<String, String> {
+    start_mcp_auth_inner(&session_id, &server_name, &auth_url, &sessions, true).await
+}
+
+/// Fill the MCP auth URL without opening browser.
+/// Returns the filled URL for the frontend to copy.
+#[tauri::command]
+pub async fn fill_mcp_auth_url(
+    session_id: String,
+    server_name: String,
+    auth_url: String,
+    sessions: State<'_, SessionMap>,
+) -> Result<String, String> {
+    start_mcp_auth_inner(&session_id, &server_name, &auth_url, &sessions, false).await
+}
+
+/// Shared implementation: start callback server, fill URL, optionally open browser.
+async fn start_mcp_auth_inner(
+    session_id: &str,
+    server_name: &str,
+    auth_url: &str,
+    sessions: &State<'_, SessionMap>,
+    open_browser: bool,
+) -> Result<String, String> {
     let sessions_arc = sessions.0.clone();
+    let sid_owned = session_id.to_string();
+    let sname_owned = server_name.to_string();
 
     // Generate random state for CSRF protection (128-bit hex)
     let state = {
@@ -459,15 +480,21 @@ pub async fn start_mcp_auth_flow(
         .replace("{{redirect_uri}}", &encoded_redirect)
         .replace("{{state}}", &state);
 
-    eprintln!("[mcp_auth] Starting OAuth flow for {} on port {}", server_name, port);
-    eprintln!("[mcp_auth] Opening URL: {}", filled_url);
+    eprintln!("[mcp_auth] Started OAuth flow for {} on port {}", server_name, port);
+    eprintln!("[mcp_auth] Filled URL: {}", filled_url);
 
-    // Open browser
-    open::that(&filled_url).map_err(|e| format!("Failed to open browser: {e}"))?;
+    // Open browser if requested
+    if open_browser {
+        if let Err(e) = open::that(&filled_url) {
+            eprintln!("[mcp_auth] Failed to open browser: {}", e);
+        }
+    }
 
     // Accept callback in a background thread
+    let sid = sid_owned;
+    let sname = sname_owned;
+    let ruri = redirect_uri.clone();
     std::thread::spawn(move || {
-        // Accept one connection (the OAuth callback)
         match listener.accept() {
             Ok((mut stream, addr)) => {
                 eprintln!("[mcp_auth] Callback received from {}", addr);
@@ -475,73 +502,60 @@ pub async fn start_mcp_auth_flow(
                 let mut request_line = String::new();
                 if reader.read_line(&mut request_line).is_err() {
                     eprintln!("[mcp_auth] Failed to read request line");
-                    let _ = send_mcp_result(&sessions_arc, &session_id, &server_name, &redirect_uri, None);
+                    let _ = send_mcp_result(&sessions_arc, &sid, &sname, &ruri, None);
                     return;
                 }
-
-                // Parse the request URI
                 let parts: Vec<&str> = request_line.split_whitespace().collect();
                 let path = if parts.len() >= 2 { parts[1] } else { "/" };
-
-                // Parse query parameters from the path
                 let query_str = path.split('?').nth(1).unwrap_or("");
-                let params: std::collections::HashMap<String, String> = 
+                let params: std::collections::HashMap<String, String> =
                     url::form_urlencoded::parse(query_str.as_bytes())
                         .into_owned()
                         .collect();
-
-                // Write a simple HTTP response to close the browser tab
-                let http_response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n\
-                    <!DOCTYPE html><html><body style='display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;'>\
-                    <div style='text-align:center;'><h2>Authorization {}!</h2>\
-                    <p style='color:#666;'>You can close this window.</p></div></body></html>",
+                let http_body = format!(
+                    "<!DOCTYPE html><html><body style='display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;'>                    <div style='text-align:center;'><h2>Authorization {}</h2>                    <p style='color:#666;'>You can close this window.</p></div></body></html>",
                     if params.contains_key("code") { "Successful" } else { "Failed" }
                 );
+                let http_response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
+                    http_body.len(), http_body
+                );
                 let _ = stream.write_all(http_response.as_bytes());
-
-                // Check for errors
                 if let Some(err) = params.get("error") {
                     let desc = params.get("error_description").map(|s| s.as_str()).unwrap_or("");
                     eprintln!("[mcp_auth] Auth error: {}: {}", err, desc);
-                    let _ = send_mcp_result(&sessions_arc, &session_id, &server_name, &redirect_uri, None);
+                    let _ = send_mcp_result(&sessions_arc, &sid, &sname, &ruri, None);
                     return;
                 }
-
-                // Validate state
                 match params.get("state") {
                     Some(returned_state) if returned_state == &state => {}
                     _ => {
                         eprintln!("[mcp_auth] State mismatch");
-                        let _ = send_mcp_result(&sessions_arc, &session_id, &server_name, &redirect_uri, None);
+                        let _ = send_mcp_result(&sessions_arc, &sid, &sname, &ruri, None);
                         return;
                     }
                 }
-
-                // Get the authorization code
                 match params.get("code") {
                     Some(code) => {
                         eprintln!("[mcp_auth] Authorization code received");
-                        let _ = send_mcp_result(&sessions_arc, &session_id, &server_name, &redirect_uri, Some(code));
+                        let _ = send_mcp_result(&sessions_arc, &sid, &sname, &ruri, Some(code));
                     }
                     None => {
                         eprintln!("[mcp_auth] No authorization code in callback");
-                        let _ = send_mcp_result(&sessions_arc, &session_id, &server_name, &redirect_uri, None);
+                        let _ = send_mcp_result(&sessions_arc, &sid, &sname, &ruri, None);
                     }
                 }
             }
             Err(e) => {
                 eprintln!("[mcp_auth] Accept error: {}", e);
-                let _ = send_mcp_result(&sessions_arc, &session_id, &server_name, &redirect_uri, None);
+                let _ = send_mcp_result(&sessions_arc, &sid, &sname, &ruri, None);
             }
         }
     });
 
-    Ok(())
+    Ok(filled_url)
 }
 
-/// Send MCP auth result to alayacore via TLV.
-/// Runs synchronously in a background thread using tokio::runtime::Runtime.
 fn send_mcp_result(
     sessions_arc: &std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<String, session::SessionHandle>>>,
     session_id: &str,

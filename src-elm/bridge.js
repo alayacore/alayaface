@@ -161,6 +161,18 @@
       });
     });
 
+    on("fillMcpAuthUrl", function (data) {
+      invoke("fill_mcp_auth_url", {
+        sessionId: data.sessionId,
+        serverName: data.serverName,
+        authUrl: data.authUrl,
+      }).then(function (url) {
+        navigator.clipboard.writeText(url).catch(function (e) {
+          console.error("copyToClipboard failed:", e);
+        });
+      });
+    });
+
     on("scrollBy", function (data) {
       window.scrollBy({ top: data.dy, left: data.dx, behavior: "smooth" });
     });

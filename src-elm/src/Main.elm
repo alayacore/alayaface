@@ -180,7 +180,7 @@ type Msg
     | SetHelpFilter String
     | HelpSelectItem Int
     | HelpCmdMsg String
-    | CopyToClipboard String
+    | FillMcpAuthUrl String
       -- Display navigation
     | ToggleFocus
     | FocusDisplay
@@ -1079,8 +1079,28 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
-        CopyToClipboard text ->
-            ( model, Ports.copyToClipboard { text = text } )
+        FillMcpAuthUrl url ->
+            case getActiveSession model of
+                Just s ->
+                    let
+                        serverName =
+                            case s.pendingMcpAuth of
+                                Just auth ->
+                                    Maybe.withDefault "" auth.toolName
+
+                                Nothing ->
+                                    ""
+                    in
+                    ( model
+                    , Ports.fillMcpAuthUrl
+                        { sessionId = s.id
+                        , serverName = serverName
+                        , authUrl = url
+                        }
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
 
         -- Display Navigation
         ToggleFocus ->
@@ -2235,7 +2255,7 @@ viewMcpInitPage session =
                                 Html.span [ Attr.class "mcp-init-actions" ]
                                     [ Html.button
                                         [ Attr.class "mcp-init-btn mcp-init-btn-url"
-                                        , Ev.onClick (CopyToClipboard authUrl)
+                                        , Ev.onClick (FillMcpAuthUrl authUrl)
                                         , Attr.title "Copy authorization URL"
                                         ]
                                         [ Html.text "📋 URL" ]

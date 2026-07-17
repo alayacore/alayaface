@@ -30,6 +30,8 @@ port module Ports exposing
     , listModels
     , -- MCP Auth Flow
       startMcpAuthFlow
+    , fillMcpAuthUrl
+    , onMcpAuthUrl
       -- Display navigation
     , scrollBy
     , scrollToY
@@ -86,6 +88,8 @@ port startDragging : {} -> Cmd msg
 port isSessionConnected : { sessionId : String } -> Cmd msg
 port listModels : {} -> Cmd msg
 port startMcpAuthFlow : { sessionId : String, serverName : String, authUrl : String } -> Cmd msg
+port fillMcpAuthUrl : { sessionId : String, serverName : String, authUrl : String } -> Cmd msg
+port onMcpAuthUrl : (String -> msg) -> Sub msg
 port scrollBy : { dx : Float, dy : Float } -> Cmd msg
 port scrollToY : { y : Float } -> Cmd msg
 port blurInput : {} -> Cmd msg
