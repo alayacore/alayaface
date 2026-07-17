@@ -34,6 +34,7 @@ port module Ports exposing
     , scrollBy
     , scrollToY
     , blurInput
+    , copyToClipboard
       -- Inbound subscriptions (Tauri → Elm responses)
     , onSessionCreated
     , onSessionClosed
@@ -88,6 +89,7 @@ port startMcpAuthFlow : { sessionId : String, serverName : String, authUrl : Str
 port scrollBy : { dx : Float, dy : Float } -> Cmd msg
 port scrollToY : { y : Float } -> Cmd msg
 port blurInput : {} -> Cmd msg
+port copyToClipboard : { text : String } -> Cmd msg
 
 
 -- Inbound responses (Tauri → Elm for command results)

@@ -180,6 +180,7 @@ type Msg
     | SetHelpFilter String
     | HelpSelectItem Int
     | HelpCmdMsg String
+    | CopyToClipboard String
       -- Display navigation
     | ToggleFocus
     | FocusDisplay
@@ -726,7 +727,41 @@ update msg model =
                     case List.head (List.drop s.filePickerSelected entries) of
                         Just entry ->
                             if entry.isDir then
-                                update (FilePickerNavigateDir entry.name) model
+                                -- Autocomplete directory: preserve path prefix like terminal adapter
+                                let
+                                    inputVal =
+                                        s.filePickerInput
+
+                                    -- Find prefix up to last "/" to preserve path context
+                                    -- e.g. /usr/loc + local → /usr/local/
+                                    --      ~/loc   + local → ~/local/
+                                    --      loc     + local → local/
+                                    newInput =
+                                        if String.contains "/" inputVal then
+                                            let
+                                                parts =
+                                                    String.split "/" inputVal
+
+                                                prefix =
+                                                    String.join "/" (List.take (List.length parts - 1) parts) ++ "/"
+                                            in
+                                            prefix ++ entry.name ++ "/"
+
+                                        else if String.startsWith "~" inputVal then
+                                            "~/" ++ entry.name ++ "/"
+
+                                        else
+                                            entry.name ++ "/"
+                                in
+                                ( updateActiveSession model (\sess ->
+                                    { sess
+                                        | filePickerLoading = True
+                                        , filePickerInput = newInput
+                                        , filePickerFilter = ""
+                                    }
+                                  )
+                                , Ports.fsResolvePath { path = s.filePickerDir ++ "/" ++ entry.name }
+                                )
 
                             else
                                 let
@@ -1043,6 +1078,9 @@ update msg model =
 
                 Nothing ->
                     ( model, Cmd.none )
+
+        CopyToClipboard text ->
+            ( model, Ports.copyToClipboard { text = text } )
 
         -- Display Navigation
         ToggleFocus ->
@@ -2047,28 +2085,11 @@ viewOverlay onBackdropClick children =
 
 viewConfirmOverlay : T.SessionState -> Html Msg
 viewConfirmOverlay session =
-    let
-        -- Check tool confirm first (higher priority)
-        toolPending =
-            case session.pendingConfirm of
-                first :: _ ->
-                    Just first
+    case session.pendingConfirm of
+        first :: _ ->
+            viewOverlay CloseConfirm [ viewConfirmToolPage first ]
 
-                [] ->
-                    Nothing
-
-        -- Then check MCP auth
-        authPending =
-            session.pendingMcpAuth
-    in
-    case ( toolPending, authPending ) of
-        ( Just p, _ ) ->
-            viewOverlay CloseConfirm [ viewConfirmToolPage p ]
-
-        ( _, Just auth ) ->
-            viewOverlay CloseConfirm [ viewConfirmMcpAuthPage auth ]
-
-        ( _, _ ) ->
+        [] ->
             Html.text ""
 
 
@@ -2142,6 +2163,9 @@ viewMcpInitOverlay session =
             else
                 viewOverlay CloseMcpInit [ viewMcpInitPage session ]
 
+        Just "auth_confirm" ->
+            viewOverlay CloseMcpInit [ viewMcpInitPage session ]
+
         Just "auth_running" ->
             viewOverlay CloseMcpInit [ viewMcpInitPage session ]
 
@@ -2171,6 +2195,22 @@ viewMcpInitPage session =
 
                 _ ->
                     "Initializing MCP servers…"
+
+        authServerName =
+            case session.pendingMcpAuth of
+                Just a ->
+                    Maybe.withDefault "" a.toolName
+
+                Nothing ->
+                    ""
+
+        authUrl =
+            case session.pendingMcpAuth of
+                Just a ->
+                    Maybe.withDefault "" a.toolInput
+
+                Nothing ->
+                    ""
     in
     Html.div [ Attr.class "mcp-init-page" ]
         [ Html.div [ Attr.class "confirm-page-title" ]
@@ -2179,11 +2219,40 @@ viewMcpInitPage session =
             [ Html.text statusText ]
         , if not (List.isEmpty session.mcpServers) then
             Html.div [ Attr.class "mcp-init-list" ]
-                (List.map (\s -> Html.div [ Attr.class "mcp-init-server" ]
-                    [ Html.span [ Attr.class "mcp-init-dot" ] [ Html.text "⟳" ]
-                    , Html.span [ Attr.class "mcp-init-name" ] [ Html.text s ]
-                    ]
-                ) session.mcpServers)
+                (List.map
+                    (\s ->
+                        let
+                            isAuthServer =
+                                s == authServerName && authUrl /= ""
+                        in
+                        Html.div [ Attr.class "mcp-init-server" ]
+                            [ Html.span [ Attr.class "mcp-init-dot" ]
+                                [ Html.text
+                                    (if isAuthServer then "🔑" else "⟳")
+                                ]
+                            , Html.span [ Attr.class "mcp-init-name" ] [ Html.text s ]
+                            , if isAuthServer then
+                                Html.span [ Attr.class "mcp-init-actions" ]
+                                    [ Html.button
+                                        [ Attr.class "mcp-init-btn mcp-init-btn-url"
+                                        , Ev.onClick (CopyToClipboard authUrl)
+                                        , Attr.title "Copy authorization URL"
+                                        ]
+                                        [ Html.text "📋 URL" ]
+                                    , Html.button
+                                        [ Attr.class "mcp-init-btn mcp-init-btn-auth"
+                                        , Ev.onClick McpAuthConfirm
+                                        , Attr.title "Open browser to authorize"
+                                        ]
+                                        [ Html.text "✓ Authorize" ]
+                                    ]
+
+                              else
+                                Html.text ""
+                            ]
+                    )
+                    session.mcpServers
+                )
 
           else
             Html.text ""

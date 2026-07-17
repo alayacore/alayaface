@@ -716,10 +716,6 @@ pub async fn fs_list_dir(path: String) -> Result<Vec<DirEntry>, String> {
 
     for entry in entries {
         let name = entry.file_name().to_string_lossy().to_string();
-        // Skip hidden files (starting with ".")
-        if name.starts_with('.') {
-            continue;
-        }
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
         let de = DirEntry {
             name,

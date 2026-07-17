@@ -173,6 +173,12 @@
       document.getElementById("msg-input").blur();
     });
 
+    on("copyToClipboard", function (data) {
+      navigator.clipboard.writeText(data.text).catch(function (e) {
+        console.error("copyToClipboard failed:", e);
+      });
+    });
+
     // 3. Register Tauri event listeners
     Promise.all([
       listen("tlv-delta", function (ev) { app.ports.onDelta.send(ev.payload); }),
