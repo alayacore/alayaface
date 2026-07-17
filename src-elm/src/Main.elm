@@ -54,6 +54,8 @@ type alias Model =
     , sessionOrder : List String
     , pendingSwitchOnCreate : Bool
     , inputRows : Int
+    , displayFocused : Bool
+    , cursorMsgId : Maybe String
     }
 
 
@@ -74,6 +76,8 @@ init _ =
       , sessionOrder = []
       , pendingSwitchOnCreate = False
       , inputRows = 1
+      , displayFocused = False
+      , cursorMsgId = Nothing
       }
     , Ports.createSession { toolConfirm = Just "execute_command" }
     )
@@ -174,6 +178,20 @@ type Msg
     | SetHelpFilter String
     | HelpSelectItem Int
     | HelpCmdMsg String
+      -- Display navigation
+    | ToggleFocus
+    | FocusDisplay
+    | FocusInput
+    | MoveCursorUp
+    | MoveCursorDown
+    | ScrollLines Int
+    | ScrollHalfPage Int
+    | GotoTop
+    | GotoBottom
+    | SetCursorMsgId String
+    | ToggleMsgFold String
+    | NavigateToPrevPrompt
+    | NavigateToNextPrompt
       -- Internal
     | NoOp
     | FocusNow
@@ -949,6 +967,204 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
+        -- Display Navigation
+        ToggleFocus ->
+            if model.displayFocused then
+                ( { model | displayFocused = False }
+                , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
+                )
+            else
+                ( { model | displayFocused = True }
+                , Ports.blurInput {}
+                )
+
+        FocusDisplay ->
+            ( { model | displayFocused = True }
+            , Ports.blurInput {}
+            )
+
+        FocusInput ->
+            ( { model | displayFocused = False }
+            , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
+            )
+
+        MoveCursorUp ->
+            case getActiveSession model of
+                Just s ->
+                    let
+                        msgIds =
+                            List.map .id s.messages
+
+                        newCursor =
+                            case model.cursorMsgId of
+                                Just cur ->
+                                    case listElemIndex cur msgIds of
+                                        Just idx ->
+                                            if idx > 0 then
+                                                Just (Maybe.withDefault cur (List.head (List.drop (idx - 1) msgIds)))
+                                            else
+                                                Just cur
+
+                                        Nothing ->
+                                            List.head (List.reverse msgIds)
+
+                                Nothing ->
+                                    List.head (List.reverse msgIds)
+                    in
+                    ( { model | cursorMsgId = newCursor }
+                    , Cmd.none
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        MoveCursorDown ->
+            case getActiveSession model of
+                Just s ->
+                    let
+                        msgIds =
+                            List.map .id s.messages
+
+                        newCursor =
+                            case model.cursorMsgId of
+                                Just cur ->
+                                    case listElemIndex cur msgIds of
+                                        Just idx ->
+                                            if idx < List.length msgIds - 1 then
+                                                Just (Maybe.withDefault cur (List.head (List.drop (idx + 1) msgIds)))
+                                            else
+                                                Just cur
+
+                                        Nothing ->
+                                            List.head msgIds
+
+                                Nothing ->
+                                    List.head msgIds
+                    in
+                    ( { model | cursorMsgId = newCursor }
+                    , Cmd.none
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        ScrollLines n ->
+            ( model, Ports.scrollBy { dx = 0, dy = toFloat (n * 28) } )
+
+        ScrollHalfPage n ->
+            ( model
+            , Ports.scrollBy { dx = 0, dy = toFloat (n * 200) }
+            )
+
+        GotoTop ->
+            ( model, Ports.scrollToY { y = 0 } )
+
+        GotoBottom ->
+            ( model, Ports.scrollToY { y = 999999 } )
+
+        SetCursorMsgId id ->
+            ( { model | cursorMsgId = Just id }, Cmd.none )
+
+        ToggleMsgFold id ->
+            case model.activeId of
+                Just sid ->
+                    let
+                        s =
+                            Dict.get sid model.sessions
+                    in
+                    case s of
+                        Just sess ->
+                            let
+                                newCollapsed =
+                                    if Set.member id sess.collapsedMsgIds then
+                                        Set.remove id sess.collapsedMsgIds
+                                    else
+                                        Set.insert id sess.collapsedMsgIds
+                            in
+                            ( { model | sessions = Dict.insert sid { sess | collapsedMsgIds = newCollapsed } model.sessions }
+                            , Cmd.none
+                            )
+
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        NavigateToPrevPrompt ->
+            case getActiveSession model of
+                Just s ->
+                    let
+                        userMsgIds =
+                            List.filterMap
+                                (\m ->
+                                    if m.role == T.User then
+                                        Just m.id
+                                    else
+                                        Nothing
+                                )
+                                s.messages
+
+                        newCursor =
+                            case model.cursorMsgId of
+                                Just cur ->
+                                    case listElemIndex cur userMsgIds of
+                                        Just idx ->
+                                            if idx > 0 then
+                                                Just (Maybe.withDefault cur (List.head (List.drop (idx - 1) userMsgIds)))
+                                            else
+                                                Just cur
+
+                                        Nothing ->
+                                            List.head (List.reverse userMsgIds)
+
+                                Nothing ->
+                                    List.head (List.reverse userMsgIds)
+                    in
+                    ( { model | cursorMsgId = newCursor }
+                    , Cmd.none
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        NavigateToNextPrompt ->
+            case getActiveSession model of
+                Just s ->
+                    let
+                        userMsgIds =
+                            List.filterMap
+                                (\m ->
+                                    if m.role == T.User then
+                                        Just m.id
+                                    else
+                                        Nothing
+                                )
+                                s.messages
+
+                        newCursor =
+                            case model.cursorMsgId of
+                                Just cur ->
+                                    case listElemIndex cur userMsgIds of
+                                        Just idx ->
+                                            if idx < List.length userMsgIds - 1 then
+                                                Just (Maybe.withDefault cur (List.head (List.drop (idx + 1) userMsgIds)))
+                                            else
+                                                Just cur
+
+                                        Nothing ->
+                                            List.head userMsgIds
+
+                                Nothing ->
+                                    List.head userMsgIds
+                    in
+                    ( { model | cursorMsgId = newCursor }
+                    , Cmd.none
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
         FocusNow ->
             ( model, Task.attempt (\_ -> NoOp) (Dom.focus "msg-input") )
 
@@ -976,15 +1192,23 @@ update msg model =
                     Nothing ->
                         ( model, Cmd.none )
 
+            -- Tab toggles focus between display and input
+            else if key == "Tab" then
+                update ToggleFocus model
+
+            -- Ctrl+G cancels task
             else if key == "g" && ctrl then
                 update CancelTask model
 
+            -- Ctrl+L opens model selector
             else if key == "l" && ctrl && not alt then
                 update OpenModelSelector model
 
+            -- Ctrl+H opens help
             else if key == "h" && ctrl && not alt then
                 update OpenHelpWindow model
 
+            -- Ctrl+A opens file picker
             else if key == "a" && ctrl && not alt && not model.showSessionManager then
                 case getActiveSession model of
                     Just s ->
@@ -996,6 +1220,38 @@ update msg model =
                     Nothing ->
                         ( model, Cmd.none )
 
+            -- Display navigation keys (only when display is focused)
+            else if model.displayFocused then
+                case key of
+                    "j" -> update MoveCursorDown model
+                    "k" -> update MoveCursorUp model
+                    "ArrowDown" -> update MoveCursorDown model
+                    "ArrowUp" -> update MoveCursorUp model
+                    "J" -> update (ScrollLines 1) model  -- Shift+J = scroll down
+                    "K" -> update (ScrollLines -1) model  -- Shift+K = scroll up
+                    "g" -> update GotoTop model
+                    "G" -> update GotoBottom model
+                    "H" -> update GotoTop model           -- H = cursor top
+                    "L" -> update GotoBottom model         -- L = cursor bottom
+                    "M" -> ( model, Cmd.none )             -- M = cursor mid
+                    " " ->                                -- Space = toggle fold
+                        case model.cursorMsgId of
+                            Just cur ->
+                                update (ToggleMsgFold cur) model
+                            Nothing ->
+                                ( model, Cmd.none )
+                    "f" -> update NavigateToNextPrompt model
+                    "b" -> update NavigateToPrevPrompt model
+                    _ ->
+                        -- Ctrl+D and Ctrl+U for half-page scroll
+                        if ctrl && key == "d" then
+                            update (ScrollHalfPage 1) model
+                        else if ctrl && key == "u" then
+                            update (ScrollHalfPage -1) model
+                        else
+                            ( model, Cmd.none )
+
+            -- Regular input (not display focused)
             else
                 ( model, Cmd.none )
 
@@ -1104,6 +1360,25 @@ detectMediaType name =
         "html" -> T.Document
         "htm" -> T.Document
         _ -> T.Document
+
+-- ─── List Helpers ───────────────────────────────────────────────────
+
+listElemIndex : a -> List a -> Maybe Int
+listElemIndex target items =
+    listElemIndexHelp target items 0
+
+
+listElemIndexHelp : a -> List a -> Int -> Maybe Int
+listElemIndexHelp target items idx =
+    case items of
+        first :: rest ->
+            if first == target then
+                Just idx
+            else
+                listElemIndexHelp target rest (idx + 1)
+
+        [] ->
+            Nothing
 
 
 shortenPath : String -> String
@@ -1399,7 +1674,7 @@ viewChatArea model session =
         [ Attr.class "chat-area" ]
         [ if hasMessages then
             Html.div [ Attr.class "messages" ]
-                (List.map viewMessage session.messages
+                (List.map (viewMessage model.displayFocused model.cursorMsgId) session.messages
 
                     ++ [ Html.div [] [] ]
                 )
@@ -1410,12 +1685,26 @@ viewChatArea model session =
         ]
 
 
-viewMessage : T.Message -> Html Msg
-viewMessage msg =
+viewMessage : Bool -> Maybe String -> T.Message -> Html Msg
+viewMessage displayFocused cursorMsgId msg =
+    let
+        isCursor =
+            case cursorMsgId of
+                Just c -> c == msg.id
+                Nothing -> False
+
+        cursorClass =
+            if displayFocused && isCursor then
+                " message-cursor"
+            else
+                ""
+    in
     case msg.role of
         T.Assistant ->
             Html.div
-                [ Attr.class ("message message-" ++ T.roleToString msg.role) ]
+                [ Attr.class ("message message-" ++ T.roleToString msg.role ++ cursorClass)
+                , Ev.onClick (SetCursorMsgId msg.id)
+                ]
                 [ Html.div [ Attr.class "message-content" ]
                     [ Markdown.toHtmlWith
                         { githubFlavored = Just { tables = True, breaks = True }
@@ -1430,26 +1719,28 @@ viewMessage msg =
 
         T.Reasoning ->
             Html.div [ Attr.class "message-reasoning-wrap" ]
-                [ Html.div [ Attr.class "message message-reasoning" ]
+                [ Html.div [ Attr.class ("message message-reasoning" ++ cursorClass) ]
                     [ Html.text msg.content ]
                 ]
 
         T.Tool ->
             Html.div [ Attr.class "message-reasoning-wrap" ]
-                [ Html.div [ Attr.class "message message-tool" ]
+                [ Html.div [ Attr.class ("message message-tool" ++ cursorClass) ]
                     [ Html.text msg.content ]
                 ]
 
         T.User ->
             Html.div
-                [ Attr.class ("message message-" ++ T.roleToString msg.role) ]
+                [ Attr.class ("message message-" ++ T.roleToString msg.role ++ cursorClass)
+                , Ev.onClick (SetCursorMsgId msg.id)
+                ]
                 [ Html.div [ Attr.class "message-content" ]
                     [ Html.text msg.content ]
                 ]
 
         T.System ->
             Html.div
-                [ Attr.class ("message message-" ++ T.roleToString msg.role) ]
+                [ Attr.class ("message message-" ++ T.roleToString msg.role ++ cursorClass) ]
                 [ Html.div [ Attr.class "message-content" ]
                     (List.map (\line -> Html.span [] [ Html.text line ]) (String.lines msg.content))
                 ]
@@ -1505,7 +1796,14 @@ viewInputBar model session =
                         , Attr.disabled (not session.connected)
                         ]
                         [ Html.text "📎" ]
-                    , Html.span [ Attr.class "input-hint" ] [ Html.text "Ctrl+L Model  ·  Ctrl+H Help  ·  ↵ Send" ] ]
+                    , Html.span [ Attr.class "input-hint" ]
+                        [ Html.text
+                            (if model.displayFocused then
+                                "Tab ← input  ·  j/k ↑↓  ·  g/G top/btm  ·  Space fold"
+                             else
+                                "Ctrl+L Model  ·  Ctrl+H Help  ·  ↵ Send"
+                            )
+                        ] ]
                 , Html.div [ Attr.class "input-footer-right" ]
                     [ Html.button
                         [ Attr.class ("send-btn" ++ (if session.taskRunning then " cancel" else ""))

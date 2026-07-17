@@ -161,6 +161,18 @@
       });
     });
 
+    on("scrollBy", function (data) {
+      window.scrollBy({ top: data.dy, left: data.dx, behavior: "smooth" });
+    });
+
+    on("scrollToY", function (data) {
+      window.scrollTo({ top: data.y, behavior: "smooth" });
+    });
+
+    on("blurInput", function () {
+      document.getElementById("msg-input").blur();
+    });
+
     // 3. Register Tauri event listeners
     Promise.all([
       listen("tlv-delta", function (ev) { app.ports.onDelta.send(ev.payload); }),
