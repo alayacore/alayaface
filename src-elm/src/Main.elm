@@ -9,6 +9,7 @@ import Set exposing (Set)
 import Html exposing (Html, Attribute)
 import Html.Attributes as Attr
 import Html.Events as Ev
+import Html.Keyed as Keyed
 import Json.Decode as D
 import Json.Encode as E
 import Time
@@ -588,7 +589,7 @@ update msg model =
                                 , filePickerInput = ""
                             }
                           )
-                        , Cmd.none
+                        , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
                         )
 
                 Nothing ->
@@ -627,11 +628,15 @@ update msg model =
                             | showFilePicker = True
                             , filePickerMode = T.Local
                             , filePickerInput = ""
+                            , filePickerFilter = ""
                             , filePickerSelected = 0
                             , filePickerLoading = True
                         }
                       )
-                    , Ports.fsHomeDir {}
+                    , Cmd.batch
+                        [ Ports.fsHomeDir {}
+                        , Task.attempt (\_ -> NoOp) (Dom.focus "fp-page-input")
+                        ]
                     )
 
                 Nothing ->
@@ -794,9 +799,10 @@ update msg model =
                             T.Local -> T.Url
                             T.Url -> T.Local
                     , filePickerInput = ""
+                    , filePickerFilter = ""
                 }
               )
-            , Cmd.none
+            , Task.attempt (\_ -> NoOp) (Dom.focus "fp-page-input")
             )
 
         FilePickerNavigateUp ->
@@ -896,30 +902,41 @@ update msg model =
                             , staged = sess.staged ++ [ newItem ]
                         }
                       )
-                    , Cmd.none
+                    , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
                     )
 
                 Nothing ->
                     ( model, Cmd.none )
 
         FsResolvePathResult result ->
-            case D.decodeValue resolvePathResultDecoder result of
-                Ok rp ->
-                    if rp.exists && rp.isDir then
-                        ( updateActiveSession model (\s ->
-                            { s
-                                | filePickerDir = rp.resolved
-                                , filePickerSelected = 0
-                                , filePickerLoading = True
-                            }
-                          )
-                        , Ports.fsListDir { path = rp.resolved }
-                        )
+            case getActiveSession model of
+                Just s ->
+                    case D.decodeValue resolvePathResultDecoder result of
+                        Ok rp ->
+                            if rp.exists && rp.isDir then
+                                let
+                                    sameDir =
+                                        rp.resolved == s.filePickerDir
+                                in
+                                ( updateActiveSession model (\sess ->
+                                    { sess
+                                        | filePickerDir = rp.resolved
+                                        , filePickerSelected = 0
+                                    }
+                                  )
+                                , if sameDir then
+                                    Cmd.none
+                                  else
+                                    Ports.fsListDir { path = rp.resolved }
+                                )
 
-                    else
-                        ( model, Cmd.none )
+                            else
+                                ( model, Cmd.none )
 
-                Err _ ->
+                        Err _ ->
+                            ( model, Cmd.none )
+
+                Nothing ->
                     ( model, Cmd.none )
 
         -- Session Manager
@@ -1980,7 +1997,14 @@ viewMessage displayFocused cursorMsgId msg =
                 [ Attr.class ("message message-" ++ T.roleToString msg.role ++ cursorClass)
                 , Ev.onClick (SetCursorMsgId msg.id)
                 ]
-                [ Html.div [ Attr.class "message-content" ]
+                [ case msg.media of
+                    Just items ->
+                        Html.div [ Attr.class "hs-staged-row" ]
+                            (List.map viewMessageMedia items)
+
+                    Nothing ->
+                        Html.text ""
+                , Html.div [ Attr.class "message-content" ]
                     [ Html.text msg.content ]
                 ]
 
@@ -2006,14 +2030,14 @@ viewInputBar model session =
     in
     Html.div [ Attr.class inputClass ]
         [ Html.div [ Attr.class "input-container" ]
-            [ if hasStaged then
-                Html.div [ Attr.class "hs-staged-row" ]
-                    (List.map viewStagedChip session.staged)
+            [ Html.div [ Attr.class "message message-user input-bubble" ]
+                [ if hasStaged then
+                    Html.div [ Attr.class "hs-staged-row" ]
+                        (List.map viewStagedChip session.staged)
 
-              else
-                Html.text ""
-            , Html.div [ Attr.class "message message-user input-bubble" ]
-                [ Html.textarea
+                  else
+                    Html.text ""
+                , Html.textarea
                     [ Attr.id "msg-input"
                     , Attr.class "input-text"
                     , Attr.placeholder "Type a message…"
@@ -2079,6 +2103,18 @@ viewStagedChip item =
             , Attr.title "Remove"
             ]
             [ Html.text "✕" ]
+        ]
+
+
+-- ─── Message Media Previews ─────────────────────────────────────────
+
+viewMessageMedia : T.MediaItem -> Html Msg
+viewMessageMedia item =
+    Html.div [ Attr.class "hs-staged-chip message-media-chip" ]
+        [ Html.span [ Attr.class "hs-staged-icon" ]
+            [ Html.text (mediaTypeIcon item.mediaType) ]
+        , Html.span [ Attr.class "hs-staged-name" ]
+            [ Html.text (Maybe.withDefault (String.left 40 item.uri) item.name) ]
         ]
 
 
@@ -2323,7 +2359,8 @@ viewFilePickerPage s =
     Html.div [ Attr.class "fp-page" ]
         [ Html.div [ Attr.class "fp-page-input-row" ]
             [ Html.input
-                [ Attr.class "fp-page-input"
+                [ Attr.id "fp-page-input"
+                , Attr.class "fp-page-input"
                 , Attr.type_ "text"
                 , Attr.value s.filePickerInput
                 , Ev.onInput SetFilePickerInput
@@ -2383,8 +2420,11 @@ viewFilePickerPage s =
             Html.div [ Attr.class "fp-page-status" ] [ Html.text "No files found" ]
 
           else
-            Html.div [ Attr.class "fp-page-list" ]
-                (List.indexedMap (\i e -> viewFilePickerPageEntry i e s) entries)
+            let
+                keyedEntries =
+                    List.indexedMap (\i e -> ( e.name, viewFilePickerPageEntry i e s )) entries
+            in
+            Keyed.node "div" [ Attr.class "fp-page-list" ] keyedEntries
         ]
 
 

@@ -86,7 +86,7 @@ html {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  padding: 8px 12px 0;
+  padding: 0 0 6px 0;
 }
 
 .hs-staged-chip {
@@ -128,6 +128,25 @@ html {
   color: #e94560;
 }
 
+/* ─── Message media chips (read-only, no remove button) ──────────────── */
+
+.message-media-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(99, 102, 241, 0.1);
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  border-radius: 8px;
+  padding: 3px 8px;
+  font-size: 0.78rem;
+  color: #818cf8;
+  pointer-events: none;
+}
+
+.message-media-chip .hs-staged-name {
+  font-size: 0.78rem;
+}
+
 @media (prefers-color-scheme: light) {
   .hs-staged-chip {
     background: rgba(99, 102, 241, 0.06);
@@ -136,6 +155,11 @@ html {
   }
   .hs-staged-remove {
     color: rgba(99, 102, 241, 0.4);
+  }
+  .message-media-chip {
+    background: rgba(99, 102, 241, 0.06);
+    border-color: rgba(99, 102, 241, 0.2);
+    color: #6366f1;
   }
 }
 
