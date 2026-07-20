@@ -121,7 +121,8 @@ viewItem idx model config =
             config.activeModelId == Just model.id
     in
     Html.div
-        [ Attr.class ("sel-page-item"
+        [ Attr.id ("model-selector-item-" ++ String.fromInt model.id)
+        , Attr.class ("sel-page-item"
             ++ (if isSelected then " sel-page-item-selected" else "")
             ++ (if isActive then " sel-page-item-active" else "")
           )

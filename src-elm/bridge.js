@@ -186,10 +186,17 @@
     });
 
     on("focusElement", function (id) {
-      setTimeout(function () {
+      requestAnimationFrame(function () {
         var el = document.getElementById(id);
         if (el) { el.focus(); }
-      }, 10);
+      });
+    });
+
+    on("scrollIntoView", function (id) {
+      requestAnimationFrame(function () {
+        var el = document.getElementById(id);
+        if (el) { el.scrollIntoView({ block: "nearest" }); }
+      });
     });
 
     on("copyToClipboard", function (data) {

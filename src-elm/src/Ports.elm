@@ -48,6 +48,7 @@ port module Ports exposing
     , onStderrLog
     , scrollToBottom
     , focusElement
+    , scrollIntoView
     , onScroll
     , onWindowMaximized
     , getStderrLog
@@ -116,6 +117,7 @@ port onStderrLog : (List String -> msg) -> Sub msg
 
 port scrollToBottom : {} -> Cmd msg
 port focusElement : String -> Cmd msg
+port scrollIntoView : String -> Cmd msg
 port onScroll : ({ scrollTop : Float, scrollHeight : Float, clientHeight : Float } -> msg) -> Sub msg
 
 -- Window state

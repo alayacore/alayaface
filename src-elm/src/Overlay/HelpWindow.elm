@@ -132,12 +132,16 @@ viewItem idx item config =
             idx == config.selected
     in
     if item.isSection then
-        Html.div [ Attr.class "help-page-section" ]
+        Html.div
+            [ Attr.id ("help-item-" ++ String.fromInt idx)
+            , Attr.class "help-page-section"
+            ]
             [ Html.text ("── " ++ item.key) ]
 
     else
         Html.div
-            [ Attr.class ("help-page-item"
+            [ Attr.id ("help-item-" ++ String.fromInt idx)
+            , Attr.class ("help-page-item"
                 ++ (if isSelected then " help-page-item-selected" else "")
               )
             , Ev.onMouseEnter (config.onSelect idx)

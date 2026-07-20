@@ -652,7 +652,7 @@ update msg model =
                                 , filePickerInput = ""
                             }
                           )
-                        , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
+                        , restoreFocus model.displayFocused
                         )
 
                 Nothing ->
@@ -784,8 +784,26 @@ update msg model =
                     ( model, Cmd.none )
 
         FilePickerSelectItem idx ->
+            let
+                scrollCmd =
+                    case getActiveSession model of
+                        Just s ->
+                            let
+                                entries =
+                                    filterEntries s
+                            in
+                            case List.head (List.drop idx entries) of
+                                Just e ->
+                                    Ports.scrollIntoView ("fp-item-" ++ e.name)
+
+                                Nothing ->
+                                    Cmd.none
+
+                        Nothing ->
+                            Cmd.none
+            in
             ( updateActiveSession model (\s -> { s | filePickerSelected = idx })
-            , Cmd.none
+            , scrollCmd
             )
 
         FilePickerConfirmItem ->
@@ -968,7 +986,7 @@ update msg model =
                             , staged = sess.staged ++ [ newItem ]
                         }
                       )
-                    , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
+                    , restoreFocus model.displayFocused
                     )
 
                 Nothing ->
@@ -1082,8 +1100,26 @@ update msg model =
             )
 
         ModelSelectorSelectItem idx ->
+            let
+                scrollCmd =
+                    case getActiveSession model of
+                        Just s ->
+                            let
+                                filtered =
+                                    filterModels s.models s.modelSelectorInput
+                            in
+                            case List.head (List.drop idx filtered) of
+                                Just m ->
+                                    Ports.scrollIntoView ("model-selector-item-" ++ String.fromInt m.id)
+
+                                Nothing ->
+                                    Cmd.none
+
+                        Nothing ->
+                            Cmd.none
+            in
             ( updateActiveSession model (\s -> { s | modelSelectorSelected = idx })
-            , Cmd.none
+            , scrollCmd
             )
 
         ModelSelectorConfirmItem ->
@@ -1099,7 +1135,10 @@ update msg model =
                     case selectedModel of
                         Just m ->
                             ( updateActiveSession model (\sess -> { sess | showModelSelector = False, modelSelectorInput = "" })
-                            , Ports.setModel { sessionId = s.id, modelId = m.id }
+                            , Cmd.batch
+                                [ Ports.setModel { sessionId = s.id, modelId = m.id }
+                                , restoreFocus model.displayFocused
+                                ]
                             )
 
                         Nothing ->
@@ -1148,7 +1187,7 @@ update msg model =
 
         HelpSelectItem idx ->
             ( updateActiveSession model (\s -> { s | helpSelected = idx })
-            , Cmd.none
+            , Ports.scrollIntoView ("help-item-" ++ String.fromInt idx)
             )
 
         HelpCmdMsg cmd ->

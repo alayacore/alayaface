@@ -149,7 +149,8 @@ view config =
 viewEntry : Int -> T.DirEntry -> { a | selected : Int, onSelect : Int -> msg, onConfirm : msg, onNavigateDir : String -> msg } -> Html msg
 viewEntry idx entry config =
     Html.div
-        [ Attr.class ("fp-page-item" ++ (if idx == config.selected then " fp-page-item-selected" else ""))
+        [ Attr.id ("fp-item-" ++ entry.name)
+        , Attr.class ("fp-page-item" ++ (if idx == config.selected then " fp-page-item-selected" else ""))
         , Ev.onClick
             (if entry.isDir then
                 config.onNavigateDir entry.name
