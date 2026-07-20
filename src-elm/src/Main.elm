@@ -20,7 +20,7 @@ import Overlay.ConfirmTool
 import Overlay.McpInit
 import Overlay.FilePicker
 import Overlay.ModelSelector
-import Overlay.HelpWindow exposing (HelpItem, helpItems)
+import Overlay.HelpWindow exposing (HelpItem, helpItems, filterHelpItems)
 import Markdown
 import Ports
 import Fuzzy
@@ -1098,7 +1098,22 @@ update msg model =
             )
 
         SetHelpFilter val ->
-            ( updateActiveSession model (\s -> { s | helpFilter = val })
+            ( updateActiveSession model (\s ->
+                let
+                    filtered =
+                        filterHelpItems val helpItems
+
+                    clampedSelected =
+                        if List.length filtered <= s.helpSelected then
+                            max 0 (List.length filtered - 1)
+                        else
+                            s.helpSelected
+                in
+                { s
+                    | helpFilter = val
+                    , helpSelected = clampedSelected
+                }
+              )
             , Cmd.none
             )
 

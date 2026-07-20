@@ -1,4 +1,4 @@
-module Overlay.HelpWindow exposing (HelpItem, helpItems, view)
+module Overlay.HelpWindow exposing (HelpItem, helpItems, filterHelpItems, view)
 
 import Html exposing (Html)
 import Html.Attributes as Attr
