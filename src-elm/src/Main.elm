@@ -131,6 +131,14 @@ isOverlayOpen model =
             False
 
 
+restoreFocus : Bool -> Cmd Msg
+restoreFocus displayFocused =
+    if displayFocused then
+        Ports.blurInput {}
+    else
+        Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
+
+
 -- MSG
 
 type Msg
@@ -487,7 +495,7 @@ update msg model =
                             ( { model | sessions = Dict.insert sid { sess | pendingMcpAuth = Nothing } model.sessions }
                             , Cmd.batch
                                 [ Ports.sendCommand { sessionId = sid, command = ":mcp_decline " ++ server }
-                                , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
+                                , restoreFocus model.displayFocused
                                 ]
                             )
 
@@ -512,7 +520,7 @@ update msg model =
                       }
                     , Cmd.batch
                         [ Ports.sendCommand { sessionId = sid, command = ":mcp_cancel" }
-                        , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
+                        , restoreFocus model.displayFocused
                         ]
                     )
 
@@ -535,7 +543,7 @@ update msg model =
                               }
                             , Cmd.batch
                                 [ Ports.sendCommand { sessionId = sid, command = ":mcp_cancel" }
-                                , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
+                                , restoreFocus model.displayFocused
                                 ]
                             )
 
@@ -574,7 +582,7 @@ update msg model =
                                     }
                                     model.sessions
                               }
-                            , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
+                            , restoreFocus model.displayFocused
                             )
 
                         Nothing ->
@@ -699,7 +707,7 @@ update msg model =
 
         CloseFilePicker ->
             ( updateActiveSession model (\s -> { s | showFilePicker = False })
-            , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
+            , restoreFocus model.displayFocused
             )
 
         FocusElement id ->
@@ -1003,7 +1011,7 @@ update msg model =
 
         CloseSessionManager ->
             ( { model | showSessionManager = False }
-            , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
+            , restoreFocus model.displayFocused
             )
 
         SessionDirsResult dirs ->
@@ -1049,7 +1057,7 @@ update msg model =
 
         CloseModelSelector ->
             ( updateActiveSession model (\s -> { s | showModelSelector = False })
-            , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
+            , restoreFocus model.displayFocused
             )
 
         SetModelSelectorInput val ->
@@ -1115,7 +1123,7 @@ update msg model =
 
         CloseHelpWindow ->
             ( updateActiveSession model (\s -> { s | showHelpWindow = False })
-            , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
+            , restoreFocus model.displayFocused
             )
 
         SetHelpFilter val ->
