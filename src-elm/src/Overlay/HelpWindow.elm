@@ -1,4 +1,4 @@
-module Overlay.HelpWindow exposing (HelpItem, helpItems, filterHelpItems, view)
+module Overlay.HelpWindow exposing (HelpItem, helpItems, filterHelpItems, nextSelectable, view)
 
 import Html exposing (Html)
 import Html.Attributes as Attr
@@ -31,9 +31,6 @@ view config =
     let
         filtered =
             filterHelpItems config.filter config.items
-
-        filteredLen =
-            List.length filtered
     in
     Html.div [ Attr.class "help-page" ]
         [ Html.div [ Attr.class "sel-page-title" ] [ Html.text "Help" ]
@@ -67,13 +64,13 @@ view config =
                         else if key == "ArrowDown" then
                             let
                                 newIdx =
-                                    min (config.selected + 1) (max 0 (filteredLen - 1))
+                                    nextSelectable config.selected filtered
                             in
                             ( config.onSelect newIdx, True )
                         else if key == "ArrowUp" then
                             let
                                 newIdx =
-                                    max 0 (config.selected - 1)
+                                    prevSelectable config.selected filtered
                             in
                             ( config.onSelect newIdx, True )
                         else
@@ -92,10 +89,6 @@ view config =
                 , Attr.tabindex 0
                 , Ev.preventDefaultOn "keydown" <|
                     D.map4 (\key ctrl alt shift ->
-                        let
-                            listLen =
-                                List.length filtered
-                        in
                         if key == "Tab" then
                             ( config.focusInput, True )
                         else if key == "Enter" && not ctrl then
@@ -115,13 +108,13 @@ view config =
                         else if key == "ArrowDown" || (key == "j" && not ctrl && not alt && not shift) then
                             let
                                 newIdx =
-                                    min (config.selected + 1) (max 0 (listLen - 1))
+                                    nextSelectable config.selected filtered
                             in
                             ( config.onSelect newIdx, True )
                         else if key == "ArrowUp" || (key == "k" && not ctrl && not alt && not shift) then
                             let
                                 newIdx =
-                                    max 0 (config.selected - 1)
+                                    prevSelectable config.selected filtered
                             in
                                 ( config.onSelect newIdx, True )
                         else
@@ -216,6 +209,62 @@ fuzzyMatchHelp search target =
                         fuzzyMatchHelp restSearch restTarget
                     else
                         fuzzyMatchHelp search restTarget
+
+
+-- Navigate to next/previous selectable (non-section) item
+
+nextSelectable : Int -> List HelpItem -> Int
+nextSelectable current items =
+    let
+        len =
+            List.length items
+    in
+    if len == 0 then
+        0
+
+    else
+        let
+            search =
+                List.range (current + 1) (len - 1)
+        in
+        case List.filter (\i -> not (isSectionAt i items)) search of
+            idx :: _ ->
+                idx
+
+            [] ->
+                current
+
+
+prevSelectable : Int -> List HelpItem -> Int
+prevSelectable current items =
+    let
+        len =
+            List.length items
+    in
+    if len == 0 then
+        0
+
+    else
+        let
+            search =
+                List.range 0 (current - 1) |> List.reverse
+        in
+        case List.filter (\i -> not (isSectionAt i items)) search of
+            idx :: _ ->
+                idx
+
+            [] ->
+                current
+
+
+isSectionAt : Int -> List HelpItem -> Bool
+isSectionAt idx items =
+    case List.head (List.drop idx items) of
+        Just item ->
+            item.isSection
+
+        Nothing ->
+            False
 
 
 helpItems : List HelpItem

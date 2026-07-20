@@ -20,7 +20,7 @@ import Overlay.ConfirmTool
 import Overlay.McpInit
 import Overlay.FilePicker
 import Overlay.ModelSelector
-import Overlay.HelpWindow exposing (HelpItem, helpItems, filterHelpItems)
+import Overlay.HelpWindow exposing (HelpItem, helpItems, filterHelpItems, nextSelectable, view)
 import Markdown
 import Ports
 import Fuzzy
@@ -1085,7 +1085,7 @@ update msg model =
                 { s
                     | showHelpWindow = True
                     , helpFilter = ""
-                    , helpSelected = 0
+                    , helpSelected = nextSelectable (-1) helpItems
                     , helpScroll = 0
                 }
               )
