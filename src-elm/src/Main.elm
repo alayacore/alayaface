@@ -136,7 +136,7 @@ restoreFocus displayFocused =
     if displayFocused then
         Ports.blurInput {}
     else
-        Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
+        Ports.focusElement "msg-input"
 
 
 -- MSG

@@ -157,7 +157,6 @@ viewEntry idx entry config =
              else
                 config.onConfirm
             )
-        , Ev.onMouseEnter (config.onSelect idx)
         ]
         [ Html.span [ Attr.class "fp-page-item-icon" ] [ Html.text (if entry.isDir then "📁" else "📄") ]
         , Html.span [ Attr.class "fp-page-item-name" ] [ Html.text entry.name ]
