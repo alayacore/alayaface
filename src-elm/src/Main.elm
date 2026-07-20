@@ -321,14 +321,24 @@ update msg model =
                                 msgCountChanged =
                                     List.length newSession.messages /= model.prevMsgCount
 
+                                mcpJustCompleted =
+                                    session.mcpStatus /= Nothing && newSession.mcpStatus == Nothing
+
                                 cmds =
-                                    if msgCountChanged && model.atBottom then
-                                        Cmd.batch
-                                            [ Ports.scrollToBottom {}
-                                            , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
+                                    Cmd.batch
+                                        (List.filterMap identity
+                                            [ if msgCountChanged && model.atBottom then
+                                                Just (Ports.scrollToBottom {})
+
+                                              else
+                                                Nothing
+                                            , if msgCountChanged && model.atBottom || mcpJustCompleted then
+                                                Just (Task.attempt (\_ -> NoOp) (Dom.focus "msg-input"))
+
+                                              else
+                                                Nothing
                                             ]
-                                    else
-                                        Cmd.none
+                                        )
                             in
                             ( { model
                                 | sessions = Dict.insert ev.sessionId newSession model.sessions
@@ -475,7 +485,10 @@ update msg model =
                     case s of
                         Just sess ->
                             ( { model | sessions = Dict.insert sid { sess | pendingMcpAuth = Nothing } model.sessions }
-                            , Ports.sendCommand { sessionId = sid, command = ":mcp_decline " ++ server }
+                            , Cmd.batch
+                                [ Ports.sendCommand { sessionId = sid, command = ":mcp_decline " ++ server }
+                                , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
+                                ]
                             )
 
                         Nothing ->
@@ -497,7 +510,10 @@ update msg model =
                         ))
                         model.sessions
                       }
-                    , Ports.sendCommand { sessionId = sid, command = ":mcp_cancel" }
+                    , Cmd.batch
+                        [ Ports.sendCommand { sessionId = sid, command = ":mcp_cancel" }
+                        , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
+                        ]
                     )
 
                 Nothing ->
@@ -517,7 +533,10 @@ update msg model =
                                     { sess | pendingMcpAuth = Nothing, mcpStatus = Nothing }
                                     model.sessions
                               }
-                            , Ports.sendCommand { sessionId = sid, command = ":mcp_cancel" }
+                            , Cmd.batch
+                                [ Ports.sendCommand { sessionId = sid, command = ":mcp_cancel" }
+                                , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
+                                ]
                             )
 
                         Nothing ->
