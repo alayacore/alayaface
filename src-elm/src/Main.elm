@@ -156,8 +156,7 @@ type Msg
       -- File picker
     | OpenFilePicker
     | CloseFilePicker
-    | FocusFilePickerList
-    | FocusFilePickerInput
+    | FocusElement String
     | SetFilePickerInput String
     | FilePickerNavigateDir String
     | FilePickerSelectItem Int
@@ -185,16 +184,12 @@ type Msg
       -- Model Selector
     | OpenModelSelector
     | CloseModelSelector
-    | FocusModelSelectorList
-    | FocusModelSelectorInput
     | SetModelSelectorInput String
     | ModelSelectorSelectItem Int
     | ModelSelectorConfirmItem
       -- Help Window
     | OpenHelpWindow
     | CloseHelpWindow
-    | FocusHelpList
-    | FocusHelpInput
     | SetHelpFilter String
     | HelpSelectItem Int
     | HelpCmdMsg String
@@ -683,11 +678,8 @@ update msg model =
             , Cmd.none
             )
 
-        FocusFilePickerList ->
-            ( model, Ports.focusElement "fp-page-list" )
-
-        FocusFilePickerInput ->
-            ( model, Ports.focusElement "fp-page-input" )
+        FocusElement id ->
+            ( model, Ports.focusElement id )
 
         SetFilePickerInput val ->
             case getActiveSession model of
@@ -1034,12 +1026,6 @@ update msg model =
             , Cmd.none
             )
 
-        FocusModelSelectorList ->
-            ( model, Ports.focusElement "model-selector-list" )
-
-        FocusModelSelectorInput ->
-            ( model, Ports.focusElement "model-selector-input" )
-
         SetModelSelectorInput val ->
             ( updateActiveSession model (\s ->
                 let
@@ -1105,12 +1091,6 @@ update msg model =
             ( updateActiveSession model (\s -> { s | showHelpWindow = False })
             , Cmd.none
             )
-
-        FocusHelpList ->
-            ( model, Ports.focusElement "help-page-list" )
-
-        FocusHelpInput ->
-            ( model, Ports.focusElement "help-filter-input" )
 
         SetHelpFilter val ->
             ( updateActiveSession model (\s -> { s | helpFilter = val })
@@ -1696,6 +1676,8 @@ listElemIndexHelp target items idx =
 
         [] ->
             Nothing
+
+
 
 
 shortenPath : String -> String
@@ -2460,7 +2442,7 @@ viewFilePickerPage s =
                             ( FilePickerSelectItem newIdx, True )
                         -- Tab switches to list
                         else if key == "Tab" then
-                            ( FocusFilePickerList, True )
+                            ( FocusElement "fp-page-list", True )
                         else
                             ( NoOp, False )
                     ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool)
@@ -2500,7 +2482,7 @@ viewFilePickerPage s =
                                 List.length entries
                         in
                         if key == "Tab" then
-                            ( FocusFilePickerInput, True )
+                            ( FocusElement "fp-page-input", True )
                         else if key == "Enter" && not ctrl then
                             ( FilePickerConfirmItem, True )
                         else if key == "ArrowDown" || (key == "j" && not ctrl && not alt && not shift) then
@@ -2580,7 +2562,7 @@ viewModelSelectorPage s =
                                 List.length filtered
                         in
                         if key == "Tab" then
-                            ( FocusModelSelectorList, True )
+                            ( FocusElement "model-selector-list", True )
                         else if key == "Enter" && not ctrl then
                             ( ModelSelectorConfirmItem, True )
                         else if key == "ArrowDown" then
@@ -2627,7 +2609,7 @@ viewModelSelectorPage s =
                                 List.length filtered
                         in
                         if key == "Tab" then
-                            ( FocusModelSelectorInput, True )
+                            ( FocusElement "model-selector-input", True )
                         else if key == "Enter" && not ctrl then
                             ( ModelSelectorConfirmItem, True )
                         else if key == "ArrowDown" || (key == "j" && not ctrl && not alt && not shift) then
@@ -2714,7 +2696,9 @@ viewHelpWindowPage s =
                 , Attr.autofocus True
                 , Ev.preventDefaultOn "keydown" <|
                     D.map4 (\key ctrl alt shift ->
-                        if key == "Enter" && not ctrl then
+                        if key == "Tab" then
+                            ( FocusElement "help-page-list", True )
+                        else if key == "Enter" && not ctrl then
                             let
                                 selectedItem =
                                     List.head (List.drop s.helpSelected filtered)
@@ -2740,9 +2724,6 @@ viewHelpWindowPage s =
                                     max 0 (s.helpSelected - 1)
                             in
                             ( HelpSelectItem newIdx, True )
-                        -- Tab switches to list
-                        else if key == "Tab" then
-                            ( FocusHelpList, True )
                         else
                             ( NoOp, False )
                     ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool)
@@ -2764,7 +2745,7 @@ viewHelpWindowPage s =
                                 List.length filtered
                         in
                         if key == "Tab" then
-                            ( FocusHelpInput, True )
+                            ( FocusElement "help-filter-input", True )
                         else if key == "Enter" && not ctrl then
                             let
                                 selectedItem =
@@ -2784,13 +2765,13 @@ viewHelpWindowPage s =
                                 newIdx =
                                     min (s.helpSelected + 1) (max 0 (listLen - 1))
                             in
-                            ( HelpSelectItem newIdx, True )
+                                ( HelpSelectItem newIdx, True )
                         else if key == "ArrowUp" || (key == "k" && not ctrl && not alt && not shift) then
                             let
                                 newIdx =
                                     max 0 (s.helpSelected - 1)
                             in
-                            ( HelpSelectItem newIdx, True )
+                                ( HelpSelectItem newIdx, True )
                         else
                             ( NoOp, False )
                     ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool)
