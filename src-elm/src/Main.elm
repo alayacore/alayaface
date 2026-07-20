@@ -16,6 +16,11 @@ import Time
 import Session.Types as T
 import Session.Protocol as P
 import Session.Handlers as H
+import Overlay.ConfirmTool
+import Overlay.McpInit
+import Overlay.FilePicker
+import Overlay.ModelSelector
+import Overlay.HelpWindow exposing (HelpItem, helpItems)
 import Markdown
 import Ports
 import Fuzzy
@@ -1620,11 +1625,6 @@ resolvePathResultDecoder =
         (D.field "isDir" D.bool)
 
 
-isUrl : String -> Bool
-isUrl s =
-    String.startsWith "http://" s || String.startsWith "https://" s
-
-
 detectMediaType : String -> T.MediaType
 detectMediaType name =
     let
@@ -1678,38 +1678,6 @@ listElemIndexHelp target items idx =
             Nothing
 
 
-
-
-shortenPath : String -> String
-shortenPath path =
-    if path == "" then
-        ""
-
-    else
-        let
-            home =
-                Maybe.withDefault "~" (Maybe.map (\_ -> "~") (String.indexes "/home/" path |> List.head))
-
-            parts =
-                String.split "/" path
-
-            numParts =
-                List.length parts
-        in
-        if numParts <= 4 then
-            path
-
-        else
-            let
-                first =
-                    Maybe.withDefault "" (List.head parts)
-
-                lastFew =
-                    List.drop (numParts - 3) parts |> String.join "/"
-            in
-            first ++ "/…/" ++ lastFew
-
-
 -- ─── Model Selector Helpers ──────────────────────────────────────────
 
 filterModels : List T.ModelInfo -> String -> List T.ModelInfo
@@ -1726,15 +1694,6 @@ filterModels models term =
 
 
 -- ─── Help Items ──────────────────────────────────────────────────────
-
-type alias HelpItem =
-    { id : Int
-    , key : String
-    , desc : String
-    , isSection : Bool
-    , isCommand : Bool
-    }
-
 
 helpItems : List HelpItem
 helpItems =
@@ -1782,30 +1741,6 @@ helpItems =
     , { id = 42, key = "Space", desc = "Toggle window fold", isSection = False, isCommand = False }
     , { id = 43, key = "Ctrl+F", desc = "Fork session from cursor", isSection = False, isCommand = False }
     ]
-
-
-filterHelpItems : String -> List HelpItem -> List HelpItem
-filterHelpItems term items =
-    let
-        trimmed =
-            String.trim term
-    in
-    if String.isEmpty trimmed then
-        items
-
-    else
-        let
-            lower =
-                String.toLower trimmed
-        in
-        List.filter
-            (\item ->
-                if item.isSection then
-                    True
-                else
-                    Fuzzy.fuzzyMatch lower (String.toLower (item.key ++ " " ++ item.desc))
-            )
-            items
 
 
 -- SUBSCRIPTIONS
@@ -2179,192 +2114,46 @@ viewConfirmOverlay : T.SessionState -> Html Msg
 viewConfirmOverlay session =
     case session.pendingConfirm of
         first :: _ ->
-            viewOverlay CloseConfirm [ viewConfirmToolPage first ]
+            viewOverlay CloseConfirm
+                [ Overlay.ConfirmTool.view
+                    { onConfirm = ConfirmTool
+                    }
+                    first
+                ]
 
         [] ->
             Html.text ""
-
-
-viewConfirmToolPage : T.PendingConfirm -> Html Msg
-viewConfirmToolPage p =
-    Html.div [ Attr.class "confirm-page" ]
-        [ Html.div [ Attr.class "confirm-page-title" ]
-            [ Html.text ("Allow \"" ++ Maybe.withDefault "Tool" p.toolName ++ "\" to run?") ]
-        , case p.toolInput of
-            Just input ->
-                Html.div [ Attr.class "confirm-page-input" ]
-                    [ Html.text input ]
-
-            Nothing ->
-                Html.text ""
-        , Html.div [ Attr.class "confirm-page-buttons" ]
-            [ Html.button
-                [ Attr.class "confirm-page-btn confirm-page-btn-allow"
-                , Ev.onClick (ConfirmTool p.id True)
-                ]
-                [ Html.text "✓ Allow" ]
-            , Html.button
-                [ Attr.class "confirm-page-btn confirm-page-btn-deny"
-                , Ev.onClick (ConfirmTool p.id False)
-                ]
-                [ Html.text "✕ Deny" ]
-            ]
-        ]
-
-
-viewConfirmMcpAuthPage : T.PendingConfirm -> Html Msg
-viewConfirmMcpAuthPage auth =
-    Html.div [ Attr.class "confirm-page" ]
-        [ Html.div [ Attr.class "confirm-page-title" ]
-            [ Html.text ("Authorize MCP server \"" ++ Maybe.withDefault "?" auth.toolName ++ "\"?") ]
-        , case auth.toolInput of
-            Just url ->
-                Html.div [ Attr.class "confirm-page-input" ]
-                    [ Html.text url ]
-
-            Nothing ->
-                Html.text ""
-        , Html.div [ Attr.class "confirm-page-buttons" ]
-            [ Html.button
-                [ Attr.class "confirm-page-btn confirm-page-btn-cancel-all"
-                , Ev.onClick McpCancelAll
-                ]
-                [ Html.text "✕ Cancel All" ]
-            , Html.button
-                [ Attr.class "confirm-page-btn confirm-page-btn-allow"
-                , Ev.onClick McpAuthConfirm
-                ]
-                [ Html.text "✓ Authorize" ]
-            , Html.button
-                [ Attr.class "confirm-page-btn confirm-page-btn-deny"
-                , Ev.onClick (McpAuthDeny (Maybe.withDefault "" auth.toolName))
-                ]
-                [ Html.text "✕ Deny" ]
-            ]
-        ]
 
 
 -- ─── MCP Init Overlay ────────────────────────────────────────────────
 
 viewMcpInitOverlay : T.SessionState -> Html Msg
 viewMcpInitOverlay session =
-    case session.mcpStatus of
-        Just "connecting" ->
-            if List.isEmpty session.mcpServers then
-                Html.text ""
-            else
-                viewOverlay CloseMcpInit [ viewMcpInitPage session ]
-
-        Just "auth_required" ->
-            viewOverlay CloseMcpInit [ viewMcpInitPage session ]
-
-        Just "auth_running" ->
-            viewOverlay CloseMcpInit [ viewMcpInitPage session ]
-
-        Just "failed" ->
-            viewOverlay CloseMcpInit [ viewMcpInitPage session ]
-
-        _ ->
-            Html.text ""
-
-
-viewMcpInitPage : T.SessionState -> Html Msg
-viewMcpInitPage session =
     let
-        statusText =
+        showOverlay =
             case session.mcpStatus of
-                Just "connecting" ->
-                    if List.isEmpty session.mcpServers then
-                        "Initializing MCP servers…"
-                    else
-                        "Connecting to MCP servers:"
-
-                Just "auth_running" ->
-                    "Waiting for OAuth authorization…"
-
-                Just "failed" ->
-                    "MCP initialization failed."
-
-                _ ->
-                    "Initializing MCP servers…"
-
-        authServerName =
-            case session.pendingMcpAuth of
-                Just a ->
-                    Maybe.withDefault "" a.toolName
-
-                Nothing ->
-                    ""
-
-        authUrl =
-            case session.pendingMcpAuth of
-                Just a ->
-                    Maybe.withDefault "" a.toolInput
-
-                Nothing ->
-                    ""
+                Just "connecting" -> not (List.isEmpty session.mcpServers)
+                Just "auth_required" -> True
+                Just "auth_running" -> True
+                Just "failed" -> True
+                _ -> False
     in
-    Html.div [ Attr.class "mcp-init-page" ]
-        [ Html.div [ Attr.class "confirm-page-title" ]
-            [ Html.text "Initializing MCP Servers" ]
-        , Html.div [ Attr.class "mcp-init-status" ]
-            [ Html.text statusText ]
-        , if not (List.isEmpty session.mcpServers) then
-            Html.div [ Attr.class "mcp-init-list" ]
-                (List.map
-                    (\s ->
-                        let
-                            isAuthServer =
-                                s == authServerName && authUrl /= ""
-                        in
-                        Html.div [ Attr.class "mcp-init-server" ]
-                            [ Html.span [ Attr.class "mcp-init-dot" ]
-                                [ Html.text
-                                    (if isAuthServer then "🔑" else "⟳")
-                                ]
-                            , Html.span [ Attr.class "mcp-init-name" ] [ Html.text s ]
-                            , if isAuthServer then
-                                Html.span [ Attr.class "mcp-init-actions" ]
-                                    [ Html.button
-                                        [ Attr.class "mcp-init-btn mcp-init-btn-url"
-                                        , Ev.onClick (FillMcpAuthUrl authUrl)
-                                        , Attr.title "Copy authorization URL"
-                                        ]
-                                        [ Html.text "📋 URL" ]
-                                    , Html.button
-                                        [ Attr.class "mcp-init-btn mcp-init-btn-auth"
-                                        , Ev.onClick McpAuthConfirm
-                                        , Attr.title "Open browser to authorize"
-                                        ]
-                                        [ Html.text "✓ Authorize" ]
-                                    , Html.button
-                                        [ Attr.class "mcp-init-btn mcp-init-btn-deny"
-                                        , Ev.onClick (McpAuthDeny s)
-                                        , Attr.title "Skip this server"
-                                        ]
-                                        [ Html.text "✕ Deny" ]
-                                    ]
-
-                              else
-                                Html.text ""
-                            ]
-                    )
-                    session.mcpServers
-                )
-
-          else
-            Html.text ""
-        , Html.div [ Attr.class "mcp-init-hint" ]
-            [ Html.text "Press Ctrl+G to cancel MCP initialization." ]
-        , Html.div [ Attr.class "mcp-init-footer" ]
-            [ Html.button
-                [ Attr.class "mcp-init-btn mcp-init-btn-close"
-                , Ev.onClick CloseMcpAuthOverlay
-                , Attr.title "Close overlay"
-                ]
-                [ Html.text "✕ Close" ]
+    if showOverlay then
+        viewOverlay CloseMcpInit
+            [ Overlay.McpInit.view
+                { mcpStatus = session.mcpStatus
+                , mcpServers = session.mcpServers
+                , pendingMcpAuth = session.pendingMcpAuth
+                , onClose = CloseMcpAuthOverlay
+                , onCancelAll = McpCancelAll
+                , onAuthConfirm = McpAuthConfirm
+                , onAuthDeny = McpAuthDeny
+                , onFillUrl = FillMcpAuthUrl
+                }
             ]
-        ]
+
+    else
+        Html.text ""
 
 
 -- ─── File Picker Overlay ──────────────────────────────────────────────
@@ -2374,153 +2163,31 @@ viewFilePickerOverlay model =
     case getActiveSession model of
         Just s ->
             if s.showFilePicker then
-                viewOverlay CloseFilePicker [ viewFilePickerPage s ]
+                viewOverlay CloseFilePicker
+                    [ Overlay.FilePicker.view
+                        { entries = filterEntries s
+                        , input = s.filePickerInput
+                        , filter = s.filePickerFilter
+                        , selected = s.filePickerSelected
+                        , dir = s.filePickerDir
+                        , mode = s.filePickerMode
+                        , loading = s.filePickerLoading
+                        , noOp = NoOp
+                        , onInput = SetFilePickerInput
+                        , onSelect = FilePickerSelectItem
+                        , onConfirm = FilePickerConfirmItem
+                        , onUrlConfirm = ConfirmFilePickerUrl
+                        , onToggleMode = FilePickerToggleMode
+                        , onNavigateDir = FilePickerNavigateDir
+                        , focusInput = FocusElement "fp-page-input"
+                        , focusList = FocusElement "fp-page-list"
+                        }
+                    ]
             else
                 Html.text ""
 
         Nothing ->
             Html.text ""
-
-
-viewFilePickerPage : T.SessionState -> Html Msg
-viewFilePickerPage s =
-    let
-        entries =
-            filterEntries s
-
-        inputIsUrl =
-            isUrl (String.trim s.filePickerInput)
-
-        isUrlMode =
-            s.filePickerMode == T.Url
-
-        placeholder =
-            if isUrlMode then
-                "Paste a URL…"
-            else
-                "Type a file name or path…"
-
-        modeLabel =
-            if isUrlMode then "URL" else "Local"
-
-        filteredLen =
-            List.length entries
-    in
-    Html.div [ Attr.class "fp-page" ]
-        [ Html.div [ Attr.class "fp-page-input-row" ]
-            [ Html.input
-                [ Attr.id "fp-page-input"
-                , Attr.class "fp-page-input"
-                , Attr.type_ "text"
-                , Attr.value s.filePickerInput
-                , Ev.onInput SetFilePickerInput
-                , Attr.placeholder placeholder
-                , Attr.autofocus True
-                , Ev.preventDefaultOn "keydown" <|
-                    D.map4 (\key ctrl alt shift ->
-                        -- Ctrl+A toggles mode
-                        if key == "a" && ctrl && not alt then
-                            ( FilePickerToggleMode, True )
-                        -- Enter confirms (URL mode or local file)
-                        else if key == "Enter" && not ctrl then
-                            if isUrlMode then
-                                ( ConfirmFilePickerUrl, True )
-                            else
-                                ( FilePickerConfirmItem, True )
-                        -- Arrow keys navigate list
-                        else if key == "ArrowDown" && not ctrl && not alt && not shift && not isUrlMode then
-                            let
-                                newIdx =
-                                    min (s.filePickerSelected + 1) (max 0 (filteredLen - 1))
-                            in
-                            ( FilePickerSelectItem newIdx, True )
-                        else if key == "ArrowUp" && not ctrl && not alt && not shift && not isUrlMode then
-                            let
-                                newIdx =
-                                    max 0 (s.filePickerSelected - 1)
-                            in
-                            ( FilePickerSelectItem newIdx, True )
-                        -- Tab switches to list
-                        else if key == "Tab" then
-                            ( FocusElement "fp-page-list", True )
-                        else
-                            ( NoOp, False )
-                    ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool)
-                ]
-                []
-            , Html.div [ Attr.class "fp-page-mode" ]
-                [ Html.text modeLabel ]
-            ]
-        , Html.div [ Attr.class "fp-page-dir" ]
-            [ if isUrlMode then
-                Html.text "Paste a URL and press Enter to attach"
-              else
-                Html.text (shortenPath s.filePickerDir)
-            ]
-        , if s.filePickerLoading then
-            Html.div [ Attr.class "fp-page-status" ] [ Html.text "Loading…" ]
-
-          else if isUrlMode then
-            Html.div [ Attr.class "fp-page-status" ] [ Html.text "Press Enter to attach URL" ]
-
-          else if List.isEmpty entries then
-            Html.div [ Attr.class "fp-page-status" ] [ Html.text "No files found" ]
-
-          else
-            let
-                keyedEntries =
-                    List.indexedMap (\i e -> ( e.name, viewFilePickerPageEntry i e s )) entries
-            in
-            Keyed.node "div"
-                [ Attr.class "fp-page-list"
-                , Attr.id "fp-page-list"
-                , Attr.tabindex 0
-                , Ev.preventDefaultOn "keydown" <|
-                    D.map4 (\key ctrl alt shift ->
-                        let
-                            entriesLen =
-                                List.length entries
-                        in
-                        if key == "Tab" then
-                            ( FocusElement "fp-page-input", True )
-                        else if key == "Enter" && not ctrl then
-                            ( FilePickerConfirmItem, True )
-                        else if key == "ArrowDown" || (key == "j" && not ctrl && not alt && not shift) then
-                            let
-                                newIdx =
-                                    min (s.filePickerSelected + 1) (max 0 (entriesLen - 1))
-                            in
-                            ( FilePickerSelectItem newIdx, True )
-                        else if key == "ArrowUp" || (key == "k" && not ctrl && not alt && not shift) then
-                            let
-                                newIdx =
-                                    max 0 (s.filePickerSelected - 1)
-                            in
-                            ( FilePickerSelectItem newIdx, True )
-                        else
-                            ( NoOp, False )
-                    ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool)
-                ]
-                keyedEntries
-        ]
-
-
-viewFilePickerPageEntry : Int -> T.DirEntry -> T.SessionState -> Html Msg
-viewFilePickerPageEntry idx entry s =
-    Html.div
-        [ Attr.class ("fp-page-item" ++ (if idx == s.filePickerSelected then " fp-page-item-selected" else ""))
-        , Ev.onClick
-            (if entry.isDir then
-                FilePickerNavigateDir entry.name
-
-             else
-                FilePickerConfirmItem
-            )
-        , Ev.onMouseEnter (FilePickerSelectItem idx)
-        ]
-        [ Html.span [ Attr.class "fp-page-item-icon" ] [ Html.text (if entry.isDir then "📁" else "📄") ]
-        , Html.span [ Attr.class "fp-page-item-name" ] [ Html.text entry.name ]
-        ]
 
 
 -- ─── Model Selector Overlay ──────────────────────────────────────────
@@ -2530,130 +2197,27 @@ viewModelSelectorOverlay model =
     case getActiveSession model of
         Just s ->
             if s.showModelSelector then
-                viewOverlay CloseModelSelector [ viewModelSelectorPage s ]
+                viewOverlay CloseModelSelector
+                    [ Overlay.ModelSelector.view
+                        { models = s.models
+                        , input = s.modelSelectorInput
+                        , selected = s.modelSelectorSelected
+                        , activeModelId = s.activeModelId
+                        , activeModelName = s.activeModelName
+                        , noOp = NoOp
+                        , onSelect = ModelSelectorSelectItem
+                        , onConfirm = ModelSelectorConfirmItem
+                        , onClose = CloseModelSelector
+                        , onInput = SetModelSelectorInput
+                        , focusInput = FocusElement "model-selector-input"
+                        , focusList = FocusElement "model-selector-list"
+                        }
+                    ]
             else
                 Html.text ""
 
         Nothing ->
             Html.text ""
-
-
-viewModelSelectorPage : T.SessionState -> Html Msg
-viewModelSelectorPage s =
-    let
-        filtered =
-            filterModels s.models s.modelSelectorInput
-    in
-    Html.div [ Attr.class "sel-page" ]
-        [ Html.div [ Attr.class "sel-page-title" ] [ Html.text "Model Selector" ]
-        , Html.div [ Attr.class "sel-page-input-row" ]
-            [ Html.input
-                [ Attr.class "sel-page-input"
-                , Attr.id "model-selector-input"
-                , Attr.type_ "text"
-                , Attr.value s.modelSelectorInput
-                , Ev.onInput SetModelSelectorInput
-                , Attr.placeholder "Search models…"
-                , Attr.autofocus True
-                , Ev.preventDefaultOn "keydown" <|
-                    D.map4 (\key ctrl alt shift ->
-                        let
-                            filteredLen =
-                                List.length filtered
-                        in
-                        if key == "Tab" then
-                            ( FocusElement "model-selector-list", True )
-                        else if key == "Enter" && not ctrl then
-                            ( ModelSelectorConfirmItem, True )
-                        else if key == "ArrowDown" then
-                            let
-                                newIdx =
-                                    min (s.modelSelectorSelected + 1) (max 0 (filteredLen - 1))
-                            in
-                            ( ModelSelectorSelectItem newIdx, True )
-                        else if key == "ArrowUp" then
-                            let
-                                newIdx =
-                                    max 0 (s.modelSelectorSelected - 1)
-                            in
-                            ( ModelSelectorSelectItem newIdx, True )
-                        else
-                            ( NoOp, False )
-                    ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool)
-                ]
-                []
-            ]
-        , if s.activeModelName /= "" then
-            Html.div [ Attr.class "sel-page-current" ]
-                [ Html.span [ Attr.class "sel-page-current-label" ] [ Html.text "Current: " ]
-                , Html.span [ Attr.class "sel-page-current-name" ] [ Html.text s.activeModelName ]
-                ]
-
-          else
-            Html.text ""
-        , if List.isEmpty s.models then
-            Html.div [ Attr.class "sel-page-status" ] [ Html.text "No models configured." ]
-
-          else if List.isEmpty filtered then
-            Html.div [ Attr.class "sel-page-status" ] [ Html.text "No models match your search." ]
-
-          else
-            Html.div
-                [ Attr.class "sel-page-list"
-                , Attr.id "model-selector-list"
-                , Attr.tabindex 0
-                , Ev.preventDefaultOn "keydown" <|
-                    D.map4 (\key ctrl alt shift ->
-                        let
-                            filteredLen =
-                                List.length filtered
-                        in
-                        if key == "Tab" then
-                            ( FocusElement "model-selector-input", True )
-                        else if key == "Enter" && not ctrl then
-                            ( ModelSelectorConfirmItem, True )
-                        else if key == "ArrowDown" || (key == "j" && not ctrl && not alt && not shift) then
-                            let
-                                newIdx =
-                                    min (s.modelSelectorSelected + 1) (max 0 (filteredLen - 1))
-                            in
-                            ( ModelSelectorSelectItem newIdx, True )
-                        else if key == "ArrowUp" || (key == "k" && not ctrl && not alt && not shift) then
-                            let
-                                newIdx =
-                                    max 0 (s.modelSelectorSelected - 1)
-                            in
-                            ( ModelSelectorSelectItem newIdx, True )
-                        else
-                            ( NoOp, False )
-                    ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool)
-                ]
-                (List.indexedMap (\i m -> viewModelSelectorItem i m s) filtered)
-        ]
-
-
-viewModelSelectorItem : Int -> T.ModelInfo -> T.SessionState -> Html Msg
-viewModelSelectorItem idx model s =
-    let
-        isSelected =
-            idx == s.modelSelectorSelected
-
-        isActive =
-            s.activeModelId == Just model.id
-    in
-    Html.div
-        [ Attr.class ("sel-page-item"
-            ++ (if isSelected then " sel-page-item-selected" else "")
-            ++ (if isActive then " sel-page-item-active" else "")
-          )
-        , Ev.onClick (ModelSelectorSelectItem idx)
-        , Ev.onDoubleClick ModelSelectorConfirmItem
-        ]
-        [ Html.span [ Attr.class "sel-page-item-id" ] [ Html.text (String.fromInt model.id) ]
-        , Html.span [ Attr.class "sel-page-item-name" ] [ Html.text model.name ]
-        , Html.span [ Attr.class "sel-page-item-check" ]
-            [ if isActive then Html.text "●" else Html.text "" ]
-        ]
 
 
 -- ─── Help Window Overlay ─────────────────────────────────────────────
@@ -2663,149 +2227,24 @@ viewHelpWindowOverlay model =
     case getActiveSession model of
         Just s ->
             if s.showHelpWindow then
-                viewOverlay CloseHelpWindow [ viewHelpWindowPage s ]
+                viewOverlay CloseHelpWindow
+                    [ Overlay.HelpWindow.view
+                        { items = helpItems
+                        , filter = s.helpFilter
+                        , selected = s.helpSelected
+                        , noOp = NoOp
+                        , onFilter = SetHelpFilter
+                        , onSelect = HelpSelectItem
+                        , onCmd = HelpCmdMsg
+                        , focusInput = FocusElement "help-filter-input"
+                        , focusList = FocusElement "help-page-list"
+                        }
+                    ]
             else
                 Html.text ""
 
         Nothing ->
             Html.text ""
-
-
-viewHelpWindowPage : T.SessionState -> Html Msg
-viewHelpWindowPage s =
-    let
-        allItems =
-            helpItems
-
-        filtered =
-            filterHelpItems s.helpFilter allItems
-
-        filteredLen =
-            List.length filtered
-    in
-    Html.div [ Attr.class "help-page" ]
-        [ Html.div [ Attr.class "sel-page-title" ] [ Html.text "Help" ]
-        , Html.div [ Attr.class "sel-page-input-row" ]
-            [ Html.input
-                [ Attr.class "sel-page-input"
-                , Attr.id "help-filter-input"
-                , Attr.type_ "text"
-                , Attr.value s.helpFilter
-                , Ev.onInput SetHelpFilter
-                , Attr.placeholder "Filter command or key…"
-                , Attr.autofocus True
-                , Ev.preventDefaultOn "keydown" <|
-                    D.map4 (\key ctrl alt shift ->
-                        if key == "Tab" then
-                            ( FocusElement "help-page-list", True )
-                        else if key == "Enter" && not ctrl then
-                            let
-                                selectedItem =
-                                    List.head (List.drop s.helpSelected filtered)
-                            in
-                            case selectedItem of
-                                Just item ->
-                                    if item.isCommand then
-                                        ( HelpCmdMsg item.key, True )
-                                    else
-                                        ( NoOp, False )
-
-                                Nothing ->
-                                    ( NoOp, False )
-                        else if key == "ArrowDown" then
-                            let
-                                newIdx =
-                                    min (s.helpSelected + 1) (max 0 (filteredLen - 1))
-                            in
-                            ( HelpSelectItem newIdx, True )
-                        else if key == "ArrowUp" then
-                            let
-                                newIdx =
-                                    max 0 (s.helpSelected - 1)
-                            in
-                            ( HelpSelectItem newIdx, True )
-                        else
-                            ( NoOp, False )
-                    ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool)
-                ]
-                []
-            ]
-        , if List.isEmpty filtered then
-            Html.div [ Attr.class "sel-page-status" ] [ Html.text "No matching commands or keys." ]
-
-          else
-            Html.div
-                [ Attr.class "sel-page-list"
-                , Attr.id "help-page-list"
-                , Attr.tabindex 0
-                , Ev.preventDefaultOn "keydown" <|
-                    D.map4 (\key ctrl alt shift ->
-                        let
-                            listLen =
-                                List.length filtered
-                        in
-                        if key == "Tab" then
-                            ( FocusElement "help-filter-input", True )
-                        else if key == "Enter" && not ctrl then
-                            let
-                                selectedItem =
-                                    List.head (List.drop s.helpSelected filtered)
-                            in
-                            case selectedItem of
-                                Just item ->
-                                    if item.isCommand then
-                                        ( HelpCmdMsg item.key, True )
-                                    else
-                                        ( NoOp, False )
-
-                                Nothing ->
-                                    ( NoOp, False )
-                        else if key == "ArrowDown" || (key == "j" && not ctrl && not alt && not shift) then
-                            let
-                                newIdx =
-                                    min (s.helpSelected + 1) (max 0 (listLen - 1))
-                            in
-                                ( HelpSelectItem newIdx, True )
-                        else if key == "ArrowUp" || (key == "k" && not ctrl && not alt && not shift) then
-                            let
-                                newIdx =
-                                    max 0 (s.helpSelected - 1)
-                            in
-                                ( HelpSelectItem newIdx, True )
-                        else
-                            ( NoOp, False )
-                    ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool)
-                ]
-                (List.indexedMap (\i item -> viewHelpItem i item s.helpSelected) filtered)
-        ]
-
-
-viewHelpItem : Int -> HelpItem -> Int -> Html Msg
-viewHelpItem idx item selectedIdx =
-    let
-        isSelected =
-            idx == selectedIdx
-    in
-    if item.isSection then
-        Html.div [ Attr.class "help-page-section" ]
-            [ Html.text ("── " ++ item.key) ]
-
-    else
-        Html.div
-            [ Attr.class ("help-page-item"
-                ++ (if isSelected then " help-page-item-selected" else "")
-              )
-            , Ev.onMouseEnter (HelpSelectItem idx)
-            , Ev.onClick
-                (if item.isCommand then
-                    HelpCmdMsg item.key
-                 else
-                    NoOp
-                )
-            ]
-            [ Html.span [ Attr.class "help-page-item-key" ] [ Html.text item.key ]
-            , Html.span [ Attr.class "help-page-item-desc" ] [ Html.text item.desc ]
-            ]
 
 
 viewNotifications : Model -> Html Msg
