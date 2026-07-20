@@ -582,7 +582,7 @@ handleSystemMcp s data =
                 , mcpServers = remaining
             }
 
-        Just "auth_confirm" ->
+        Just "auth_required" ->
             let
                 newPending =
                     { id = server, toolName = Just server, toolInput = url }
@@ -590,7 +590,7 @@ handleSystemMcp s data =
             { s
                 | pendingMcpAuths = s.pendingMcpAuths ++ [ newPending ]
                 , pendingMcpAuth = Just newPending
-                , mcpStatus = Just "auth_confirm"
+                , mcpStatus = Just "auth_required"
             }
 
         Just "auth_running" ->

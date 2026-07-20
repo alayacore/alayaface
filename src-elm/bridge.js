@@ -185,6 +185,13 @@
       document.getElementById("msg-input").blur();
     });
 
+    on("focusElement", function (id) {
+      setTimeout(function () {
+        var el = document.getElementById(id);
+        if (el) { el.focus(); }
+      }, 10);
+    });
+
     on("copyToClipboard", function (data) {
       navigator.clipboard.writeText(data.text).catch(function (e) {
         console.error("copyToClipboard failed:", e);

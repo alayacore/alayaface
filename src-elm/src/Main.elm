@@ -116,6 +116,16 @@ getActiveSession model =
             Nothing
 
 
+isOverlayOpen : Model -> Bool
+isOverlayOpen model =
+    case getActiveSession model of
+        Just s ->
+            s.showModelSelector || s.showHelpWindow || s.showFilePicker || not (List.isEmpty s.pendingConfirm) || s.mcpStatus /= Nothing
+
+        Nothing ->
+            False
+
+
 -- MSG
 
 type Msg
@@ -133,6 +143,7 @@ type Msg
     | SetModel Int
     | ConfirmTool String Bool
     | McpAuthConfirm
+    | CloseMcpAuthOverlay
     | McpAuthDeny String
     | McpCancelAll
     | CloseConfirm
@@ -145,6 +156,8 @@ type Msg
       -- File picker
     | OpenFilePicker
     | CloseFilePicker
+    | FocusFilePickerList
+    | FocusFilePickerInput
     | SetFilePickerInput String
     | FilePickerNavigateDir String
     | FilePickerSelectItem Int
@@ -172,12 +185,16 @@ type Msg
       -- Model Selector
     | OpenModelSelector
     | CloseModelSelector
+    | FocusModelSelectorList
+    | FocusModelSelectorInput
     | SetModelSelectorInput String
     | ModelSelectorSelectItem Int
     | ModelSelectorConfirmItem
       -- Help Window
     | OpenHelpWindow
     | CloseHelpWindow
+    | FocusHelpList
+    | FocusHelpInput
     | SetHelpFilter String
     | HelpSelectItem Int
     | HelpCmdMsg String
@@ -458,11 +475,30 @@ update msg model =
                     case s of
                         Just sess ->
                             ( { model | sessions = Dict.insert sid { sess | pendingMcpAuth = Nothing } model.sessions }
-                            , Ports.sendCommand { sessionId = sid, command = ":mcp_auth " ++ server }
+                            , Ports.sendCommand { sessionId = sid, command = ":mcp_decline " ++ server }
                             )
 
                         Nothing ->
                             ( model, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        CloseMcpAuthOverlay ->
+            case model.activeId of
+                Just sid ->
+                    ( { model | sessions = Dict.update sid
+                        (Maybe.map (\sess ->
+                            { sess
+                                | mcpStatus = Nothing
+                                , pendingMcpAuth = Nothing
+                                , pendingMcpAuths = []
+                            }
+                        ))
+                        model.sessions
+                      }
+                    , Ports.sendCommand { sessionId = sid, command = ":mcp_cancel" }
+                    )
 
                 Nothing ->
                     ( model, Cmd.none )
@@ -635,7 +671,7 @@ update msg model =
                       )
                     , Cmd.batch
                         [ Ports.fsHomeDir {}
-                        , Task.attempt (\_ -> NoOp) (Dom.focus "fp-page-input")
+                        , Ports.focusElement "fp-page-input"
                         ]
                     )
 
@@ -646,6 +682,12 @@ update msg model =
             ( updateActiveSession model (\s -> { s | showFilePicker = False })
             , Cmd.none
             )
+
+        FocusFilePickerList ->
+            ( model, Ports.focusElement "fp-page-list" )
+
+        FocusFilePickerInput ->
+            ( model, Ports.focusElement "fp-page-input" )
 
         SetFilePickerInput val ->
             case getActiveSession model of
@@ -802,7 +844,7 @@ update msg model =
                     , filePickerFilter = ""
                 }
               )
-            , Task.attempt (\_ -> NoOp) (Dom.focus "fp-page-input")
+            , Ports.focusElement "fp-page-input"
             )
 
         FilePickerNavigateUp ->
@@ -984,13 +1026,19 @@ update msg model =
                     , modelSelectorScroll = 0
                 }
               )
-            , Cmd.none
+            , Ports.focusElement "model-selector-input"
             )
 
         CloseModelSelector ->
             ( updateActiveSession model (\s -> { s | showModelSelector = False })
             , Cmd.none
             )
+
+        FocusModelSelectorList ->
+            ( model, Ports.focusElement "model-selector-list" )
+
+        FocusModelSelectorInput ->
+            ( model, Ports.focusElement "model-selector-input" )
 
         SetModelSelectorInput val ->
             ( updateActiveSession model (\s ->
@@ -1050,13 +1098,19 @@ update msg model =
                     , helpScroll = 0
                 }
               )
-            , Cmd.none
+            , Ports.focusElement "help-filter-input"
             )
 
         CloseHelpWindow ->
             ( updateActiveSession model (\s -> { s | showHelpWindow = False })
             , Cmd.none
             )
+
+        FocusHelpList ->
+            ( model, Ports.focusElement "help-page-list" )
+
+        FocusHelpInput ->
+            ( model, Ports.focusElement "help-filter-input" )
 
         SetHelpFilter val ->
             ( updateActiveSession model (\s -> { s | helpFilter = val })
@@ -1328,8 +1382,8 @@ update msg model =
             ( { model | atBottom = atBottom }, Cmd.none )
 
         KeyDown key ctrl alt ->
-            -- Escape closes any open overlay
-            if key == "Escape" then
+            -- Escape or Ctrl+[ closes any open overlay
+            if key == "Escape" || (key == "[" && ctrl) then
                 case getActiveSession model of
                     Just s ->
                         if s.showModelSelector then
@@ -1344,8 +1398,8 @@ update msg model =
                     Nothing ->
                         ( model, Cmd.none )
 
-            -- Tab toggles focus between display and input
-            else if key == "Tab" then
+            -- Tab toggles focus between display and input (only when no overlay is open)
+            else if key == "Tab" && not (isOverlayOpen model) then
                 update ToggleFocus model
 
             -- Ctrl+G cancels task
@@ -1703,10 +1757,10 @@ type alias HelpItem =
 helpItems : List HelpItem
 helpItems =
     [ { id = 1, key = "Commands", desc = "", isSection = True, isCommand = False }
-    , { id = 2, key = ":confirm <id> <yes|no>", desc = "Confirm or deny pending tool", isSection = False, isCommand = True }
-    , { id = 3, key = ":mcp_auth <server> <code> <redirect_uri>", desc = "Confirm OAuth authorization", isSection = False, isCommand = True }
-    , { id = 4, key = ":mcp_auth <server>", desc = "Decline OAuth authorization", isSection = False, isCommand = True }
-    , { id = 5, key = ":mcp_cancel", desc = "Cancel MCP initialization", isSection = False, isCommand = True }
+    , { id = 2, key = ":tool_confirm <id>", desc = "Confirm pending tool", isSection = False, isCommand = True }
+    , { id = 3, key = ":tool_decline <id>", desc = "Decline pending tool", isSection = False, isCommand = True }
+    , { id = 4, key = ":mcp_confirm <server> <code> <redirect_uri>", desc = "Confirm OAuth authorization", isSection = False, isCommand = True }
+    , { id = 5, key = ":mcp_decline <server>", desc = "Decline OAuth authorization", isSection = False, isCommand = True }
     , { id = 6, key = ":continue", desc = "Retry last prompt", isSection = False, isCommand = True }
     , { id = 7, key = ":reason <0|1|2>", desc = "Set reasoning level", isSection = False, isCommand = True }
     , { id = 8, key = ":cancel", desc = "Cancel current task", isSection = False, isCommand = True }
@@ -2219,7 +2273,7 @@ viewMcpInitOverlay session =
             else
                 viewOverlay CloseMcpInit [ viewMcpInitPage session ]
 
-        Just "auth_confirm" ->
+        Just "auth_required" ->
             viewOverlay CloseMcpInit [ viewMcpInitPage session ]
 
         Just "auth_running" ->
@@ -2301,6 +2355,12 @@ viewMcpInitPage session =
                                         , Attr.title "Open browser to authorize"
                                         ]
                                         [ Html.text "✓ Authorize" ]
+                                    , Html.button
+                                        [ Attr.class "mcp-init-btn mcp-init-btn-deny"
+                                        , Ev.onClick (McpAuthDeny s)
+                                        , Attr.title "Skip this server"
+                                        ]
+                                        [ Html.text "✕ Deny" ]
                                     ]
 
                               else
@@ -2314,6 +2374,14 @@ viewMcpInitPage session =
             Html.text ""
         , Html.div [ Attr.class "mcp-init-hint" ]
             [ Html.text "Press Ctrl+G to cancel MCP initialization." ]
+        , Html.div [ Attr.class "mcp-init-footer" ]
+            [ Html.button
+                [ Attr.class "mcp-init-btn mcp-init-btn-close"
+                , Ev.onClick CloseMcpAuthOverlay
+                , Attr.title "Close overlay"
+                ]
+                [ Html.text "✕ Close" ]
+            ]
         ]
 
 
@@ -2377,25 +2445,22 @@ viewFilePickerPage s =
                                 ( ConfirmFilePickerUrl, True )
                             else
                                 ( FilePickerConfirmItem, True )
-                        -- j/k navigate list
-                        else if (key == "j" || key == "ArrowDown") && not ctrl && not alt && not shift && not isUrlMode then
+                        -- Arrow keys navigate list
+                        else if key == "ArrowDown" && not ctrl && not alt && not shift && not isUrlMode then
                             let
                                 newIdx =
                                     min (s.filePickerSelected + 1) (max 0 (filteredLen - 1))
                             in
                             ( FilePickerSelectItem newIdx, True )
-                        else if (key == "k" || key == "ArrowUp") && not ctrl && not alt && not shift && not isUrlMode then
+                        else if key == "ArrowUp" && not ctrl && not alt && not shift && not isUrlMode then
                             let
                                 newIdx =
                                     max 0 (s.filePickerSelected - 1)
                             in
                             ( FilePickerSelectItem newIdx, True )
-                        -- Escape: close picker, or go up a directory
-                        else if key == "Escape" then
-                            if not isUrlMode && s.filePickerDir /= "" then
-                                ( FilePickerNavigateUp, True )
-                            else
-                                ( CloseFilePicker, True )
+                        -- Tab switches to list
+                        else if key == "Tab" then
+                            ( FocusFilePickerList, True )
                         else
                             ( NoOp, False )
                     ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool)
@@ -2424,7 +2489,37 @@ viewFilePickerPage s =
                 keyedEntries =
                     List.indexedMap (\i e -> ( e.name, viewFilePickerPageEntry i e s )) entries
             in
-            Keyed.node "div" [ Attr.class "fp-page-list" ] keyedEntries
+            Keyed.node "div"
+                [ Attr.class "fp-page-list"
+                , Attr.id "fp-page-list"
+                , Attr.tabindex 0
+                , Ev.preventDefaultOn "keydown" <|
+                    D.map4 (\key ctrl alt shift ->
+                        let
+                            entriesLen =
+                                List.length entries
+                        in
+                        if key == "Tab" then
+                            ( FocusFilePickerInput, True )
+                        else if key == "Enter" && not ctrl then
+                            ( FilePickerConfirmItem, True )
+                        else if key == "ArrowDown" || (key == "j" && not ctrl && not alt && not shift) then
+                            let
+                                newIdx =
+                                    min (s.filePickerSelected + 1) (max 0 (entriesLen - 1))
+                            in
+                            ( FilePickerSelectItem newIdx, True )
+                        else if key == "ArrowUp" || (key == "k" && not ctrl && not alt && not shift) then
+                            let
+                                newIdx =
+                                    max 0 (s.filePickerSelected - 1)
+                            in
+                            ( FilePickerSelectItem newIdx, True )
+                        else
+                            ( NoOp, False )
+                    ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool)
+                ]
+                keyedEntries
         ]
 
 
@@ -2472,6 +2567,7 @@ viewModelSelectorPage s =
         , Html.div [ Attr.class "sel-page-input-row" ]
             [ Html.input
                 [ Attr.class "sel-page-input"
+                , Attr.id "model-selector-input"
                 , Attr.type_ "text"
                 , Attr.value s.modelSelectorInput
                 , Ev.onInput SetModelSelectorInput
@@ -2483,22 +2579,22 @@ viewModelSelectorPage s =
                             filteredLen =
                                 List.length filtered
                         in
-                        if key == "Enter" && not ctrl then
+                        if key == "Tab" then
+                            ( FocusModelSelectorList, True )
+                        else if key == "Enter" && not ctrl then
                             ( ModelSelectorConfirmItem, True )
-                        else if key == "ArrowDown" || (key == "j" && not ctrl && not alt && not shift) then
+                        else if key == "ArrowDown" then
                             let
                                 newIdx =
                                     min (s.modelSelectorSelected + 1) (max 0 (filteredLen - 1))
                             in
                             ( ModelSelectorSelectItem newIdx, True )
-                        else if key == "ArrowUp" || (key == "k" && not ctrl && not alt && not shift) then
+                        else if key == "ArrowUp" then
                             let
                                 newIdx =
                                     max 0 (s.modelSelectorSelected - 1)
                             in
                             ( ModelSelectorSelectItem newIdx, True )
-                        else if key == "Escape" then
-                            ( CloseModelSelector, True )
                         else
                             ( NoOp, False )
                     ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool)
@@ -2520,7 +2616,36 @@ viewModelSelectorPage s =
             Html.div [ Attr.class "sel-page-status" ] [ Html.text "No models match your search." ]
 
           else
-            Html.div [ Attr.class "sel-page-list" ]
+            Html.div
+                [ Attr.class "sel-page-list"
+                , Attr.id "model-selector-list"
+                , Attr.tabindex 0
+                , Ev.preventDefaultOn "keydown" <|
+                    D.map4 (\key ctrl alt shift ->
+                        let
+                            filteredLen =
+                                List.length filtered
+                        in
+                        if key == "Tab" then
+                            ( FocusModelSelectorInput, True )
+                        else if key == "Enter" && not ctrl then
+                            ( ModelSelectorConfirmItem, True )
+                        else if key == "ArrowDown" || (key == "j" && not ctrl && not alt && not shift) then
+                            let
+                                newIdx =
+                                    min (s.modelSelectorSelected + 1) (max 0 (filteredLen - 1))
+                            in
+                            ( ModelSelectorSelectItem newIdx, True )
+                        else if key == "ArrowUp" || (key == "k" && not ctrl && not alt && not shift) then
+                            let
+                                newIdx =
+                                    max 0 (s.modelSelectorSelected - 1)
+                            in
+                            ( ModelSelectorSelectItem newIdx, True )
+                        else
+                            ( NoOp, False )
+                    ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool)
+                ]
                 (List.indexedMap (\i m -> viewModelSelectorItem i m s) filtered)
         ]
 
@@ -2541,7 +2666,6 @@ viewModelSelectorItem idx model s =
           )
         , Ev.onClick (ModelSelectorSelectItem idx)
         , Ev.onDoubleClick ModelSelectorConfirmItem
-        , Ev.onMouseEnter (ModelSelectorSelectItem idx)
         ]
         [ Html.span [ Attr.class "sel-page-item-id" ] [ Html.text (String.fromInt model.id) ]
         , Html.span [ Attr.class "sel-page-item-name" ] [ Html.text model.name ]
@@ -2582,6 +2706,7 @@ viewHelpWindowPage s =
         , Html.div [ Attr.class "sel-page-input-row" ]
             [ Html.input
                 [ Attr.class "sel-page-input"
+                , Attr.id "help-filter-input"
                 , Attr.type_ "text"
                 , Attr.value s.helpFilter
                 , Ev.onInput SetHelpFilter
@@ -2603,20 +2728,21 @@ viewHelpWindowPage s =
 
                                 Nothing ->
                                     ( NoOp, False )
-                        else if key == "ArrowDown" || (key == "j" && not ctrl && not alt && not shift) then
+                        else if key == "ArrowDown" then
                             let
                                 newIdx =
                                     min (s.helpSelected + 1) (max 0 (filteredLen - 1))
                             in
                             ( HelpSelectItem newIdx, True )
-                        else if key == "ArrowUp" || (key == "k" && not ctrl && not alt && not shift) then
+                        else if key == "ArrowUp" then
                             let
                                 newIdx =
                                     max 0 (s.helpSelected - 1)
                             in
                             ( HelpSelectItem newIdx, True )
-                        else if key == "Escape" then
-                            ( CloseHelpWindow, True )
+                        -- Tab switches to list
+                        else if key == "Tab" then
+                            ( FocusHelpList, True )
                         else
                             ( NoOp, False )
                     ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool)
@@ -2627,7 +2753,48 @@ viewHelpWindowPage s =
             Html.div [ Attr.class "sel-page-status" ] [ Html.text "No matching commands or keys." ]
 
           else
-            Html.div [ Attr.class "sel-page-list" ]
+            Html.div
+                [ Attr.class "sel-page-list"
+                , Attr.id "help-page-list"
+                , Attr.tabindex 0
+                , Ev.preventDefaultOn "keydown" <|
+                    D.map4 (\key ctrl alt shift ->
+                        let
+                            listLen =
+                                List.length filtered
+                        in
+                        if key == "Tab" then
+                            ( FocusHelpInput, True )
+                        else if key == "Enter" && not ctrl then
+                            let
+                                selectedItem =
+                                    List.head (List.drop s.helpSelected filtered)
+                            in
+                            case selectedItem of
+                                Just item ->
+                                    if item.isCommand then
+                                        ( HelpCmdMsg item.key, True )
+                                    else
+                                        ( NoOp, False )
+
+                                Nothing ->
+                                    ( NoOp, False )
+                        else if key == "ArrowDown" || (key == "j" && not ctrl && not alt && not shift) then
+                            let
+                                newIdx =
+                                    min (s.helpSelected + 1) (max 0 (listLen - 1))
+                            in
+                            ( HelpSelectItem newIdx, True )
+                        else if key == "ArrowUp" || (key == "k" && not ctrl && not alt && not shift) then
+                            let
+                                newIdx =
+                                    max 0 (s.helpSelected - 1)
+                            in
+                            ( HelpSelectItem newIdx, True )
+                        else
+                            ( NoOp, False )
+                    ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool)
+                ]
                 (List.indexedMap (\i item -> viewHelpItem i item s.helpSelected) filtered)
         ]
 

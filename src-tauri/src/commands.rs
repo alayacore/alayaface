@@ -418,8 +418,12 @@ pub async fn alayacore_confirm(
     sessions: State<'_, SessionMap>,
 ) -> Result<(), String> {
     let map = sessions.0.lock().await;
-    let answer = if allowed { "yes" } else { "no" };
-    send_raw(&map, &session_id, tlv::TAG_USER_TEXT, &format!(":confirm {} {}", id, answer)).await?;
+    let cmd = if allowed {
+        format!(":tool_confirm {}", id)
+    } else {
+        format!(":tool_decline {}", id)
+    };
+    send_raw(&map, &session_id, tlv::TAG_USER_TEXT, &cmd).await?;
     send_raw(&map, &session_id, tlv::TAG_USER_END, "").await
 }
 
@@ -571,7 +575,7 @@ fn send_mcp_result(
 
         match code {
             Some(c) => {
-                let cmd = format!(":mcp_auth {} {} {}", server_name, c, redirect_uri);
+                let cmd = format!(":mcp_confirm {} {} {}", server_name, c, redirect_uri);
                 eprintln!("[mcp_auth] Sending: {}", cmd);
                 tlv::write_frame(&mut *stdin, tlv::TAG_USER_TEXT, &cmd)
                     .map_err(|e| format!("Write error: {e}"))?;
@@ -579,8 +583,9 @@ fn send_mcp_result(
                     .map_err(|e| format!("Write error: {e}"))?;
             }
             None => {
-                eprintln!("[mcp_auth] Auth failed/cancelled — sending :mcp_cancel");
-                tlv::write_frame(&mut *stdin, tlv::TAG_USER_TEXT, ":mcp_cancel")
+                eprintln!("[mcp_auth] Auth failed/cancelled — sending :mcp_decline {}", server_name);
+                let cmd = format!(":mcp_decline {}", server_name);
+                tlv::write_frame(&mut *stdin, tlv::TAG_USER_TEXT, &cmd)
                     .map_err(|e| format!("Write error: {e}"))?;
                 tlv::write_frame(&mut *stdin, tlv::TAG_USER_END, "")
                     .map_err(|e| format!("Write error: {e}"))?;
