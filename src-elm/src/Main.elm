@@ -574,7 +574,7 @@ update msg model =
                                     }
                                     model.sessions
                               }
-                            , Cmd.none
+                            , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
                             )
 
                         Nothing ->
@@ -699,7 +699,7 @@ update msg model =
 
         CloseFilePicker ->
             ( updateActiveSession model (\s -> { s | showFilePicker = False })
-            , Cmd.none
+            , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
             )
 
         FocusElement id ->
@@ -1002,7 +1002,9 @@ update msg model =
             ( { model | showSessionManager = True }, Ports.listSessionDirs {} )
 
         CloseSessionManager ->
-            ( { model | showSessionManager = False }, Cmd.none )
+            ( { model | showSessionManager = False }
+            , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
+            )
 
         SessionDirsResult dirs ->
             ( { model | sessionDirs = dirs }, Cmd.none )
@@ -1047,7 +1049,7 @@ update msg model =
 
         CloseModelSelector ->
             ( updateActiveSession model (\s -> { s | showModelSelector = False })
-            , Cmd.none
+            , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
             )
 
         SetModelSelectorInput val ->
@@ -1113,7 +1115,7 @@ update msg model =
 
         CloseHelpWindow ->
             ( updateActiveSession model (\s -> { s | showHelpWindow = False })
-            , Cmd.none
+            , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
             )
 
         SetHelpFilter val ->
