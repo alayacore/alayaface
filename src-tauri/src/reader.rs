@@ -33,9 +33,7 @@ pub fn spawn_stdout_reader(
         let reap_child = || {
             if let Ok(mut guard) = child.lock() {
                 if let Some(mut c) = guard.take() {
-                    let _ = c.stdin.take();
-                    let _ = c.kill();
-                    let _ = c.wait();
+                    crate::alayacore::kill_child(&mut c);
                 }
             }
         };

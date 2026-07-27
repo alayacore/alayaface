@@ -31,27 +31,8 @@ impl Drop for SessionHandle {
     fn drop(&mut self) {
         if let Ok(mut guard) = self.child.lock() {
             if let Some(mut child) = guard.take() {
-                kill_child(&mut child);
+                alayacore::kill_child(&mut child);
             }
-        }
-    }
-}
-
-/// Kill a child process with a 3-second timeout.
-fn kill_child(child: &mut std::process::Child) {
-    let _ = child.stdin.take();
-    let _ = child.kill();
-    let start = std::time::Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if start.elapsed() > std::time::Duration::from_secs(3) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                break;
-            }
-            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
-            Err(_) => break,
         }
     }
 }
@@ -119,7 +100,7 @@ pub async fn close(session_id: &str, sessions: &SessionMap) -> Result<(), String
         let child_opt = handle.child.lock().unwrap().take();
         if let Some(mut child) = child_opt {
             let _ = tokio::task::spawn_blocking(move || {
-                kill_child(&mut child);
+                alayacore::kill_child(&mut child);
             })
             .await;
         }

@@ -100,3 +100,23 @@ pub fn find_binary() -> String {
     // 4. Fallback
     "alayacore".to_string()
 }
+
+/// Kill a child process with a 3-second timeout.
+/// Takes stdin first, then sends kill, then waits up to 3s for exit.
+pub fn kill_child(child: &mut Child) {
+    let _ = child.stdin.take();
+    let _ = child.kill();
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if start.elapsed() > std::time::Duration::from_secs(3) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break;
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Err(_) => break,
+        }
+    }
+}
