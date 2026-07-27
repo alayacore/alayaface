@@ -110,24 +110,51 @@ pub fn write_frame<W: Write>(writer: &mut W, tag: &str, value: &str) -> io::Resu
 //
 // Same history ID → continuation; Different → new content block.
 
+/// Result of parsing a NUL-delimited delta frame value.
+#[derive(Debug, Clone)]
+pub struct DeltaParts {
+    /// The history ID extracted from the NUL prefix, or empty if none.
+    pub history_id: String,
+    /// The content after the NUL-delimited history ID prefix, or the full value.
+    pub content: String,
+    /// Whether a valid NUL-delimited history ID prefix was found.
+    pub has_delta: bool,
+}
+
 /// Parse a NUL-delimited history ID prefix from a value.
-/// Returns `(id, content, true)` on success, or `("", full_value, false)`.
-pub fn unwrap_delta(value: &str) -> (String, String, bool) {
+/// Returns `DeltaParts` with `has_delta = true` on success.
+pub fn unwrap_delta(value: &str) -> DeltaParts {
     let bytes = value.as_bytes();
     if bytes.is_empty() || bytes[0] != 0u8 {
-        return (String::new(), value.to_string(), false);
+        return DeltaParts {
+            history_id: String::new(),
+            content: value.to_string(),
+            has_delta: false,
+        };
     }
 
     if let Some(end_idx) = bytes[1..].iter().position(|&b| b == 0u8) {
         let end_idx = end_idx + 1;
         let id = String::from_utf8_lossy(&bytes[1..end_idx]).to_string();
         if id.is_empty() {
-            return (String::new(), value.to_string(), false);
+            return DeltaParts {
+                history_id: String::new(),
+                content: value.to_string(),
+                has_delta: false,
+            };
         }
         let content = String::from_utf8_lossy(&bytes[end_idx + 1..]).to_string();
-        (id, content, true)
+        DeltaParts {
+            history_id: id,
+            content,
+            has_delta: true,
+        }
     } else {
-        (String::new(), value.to_string(), false)
+        DeltaParts {
+            history_id: String::new(),
+            content: value.to_string(),
+            has_delta: false,
+        }
     }
 }
 

@@ -113,12 +113,12 @@ fn dispatch_frame(
 
 /// Handle At/Ar streaming delta frames.
 fn handle_delta_frame(app: &AppHandle, sid: &str, tag: &str, raw_value: &str) {
-    let (history_id, content, has_delta) = tlv::unwrap_delta(raw_value);
-    if has_delta {
+    let parts = tlv::unwrap_delta(raw_value);
+    if parts.has_delta {
         let _ = app.emit("tlv-delta", DeltaEvent {
             session_id: sid.to_string(),
-            history_id,
-            content,
+            history_id: parts.history_id,
+            content: parts.content,
             tag: tag.to_string(),
         });
         // Note: intentionally NOT emitting tlv-frame here.
@@ -143,9 +143,9 @@ fn handle_delta_frame(app: &AppHandle, sid: &str, tag: &str, raw_value: &str) {
 /// Handle AT/AR complete/authoritative frames.
 /// Delta mode: content is empty (terminator). Replay/--no-delta: full text.
 fn handle_complete_frame(app: &AppHandle, sid: &str, tag: &str, raw_value: &str) {
-    let (history_id, content, has_delta) = tlv::unwrap_delta(raw_value);
-    let hid = if has_delta { Some(history_id) } else { None };
-    let ct = content;
+    let parts = tlv::unwrap_delta(raw_value);
+    let hid = if parts.has_delta { Some(parts.history_id) } else { None };
+    let ct = parts.content;
 
     let _ = app.emit("tlv-frame", FrameEvent {
         session_id: sid.to_string(),
@@ -160,13 +160,13 @@ fn handle_complete_frame(app: &AppHandle, sid: &str, tag: &str, raw_value: &str)
 
 /// Handle Af tool argument delta frames.
 fn handle_tool_delta_frame(app: &AppHandle, sid: &str, raw_value: &str) {
-    let (sid_val, raw_content, has_delta) = tlv::unwrap_delta(raw_value);
+    let parts = tlv::unwrap_delta(raw_value);
     let mut json_val = None;
-    let history_id = if has_delta {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw_content) {
+    let history_id = if parts.has_delta {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&parts.content) {
             json_val = Some(v);
         }
-        Some(sid_val)
+        Some(parts.history_id)
     } else {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw_value) {
             json_val = Some(v);
@@ -178,7 +178,7 @@ fn handle_tool_delta_frame(app: &AppHandle, sid: &str, raw_value: &str) {
         tag: "Af".to_string(),
         raw_value: raw_value.to_string(),
         history_id,
-        content: Some(raw_content),
+        content: Some(parts.content),
         json: json_val,
         user_content_type: None,
     });
@@ -186,10 +186,10 @@ fn handle_tool_delta_frame(app: &AppHandle, sid: &str, raw_value: &str) {
 
 /// Handle AF/UF JSON frames.
 fn handle_json_frame(app: &AppHandle, sid: &str, tag: &str, raw_value: &str) {
-    let (sid_val, raw_content, has_delta) = tlv::unwrap_delta(raw_value);
-    let (history_id, content, json_val) = if has_delta {
-        let json = serde_json::from_str::<serde_json::Value>(&raw_content).ok();
-        (Some(sid_val), Some(raw_content), json)
+    let parts = tlv::unwrap_delta(raw_value);
+    let (history_id, content, json_val) = if parts.has_delta {
+        let json = serde_json::from_str::<serde_json::Value>(&parts.content).ok();
+        (Some(parts.history_id), Some(parts.content), json)
     } else {
         let json = serde_json::from_str::<serde_json::Value>(raw_value).ok();
         (None, Some(raw_value.to_string()), json)
@@ -223,9 +223,9 @@ fn handle_sm_frame(app: &AppHandle, sid: &str, raw_value: &str) {
 
 /// Handle all other frames (user echoes, unknown tags).
 fn handle_other_frame(app: &AppHandle, sid: &str, tag: &str, raw_value: &str) {
-    let (sid_val, raw_content, has_delta) = tlv::unwrap_delta(raw_value);
-    let (history_id, content) = if has_delta {
-        (Some(sid_val), Some(raw_content))
+    let parts = tlv::unwrap_delta(raw_value);
+    let (history_id, content) = if parts.has_delta {
+        (Some(parts.history_id), Some(parts.content))
     } else {
         (None, Some(raw_value.to_string()))
     };
