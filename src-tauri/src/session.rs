@@ -40,22 +40,25 @@ impl Drop for SessionHandle {
 /// Shared map of session_id → SessionHandle.
 pub struct SessionMap(pub Arc<Mutex<HashMap<String, SessionHandle>>>);
 
+/// Configuration for creating a new session.
+pub struct SessionConfig<'a> {
+    pub app: &'a AppHandle,
+    pub binary: &'a str,
+    pub config_path: &'a str,
+    pub session_file: &'a str,
+    pub session_dir: PathBuf,
+    pub sessions: &'a SessionMap,
+    pub model_cache: &'a ModelCache,
+    pub tool_confirm: &'a str,
+}
+
 // ─── Factory ──────────────────────────────────────────────────────────
 
 /// Create a new session: spawn alayacore and start background readers.
-pub async fn create(
-    app: &AppHandle,
-    bin: &str,
-    config_path: &str,
-    session_file: &str,
-    session_dir: PathBuf,
-    sessions: &SessionMap,
-    model_cache: &ModelCache,
-    tool_confirm: &str,
-) -> Result<String, String> {
+pub async fn create(cfg: SessionConfig<'_>) -> Result<String, String> {
     let session_id = Uuid::new_v4().to_string();
 
-    let proc = alayacore::spawn(bin, config_path, session_file, tool_confirm)
+    let proc = alayacore::spawn(cfg.binary, cfg.config_path, cfg.session_file, cfg.tool_confirm)
         .map_err(|e| format!("Failed to start alayacore: {e}"))?;
 
     let connected = Arc::new(AtomicBool::new(true));
@@ -68,26 +71,26 @@ pub async fn create(
         connected: connected.clone(),
         stderr_log: stderr_log.clone(),
         child: child.clone(),
-        session_dir,
+        session_dir: cfg.session_dir,
     };
 
-    sessions.0.lock().await.insert(session_id.clone(), handle);
+    cfg.sessions.0.lock().await.insert(session_id.clone(), handle);
 
     // Background readers
     crate::reader::spawn_stderr_collector(proc.stderr, stderr_log);
     crate::reader::spawn_stdout_reader(
-        app.clone(),
+        cfg.app.clone(),
         session_id.clone(),
         proc.stdout,
         connected,
-        model_cache.0.clone(),
+        cfg.model_cache.0.clone(),
         child.clone(),
     );
 
-    let _ = app.emit("core-status", StatusEvent {
+    let _ = cfg.app.emit("core-status", StatusEvent {
         session_id: session_id.clone(),
         connected: true,
-        message: format!("Connected to alayacore ({})", bin),
+        message: format!("Connected to alayacore ({})", cfg.binary),
     });
 
     Ok(session_id)

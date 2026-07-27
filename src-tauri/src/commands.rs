@@ -58,7 +58,16 @@ pub async fn create_session(
         log::info!("  with --tool-confirm={}", &tc);
     }
 
-    session::create(&app, &bin, &effective_config, &session_file, session_dir, &sessions, &model_cache, &tc).await
+    session::create(session::SessionConfig {
+        app: &app,
+        binary: &bin,
+        config_path: &effective_config,
+        session_file: &session_file,
+        session_dir,
+        sessions: &sessions,
+        model_cache: &model_cache,
+        tool_confirm: &tc,
+    }).await
 }
 
 #[tauri::command]
@@ -92,7 +101,16 @@ pub async fn resume_session(
     let config_path = config_dir.to_string_lossy().to_string();
     let session_path = session_file.to_string_lossy().to_string();
 
-    session::create(&app, &bin, &config_path, &session_path, sessions_dir, &sessions, &model_cache, "").await
+    session::create(session::SessionConfig {
+        app: &app,
+        binary: &bin,
+        config_path: &config_path,
+        session_file: &session_path,
+        session_dir: sessions_dir,
+        sessions: &sessions,
+        model_cache: &model_cache,
+        tool_confirm: "",
+    }).await
 }
 
 #[tauri::command]
@@ -203,7 +221,16 @@ pub async fn fork_session(
     wait_for_file(&target_file).await?;
 
     let bin = resolve_binary(&binary_path);
-    session::create(&app, &bin, &config_path, &target_file, new_session_dir, &sessions, &model_cache, "").await
+    session::create(session::SessionConfig {
+        app: &app,
+        binary: &bin,
+        config_path: &config_path,
+        session_file: &target_file,
+        session_dir: new_session_dir,
+        sessions: &sessions,
+        model_cache: &model_cache,
+        tool_confirm: "",
+    }).await
 }
 
 async fn wait_for_file(path: &str) -> Result<(), String> {
