@@ -1,5 +1,6 @@
 module Overlay.HelpWindow exposing (HelpItem, helpItems, filterHelpItems, nextSelectable, view)
 
+import Fuzzy
 import Html exposing (Html)
 import Html.Attributes as Attr
 import Html.Events as Ev
@@ -175,44 +176,9 @@ filterHelpItems term items =
                 if item.isSection then
                     True
                 else
-                    fuzzyMatch lower (String.toLower (item.key ++ " " ++ item.desc))
+                    Fuzzy.fuzzyMatch lower (String.toLower (item.key ++ " " ++ item.desc))
             )
             items
-
-
-fuzzyMatch : String -> String -> Bool
-fuzzyMatch search target =
-    if String.isEmpty search then
-        True
-    else if String.length search > String.length target then
-        False
-    else
-        let
-            searchChars =
-                String.toList search
-
-            targetChars =
-                String.toList target
-        in
-        fuzzyMatchHelp searchChars targetChars
-
-
-fuzzyMatchHelp : List Char -> List Char -> Bool
-fuzzyMatchHelp search target =
-    case search of
-        [] ->
-            True
-
-        s :: restSearch ->
-            case target of
-                [] ->
-                    False
-
-                t :: restTarget ->
-                    if s == t then
-                        fuzzyMatchHelp restSearch restTarget
-                    else
-                        fuzzyMatchHelp search restTarget
 
 
 -- Navigate to next/previous selectable (non-section) item

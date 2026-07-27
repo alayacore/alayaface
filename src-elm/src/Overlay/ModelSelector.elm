@@ -1,5 +1,6 @@
 module Overlay.ModelSelector exposing (view)
 
+import Fuzzy
 import Html exposing (Html)
 import Html.Attributes as Attr
 import Html.Events as Ev
@@ -145,39 +146,4 @@ filterModels models term =
     if String.isEmpty trimmed then
         models
     else
-        List.filter (\m -> fuzzyMatch (String.toLower trimmed) (String.toLower m.name)) models
-
-
-fuzzyMatch : String -> String -> Bool
-fuzzyMatch search target =
-    if String.isEmpty search then
-        True
-    else if String.length search > String.length target then
-        False
-    else
-        let
-            searchChars =
-                String.toList search
-
-            targetChars =
-                String.toList target
-        in
-        fuzzyMatchHelp searchChars targetChars
-
-
-fuzzyMatchHelp : List Char -> List Char -> Bool
-fuzzyMatchHelp search target =
-    case search of
-        [] ->
-            True
-
-        s :: restSearch ->
-            case target of
-                [] ->
-                    False
-
-                t :: restTarget ->
-                    if s == t then
-                        fuzzyMatchHelp restSearch restTarget
-                    else
-                        fuzzyMatchHelp search restTarget
+        List.filter (\m -> Fuzzy.fuzzyMatch (String.toLower trimmed) (String.toLower m.name)) models
