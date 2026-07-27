@@ -53,9 +53,9 @@ pub async fn create_session(
     let session_file = session_dir.join("session.md").to_string_lossy().to_string();
 
     let tc = tool_confirm.unwrap_or_default();
-    eprintln!("[alayaface] Spawning: {} --rawio --config-path {} --session {}", &bin, &effective_config, &session_file);
+    log::info!("Spawning: {} --rawio --config-path {} --session {}", &bin, &effective_config, &session_file);
     if !tc.is_empty() {
-        eprintln!("[alayaface]   with --tool-confirm={}", &tc);
+        log::info!("  with --tool-confirm={}", &tc);
     }
 
     session::create(&app, &bin, &effective_config, &session_file, session_dir, &sessions, &model_cache, &tc).await
@@ -189,7 +189,7 @@ pub async fn fork_session(
     let target_file = new_session_dir.join("session.md").to_string_lossy().to_string();
     let config_path = new_session_dir.join("config").to_string_lossy().to_string();
 
-    eprintln!("[alayaface] Forking {} up to history {} → {}", &source_session_id, &history_id, &target_file);
+    log::info!("Forking {} up to history {} → {}", &source_session_id, &history_id, &target_file);
 
     // Tell source alayacore to fork
     {
@@ -249,7 +249,7 @@ async fn send_raw(
 
     // Log outgoing frame for debugging
     let preview: String = value.chars().take(200).collect();
-    eprintln!("[tlv] >> {} {} {}b {}", session_id, tag, value.len(), preview);
+    log::debug!("[tlv] >> {} {} {}b {}", session_id, tag, value.len(), preview);
 
     Ok(())
 }
@@ -484,13 +484,13 @@ async fn start_mcp_auth_inner(
         .replace("{{redirect_uri}}", &encoded_redirect)
         .replace("{{state}}", &state);
 
-    eprintln!("[mcp_auth] Started OAuth flow for {} on port {}", server_name, port);
-    eprintln!("[mcp_auth] Filled URL: {}", filled_url);
+    log::info!("[mcp_auth] Started OAuth flow for {} on port {}", server_name, port);
+    log::info!("[mcp_auth] Filled URL: {}", filled_url);
 
     // Open browser if requested
     if open_browser {
         if let Err(e) = open::that(&filled_url) {
-            eprintln!("[mcp_auth] Failed to open browser: {}", e);
+            log::warn!("[mcp_auth] Failed to open browser: {}", e);
         }
     }
 
@@ -501,11 +501,11 @@ async fn start_mcp_auth_inner(
     std::thread::spawn(move || {
         match listener.accept() {
             Ok((mut stream, addr)) => {
-                eprintln!("[mcp_auth] Callback received from {}", addr);
+                log::info!("[mcp_auth] Callback received from {}", addr);
                 let mut reader = std::io::BufReader::new(&stream);
                 let mut request_line = String::new();
                 if reader.read_line(&mut request_line).is_err() {
-                    eprintln!("[mcp_auth] Failed to read request line");
+                    log::error!("[mcp_auth] Failed to read request line");
                     let _ = send_mcp_result(&sessions_arc, &sid, &sname, &ruri, None);
                     return;
                 }
@@ -527,31 +527,31 @@ async fn start_mcp_auth_inner(
                 let _ = stream.write_all(http_response.as_bytes());
                 if let Some(err) = params.get("error") {
                     let desc = params.get("error_description").map(|s| s.as_str()).unwrap_or("");
-                    eprintln!("[mcp_auth] Auth error: {}: {}", err, desc);
+                    log::error!("[mcp_auth] Auth error: {}: {}", err, desc);
                     let _ = send_mcp_result(&sessions_arc, &sid, &sname, &ruri, None);
                     return;
                 }
                 match params.get("state") {
                     Some(returned_state) if returned_state == &state => {}
                     _ => {
-                        eprintln!("[mcp_auth] State mismatch");
+                        log::warn!("[mcp_auth] State mismatch");
                         let _ = send_mcp_result(&sessions_arc, &sid, &sname, &ruri, None);
                         return;
                     }
                 }
                 match params.get("code") {
                     Some(code) => {
-                        eprintln!("[mcp_auth] Authorization code received");
+                        log::info!("[mcp_auth] Authorization code received");
                         let _ = send_mcp_result(&sessions_arc, &sid, &sname, &ruri, Some(code));
                     }
                     None => {
-                        eprintln!("[mcp_auth] No authorization code in callback");
+                        log::warn!("[mcp_auth] No authorization code in callback");
                         let _ = send_mcp_result(&sessions_arc, &sid, &sname, &ruri, None);
                     }
                 }
             }
             Err(e) => {
-                eprintln!("[mcp_auth] Accept error: {}", e);
+                log::error!("[mcp_auth] Accept error: {}", e);
                 let _ = send_mcp_result(&sessions_arc, &sid, &sname, &ruri, None);
             }
         }
@@ -576,14 +576,14 @@ fn send_mcp_result(
         match code {
             Some(c) => {
                 let cmd = format!(":mcp_confirm {} {} {}", server_name, c, redirect_uri);
-                eprintln!("[mcp_auth] Sending: {}", cmd);
+                log::info!("[mcp_auth] Sending: {}", cmd);
                 tlv::write_frame(&mut *stdin, tlv::TAG_USER_TEXT, &cmd)
                     .map_err(|e| format!("Write error: {e}"))?;
                 tlv::write_frame(&mut *stdin, tlv::TAG_USER_END, "")
                     .map_err(|e| format!("Write error: {e}"))?;
             }
             None => {
-                eprintln!("[mcp_auth] Auth failed/cancelled — sending :mcp_decline {}", server_name);
+                log::info!("[mcp_auth] Auth failed/cancelled — sending :mcp_decline {}", server_name);
                 let cmd = format!(":mcp_decline {}", server_name);
                 tlv::write_frame(&mut *stdin, tlv::TAG_USER_TEXT, &cmd)
                     .map_err(|e| format!("Write error: {e}"))?;

@@ -27,6 +27,10 @@ pub struct ModelCache(pub Arc<std::sync::Mutex<Vec<serde_json::Value>>>);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format_timestamp_millis()
+        .init();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(session::SessionMap(Arc::new(tokio::sync::Mutex::new(HashMap::new()))))
