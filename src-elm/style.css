@@ -1195,7 +1195,7 @@ html {
   flex: 1;
   min-height: 0;
   max-width: var(--content-width);
-  width: var(--content-width);
+  width: 100%;
   align-self: center;
 }
 
@@ -1282,7 +1282,7 @@ html {
   flex: 1;
   min-height: 0;
   max-width: var(--content-width);
-  width: var(--content-width);
+  width: 100%;
   align-self: center;
 }
 
@@ -1464,7 +1464,6 @@ html {
 /* ─── Responsive ───────────────────────────────────────────────────── */
 
 @media (max-width: 700px) {
-  .message { max-width: 95%; font-size: 1rem; }
   .connection-controls { flex-direction: column; }
   .input-area { flex-wrap: wrap; }
   .message-input { min-width: 120px; }
@@ -1685,7 +1684,7 @@ html {
   flex: 1;
   min-height: 0;
   max-width: var(--content-width);
-  width: var(--content-width);
+  width: 100%;
   align-self: center;
 }
 
@@ -1819,7 +1818,7 @@ html {
   flex: 1;
   min-height: 0;
   max-width: var(--content-width);
-  width: var(--content-width);
+  width: 100%;
   align-self: center;
 }
 
@@ -1890,7 +1889,7 @@ html {
   justify-content: center;
   text-align: center;
   max-width: var(--content-width);
-  width: var(--content-width);
+  width: 100%;
   align-self: center;
 }
 
