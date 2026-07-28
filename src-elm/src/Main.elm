@@ -997,59 +997,22 @@ update msg model =
             ( model, Cmd.none )
 
         FilePickerBackspace ->
-            -- Delete one path segment (back to previous "/") instead of one character
+            -- Single character deletion (normal backspace behavior)
             case getActiveSession model of
                 Just s ->
+                    let
+                        newVal =
+                            String.dropRight 1 s.filePickerInput
+                    in
+                    -- Re-parse path like SetFilePickerInput does
                     if s.filePickerMode == T.Url then
-                        -- URL mode: delete last character normally
-                        let
-                            newInput =
-                                String.dropRight 1 s.filePickerInput
-                        in
                         ( updateActiveSession model (\sess ->
-                            { sess | filePickerInput = newInput }
+                            { sess | filePickerInput = newVal }
                           )
                         , Cmd.none
                         )
 
                     else
-                        let
-                            val =
-                                s.filePickerInput
-
-                            -- Don't delete the root path
-                            newVal =
-                                if val == "/" then
-                                    val
-
-                                else if String.endsWith "/" val then
-                                    -- Input is a directory path like "/home/user/"
-                                    -- Remove trailing slash first, then delete to previous "/"
-                                    let
-                                        withoutTrailingSlash =
-                                            String.dropRight 1 val
-                                    in
-                                    case lastIndexOf '/' withoutTrailingSlash of
-                                        Just idx ->
-                                            if idx < 0 then
-                                                ""
-                                            else
-                                                String.left (idx + 1) withoutTrailingSlash
-
-                                        Nothing ->
-                                            ""
-
-                                else
-                                    -- Input has filter text like "/home/user/foo"
-                                    -- Delete filter text (back to the "/" before it)
-                                    case lastIndexOf '/' val of
-                                        Just idx ->
-                                            String.left (idx + 1) val
-
-                                        Nothing ->
-                                            ""
-                        in
-                        -- Apply the same change logic as SetFilePickerInput
                         let
                             ( needsResolve, resolvePath, filterText ) =
                                 parsePathInput newVal s.filePickerDir s.filePickerBaseDir

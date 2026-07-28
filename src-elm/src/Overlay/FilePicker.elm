@@ -62,10 +62,6 @@ view config =
                         if key == "a" && ctrl && not alt then
                             ( config.onToggleMode, True )
 
-                        -- Backspace: delete path segment (delegated to Main)
-                        else if key == "Backspace" && not isUrlMode then
-                            ( config.onBackspace, True )
-
                         -- Enter confirms (URL mode or local file/dir)
                         else if key == "Enter" && not ctrl then
                             if isUrlMode then
