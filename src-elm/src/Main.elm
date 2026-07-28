@@ -1728,7 +1728,10 @@ viewSessionPanel : Model -> String -> Html Msg
 viewSessionPanel model id =
     case Dict.get id model.sessions of
         Just session ->
-            Html.div [ Attr.class "session-panel" ]
+            Html.div
+                [ Attr.class ("session-panel" ++ (if model.activeId == Just id then " session-panel-active" else ""))
+                , Ev.onClick (SwitchSession id)
+                ]
                 [ viewChatArea model session ]
 
         Nothing ->
