@@ -116,10 +116,8 @@
     });
 
         on("scrollToBottom", function () {
-      window.scrollTo({
-        top: document.documentElement.scrollHeight,
-        behavior: "auto",
-      });
+      var el = document.querySelector(".messages");
+      if (el) { el.scrollTop = el.scrollHeight; }
     });
 
         on("startMcpAuthFlow", function (data) {
@@ -167,16 +165,31 @@
       console.error("[bridge] listen() failed:", e);
     });
 
-    // 4. Scroll tracking: send scroll data to Elm
+    // 4. Scroll tracking: send scroll data from focused messages container
     function sendScroll() {
-      app.ports.onScroll.send({
-        scrollTop: window.scrollY,
-        scrollHeight: document.documentElement.scrollHeight,
-        clientHeight: window.innerHeight,
-      });
+      var el = document.querySelector(".messages");
+      if (el) {
+        app.ports.onScroll.send({
+          scrollTop: el.scrollTop,
+          scrollHeight: el.scrollHeight,
+          clientHeight: el.clientHeight,
+        });
+      }
     }
     sendScroll();
-    window.addEventListener("scroll", sendScroll, { passive: true });
+    // Listen for scroll on all present and future .messages containers
+    function attachScroll() {
+      document.querySelectorAll(".messages").forEach(function(el) {
+        if (!el._scrollAttached) {
+          el._scrollAttached = true;
+          el.addEventListener("scroll", sendScroll, { passive: true });
+        }
+      });
+    }
+    attachScroll();
+    // Check for new messages containers periodically (e.g. new sessions)
+    var scrollObserver = new MutationObserver(attachScroll);
+    scrollObserver.observe(document.getElementById("root"), { childList: true, subtree: true });
 
     // 5. Window maximize state
     window.__TAURI__.window.getCurrentWindow().isMaximized().then(function (v) {
