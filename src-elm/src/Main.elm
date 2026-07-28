@@ -20,7 +20,7 @@ import Overlay.ConfirmTool
 import Overlay.McpInit
 import Overlay.FilePicker
 import Overlay.ModelSelector
-import Overlay.HelpWindow exposing (HelpItem, helpItems, filterHelpItems, view)
+import Overlay.HelpWindow exposing (HelpItem, filterHelpItems, view)
 import Markdown
 import Ports
 import Fuzzy
@@ -1674,30 +1674,6 @@ helpItems =
     , { id = 17, key = ":suspend", desc = "Suspend process", isSection = False, isCommand = True }
     , { id = 18, key = ":quit", desc = "Exit application", isSection = False, isCommand = True }
     , { id = 19, key = ":help", desc = "Open help window", isSection = False, isCommand = True }
-    , { id = 20, key = "Global Shortcuts", desc = "", isSection = True, isCommand = False }
-    , { id = 21, key = "Tab", desc = "Toggle focus display/input", isSection = False, isCommand = False }
-    , { id = 22, key = "Enter", desc = "Submit prompt or command", isSection = False, isCommand = False }
-    , { id = 23, key = "Ctrl+H", desc = "Open help window", isSection = False, isCommand = False }
-    , { id = 24, key = "Ctrl+G", desc = "Cancel current task", isSection = False, isCommand = False }
-    , { id = 25, key = "Ctrl+C", desc = "Clear text", isSection = False, isCommand = False }
-    , { id = 26, key = "Ctrl+S", desc = "Save session", isSection = False, isCommand = False }
-    , { id = 27, key = "Ctrl+A", desc = "Open attachment picker", isSection = False, isCommand = False }
-    , { id = 28, key = "Ctrl+L", desc = "Open model selector", isSection = False, isCommand = False }
-    , { id = 29, key = "Ctrl+R", desc = "Force redraw screen", isSection = False, isCommand = False }
-    , { id = 30, key = "Ctrl+P", desc = "Open theme selector", isSection = False, isCommand = False }
-    , { id = 31, key = "Ctrl+Z", desc = "Suspend process", isSection = False, isCommand = False }
-    , { id = 32, key = "Display Mode", desc = "", isSection = True, isCommand = False }
-    , { id = 33, key = "j/k", desc = "Move window cursor", isSection = False, isCommand = False }
-    , { id = 34, key = "J/K", desc = "Scroll one line", isSection = False, isCommand = False }
-    , { id = 35, key = "Ctrl+D/U", desc = "Scroll half screen", isSection = False, isCommand = False }
-    , { id = 36, key = "g", desc = "Go to first window", isSection = False, isCommand = False }
-    , { id = 37, key = "G", desc = "Follow the last window", isSection = False, isCommand = False }
-    , { id = 38, key = "H/L/M", desc = "Cursor top/btm/mid", isSection = False, isCommand = False }
-    , { id = 39, key = "e", desc = "Open in editor", isSection = False, isCommand = False }
-    , { id = 40, key = "f/b", desc = "Next/prev prompt", isSection = False, isCommand = False }
-    , { id = 41, key = ":", desc = "Enter command mode", isSection = False, isCommand = False }
-    , { id = 42, key = "Space", desc = "Toggle window fold", isSection = False, isCommand = False }
-    , { id = 43, key = "Ctrl+F", desc = "Fork session from cursor", isSection = False, isCommand = False }
     ]
 
 
@@ -1746,25 +1722,23 @@ viewNoSession model =
         [ Html.node "style"
             []
             [ Html.text (".app{--content-width:" ++ String.fromInt model.contentWidth ++ "px}") ]
-        , Html.header [ Attr.class "app-header" ]
-            [ Html.div [ Attr.class "header-top" ]
-                [ Html.button [ Attr.class "connect-btn", Ev.onClick CreateSession ] [ Html.text "+ New Session" ]
-                ]
-            ]
-        , Html.div [ Attr.class "chat-area chat-area-centered" ]
-            [ if model.initializing then
-                Html.div [ Attr.class "hs-container-inline" ]
-                    [ Html.div [ Attr.class "hs-logo" ] [ Html.text "AlayaFace" ]
-                    , Html.div [ Attr.class "hs-tagline" ] [ Html.text "Connecting…" ]
-                    ]
+        , viewSidebar model
+        , Html.div [ Attr.class "main-content" ]
+            [ Html.div [ Attr.class "chat-area chat-area-centered" ]
+                [ if model.initializing then
+                    Html.div [ Attr.class "hs-container-inline" ]
+                        [ Html.div [ Attr.class "hs-logo" ] [ Html.text "AlayaFace" ]
+                        , Html.div [ Attr.class "hs-tagline" ] [ Html.text "Connecting…" ]
+                        ]
 
-              else
-                Html.div [ Attr.class "hs-container-inline" ]
-                    [ Html.div [ Attr.class "hs-tagline", Attr.style "color" "#ef4444" ]
-                        [ Html.text (Maybe.withDefault "Failed to start" model.initError) ]
-                    , Html.button [ Attr.class "connect-btn", Attr.style "margin-top" "12px", Ev.onClick CreateSession ]
-                        [ Html.text "Retry" ]
-                    ]
+                  else
+                    Html.div [ Attr.class "hs-container-inline" ]
+                        [ Html.div [ Attr.class "hs-tagline", Attr.style "color" "#ef4444" ]
+                            [ Html.text (Maybe.withDefault "Failed to start" model.initError) ]
+                        , Html.button [ Attr.class "connect-btn", Attr.style "margin-top" "12px", Ev.onClick CreateSession ]
+                            [ Html.text "Retry" ]
+                        ]
+                ]
             ]
         ]
 
@@ -1776,35 +1750,25 @@ viewMain model session =
             []
             [ Html.text (".app{--content-width:" ++ String.fromInt model.contentWidth ++ "px}") ]
         , viewNotifications model
-        , viewHeader model session
-        , viewChatArea model session
-        , viewConfirmOverlay session
-        , viewMcpInitOverlay session
-        , viewFilePickerOverlay model
-        , viewModelSelectorOverlay model
-        , viewHelpWindowOverlay model
+        , viewSidebar model
+        , Html.div [ Attr.class "main-content" ]
+            [ viewChatArea model session ]
         ]
 
 
-viewHeader : Model -> T.SessionState -> Html Msg
-viewHeader model session =
+viewSidebar : Model -> Html Msg
+viewSidebar model =
     let
         sessionKeys =
             model.sessionOrder
     in
-    Html.header [ Attr.class "app-header" ]
-        [ Html.div [ Attr.class "header-top" ] []
-        , if List.isEmpty sessionKeys then
-            Html.div []
-                [ Html.button [ Attr.class "connect-btn", Ev.onClick CreateSession ] [ Html.text "+ New Session" ] ]
-
-          else
-            Html.div [ Attr.class "tab-bar" ]
-                (List.indexedMap (\i id -> viewTab i id model) sessionKeys
-                    ++ [ Html.button [ Attr.class "tab-new", Ev.onClick CreateSession, Attr.title "New session" ] [ Html.text "+" ]
-                       , Html.button [ Attr.class "tab-btn", Ev.onClick OpenSessionManager, Attr.title "Session manager" ] [ Html.text "☰" ]
-                       ]
-                )
+    Html.nav [ Attr.class "sidebar" ]
+        [ Html.div [ Attr.class "sidebar-tabs" ]
+            (List.indexedMap (\i id -> viewTab i id model) sessionKeys
+                ++ [ Html.button [ Attr.class "sidebar-btn", Ev.onClick CreateSession, Attr.title "New session" ] [ Html.text "+" ]
+                   , Html.button [ Attr.class "sidebar-btn", Ev.onClick OpenSessionManager, Attr.title "Session manager" ] [ Html.text "☰" ]
+                   ]
+            )
         ]
 
 
@@ -1821,16 +1785,16 @@ viewTab i id model =
             Maybe.map .connected session |> Maybe.withDefault False
     in
     Html.div
-        [ Attr.class ("tab"
-            ++ (if isActive then " tab-active" else "")
-            ++ (if not isConnected then " tab-disconnected" else "")
+        [ Attr.class ("sidebar-tab"
+            ++ (if isActive then " sidebar-tab-active" else "")
+            ++ (if not isConnected then " sidebar-tab-disconnected" else "")
             )
         , Ev.onClick (SwitchSession id)
         ]
-        [ Html.span [ Attr.class "tab-dot" ] []
-        , Html.span [ Attr.class "tab-label" ] [ Html.text ("Session " ++ String.fromInt (i + 1)) ]
+        [ Html.span [ Attr.class "sidebar-tab-dot" ] []
+        , Html.span [ Attr.class "sidebar-tab-label" ] [ Html.text (String.fromInt (i + 1)) ]
         , Html.button
-            [ Attr.class "tab-close"
+            [ Attr.class "sidebar-tab-close"
             , Ev.onClick (CloseSession id)
             , Ev.stopPropagationOn "click" (D.succeed ( NoOp, True ))
             , Attr.title "Close session"
@@ -1857,6 +1821,11 @@ viewChatArea model session =
           else
             Html.text ""
         , viewInputBar model session
+        , viewConfirmOverlay session
+        , viewMcpInitOverlay session
+        , viewFilePickerOverlay model
+        , viewModelSelectorOverlay model
+        , viewHelpWindowOverlay model
         ]
 
 

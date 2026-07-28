@@ -1,4 +1,4 @@
-module Overlay.HelpWindow exposing (HelpItem, helpItems, filterHelpItems, view)
+module Overlay.HelpWindow exposing (HelpItem, filterHelpItems, view)
 
 import Fuzzy
 import Html exposing (Html)
@@ -129,49 +129,4 @@ filterHelpItems term items =
             items
 
 
-helpItems : List HelpItem
-helpItems =
-    [ { id = 1, key = "Commands", desc = "", isSection = True, isCommand = False }
-    , { id = 2, key = ":tool_confirm <id>", desc = "Confirm pending tool", isSection = False, isCommand = True }
-    , { id = 3, key = ":tool_decline <id>", desc = "Decline pending tool", isSection = False, isCommand = True }
-    , { id = 4, key = ":mcp_confirm <server> <code> <redirect_uri>", desc = "Confirm OAuth authorization", isSection = False, isCommand = True }
-    , { id = 5, key = ":mcp_decline <server>", desc = "Decline OAuth authorization", isSection = False, isCommand = True }
-    , { id = 6, key = ":continue", desc = "Retry last prompt", isSection = False, isCommand = True }
-    , { id = 7, key = ":reason <0|1|2>", desc = "Set reasoning level", isSection = False, isCommand = True }
-    , { id = 8, key = ":cancel", desc = "Cancel current task", isSection = False, isCommand = True }
-    , { id = 9, key = ":summarize", desc = "Summarize & compress history", isSection = False, isCommand = True }
-    , { id = 10, key = ":theme_set <name>", desc = "Switch theme by name", isSection = False, isCommand = True }
-    , { id = 11, key = ":model_set <id>", desc = "Switch model by ID", isSection = False, isCommand = True }
-    , { id = 12, key = ":model_load", desc = "Reload model config", isSection = False, isCommand = True }
-    , { id = 13, key = ":model_sync", desc = "Apply edited model config", isSection = False, isCommand = True }
-    , { id = 14, key = ":save [filename]", desc = "Save session", isSection = False, isCommand = True }
-    , { id = 15, key = ":fork <id> <filename>", desc = "Fork session up to content", isSection = False, isCommand = True }
-    , { id = 16, key = ":video_config <fps> <0|1>", desc = "Set video FPS and resolution", isSection = False, isCommand = True }
-    , { id = 17, key = ":suspend", desc = "Suspend process", isSection = False, isCommand = True }
-    , { id = 18, key = ":quit", desc = "Exit application", isSection = False, isCommand = True }
-    , { id = 19, key = ":help", desc = "Open help window", isSection = False, isCommand = True }
-    , { id = 20, key = "Global Shortcuts", desc = "", isSection = True, isCommand = False }
-    , { id = 21, key = "Tab", desc = "Toggle focus display/input", isSection = False, isCommand = False }
-    , { id = 22, key = "Enter", desc = "Submit prompt or command", isSection = False, isCommand = False }
-    , { id = 23, key = "Ctrl+H", desc = "Open help window", isSection = False, isCommand = False }
-    , { id = 24, key = "Ctrl+G", desc = "Cancel current task", isSection = False, isCommand = False }
-    , { id = 25, key = "Ctrl+C", desc = "Clear text", isSection = False, isCommand = False }
-    , { id = 26, key = "Ctrl+S", desc = "Save session", isSection = False, isCommand = False }
-    , { id = 27, key = "Ctrl+A", desc = "Open attachment picker", isSection = False, isCommand = False }
-    , { id = 28, key = "Ctrl+L", desc = "Open model selector", isSection = False, isCommand = False }
-    , { id = 29, key = "Ctrl+R", desc = "Force redraw screen", isSection = False, isCommand = False }
-    , { id = 30, key = "Ctrl+P", desc = "Open theme selector", isSection = False, isCommand = False }
-    , { id = 31, key = "Ctrl+Z", desc = "Suspend process", isSection = False, isCommand = False }
-    , { id = 32, key = "Display Mode", desc = "", isSection = True, isCommand = False }
-    , { id = 33, key = "j/k", desc = "Move window cursor", isSection = False, isCommand = False }
-    , { id = 34, key = "J/K", desc = "Scroll one line", isSection = False, isCommand = False }
-    , { id = 35, key = "Ctrl+D/U", desc = "Scroll half screen", isSection = False, isCommand = False }
-    , { id = 36, key = "g", desc = "Go to first window", isSection = False, isCommand = False }
-    , { id = 37, key = "G", desc = "Follow the last window", isSection = False, isCommand = False }
-    , { id = 38, key = "H/L/M", desc = "Cursor top/btm/mid", isSection = False, isCommand = False }
-    , { id = 39, key = "e", desc = "Open in editor", isSection = False, isCommand = False }
-    , { id = 40, key = "f/b", desc = "Next/prev prompt", isSection = False, isCommand = False }
-    , { id = 41, key = ":", desc = "Enter command mode", isSection = False, isCommand = False }
-    , { id = 42, key = "Space", desc = "Toggle window fold", isSection = False, isCommand = False }
-    , { id = 43, key = "Ctrl+F", desc = "Fork session from cursor", isSection = False, isCommand = False }
-    ]
+

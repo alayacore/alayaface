@@ -100,14 +100,12 @@ view config =
 
           else
             Html.text ""
-        , Html.div [ Attr.class "mcp-init-hint" ]
-            [ Html.text "Press Ctrl+G to cancel MCP initialization." ]
         , Html.div [ Attr.class "mcp-init-footer" ]
             [ Html.button
                 [ Attr.class "mcp-init-btn mcp-init-btn-close"
                 , Ev.onClick config.onClose
                 , Attr.title "Close overlay"
                 ]
-                [ Html.text "✕ Close" ]
+                [ Html.text "Cancel Initialization" ]
             ]
         ]
