@@ -1350,9 +1350,10 @@ html {
   border-radius: 6px;
   cursor: pointer;
   font-size: 0.88rem;
+  font-weight: 400;
 }
 .fp-page-item:hover { background: rgba(255,255,255,0.04); }
-.fp-page-item-selected { background: #6366f1; color: white; }
+.fp-page-item-selected { background: #6366f1; color: white; font-weight: 400; }
 .fp-page-item-selected:hover { background: #5558e6; }
 
 .fp-page-item-icon {
@@ -1368,6 +1369,10 @@ html {
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
+  font-weight: 400;
+  font-family: inherit;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 @media (prefers-color-scheme: light) {
@@ -1746,6 +1751,7 @@ html {
   border-radius: 6px;
   cursor: pointer;
   font-size: 0.85rem;
+  font-weight: 400;
 }
 .sel-page-item:hover { background: rgba(255,255,255,0.04); }
 .sel-page-item-selected { background: #6366f1; color: white; }
@@ -1767,6 +1773,9 @@ html {
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 .sel-page-item-check {
@@ -1819,6 +1828,7 @@ html {
   border-radius: 6px;
   cursor: pointer;
   font-size: 0.82rem;
+  font-weight: 400;
 }
 .help-page-item:hover { background: rgba(255,255,255,0.04); }
 .help-page-item-selected { background: #6366f1; color: white; }
@@ -1827,6 +1837,9 @@ html {
 .help-page-item-key {
   font-family: "Courier New", monospace;
   font-size: 0.78rem;
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   min-width: 160px;
   flex-shrink: 0;
   color: #93c5fd;
@@ -1839,6 +1852,7 @@ html {
   white-space: nowrap;
   flex: 1;
   color: #bbb;
+  font-weight: 400;
 }
 .help-page-item-selected .help-page-item-desc { color: rgba(255,255,255,0.85); }
 
