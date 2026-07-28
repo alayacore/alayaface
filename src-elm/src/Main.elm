@@ -198,6 +198,8 @@ type Msg
     | HelpSelectItem Int
     | HelpCmdMsg String
     | FillMcpAuthUrl String
+      -- Session wrapper
+    | ForSession String Msg
       -- Internal
     | NoOp
     | KeyDown String Bool Bool Bool
@@ -1344,11 +1346,11 @@ update msg model =
                 case getActiveSession model of
                     Just s ->
                         if s.showModelSelector then
-                            update CloseModelSelector model
+                            ( { model | activeId = Just s.id }, Cmd.none )
                         else if s.showHelpWindow then
-                            update CloseHelpWindow model
+                            ( { model | activeId = Just s.id }, Cmd.none )
                         else if s.showFilePicker then
-                            update CloseFilePicker model
+                            ( { model | activeId = Just s.id }, Cmd.none )
                         else
                             ( model, Cmd.none )
 
@@ -1357,6 +1359,9 @@ update msg model =
 
             else
                 ( model, Cmd.none )
+
+        ForSession sid innerMsg ->
+            update innerMsg { model | activeId = Just sid }
 
         NoOp ->
             ( model, Cmd.none )
@@ -1814,9 +1819,9 @@ viewChatArea model session =
         , viewInputBar model session
         , viewConfirmOverlay session.id session
         , viewMcpInitOverlay session.id session
-        , viewFilePickerOverlay model
-        , viewModelSelectorOverlay model
-        , viewHelpWindowOverlay model
+        , viewFilePickerOverlay session.id model
+        , viewModelSelectorOverlay session.id model
+        , viewHelpWindowOverlay session.id model
         ]
 
 
@@ -1905,7 +1910,7 @@ viewInputBar model session =
             [ Html.div [ Attr.class "message message-user input-bubble" ]
                 [ if hasStaged then
                     Html.div [ Attr.class "hs-staged-row" ]
-                        (List.map viewStagedChip session.staged)
+                        (List.map (viewStagedChip session.id) session.staged)
 
                   else
                     Html.text ""
@@ -1914,11 +1919,11 @@ viewInputBar model session =
                     , Attr.class "input-text"
                     , Attr.placeholder "Type a message…"
                     , Attr.value session.input
-                    , Ev.onInput SetInput
+                    , Ev.onInput (\v -> ForSession session.id (SetInput v))
                     , Ev.preventDefaultOn "keydown" <|
                         D.map3 (\key ctrl shift ->
                             if key == "Enter" && not ctrl && not shift then
-                                ( SendPrompt, True )
+                                ( ForSession session.id SendPrompt, True )
                             else if key == "Enter" && shift then
                                 ( NoOp, False )
                             else
@@ -1933,21 +1938,21 @@ viewInputBar model session =
                 [ Html.div [ Attr.class "input-footer-left" ]
                     [ Html.button
                         [ Attr.class "footer-btn"
-                        , Ev.onClick OpenFilePicker
+                        , Ev.onClick (ForSession session.id OpenFilePicker)
                         , Attr.title "Attach media"
                         , Attr.disabled (not session.connected)
                         ]
                         [ Html.text "📎" ]
                     , Html.button
                         [ Attr.class "footer-btn"
-                        , Ev.onClick OpenModelSelector
+                        , Ev.onClick (ForSession session.id OpenModelSelector)
                         , Attr.title "Select model"
                         , Attr.disabled (not session.connected)
                         ]
                         [ Html.text "🧠" ]
                     , Html.button
                         [ Attr.class "footer-btn"
-                        , Ev.onClick OpenHelpWindow
+                        , Ev.onClick (ForSession session.id OpenHelpWindow)
                         , Attr.title "Help"
                         ]
                         [ Html.text "?" ]
@@ -1956,7 +1961,7 @@ viewInputBar model session =
                     [ Html.button
                         [ Attr.class ("send-btn" ++ (if session.taskRunning then " cancel" else ""))
                         , Ev.onClick
-                            (if session.taskRunning then CancelTask else SendPrompt)
+                            (if session.taskRunning then ForSession session.id CancelTask else ForSession session.id SendPrompt)
                         , Attr.disabled (not session.connected)
                         ]
                         [ if session.taskRunning then Html.text "Cancel" else Html.text "Send" ]
@@ -1968,8 +1973,8 @@ viewInputBar model session =
 
 -- ─── Staged Media Chips ──────────────────────────────────────────────
 
-viewStagedChip : T.StagedMedia -> Html Msg
-viewStagedChip item =
+viewStagedChip : String -> T.StagedMedia -> Html Msg
+viewStagedChip sid item =
     Html.div [ Attr.class "hs-staged-chip" ]
         [ Html.span [ Attr.class "hs-staged-icon" ]
             [ Html.text (mediaTypeIcon item.mediaType) ]
@@ -1977,7 +1982,7 @@ viewStagedChip item =
             [ Html.text (Maybe.withDefault (String.left 40 item.uri) item.name) ]
         , Html.button
             [ Attr.class "hs-staged-remove"
-            , Ev.onClick (RemoveStaged item.id)
+            , Ev.onClick (ForSession sid (RemoveStaged item.id))
             , Attr.title "Remove"
             ]
             [ Html.text "✕" ]
@@ -2023,7 +2028,7 @@ viewConfirmOverlay sid session =
         first :: _ ->
             viewOverlay (CloseConfirm sid)
                 [ Overlay.ConfirmTool.view
-                    { onConfirm = ConfirmTool sid
+                    { onConfirm = \id allowed -> ConfirmTool sid id allowed
                     }
                     first
                 ]
@@ -2054,8 +2059,8 @@ viewMcpInitOverlay sid session =
                 , onClose = CloseMcpAuthOverlay sid
                 , onCancelAll = McpCancelAll sid
                 , onAuthConfirm = McpAuthConfirm sid
-                , onAuthDeny = McpAuthDeny sid
-                , onFillUrl = FillMcpAuthUrl
+                , onAuthDeny = \s -> McpAuthDeny sid s
+                , onFillUrl = \url -> ForSession sid (FillMcpAuthUrl url)
                 }
             ]
 
@@ -2065,12 +2070,12 @@ viewMcpInitOverlay sid session =
 
 -- ─── File Picker Overlay ──────────────────────────────────────────────
 
-viewFilePickerOverlay : Model -> Html Msg
-viewFilePickerOverlay model =
+viewFilePickerOverlay : String -> Model -> Html Msg
+viewFilePickerOverlay sid model =
     case getActiveSession model of
         Just s ->
             if s.showFilePicker then
-                viewOverlay CloseFilePicker
+                viewOverlay (ForSession sid CloseFilePicker)
                     [ Overlay.FilePicker.view
                         { entries = filterEntries s
                         , input = s.filePickerInput
@@ -2079,11 +2084,11 @@ viewFilePickerOverlay model =
                         , mode = s.filePickerMode
                         , loading = s.filePickerLoading
                         , noOp = NoOp
-                        , onInput = SetFilePickerInput
-                        , onConfirm = FilePickerConfirmItem
-                        , onPick = FilePickerPickItem
-                        , onUrlConfirm = ConfirmFilePickerUrl
-                        , onToggleMode = FilePickerToggleMode
+                        , onInput = \v -> ForSession sid (SetFilePickerInput v)
+                        , onConfirm = ForSession sid FilePickerConfirmItem
+                        , onPick = \i -> ForSession sid (FilePickerPickItem i)
+                        , onUrlConfirm = ForSession sid ConfirmFilePickerUrl
+                        , onToggleMode = ForSession sid FilePickerToggleMode
                         }
                     ]
             else
@@ -2095,12 +2100,12 @@ viewFilePickerOverlay model =
 
 -- ─── Model Selector Overlay ──────────────────────────────────────────
 
-viewModelSelectorOverlay : Model -> Html Msg
-viewModelSelectorOverlay model =
+viewModelSelectorOverlay : String -> Model -> Html Msg
+viewModelSelectorOverlay sid model =
     case getActiveSession model of
         Just s ->
             if s.showModelSelector then
-                viewOverlay CloseModelSelector
+                viewOverlay (ForSession sid CloseModelSelector)
                     [ Overlay.ModelSelector.view
                         { models = s.models
                         , input = s.modelSelectorInput
@@ -2108,10 +2113,10 @@ viewModelSelectorOverlay model =
                         , activeModelId = s.activeModelId
                         , activeModelName = s.activeModelName
                         , noOp = NoOp
-                        , onSelect = ModelSelectorSelectItem
-                        , onConfirm = ModelSelectorConfirmItem
-                        , onClose = CloseModelSelector
-                        , onInput = SetModelSelectorInput
+                        , onSelect = \i -> ForSession sid (ModelSelectorSelectItem i)
+                        , onConfirm = ForSession sid ModelSelectorConfirmItem
+                        , onClose = ForSession sid CloseModelSelector
+                        , onInput = \v -> ForSession sid (SetModelSelectorInput v)
                         }
                     ]
             else
@@ -2123,19 +2128,19 @@ viewModelSelectorOverlay model =
 
 -- ─── Help Window Overlay ─────────────────────────────────────────────
 
-viewHelpWindowOverlay : Model -> Html Msg
-viewHelpWindowOverlay model =
+viewHelpWindowOverlay : String -> Model -> Html Msg
+viewHelpWindowOverlay sid model =
     case getActiveSession model of
         Just s ->
             if s.showHelpWindow then
-                viewOverlay CloseHelpWindow
+                viewOverlay (ForSession sid CloseHelpWindow)
                     [ Overlay.HelpWindow.view
                         { items = helpItems
                         , filter = s.helpFilter
                         , selected = s.helpSelected
                         , noOp = NoOp
-                        , onFilter = SetHelpFilter
-                        , onCmd = HelpCmdMsg
+                        , onFilter = \v -> ForSession sid (SetHelpFilter v)
+                        , onCmd = \v -> ForSession sid (HelpCmdMsg v)
                         }
                     ]
             else
