@@ -920,6 +920,7 @@ body {
 
 /* ─── Log Panel ────────────────────────────────────────────────────── */
 
+.log-panel {
   padding: 6px 16px;
   font-family: "Courier New", monospace;
   font-size: 0.72rem;
@@ -1174,7 +1175,6 @@ body {
   gap: 10px;
   justify-content: flex-end;
   flex-shrink: 0;
-}
   flex-wrap: wrap;
 }
 
