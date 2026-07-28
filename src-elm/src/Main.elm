@@ -61,6 +61,7 @@ type alias Model =
     , pendingSwitchOnCreate : Bool
     , inputRows : Int
     , cursorMsgId : Maybe String
+    , contentWidth : Int
     }
 
 
@@ -82,6 +83,7 @@ init _ =
       , pendingSwitchOnCreate = False
       , inputRows = 1
       , cursorMsgId = Nothing
+      , contentWidth = 864
       }
     , Ports.createSession { toolConfirm = Just "execute_command" }
     )
@@ -1757,7 +1759,10 @@ view model =
 viewNoSession : Model -> Html Msg
 viewNoSession model =
     Html.div [ Attr.class "app" ]
-        [ Html.header [ Attr.class "app-header", Attr.attribute "data-tauri-drag-region" "" ]
+        [ Html.node "style"
+            []
+            [ Html.text (".app{--content-width:" ++ String.fromInt model.contentWidth ++ "px}") ]
+        , Html.header [ Attr.class "app-header", Attr.attribute "data-tauri-drag-region" "" ]
             [ Html.div [ Attr.class "header-top" ]
                 [ Html.button [ Attr.class "connect-btn", Ev.onClick CreateSession ] [ Html.text "+ New Session" ]
                 , viewWindowControls model
@@ -1784,7 +1789,10 @@ viewNoSession model =
 viewMain : Model -> T.SessionState -> Html Msg
 viewMain model session =
     Html.div [ Attr.class "app" ]
-        [ viewNotifications model
+        [ Html.node "style"
+            []
+            [ Html.text (".app{--content-width:" ++ String.fromInt model.contentWidth ++ "px}") ]
+        , viewNotifications model
         , viewHeader model session
         , viewChatArea model session
         , viewConfirmOverlay session

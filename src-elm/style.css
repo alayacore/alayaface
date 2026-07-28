@@ -65,7 +65,7 @@ html {
   align-items: center;
   justify-content: center;
   width: 100%;
-  max-width: 864px;
+  max-width: var(--content-width);
   position: relative;
   z-index: 1;
 }
@@ -206,10 +206,10 @@ html {
   flex-direction: column;
   align-items: center;
   gap: 10px;
-  padding: 12px 16px 16px;
+  padding: 12px 0 0;
   background: transparent;
   width: 100%;
-  max-width: 864px;
+  max-width: var(--content-width);
   transition: transform 0.3s ease, bottom 0.3s ease, top 0.3s ease;
 }
 
@@ -219,7 +219,7 @@ html {
   left: 50%;
   transform: translate(-50%, -50%);
   bottom: auto;
-  padding: 12px 16px 16px;
+  padding: 12px 0 0;
 }
 
 /* Bottom (has messages) — default state */
@@ -250,7 +250,7 @@ html {
 }
 
 .chat-area .hs-search-wrapper {
-  max-width: 864px;
+  max-width: var(--content-width);
 }
 
 .chat-area-centered .hs-search-form {
@@ -267,7 +267,7 @@ html {
 }
 
 .session-input-bar .hs-search-wrapper {
-  max-width: 864px;
+  max-width: var(--content-width);
   width: 100%;
 }
 
@@ -622,14 +622,14 @@ html {
 
 .messages {
   flex: 0 0 auto;
-  padding: 12px 16px 120px;
+  padding: 12px 0 120px;
   display: flex;
   flex-direction: column;
   gap: 6px;
   position: relative;
   z-index: 1;
   width: 100%;
-  max-width: 864px;
+  max-width: var(--content-width);
   margin: 0 auto;
 }
 
@@ -654,7 +654,7 @@ html {
 .message {
   padding: 10px 14px;
   border-radius: 4px;
-  max-width: 864px;
+  max-width: var(--content-width);
   width: 100%;
   word-wrap: break-word;
   white-space: pre-wrap;
@@ -692,7 +692,7 @@ html {
 .message-reasoning-wrap {
   align-self: flex-start;
   width: 100%;
-  max-width: 864px;
+  max-width: var(--content-width);
 }
 
 .reasoning-header {
@@ -1194,6 +1194,9 @@ html {
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  max-width: var(--content-width);
+  width: var(--content-width);
+  align-self: center;
 }
 
 .confirm-page-title {
@@ -1278,10 +1281,9 @@ html {
   gap: 6px;
   flex: 1;
   min-height: 0;
-  max-width: 864px;
-  width: 864px;
+  max-width: var(--content-width);
+  width: var(--content-width);
   align-self: center;
-  padding: 0 16px;
 }
 
 .fp-page-input-row {
@@ -1579,7 +1581,7 @@ html {
 
 .input-container {
   width: 100%;
-  max-width: 864px;
+  max-width: var(--content-width);
   background: transparent;
 }
 
@@ -1648,7 +1650,7 @@ html {
 .send-btn {
   padding: 5px 16px;
   width: 80px;
-  border: none;
+  border: 1px solid #2563eb;
   border-radius: 4px;
   font-size: 0.85rem;
   font-weight: 600;
@@ -1659,7 +1661,7 @@ html {
   text-align: center;
 }
 
-.send-btn:hover { background: #1d4ed8; }
+.send-btn:hover { background: rgba(37,99,235,0.1); }
 .send-btn.cancel { border-color: #dc2626; color: #dc2626; }
 .send-btn.cancel:hover { background: rgba(220,38,38,0.1); }
 .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
@@ -1684,10 +1686,9 @@ html {
   gap: 6px;
   flex: 1;
   min-height: 0;
-  max-width: 864px;
-  width: 864px;
+  max-width: var(--content-width);
+  width: var(--content-width);
   align-self: center;
-  padding: 0 16px;
 }
 
 .sel-page-title {
@@ -1819,10 +1820,9 @@ html {
   gap: 6px;
   flex: 1;
   min-height: 0;
-  max-width: 864px;
-  width: 864px;
+  max-width: var(--content-width);
+  width: var(--content-width);
   align-self: center;
-  padding: 0 16px;
 }
 
 .help-page-section {
@@ -1891,6 +1891,9 @@ html {
   align-items: center;
   justify-content: center;
   text-align: center;
+  max-width: var(--content-width);
+  width: var(--content-width);
+  align-self: center;
 }
 
 .mcp-init-status {
@@ -1903,14 +1906,14 @@ html {
   flex-direction: column;
   gap: 6px;
   width: 100%;
-  max-width: 400px;
+  max-width: var(--content-width);
 }
 
 .mcp-init-server {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 12px;
+  padding: 6px 0;
   background: rgba(255,255,255,0.03);
   border-radius: 4px;
   font-size: 0.85rem;
