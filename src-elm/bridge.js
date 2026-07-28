@@ -147,17 +147,20 @@
     });
 
                 on("focusElement", function (id) {
-      requestAnimationFrame(function () {
-        var el = document.getElementById(id);
-        if (el) { el.focus(); }
-      });
+      // Deprecated: focusing is now done via Elm's Dom.focus (FocusElement msg).
+      // This port is kept for backward compatibility but does nothing.
+    });
+
+    on("setCursorPos", function (id) {
+      var el = document.getElementById(id);
+      if (!el || !el.setSelectionRange) return;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
     });
 
     on("scrollIntoView", function (id) {
-      requestAnimationFrame(function () {
-        var el = document.getElementById(id);
-        if (el) { el.scrollIntoView({ block: "nearest" }); }
-      });
+      var el = document.getElementById(id);
+      if (el) { el.scrollIntoView({ block: "nearest" }); }
     });
 
         // 3. Register Tauri event listeners

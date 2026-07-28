@@ -4,6 +4,7 @@ import Browser
 import Browser.Dom as Dom
 import Browser.Events as Evts
 import Task
+import Process
 import Dict exposing (Dict)
 import Set exposing (Set)
 import Html exposing (Html, Attribute)
@@ -62,6 +63,7 @@ type alias Model =
     , inputRows : Int
     , cursorMsgId : Maybe String
     , contentWidth : Int
+    , pendingEvents : Dict String (List E.Value)
     }
 
 
@@ -84,6 +86,7 @@ init _ =
       , inputRows = 1
       , cursorMsgId = Nothing
       , contentWidth = 864
+      , pendingEvents = Dict.empty
       }
     , Ports.createSession { toolConfirm = Just "execute_command" }
     )
@@ -115,7 +118,7 @@ focusInput : Model -> Cmd Msg
 focusInput model =
     case model.activeId of
         Just sid ->
-            Ports.focusElement ("msg-input-" ++ sid)
+            Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ sid))
         Nothing ->
             Cmd.none
 
@@ -128,17 +131,6 @@ getActiveSession model =
 
         Nothing ->
             Nothing
-
-
-isOverlayOpen : Model -> Bool
-isOverlayOpen model =
-    case getActiveSession model of
-        Just s ->
-            s.showModelSelector || s.showHelpWindow || s.showFilePicker || not (List.isEmpty s.pendingConfirm) || s.mcpStatus /= Nothing
-
-        Nothing ->
-            False
-
 
 
 
@@ -234,6 +226,13 @@ update msg model =
                 newSessions =
                     Dict.insert id newSession model.sessions
 
+                -- Replay any buffered events that arrived before this session was registered
+                buffered =
+                    Dict.get id model.pendingEvents |> Maybe.withDefault []
+
+                sessionsAfterBuffer =
+                    List.foldl applyPendingEvent newSessions buffered
+
                 -- Only auto-switch on initial creation (activeId was Nothing)
                 -- If user is already viewing a session, don't steal focus
                 newActiveId =
@@ -249,12 +248,13 @@ update msg model =
                         Cmd.none
             in
             ( { model
-                | sessions = newSessions
+                | sessions = sessionsAfterBuffer
                 , activeId = newActiveId
                 , initializing = False
                 , atBottom = True
                 , sessionOrder = model.sessionOrder ++ [ id ]
                 , pendingSwitchOnCreate = False
+                , pendingEvents = Dict.remove id model.pendingEvents
               }
             , cmds
             )
@@ -302,7 +302,14 @@ update msg model =
                             )
 
                         Nothing ->
-                            ( model, Cmd.none )
+                            -- Buffer for when session is registered
+                            let
+                                existing =
+                                    Dict.get ev.sessionId model.pendingEvents |> Maybe.withDefault []
+                            in
+                            ( { model | pendingEvents = Dict.insert ev.sessionId (existing ++ [ raw ]) model.pendingEvents }
+                            , Cmd.none
+                            )
 
                 Err _ ->
                     ( model, Cmd.none )
@@ -346,7 +353,14 @@ update msg model =
                             )
 
                         Nothing ->
-                            ( model, Cmd.none )
+                            -- Buffer for when session is registered
+                            let
+                                existing =
+                                    Dict.get ev.sessionId model.pendingEvents |> Maybe.withDefault []
+                            in
+                            ( { model | pendingEvents = Dict.insert ev.sessionId (existing ++ [ raw ]) model.pendingEvents }
+                            , Cmd.none
+                            )
 
                 Err _ ->
                     ( model, Cmd.none )
@@ -368,7 +382,14 @@ update msg model =
                             )
 
                         Nothing ->
-                            ( model, Cmd.none )
+                            -- Buffer for when session is registered
+                            let
+                                existing =
+                                    Dict.get ev.sessionId model.pendingEvents |> Maybe.withDefault []
+                            in
+                            ( { model | pendingEvents = Dict.insert ev.sessionId (existing ++ [ raw ]) model.pendingEvents }
+                            , Cmd.none
+                            )
 
                 Err _ ->
                     ( model, Cmd.none )
@@ -652,9 +673,9 @@ update msg model =
         -- File Picker
         OpenFilePicker ->
             case getActiveSession model of
-                Just _ ->
-                    ( updateActiveSession model (\s ->
-                        { s
+                Just s ->
+                    ( updateActiveSession model (\sess ->
+                        { sess
                             | showFilePicker = True
                             , filePickerMode = T.Local
                             , filePickerInput = ""
@@ -665,7 +686,8 @@ update msg model =
                       )
                     , Cmd.batch
                         [ Ports.fsHomeDir {}
-                        , Ports.focusElement "fp-page-input"
+                        , focusAfterDelay ("fp-page-input-" ++ s.id)
+                        , Ports.setCursorPos ("fp-page-input-" ++ s.id)
                         ]
                     )
 
@@ -678,7 +700,7 @@ update msg model =
             )
 
         FocusElement id ->
-            ( model, Ports.focusElement id )
+            ( model, Task.attempt (\_ -> NoOp) (Dom.focus id) )
 
         SetFilePickerInput val ->
             case getActiveSession model of
@@ -794,7 +816,7 @@ update msg model =
                             in
                             case List.head (List.drop idx entries) of
                                 Just e ->
-                                    Ports.scrollIntoView ("fp-item-" ++ e.name)
+                                    Ports.scrollIntoView ("fp-item-" ++ s.id ++ "-" ++ e.name)
 
                                 Nothing ->
                                     Cmd.none
@@ -989,7 +1011,10 @@ update msg model =
                             , filePickerSavedUrlPath = savedUrl
                         }
                       )
-                    , Ports.focusElement "fp-page-input"
+                    , Cmd.batch
+                        [ focusAfterDelay ("fp-page-input-" ++ s.id)
+                        , Ports.setCursorPos ("fp-page-input-" ++ s.id)
+                        ]
                     )
 
                 Nothing ->
@@ -1065,7 +1090,15 @@ update msg model =
                     , filePickerLoading = True
                 }
               )
-            , Ports.fsListDir { path = home }
+            , case model.activeId of
+                Just sid ->
+                    Cmd.batch
+                        [ Ports.fsListDir { path = home }
+                        , focusAfterDelay ("fp-page-input-" ++ sid)
+                        , Ports.setCursorPos ("fp-page-input-" ++ sid)
+                        ]
+                Nothing ->
+                    Ports.fsListDir { path = home }
             )
 
         FsReadFileResult uri ->
@@ -1162,16 +1195,24 @@ update msg model =
 
         -- Model Selector
         OpenModelSelector ->
-            ( updateActiveSession model (\s ->
-                { s
-                    | showModelSelector = True
-                    , modelSelectorInput = ""
-                    , modelSelectorSelected = 0
-                    , modelSelectorScroll = 0
-                }
-              )
-            , Ports.focusElement "model-selector-input"
-            )
+            case getActiveSession model of
+                Just s ->
+                    ( updateActiveSession model (\sess ->
+                        { sess
+                            | showModelSelector = True
+                            , modelSelectorInput = ""
+                            , modelSelectorSelected = 0
+                            , modelSelectorScroll = 0
+                        }
+                      )
+                    , Cmd.batch
+                        [ focusAfterDelay ("model-selector-input-" ++ s.id)
+                        , Ports.setCursorPos ("model-selector-input-" ++ s.id)
+                        ]
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
 
         CloseModelSelector ->
             ( updateActiveSession model (\s -> { s | showModelSelector = False })
@@ -1210,7 +1251,7 @@ update msg model =
                             in
                             case List.head (List.drop idx filtered) of
                                 Just m ->
-                                    Ports.scrollIntoView ("model-selector-item-" ++ String.fromInt m.id)
+                                    Ports.scrollIntoView ("model-selector-item-" ++ s.id ++ "-" ++ String.fromInt m.id)
 
                                 Nothing ->
                                     Cmd.none
@@ -1249,16 +1290,24 @@ update msg model =
 
         -- Help Window
         OpenHelpWindow ->
-            ( updateActiveSession model (\s ->
-                { s
-                    | showHelpWindow = True
-                    , helpFilter = ""
-                    , helpSelected = 0
-                    , helpScroll = 0
-                }
-              )
-            , Ports.focusElement "help-filter-input"
-            )
+            case getActiveSession model of
+                Just s ->
+                    ( updateActiveSession model (\sess ->
+                        { sess
+                            | showHelpWindow = True
+                            , helpFilter = ""
+                            , helpSelected = 0
+                            , helpScroll = 0
+                        }
+                      )
+                    , Cmd.batch
+                        [ focusAfterDelay ("help-filter-input-" ++ s.id)
+                        , Ports.setCursorPos ("help-filter-input-" ++ s.id)
+                        ]
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
 
         CloseHelpWindow ->
             ( updateActiveSession model (\s -> { s | showHelpWindow = False })
@@ -1286,9 +1335,14 @@ update msg model =
             )
 
         HelpSelectItem idx ->
-            ( updateActiveSession model (\s -> { s | helpSelected = idx })
-            , Ports.scrollIntoView ("help-item-" ++ String.fromInt idx)
-            )
+            case getActiveSession model of
+                Just s ->
+                    ( updateActiveSession model (\sess -> { sess | helpSelected = idx })
+                    , Ports.scrollIntoView ("help-item-" ++ s.id ++ "-" ++ String.fromInt idx)
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
 
         HelpCmdMsg cmd ->
             case model.activeId of
@@ -1358,11 +1412,11 @@ update msg model =
                 case getActiveSession model of
                     Just s ->
                         if s.showModelSelector then
-                            ( { model | activeId = Just s.id }, Cmd.none )
+                            update CloseModelSelector model
                         else if s.showHelpWindow then
-                            ( { model | activeId = Just s.id }, Cmd.none )
+                            update CloseHelpWindow model
                         else if s.showFilePicker then
-                            ( { model | activeId = Just s.id }, Cmd.none )
+                            update CloseFilePicker model
                         else
                             ( model, Cmd.none )
 
@@ -1395,6 +1449,60 @@ updateAfterConfirm model sid =
 
         Nothing ->
             model
+
+
+-- Focus an element by ID after a brief delay to ensure the DOM is fully rendered
+focusAfterDelay : String -> Cmd Msg
+focusAfterDelay id =
+    Task.attempt (\_ -> NoOp)
+        (Process.sleep 0
+            |> Task.andThen (\_ -> Dom.focus id)
+        )
+
+
+-- Apply a buffered transport event to the sessions dict.
+-- Returns the updated sessions dict unchanged if the event can't be decoded or session not found.
+applyPendingEvent : E.Value -> Dict String T.SessionState -> Dict String T.SessionState
+applyPendingEvent raw sessions =
+    -- Try FrameEvent first (most common for initial messages)
+    case D.decodeValue P.frameEventDecoder raw of
+        Ok ev ->
+            case Dict.get ev.sessionId sessions of
+                Just session ->
+                    Dict.insert ev.sessionId (H.handleFrameEvent session ev) sessions
+
+                Nothing ->
+                    sessions
+
+        Err _ ->
+            -- Try DeltaEvent
+            case D.decodeValue P.deltaEventDecoder raw of
+                Ok ev ->
+                    case Dict.get ev.sessionId sessions of
+                        Just session ->
+                            Dict.insert ev.sessionId (H.handleDeltaEvent session ev) sessions
+
+                        Nothing ->
+                            sessions
+
+                Err _ ->
+                    -- Try StatusEvent
+                    case D.decodeValue P.statusEventDecoder raw of
+                        Ok ev ->
+                            case Dict.get ev.sessionId sessions of
+                                Just session ->
+                                    Dict.insert ev.sessionId
+                                        { session
+                                            | connected = ev.connected
+                                            , statusMsg = ev.message
+                                        }
+                                        sessions
+
+                                Nothing ->
+                                    sessions
+
+                        Err _ ->
+                            sessions
 
 
 decodeDirEntry : E.Value -> Maybe T.DirEntry
@@ -1800,9 +1908,9 @@ viewChatArea model session =
         , viewInputBar model session
         , viewConfirmOverlay session.id session
         , viewMcpInitOverlay session.id session
-        , viewFilePickerOverlay session.id model
-        , viewModelSelectorOverlay session.id model
-        , viewHelpWindowOverlay session.id model
+        , viewFilePickerOverlay session.id session
+        , viewModelSelectorOverlay session.id session
+        , viewHelpWindowOverlay session.id session
         ]
 
 
@@ -2051,84 +2159,72 @@ viewMcpInitOverlay sid session =
 
 -- ─── File Picker Overlay ──────────────────────────────────────────────
 
-viewFilePickerOverlay : String -> Model -> Html Msg
-viewFilePickerOverlay sid model =
-    case getActiveSession model of
-        Just s ->
-            if s.showFilePicker then
-                viewOverlay (ForSession sid CloseFilePicker)
-                    [ Overlay.FilePicker.view
-                        { entries = filterEntries s
-                        , input = s.filePickerInput
-                        , filter = s.filePickerFilter
-                        , selected = s.filePickerSelected
-                        , mode = s.filePickerMode
-                        , loading = s.filePickerLoading
-                        , noOp = NoOp
-                        , onInput = \v -> ForSession sid (SetFilePickerInput v)
-                        , onConfirm = ForSession sid FilePickerConfirmItem
-                        , onPick = \i -> ForSession sid (FilePickerPickItem i)
-                        , onUrlConfirm = ForSession sid ConfirmFilePickerUrl
-                        , onToggleMode = ForSession sid FilePickerToggleMode
-                        }
-                    ]
-            else
-                Html.text ""
-
-        Nothing ->
-            Html.text ""
+viewFilePickerOverlay : String -> T.SessionState -> Html Msg
+viewFilePickerOverlay sid session =
+    if session.showFilePicker then
+        viewOverlay (ForSession sid CloseFilePicker)
+            [ Overlay.FilePicker.view
+                { sessionId = sid
+                , entries = filterEntries session
+                , input = session.filePickerInput
+                , filter = session.filePickerFilter
+                , selected = session.filePickerSelected
+                , mode = session.filePickerMode
+                , loading = session.filePickerLoading
+                , noOp = NoOp
+                , onInput = \v -> ForSession sid (SetFilePickerInput v)
+                , onConfirm = ForSession sid FilePickerConfirmItem
+                , onPick = \i -> ForSession sid (FilePickerPickItem i)
+                , onUrlConfirm = ForSession sid ConfirmFilePickerUrl
+                , onToggleMode = ForSession sid FilePickerToggleMode
+                }
+            ]
+    else
+        Html.text ""
 
 
 -- ─── Model Selector Overlay ──────────────────────────────────────────
 
-viewModelSelectorOverlay : String -> Model -> Html Msg
-viewModelSelectorOverlay sid model =
-    case getActiveSession model of
-        Just s ->
-            if s.showModelSelector then
-                viewOverlay (ForSession sid CloseModelSelector)
-                    [ Overlay.ModelSelector.view
-                        { models = s.models
-                        , input = s.modelSelectorInput
-                        , selected = s.modelSelectorSelected
-                        , activeModelId = s.activeModelId
-                        , activeModelName = s.activeModelName
-                        , noOp = NoOp
-                        , onSelect = \i -> ForSession sid (ModelSelectorSelectItem i)
-                        , onConfirm = ForSession sid ModelSelectorConfirmItem
-                        , onClose = ForSession sid CloseModelSelector
-                        , onInput = \v -> ForSession sid (SetModelSelectorInput v)
-                        }
-                    ]
-            else
-                Html.text ""
-
-        Nothing ->
-            Html.text ""
+viewModelSelectorOverlay : String -> T.SessionState -> Html Msg
+viewModelSelectorOverlay sid session =
+    if session.showModelSelector then
+        viewOverlay (ForSession sid CloseModelSelector)
+            [ Overlay.ModelSelector.view
+                { sessionId = sid
+                , models = session.models
+                , input = session.modelSelectorInput
+                , selected = session.modelSelectorSelected
+                , activeModelId = session.activeModelId
+                , activeModelName = session.activeModelName
+                , noOp = NoOp
+                , onSelect = \i -> ForSession sid (ModelSelectorSelectItem i)
+                , onConfirm = ForSession sid ModelSelectorConfirmItem
+                , onClose = ForSession sid CloseModelSelector
+                , onInput = \v -> ForSession sid (SetModelSelectorInput v)
+                }
+            ]
+    else
+        Html.text ""
 
 
 -- ─── Help Window Overlay ─────────────────────────────────────────────
 
-viewHelpWindowOverlay : String -> Model -> Html Msg
-viewHelpWindowOverlay sid model =
-    case getActiveSession model of
-        Just s ->
-            if s.showHelpWindow then
-                viewOverlay (ForSession sid CloseHelpWindow)
-                    [ Overlay.HelpWindow.view
-                        { items = helpItems
-                        , filter = s.helpFilter
-                        , selected = s.helpSelected
-                        , noOp = NoOp
-                        , onFilter = \v -> ForSession sid (SetHelpFilter v)
-                        , onCmd = \v -> ForSession sid (HelpCmdMsg v)
-                        }
-                    ]
-            else
-                Html.text ""
-
-        Nothing ->
-            Html.text ""
+viewHelpWindowOverlay : String -> T.SessionState -> Html Msg
+viewHelpWindowOverlay sid session =
+    if session.showHelpWindow then
+        viewOverlay (ForSession sid CloseHelpWindow)
+            [ Overlay.HelpWindow.view
+                { sessionId = sid
+                , items = helpItems
+                , filter = session.helpFilter
+                , selected = session.helpSelected
+                , noOp = NoOp
+                , onFilter = \v -> ForSession sid (SetHelpFilter v)
+                , onCmd = \v -> ForSession sid (HelpCmdMsg v)
+                }
+            ]
+    else
+        Html.text ""
 
 
 viewNotifications : Model -> Html Msg

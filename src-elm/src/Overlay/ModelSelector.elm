@@ -9,7 +9,8 @@ import Session.Types as T
 
 
 view :
-    { models : List T.ModelInfo
+    { sessionId : String
+    , models : List T.ModelInfo
     , input : String
     , selected : Int
     , activeModelId : Maybe Int
@@ -25,18 +26,20 @@ view config =
     let
         filtered =
             filterModels config.models config.input
+
+        inputId =
+            "model-selector-input-" ++ config.sessionId
     in
     Html.div [ Attr.class "sel-page" ]
         [ Html.div [ Attr.class "sel-page-title" ] [ Html.text "Model Selector" ]
         , Html.div [ Attr.class "sel-page-input-row" ]
             [ Html.input
                 [ Attr.class "sel-page-input"
-                , Attr.id "model-selector-input"
+                , Attr.id inputId
                 , Attr.type_ "text"
                 , Attr.value config.input
                 , Ev.onInput config.onInput
                 , Attr.placeholder "Search models…"
-                , Attr.autofocus True
                 , Ev.preventDefaultOn "keydown" <|
                     D.map2 (\key ctrl ->
                         if key == "Enter" && not ctrl then
@@ -64,13 +67,13 @@ view config =
           else
             Html.div
                 [ Attr.class "sel-page-list"
-                , Attr.id "model-selector-list"
+                , Attr.id ("model-selector-list-" ++ config.sessionId)
                 ]
                 (List.indexedMap (\i m -> viewItem i m config) filtered)
         ]
 
 
-viewItem : Int -> T.ModelInfo -> { a | selected : Int, activeModelId : Maybe Int, onSelect : Int -> msg, onConfirm : msg, noOp : msg } -> Html msg
+viewItem : Int -> T.ModelInfo -> { a | sessionId : String, selected : Int, activeModelId : Maybe Int, onSelect : Int -> msg, onConfirm : msg, noOp : msg } -> Html msg
 viewItem idx model config =
     let
         isSelected =
@@ -80,7 +83,7 @@ viewItem idx model config =
             config.activeModelId == Just model.id
     in
     Html.div
-        [ Attr.id ("model-selector-item-" ++ String.fromInt model.id)
+        [ Attr.id ("model-selector-item-" ++ config.sessionId ++ "-" ++ String.fromInt model.id)
         , Attr.class ("sel-page-item"
             ++ (if isSelected then " sel-page-item-selected" else "")
             ++ (if isActive then " sel-page-item-active" else "")

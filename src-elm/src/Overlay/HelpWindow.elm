@@ -17,7 +17,8 @@ type alias HelpItem =
 
 
 view :
-    { items : List HelpItem
+    { sessionId : String
+    , items : List HelpItem
     , filter : String
     , selected : Int
     , noOp : msg
@@ -29,18 +30,20 @@ view config =
     let
         filtered =
             filterHelpItems config.filter config.items
+
+        inputId =
+            "help-filter-input-" ++ config.sessionId
     in
     Html.div [ Attr.class "help-page" ]
         [ Html.div [ Attr.class "sel-page-title" ] [ Html.text "Help" ]
         , Html.div [ Attr.class "sel-page-input-row" ]
             [ Html.input
                 [ Attr.class "sel-page-input"
-                , Attr.id "help-filter-input"
+                , Attr.id inputId
                 , Attr.type_ "text"
                 , Attr.value config.filter
                 , Ev.onInput config.onFilter
                 , Attr.placeholder "Filter command or key…"
-                , Attr.autofocus True
                 , Ev.preventDefaultOn "keydown" <|
                     D.map2 (\key ctrl ->
                         if key == "Enter" && not ctrl then
@@ -69,13 +72,13 @@ view config =
           else
             Html.div
                 [ Attr.class "sel-page-list"
-                , Attr.id "help-page-list"
+                , Attr.id ("help-page-list-" ++ config.sessionId)
                 ]
                 (List.indexedMap (\i item -> viewItem i item config) filtered)
         ]
 
 
-viewItem : Int -> HelpItem -> { a | selected : Int, onCmd : String -> msg, noOp : msg } -> Html msg
+viewItem : Int -> HelpItem -> { a | sessionId : String, selected : Int, onCmd : String -> msg, noOp : msg } -> Html msg
 viewItem idx item config =
     let
         isSelected =
@@ -83,14 +86,14 @@ viewItem idx item config =
     in
     if item.isSection then
         Html.div
-            [ Attr.id ("help-item-" ++ String.fromInt idx)
+            [ Attr.id ("help-item-" ++ config.sessionId ++ "-" ++ String.fromInt idx)
             , Attr.class "help-page-section"
             ]
             [ Html.text ("── " ++ item.key) ]
 
     else
         Html.div
-            [ Attr.id ("help-item-" ++ String.fromInt idx)
+            [ Attr.id ("help-item-" ++ config.sessionId ++ "-" ++ String.fromInt idx)
             , Attr.class ("help-page-item"
                 ++ (if isSelected then " help-page-item-selected" else "")
               )

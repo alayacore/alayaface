@@ -34,6 +34,7 @@ port module Ports exposing
     , onFsResolvePath
     , scrollToBottom
     , focusElement
+    , setCursorPos
     , scrollIntoView
     , onScroll
     , onWindowMaximized
@@ -87,6 +88,7 @@ port onFsReadFileDataUri : (String -> msg) -> Sub msg
 
 port scrollToBottom : { sessionId : String } -> Cmd msg
 port focusElement : String -> Cmd msg
+port setCursorPos : String -> Cmd msg
 port scrollIntoView : String -> Cmd msg
 port onScroll : ({ scrollTop : Float, scrollHeight : Float, clientHeight : Float } -> msg) -> Sub msg
 

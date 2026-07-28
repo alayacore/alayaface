@@ -9,7 +9,8 @@ import Session.Types as T
 
 
 view :
-    { entries : List T.DirEntry
+    { sessionId : String
+    , entries : List T.DirEntry
     , input : String
     , filter : String
     , selected : Int
@@ -28,6 +29,9 @@ view config =
         isUrlMode =
             config.mode == T.Url
 
+        inputId =
+            "fp-page-input-" ++ config.sessionId
+
         placeholder =
             if isUrlMode then
                 "Paste a URL…"
@@ -43,13 +47,12 @@ view config =
                 ]
                 [ Html.text (if isUrlMode then "URL" else "File") ]
             , Html.input
-                [ Attr.id "fp-page-input"
+                [ Attr.id inputId
                 , Attr.class "fp-page-input"
                 , Attr.type_ "text"
                 , Attr.value config.input
                 , Ev.onInput config.onInput
                 , Attr.placeholder placeholder
-                , Attr.autofocus True
                 , Ev.preventDefaultOn "keydown" <|
                     D.map2 (\key ctrl ->
                         -- Backspace at root "/": prevent deletion (no parent)
@@ -85,16 +88,16 @@ view config =
             in
             Keyed.node "div"
                 [ Attr.class "fp-page-list"
-                , Attr.id "fp-page-list"
+                , Attr.id ("fp-page-list-" ++ config.sessionId)
                 ]
                 keyedEntries
         ]
 
 
-viewEntry : Int -> T.DirEntry -> { a | selected : Int, onPick : Int -> msg } -> Html msg
+viewEntry : Int -> T.DirEntry -> { a | sessionId : String, selected : Int, onPick : Int -> msg } -> Html msg
 viewEntry idx entry config =
     Html.div
-        [ Attr.id ("fp-item-" ++ entry.name)
+        [ Attr.id ("fp-item-" ++ config.sessionId ++ "-" ++ entry.name)
         , Attr.class ("fp-page-item" ++ (if idx == config.selected then " fp-page-item-selected" else ""))
         , Ev.onClick (config.onPick idx)
         ]
