@@ -1324,16 +1324,6 @@ html {
   flex-shrink: 0;
 }
 
-.fp-page-dir {
-  font-size: 0.72rem;
-  color: #555;
-  padding: 0 2px;
-  flex-shrink: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .fp-page-status {
   flex: 1;
   display: flex;

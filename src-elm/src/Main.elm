@@ -175,7 +175,6 @@ type Msg
     | FilePickerSelectItem Int
     | FilePickerConfirmItem
     | FilePickerKeyDown Int
-    | FilePickerBackspace
     | FilePickerToggleMode
     | FilePickerNavigateUp
     | FsListDirResult (List E.Value)
@@ -729,11 +728,20 @@ update msg model =
                         )
 
                     else
+                        -- If input was cleared (select-all + delete, etc.),
+                        -- restore to current directory path
+                        let
+                            safeVal =
+                                if val == "" then
+                                    "/"
+                                else
+                                    val
+                        in
                         -- Local mode: parse input as path, extract filter text,
                         -- navigate directory if needed
                         let
                             ( needsResolve, resolvePath, filterText ) =
-                                parsePathInput val s.filePickerDir s.filePickerBaseDir
+                                parsePathInput safeVal s.filePickerDir s.filePickerBaseDir
 
                             cmd =
                                 if needsResolve then
@@ -743,7 +751,7 @@ update msg model =
 
                             -- Clamp selection to filtered list length
                             previewSession =
-                                { s | filePickerInput = val, filePickerFilter = filterText }
+                                { s | filePickerInput = safeVal, filePickerFilter = filterText }
 
                             filteredLen =
                                 List.length (filterEntries previewSession)
@@ -756,7 +764,7 @@ update msg model =
                         in
                         ( updateActiveSession model (\sess ->
                             { sess
-                                | filePickerInput = val
+                                | filePickerInput = safeVal
                                 , filePickerFilter = filterText
                                 , filePickerSelected = clampedIdx
                             }
@@ -995,58 +1003,6 @@ update msg model =
 
         FilePickerKeyDown _ ->
             ( model, Cmd.none )
-
-        FilePickerBackspace ->
-            -- Single character deletion (normal backspace behavior)
-            case getActiveSession model of
-                Just s ->
-                    let
-                        newVal =
-                            String.dropRight 1 s.filePickerInput
-                    in
-                    -- Re-parse path like SetFilePickerInput does
-                    if s.filePickerMode == T.Url then
-                        ( updateActiveSession model (\sess ->
-                            { sess | filePickerInput = newVal }
-                          )
-                        , Cmd.none
-                        )
-
-                    else
-                        let
-                            ( needsResolve, resolvePath, filterText ) =
-                                parsePathInput newVal s.filePickerDir s.filePickerBaseDir
-
-                            cmd =
-                                if needsResolve then
-                                    Ports.fsResolvePath { path = resolvePath }
-                                else
-                                    Cmd.none
-
-                            previewSession =
-                                { s | filePickerInput = newVal, filePickerFilter = filterText }
-
-                            filteredLen =
-                                List.length (filterEntries previewSession)
-
-                            clampedIdx =
-                                if s.filePickerSelected >= filteredLen then
-                                    max 0 (filteredLen - 1)
-                                else
-                                    s.filePickerSelected
-                        in
-                        ( updateActiveSession model (\sess ->
-                            { sess
-                                | filePickerInput = newVal
-                                , filePickerFilter = filterText
-                                , filePickerSelected = clampedIdx
-                            }
-                          )
-                        , cmd
-                        )
-
-                Nothing ->
-                    ( model, Cmd.none )
 
         FsListDirResult entries ->
             let
@@ -2437,7 +2393,6 @@ viewFilePickerOverlay model =
                         , input = s.filePickerInput
                         , filter = s.filePickerFilter
                         , selected = s.filePickerSelected
-                        , dir = s.filePickerDir
                         , mode = s.filePickerMode
                         , loading = s.filePickerLoading
                         , noOp = NoOp
@@ -2446,7 +2401,6 @@ viewFilePickerOverlay model =
                         , onConfirm = FilePickerConfirmItem
                         , onUrlConfirm = ConfirmFilePickerUrl
                         , onToggleMode = FilePickerToggleMode
-                        , onBackspace = FilePickerBackspace
                         , focusInput = FocusElement "fp-page-input"
                         , focusList = FocusElement "fp-page-list"
                         }

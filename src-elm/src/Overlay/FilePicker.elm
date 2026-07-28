@@ -13,7 +13,6 @@ view :
     , input : String
     , filter : String
     , selected : Int
-    , dir : String
     , mode : T.FileMode
     , loading : Bool
     , noOp : msg
@@ -22,7 +21,6 @@ view :
     , onConfirm : msg
     , onUrlConfirm : msg
     , onToggleMode : msg
-    , onBackspace : msg
     , focusInput : msg
     , focusList : msg
     }
@@ -62,6 +60,10 @@ view config =
                         if key == "a" && ctrl && not alt then
                             ( config.onToggleMode, True )
 
+                        -- Backspace at root "/": prevent deletion (no parent)
+                        else if key == "Backspace" && config.input == "/" && not isUrlMode then
+                            ( config.noOp, True )
+
                         -- Enter confirms (URL mode or local file/dir)
                         else if key == "Enter" && not ctrl then
                             if isUrlMode then
@@ -100,13 +102,6 @@ view config =
             , Html.div [ Attr.class "fp-page-mode" ]
                 [ Html.text modeLabel ]
             ]
-        , if isUrlMode then
-            Html.div [ Attr.class "fp-page-dir" ]
-                [ Html.text "Paste a URL and press Enter to attach" ]
-
-          else
-            Html.div [ Attr.class "fp-page-dir" ]
-                [ Html.text (shortenPath config.dir) ]
         , if config.loading then
             Html.div [ Attr.class "fp-page-status" ] [ Html.text "Loading…" ]
 
@@ -168,28 +163,3 @@ viewEntry idx entry config =
         [ Html.span [ Attr.class "fp-page-item-icon" ] [ Html.text (if entry.isDir then "📁" else "📄") ]
         , Html.span [ Attr.class "fp-page-item-name" ] [ Html.text entry.name ]
         ]
-
-
-shortenPath : String -> String
-shortenPath path =
-    if path == "" then
-        ""
-    else
-        let
-            parts =
-                String.split "/" path
-
-            numParts =
-                List.length parts
-        in
-        if numParts <= 4 then
-            path
-        else
-            let
-                first =
-                    Maybe.withDefault "" (List.head parts)
-
-                lastFew =
-                    List.drop (numParts - 3) parts |> String.join "/"
-            in
-            first ++ "/…/" ++ lastFew
