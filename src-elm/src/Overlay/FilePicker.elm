@@ -36,16 +36,17 @@ view config =
             else
                 "Type a path or filter files…"
 
-        modeLabel =
-            if isUrlMode then "URL" else "Local"
-
         filteredLen =
             List.length config.entries
     in
     Html.div [ Attr.class "fp-page" ]
         [ Html.div [ Attr.class "fp-page-input-row" ]
-            [ Html.span [ Attr.class "fp-page-prefix" ]
-                [ Html.text (if isUrlMode then "U" else "F") ]
+            [ Html.button
+                [ Attr.class "fp-page-prefix"
+                , Ev.onClick config.onToggleMode
+                , Attr.title "Toggle mode"
+                ]
+                [ Html.text (if isUrlMode then "URL" else "File") ]
             , Html.input
                 [ Attr.id "fp-page-input"
                 , Attr.class "fp-page-input"
@@ -56,12 +57,8 @@ view config =
                 , Attr.autofocus True
                 , Ev.preventDefaultOn "keydown" <|
                     D.map5 (\key ctrl alt shift code ->
-                        -- Ctrl+A toggles mode
-                        if key == "a" && ctrl && not alt then
-                            ( config.onToggleMode, True )
-
                         -- Backspace at root "/": prevent deletion (no parent)
-                        else if key == "Backspace" && config.input == "/" && not isUrlMode then
+                        if key == "Backspace" && config.input == "/" && not isUrlMode then
                             ( config.noOp, True )
 
                         -- Enter confirms (URL mode or local file/dir)
@@ -99,8 +96,6 @@ view config =
                     ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool) (D.field "code" D.string)
                 ]
                 []
-            , Html.div [ Attr.class "fp-page-mode" ]
-                [ Html.text modeLabel ]
             ]
         , if config.loading then
             Html.div [ Attr.class "fp-page-status" ] [ Html.text "Loading…" ]
