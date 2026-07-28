@@ -15,7 +15,7 @@
         "title": "alayaface",
         "width": 1400,
         "height": 950,
-        "decorations": false
+        "decorations": true
       }
     ],
     "security": {

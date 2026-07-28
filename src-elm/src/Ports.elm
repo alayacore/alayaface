@@ -21,10 +21,6 @@ port module Ports exposing
     , fsHomeDir
       -- Window operations
     , openUrl
-    , minimizeWindow
-    , toggleMaximize
-    , closeWindow
-    , startDragging
       -- Existence
     , isSessionConnected
     , listModels
@@ -83,10 +79,6 @@ port fsReadFileDataUri : { path : String } -> Cmd msg
 port fsResolvePath : { path : String } -> Cmd msg
 port fsHomeDir : {} -> Cmd msg
 port openUrl : { url : String } -> Cmd msg
-port minimizeWindow : {} -> Cmd msg
-port toggleMaximize : {} -> Cmd msg
-port closeWindow : {} -> Cmd msg
-port startDragging : {} -> Cmd msg
 port isSessionConnected : { sessionId : String } -> Cmd msg
 port listModels : {} -> Cmd msg
 port startMcpAuthFlow : { sessionId : String, serverName : String, authUrl : String } -> Cmd msg

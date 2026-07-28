@@ -124,22 +124,6 @@
       }
     });
 
-    on("minimizeWindow", function () {
-      window.__TAURI__.window.getCurrentWindow().minimize();
-    });
-
-    on("toggleMaximize", function () {
-      window.__TAURI__.window.getCurrentWindow().toggleMaximize();
-    });
-
-    on("closeWindow", function () {
-      window.__TAURI__.window.getCurrentWindow().close();
-    });
-
-    on("startDragging", function () {
-      window.__TAURI__.window.getCurrentWindow().startDragging();
-    });
-
     on("scrollToBottom", function () {
       window.scrollTo({
         top: document.documentElement.scrollHeight,

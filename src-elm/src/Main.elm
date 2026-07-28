@@ -185,10 +185,6 @@ type Msg
     | SelectAllSessions
       -- Window
     | WindowMaximized Bool
-    | StartDragging
-    | Minimize
-    | ToggleMaximize
-    | CloseWindow
       -- Model Selector
     | OpenModelSelector
     | CloseModelSelector
@@ -1173,18 +1169,6 @@ update msg model =
         WindowMaximized v ->
             ( { model | isMaximized = v }, Cmd.none )
 
-        StartDragging ->
-            ( model, Ports.startDragging {} )
-
-        Minimize ->
-            ( model, Ports.minimizeWindow {} )
-
-        ToggleMaximize ->
-            ( model, Ports.toggleMaximize {} )
-
-        CloseWindow ->
-            ( model, Ports.closeWindow {} )
-
         -- Model Selector
         OpenModelSelector ->
             ( updateActiveSession model (\s ->
@@ -1762,10 +1746,9 @@ viewNoSession model =
         [ Html.node "style"
             []
             [ Html.text (".app{--content-width:" ++ String.fromInt model.contentWidth ++ "px}") ]
-        , Html.header [ Attr.class "app-header", Attr.attribute "data-tauri-drag-region" "" ]
+        , Html.header [ Attr.class "app-header" ]
             [ Html.div [ Attr.class "header-top" ]
                 [ Html.button [ Attr.class "connect-btn", Ev.onClick CreateSession ] [ Html.text "+ New Session" ]
-                , viewWindowControls model
                 ]
             ]
         , Html.div [ Attr.class "chat-area chat-area-centered" ]
@@ -1803,36 +1786,23 @@ viewMain model session =
         ]
 
 
-viewWindowControls : Model -> Html Msg
-viewWindowControls model =
-    Html.div [ Attr.class "window-controls" ]
-        [ Html.button [ Attr.class "win-btn", Ev.onClick Minimize, Attr.title "Minimize" ]
-            [ svgMinimize ]
-        , Html.button [ Attr.class "win-btn", Ev.onClick ToggleMaximize, Attr.title (if model.isMaximized then "Restore" else "Maximize") ]
-            [ if model.isMaximized then svgRestore else svgMaximize ]
-        , Html.button [ Attr.class "win-btn win-close", Ev.onClick CloseWindow, Attr.title "Close" ]
-            [ svgClose ]
-        ]
-
-
 viewHeader : Model -> T.SessionState -> Html Msg
 viewHeader model session =
     let
         sessionKeys =
             model.sessionOrder
     in
-    Html.header [ Attr.class "app-header", Attr.attribute "data-tauri-drag-region" "" ]
+    Html.header [ Attr.class "app-header" ]
         [ Html.div [ Attr.class "header-top" ] []
         , if List.isEmpty sessionKeys then
             Html.div []
                 [ Html.button [ Attr.class "connect-btn", Ev.onClick CreateSession ] [ Html.text "+ New Session" ] ]
 
           else
-            Html.div [ Attr.class "tab-bar", Attr.attribute "data-tauri-drag-region" "" ]
+            Html.div [ Attr.class "tab-bar" ]
                 (List.indexedMap (\i id -> viewTab i id model) sessionKeys
                     ++ [ Html.button [ Attr.class "tab-new", Ev.onClick CreateSession, Attr.title "New session" ] [ Html.text "+" ]
                        , Html.button [ Attr.class "tab-btn", Ev.onClick OpenSessionManager, Attr.title "Session manager" ] [ Html.text "☰" ]
-                       , viewWindowControls model
                        ]
                 )
         ]
@@ -2229,31 +2199,4 @@ viewNotifications model =
 
 -- SVG icons
 
-svgMinimize : Html Msg
-svgMinimize =
-    Html.text "🗕"
 
-
-svgMaximize : Html Msg
-svgMaximize =
-    Html.text "🗖"
-
-
-svgRestore : Html Msg
-svgRestore =
-    Html.text "🗗"
-
-
-svgClose : Html Msg
-svgClose =
-    Html.text "✕"
-
-
-svgArrow : Html Msg
-svgArrow =
-    Html.text "↑"
-
-
-svgStop : Html Msg
-svgStop =
-    Html.text "■"
