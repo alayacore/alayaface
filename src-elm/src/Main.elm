@@ -111,6 +111,15 @@ updateActiveSession model fn =
             model
 
 
+focusInput : Model -> Cmd Msg
+focusInput model =
+    case model.activeId of
+        Just sid ->
+            Ports.focusElement ("msg-input-" ++ sid)
+        Nothing ->
+            Cmd.none
+
+
 getActiveSession : Model -> Maybe T.SessionState
 getActiveSession model =
     case model.activeId of
@@ -235,7 +244,7 @@ update msg model =
 
                 cmds =
                     if model.pendingSwitchOnCreate || model.activeId == Nothing then
-                        Cmd.batch [ Task.attempt (\_ -> NoOp) (Dom.focus "msg-input"), Ports.scrollToBottom {} ]
+                        Cmd.batch [ Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ id)), Ports.scrollToBottom {} ]
                     else
                         Cmd.none
             in
@@ -277,7 +286,7 @@ update msg model =
                                     if model.atBottom then
                                         Cmd.batch
                                             [ Ports.scrollToBottom {}
-                                            , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
+                                            , Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ ev.sessionId))
                                             ]
                                     else
                                         Cmd.none
@@ -319,7 +328,7 @@ update msg model =
                                               else
                                                 Nothing
                                             , if msgCountChanged && model.atBottom || mcpJustCompleted then
-                                                Just (Task.attempt (\_ -> NoOp) (Dom.focus "msg-input"))
+                                                Just (Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ ev.sessionId)))
 
                                               else
                                                 Nothing
@@ -467,7 +476,7 @@ update msg model =
                     ( { model | sessions = Dict.insert sid { sess | pendingMcpAuth = Nothing } model.sessions }
                     , Cmd.batch
                         [ Ports.sendCommand { sessionId = sid, command = ":mcp_decline " ++ server }
-                        , Ports.focusElement "msg-input"
+                        , focusInput model
                         ]
                     )
 
@@ -489,7 +498,7 @@ update msg model =
                       }
                     , Cmd.batch
                         [ Ports.sendCommand { sessionId = sid, command = ":mcp_cancel" }
-                        , Ports.focusElement "msg-input"
+                        , focusInput model
                         ]
                     )
 
@@ -506,7 +515,7 @@ update msg model =
                       }
                     , Cmd.batch
                         [ Ports.sendCommand { sessionId = sid, command = ":mcp_cancel" }
-                        , Ports.focusElement "msg-input"
+                        , focusInput model
                         ]
                     )
 
@@ -540,7 +549,7 @@ update msg model =
                             }
                             model.sessions
                       }
-                    , Ports.focusElement "msg-input"
+                    , focusInput model
                     )
 
                 Nothing ->
@@ -607,7 +616,7 @@ update msg model =
                                 , filePickerInput = ""
                             }
                           )
-                        , Ports.focusElement "msg-input"
+                        , focusInput model
                         )
 
                 Nothing ->
@@ -635,7 +644,7 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
         SwitchSession id ->
-            ( { model | activeId = Just id }, Task.attempt (\_ -> NoOp) (Dom.focus "msg-input") )
+            ( { model | activeId = Just id }, Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ id)) )
 
         -- File Picker
         OpenFilePicker ->
@@ -662,7 +671,7 @@ update msg model =
 
         CloseFilePicker ->
             ( updateActiveSession model (\s -> { s | showFilePicker = False, filePickerSavedLocalPath = "", filePickerSavedUrlPath = "" })
-            , Ports.focusElement "msg-input"
+            , focusInput model
             )
 
         FocusElement id ->
@@ -1086,7 +1095,7 @@ update msg model =
                             , staged = sess.staged ++ [ newItem ]
                         }
                       )
-                    , Ports.focusElement "msg-input"
+                    , focusInput model
                     )
 
                 Nothing ->
@@ -1129,7 +1138,7 @@ update msg model =
 
         CloseSessionManager ->
             ( { model | showSessionManager = False }
-            , Ports.focusElement "msg-input"
+            , focusInput model
             )
 
         SessionDirsResult dirs ->
@@ -1163,7 +1172,7 @@ update msg model =
 
         CloseModelSelector ->
             ( updateActiveSession model (\s -> { s | showModelSelector = False })
-            , Ports.focusElement "msg-input"
+            , focusInput model
             )
 
         SetModelSelectorInput val ->
@@ -1225,7 +1234,7 @@ update msg model =
                             ( updateActiveSession model (\sess -> { sess | showModelSelector = False, modelSelectorInput = "" })
                             , Cmd.batch
                                 [ Ports.setModel { sessionId = s.id, modelId = m.id }
-                                , Ports.focusElement "msg-input"
+                                , focusInput model
                                 ]
                             )
 
@@ -1250,7 +1259,7 @@ update msg model =
 
         CloseHelpWindow ->
             ( updateActiveSession model (\s -> { s | showHelpWindow = False })
-            , Ports.focusElement "msg-input"
+            , focusInput model
             )
 
         SetHelpFilter val ->
@@ -1300,7 +1309,7 @@ update msg model =
                                 model.sessions
                     in
                     ( { model | sessions = newSessions }
-                    , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
+                    , Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ sid))
                     )
 
                 Nothing ->
@@ -1915,7 +1924,7 @@ viewInputBar model session =
                   else
                     Html.text ""
                 , Html.textarea
-                    [ Attr.id "msg-input"
+                    [ Attr.id ("msg-input-" ++ session.id)
                     , Attr.class "input-text"
                     , Attr.placeholder "Type a message…"
                     , Attr.value session.input
