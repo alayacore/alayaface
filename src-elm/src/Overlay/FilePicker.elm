@@ -22,16 +22,13 @@ view :
     , onConfirm : msg
     , onUrlConfirm : msg
     , onToggleMode : msg
-    , onNavigateDir : String -> msg
+    , onBackspace : msg
     , focusInput : msg
     , focusList : msg
     }
     -> Html msg
 view config =
     let
-        inputIsUrl =
-            isUrl (String.trim config.input)
-
         isUrlMode =
             config.mode == T.Url
 
@@ -39,7 +36,7 @@ view config =
             if isUrlMode then
                 "Paste a URL…"
             else
-                "Type a file name or path…"
+                "Type a path or filter files…"
 
         modeLabel =
             if isUrlMode then "URL" else "Local"
@@ -49,7 +46,9 @@ view config =
     in
     Html.div [ Attr.class "fp-page" ]
         [ Html.div [ Attr.class "fp-page-input-row" ]
-            [ Html.input
+            [ Html.span [ Attr.class "fp-page-prefix" ]
+                [ Html.text (if isUrlMode then "U" else "F") ]
+            , Html.input
                 [ Attr.id "fp-page-input"
                 , Attr.class "fp-page-input"
                 , Attr.type_ "text"
@@ -58,46 +57,60 @@ view config =
                 , Attr.placeholder placeholder
                 , Attr.autofocus True
                 , Ev.preventDefaultOn "keydown" <|
-                    D.map4 (\key ctrl alt shift ->
+                    D.map5 (\key ctrl alt shift code ->
                         -- Ctrl+A toggles mode
                         if key == "a" && ctrl && not alt then
                             ( config.onToggleMode, True )
-                        -- Enter confirms (URL mode or local file)
+
+                        -- Backspace: delete path segment (delegated to Main)
+                        else if key == "Backspace" && not isUrlMode then
+                            ( config.onBackspace, True )
+
+                        -- Enter confirms (URL mode or local file/dir)
                         else if key == "Enter" && not ctrl then
                             if isUrlMode then
                                 ( config.onUrlConfirm, True )
                             else
                                 ( config.onConfirm, True )
-                        -- Arrow keys navigate list
+
+                        -- Arrow keys navigate list (local mode only)
                         else if key == "ArrowDown" && not ctrl && not alt && not shift && not isUrlMode then
                             let
                                 newIdx =
                                     min (config.selected + 1) (max 0 (filteredLen - 1))
                             in
                             ( config.onSelect newIdx, True )
+
                         else if key == "ArrowUp" && not ctrl && not alt && not shift && not isUrlMode then
                             let
                                 newIdx =
                                     max 0 (config.selected - 1)
                             in
                             ( config.onSelect newIdx, True )
-                        -- Tab switches to list
-                        else if key == "Tab" then
+
+                        -- Tab switches focus to list
+                        else if key == "Tab" && not shift then
                             ( config.focusList, True )
+
+                        -- Shift+Tab returns focus to input
+                        else if key == "Tab" && shift then
+                            ( config.focusInput, True )
+
                         else
                             ( config.noOp, False )
-                    ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool)
+                    ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool) (D.field "code" D.string)
                 ]
                 []
             , Html.div [ Attr.class "fp-page-mode" ]
                 [ Html.text modeLabel ]
             ]
-        , Html.div [ Attr.class "fp-page-dir" ]
-            [ if isUrlMode then
-                Html.text "Paste a URL and press Enter to attach"
-              else
-                Html.text (shortenPath config.dir)
-            ]
+        , if isUrlMode then
+            Html.div [ Attr.class "fp-page-dir" ]
+                [ Html.text "Paste a URL and press Enter to attach" ]
+
+          else
+            Html.div [ Attr.class "fp-page-dir" ]
+                [ Html.text (shortenPath config.dir) ]
         , if config.loading then
             Html.div [ Attr.class "fp-page-status" ] [ Html.text "Loading…" ]
 
@@ -117,12 +130,14 @@ view config =
                 , Attr.id "fp-page-list"
                 , Attr.tabindex 0
                 , Ev.preventDefaultOn "keydown" <|
-                    D.map4 (\key ctrl alt shift ->
+                    D.map5 (\key ctrl alt shift code ->
                         let
                             entriesLen =
                                 List.length config.entries
                         in
-                        if key == "Tab" then
+                        if key == "Tab" && shift then
+                            ( config.focusInput, True )
+                        else if key == "Tab" && not shift then
                             ( config.focusInput, True )
                         else if key == "Enter" && not ctrl then
                             ( config.onConfirm, True )
@@ -140,24 +155,19 @@ view config =
                             ( config.onSelect newIdx, True )
                         else
                             ( config.noOp, False )
-                    ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool)
+                    ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool) (D.field "code" D.string)
                 ]
                 keyedEntries
         ]
 
 
-viewEntry : Int -> T.DirEntry -> { a | selected : Int, onSelect : Int -> msg, onConfirm : msg, onNavigateDir : String -> msg } -> Html msg
+viewEntry : Int -> T.DirEntry -> { a | selected : Int, onConfirm : msg } -> Html msg
 viewEntry idx entry config =
     Html.div
         [ Attr.id ("fp-item-" ++ entry.name)
         , Attr.class ("fp-page-item" ++ (if idx == config.selected then " fp-page-item-selected" else ""))
         , Ev.onClick
-            (if entry.isDir then
-                config.onNavigateDir entry.name
-
-             else
-                config.onConfirm
-            )
+            (config.onConfirm)
         ]
         [ Html.span [ Attr.class "fp-page-item-icon" ] [ Html.text (if entry.isDir then "📁" else "📄") ]
         , Html.span [ Attr.class "fp-page-item-name" ] [ Html.text entry.name ]
@@ -187,8 +197,3 @@ shortenPath path =
                     List.drop (numParts - 3) parts |> String.join "/"
             in
             first ++ "/…/" ++ lastFew
-
-
-isUrl : String -> Bool
-isUrl s =
-    String.startsWith "http://" s || String.startsWith "https://" s

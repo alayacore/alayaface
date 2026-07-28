@@ -204,6 +204,8 @@ type alias SessionState =
     , filePickerSelected : Int
     , filePickerLoading : Bool
     , filePickerError : Maybe String
+    , filePickerSavedLocalPath : String
+    , filePickerSavedUrlPath : String
     , pendingFileName : String
     , mcpStatus : Maybe String
     , mcpServers : List String
@@ -275,6 +277,8 @@ emptySession id =
     , filePickerSelected = 0
     , filePickerLoading = False
     , filePickerError = Nothing
+    , filePickerSavedLocalPath = ""
+    , filePickerSavedUrlPath = ""
     , pendingFileName = ""
     , mcpStatus = Nothing
     , mcpServers = []
