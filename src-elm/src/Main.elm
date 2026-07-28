@@ -148,13 +148,13 @@ type Msg
     | SendPrompt
     | CancelTask
     | SetModel Int
-    | ConfirmTool String Bool
-    | McpAuthConfirm
-    | CloseMcpAuthOverlay
-    | McpAuthDeny String
-    | McpCancelAll
-    | CloseConfirm
-    | CloseMcpInit
+    | ConfirmTool String String Bool
+    | McpAuthConfirm String
+    | CloseMcpAuthOverlay String
+    | McpAuthDeny String String
+    | McpCancelAll String
+    | CloseConfirm String
+    | CloseMcpInit String
     | ForkMessage String
     | RemoveStaged String
     | ConfirmFilePickerUrl
@@ -420,9 +420,9 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
-        ConfirmTool id allowed ->
-            case model.activeId of
-                Just sid ->
+        ConfirmTool sid id allowed ->
+            case Dict.get sid model.sessions of
+                Just _ ->
                     ( updateAfterConfirm model sid
                     , Ports.confirmTool { sessionId = sid, id = id, allowed = allowed }
                     )
@@ -430,14 +430,14 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
-        McpAuthConfirm ->
-            case getActiveSession model of
+        McpAuthConfirm sid ->
+            case Dict.get sid model.sessions of
                 Just s ->
                     case s.pendingMcpAuth of
                         Just auth ->
                             let
                                 newSessions =
-                                    Dict.insert s.id { s | pendingMcpAuth = Nothing } model.sessions
+                                    Dict.insert sid { s | pendingMcpAuth = Nothing } model.sessions
 
                                 authUrl =
                                     Maybe.withDefault "" auth.toolInput
@@ -447,7 +447,7 @@ update msg model =
                             in
                             ( { model | sessions = newSessions }
                             , Ports.startMcpAuthFlow
-                                { sessionId = s.id
+                                { sessionId = sid
                                 , serverName = serverName
                                 , authUrl = authUrl
                                 }
@@ -459,31 +459,22 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
-        McpAuthDeny server ->
-            case model.activeId of
-                Just sid ->
-                    let
-                        s =
-                            Dict.get sid model.sessions
-                    in
-                    case s of
-                        Just sess ->
-                            ( { model | sessions = Dict.insert sid { sess | pendingMcpAuth = Nothing } model.sessions }
-                            , Cmd.batch
-                                [ Ports.sendCommand { sessionId = sid, command = ":mcp_decline " ++ server }
-                                , Ports.focusElement "msg-input"
-                                ]
-                            )
-
-                        Nothing ->
-                            ( model, Cmd.none )
+        McpAuthDeny sid server ->
+            case Dict.get sid model.sessions of
+                Just sess ->
+                    ( { model | sessions = Dict.insert sid { sess | pendingMcpAuth = Nothing } model.sessions }
+                    , Cmd.batch
+                        [ Ports.sendCommand { sessionId = sid, command = ":mcp_decline " ++ server }
+                        , Ports.focusElement "msg-input"
+                        ]
+                    )
 
                 Nothing ->
                     ( model, Cmd.none )
 
-        CloseMcpAuthOverlay ->
-            case model.activeId of
-                Just sid ->
+        CloseMcpAuthOverlay sid ->
+            case Dict.get sid model.sessions of
+                Just _ ->
                     ( { model | sessions = Dict.update sid
                         (Maybe.map (\sess ->
                             { sess
@@ -503,72 +494,58 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
-        McpCancelAll ->
-            case model.activeId of
-                Just sid ->
+        McpCancelAll sid ->
+            case Dict.get sid model.sessions of
+                Just sess ->
+                    ( { model
+                        | sessions = Dict.insert sid
+                            { sess | pendingMcpAuth = Nothing, mcpStatus = Nothing }
+                            model.sessions
+                      }
+                    , Cmd.batch
+                        [ Ports.sendCommand { sessionId = sid, command = ":mcp_cancel" }
+                        , Ports.focusElement "msg-input"
+                        ]
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        CloseConfirm sid ->
+            case Dict.get sid model.sessions of
+                Just sess ->
+                    -- Pop next pending MCP auth from queue if any
                     let
-                        s =
-                            Dict.get sid model.sessions
+                        nextAuth =
+                            case sess.pendingMcpAuths of
+                                next :: rest ->
+                                    Just next
+
+                                [] ->
+                                    Nothing
+
+                        newQueue =
+                            case sess.pendingMcpAuths of
+                                _ :: rest -> rest
+                                [] -> []
                     in
-                    case s of
-                        Just sess ->
-                            ( { model
-                                | sessions = Dict.insert sid
-                                    { sess | pendingMcpAuth = Nothing, mcpStatus = Nothing }
-                                    model.sessions
-                              }
-                            , Cmd.batch
-                                [ Ports.sendCommand { sessionId = sid, command = ":mcp_cancel" }
-                                , Ports.focusElement "msg-input"
-                                ]
-                            )
-
-                        Nothing ->
-                            ( model, Cmd.none )
+                    ( { model
+                        | sessions = Dict.insert sid
+                            { sess
+                                | pendingConfirm = []
+                                , pendingMcpAuth = nextAuth
+                                , pendingMcpAuths = newQueue
+                            }
+                            model.sessions
+                      }
+                    , Ports.focusElement "msg-input"
+                    )
 
                 Nothing ->
                     ( model, Cmd.none )
 
-        CloseConfirm ->
-            case model.activeId of
-                Just sid ->
-                    case Dict.get sid model.sessions of
-                        Just sess ->
-                            -- Pop next pending MCP auth from queue if any
-                            let
-                                nextAuth =
-                                    case sess.pendingMcpAuths of
-                                        next :: rest ->
-                                            Just next
-
-                                        [] ->
-                                            Nothing
-
-                                newQueue =
-                                    case sess.pendingMcpAuths of
-                                        _ :: rest -> rest
-                                        [] -> []
-                            in
-                            ( { model
-                                | sessions = Dict.insert sid
-                                    { sess
-                                        | pendingConfirm = []
-                                        , pendingMcpAuth = nextAuth
-                                        , pendingMcpAuths = newQueue
-                                    }
-                                    model.sessions
-                              }
-                            , Ports.focusElement "msg-input"
-                            )
-
-                        Nothing ->
-                            ( model, Cmd.none )
-
-                Nothing ->
-                    ( model, Cmd.none )
-
-        CloseMcpInit ->
-            update McpCancelAll model
+        CloseMcpInit sid ->
+            update (McpCancelAll sid) model
 
         ForkMessage historyId ->
             case model.activeId of
@@ -1835,8 +1812,8 @@ viewChatArea model session =
           else
             Html.text ""
         , viewInputBar model session
-        , viewConfirmOverlay session
-        , viewMcpInitOverlay session
+        , viewConfirmOverlay session.id session
+        , viewMcpInitOverlay session.id session
         , viewFilePickerOverlay model
         , viewModelSelectorOverlay model
         , viewHelpWindowOverlay model
@@ -2040,13 +2017,13 @@ viewOverlay onBackdropClick children =
 
 -- ─── Confirm Overlay ─────────────────────────────────────────────────
 
-viewConfirmOverlay : T.SessionState -> Html Msg
-viewConfirmOverlay session =
+viewConfirmOverlay : String -> T.SessionState -> Html Msg
+viewConfirmOverlay sid session =
     case session.pendingConfirm of
         first :: _ ->
-            viewOverlay CloseConfirm
+            viewOverlay (CloseConfirm sid)
                 [ Overlay.ConfirmTool.view
-                    { onConfirm = ConfirmTool
+                    { onConfirm = ConfirmTool sid
                     }
                     first
                 ]
@@ -2057,8 +2034,8 @@ viewConfirmOverlay session =
 
 -- ─── MCP Init Overlay ────────────────────────────────────────────────
 
-viewMcpInitOverlay : T.SessionState -> Html Msg
-viewMcpInitOverlay session =
+viewMcpInitOverlay : String -> T.SessionState -> Html Msg
+viewMcpInitOverlay sid session =
     let
         showOverlay =
             case session.mcpStatus of
@@ -2069,15 +2046,15 @@ viewMcpInitOverlay session =
                 _ -> False
     in
     if showOverlay then
-        viewOverlay CloseMcpInit
+        viewOverlay (CloseMcpInit sid)
             [ Overlay.McpInit.view
                 { mcpStatus = session.mcpStatus
                 , mcpServers = session.mcpServers
                 , pendingMcpAuth = session.pendingMcpAuth
-                , onClose = CloseMcpAuthOverlay
-                , onCancelAll = McpCancelAll
-                , onAuthConfirm = McpAuthConfirm
-                , onAuthDeny = McpAuthDeny
+                , onClose = CloseMcpAuthOverlay sid
+                , onCancelAll = McpCancelAll sid
+                , onAuthConfirm = McpAuthConfirm sid
+                , onAuthDeny = McpAuthDeny sid
                 , onFillUrl = FillMcpAuthUrl
                 }
             ]
