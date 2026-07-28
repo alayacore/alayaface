@@ -1,4 +1,4 @@
-module Overlay.HelpWindow exposing (HelpItem, helpItems, filterHelpItems, nextSelectable, view)
+module Overlay.HelpWindow exposing (HelpItem, helpItems, filterHelpItems, view)
 
 import Fuzzy
 import Html exposing (Html)
@@ -22,10 +22,7 @@ view :
     , selected : Int
     , noOp : msg
     , onFilter : String -> msg
-    , onSelect : Int -> msg
     , onCmd : String -> msg
-    , focusInput : msg
-    , focusList : msg
     }
     -> Html msg
 view config =
@@ -45,10 +42,8 @@ view config =
                 , Attr.placeholder "Filter command or key…"
                 , Attr.autofocus True
                 , Ev.preventDefaultOn "keydown" <|
-                    D.map4 (\key ctrl alt shift ->
-                        if key == "Tab" then
-                            ( config.focusList, True )
-                        else if key == "Enter" && not ctrl then
+                    D.map2 (\key ctrl ->
+                        if key == "Enter" && not ctrl then
                             let
                                 selectedItem =
                                     List.head (List.drop config.selected filtered)
@@ -62,21 +57,9 @@ view config =
 
                                 Nothing ->
                                     ( config.noOp, False )
-                        else if key == "ArrowDown" then
-                            let
-                                newIdx =
-                                    nextSelectable config.selected filtered
-                            in
-                            ( config.onSelect newIdx, True )
-                        else if key == "ArrowUp" then
-                            let
-                                newIdx =
-                                    prevSelectable config.selected filtered
-                            in
-                            ( config.onSelect newIdx, True )
                         else
                             ( config.noOp, False )
-                    ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool)
+                    ) (D.field "key" D.string) (D.field "ctrlKey" D.bool)
                 ]
                 []
             ]
@@ -87,46 +70,12 @@ view config =
             Html.div
                 [ Attr.class "sel-page-list"
                 , Attr.id "help-page-list"
-                , Attr.tabindex 0
-                , Ev.preventDefaultOn "keydown" <|
-                    D.map4 (\key ctrl alt shift ->
-                        if key == "Tab" then
-                            ( config.focusInput, True )
-                        else if key == "Enter" && not ctrl then
-                            let
-                                selectedItem =
-                                    List.head (List.drop config.selected filtered)
-                            in
-                            case selectedItem of
-                                Just item ->
-                                    if item.isCommand then
-                                        ( config.onCmd item.key, True )
-                                    else
-                                        ( config.noOp, False )
-
-                                Nothing ->
-                                    ( config.noOp, False )
-                        else if key == "ArrowDown" || (key == "j" && not ctrl && not alt && not shift) then
-                            let
-                                newIdx =
-                                    nextSelectable config.selected filtered
-                            in
-                            ( config.onSelect newIdx, True )
-                        else if key == "ArrowUp" || (key == "k" && not ctrl && not alt && not shift) then
-                            let
-                                newIdx =
-                                    prevSelectable config.selected filtered
-                            in
-                                ( config.onSelect newIdx, True )
-                        else
-                            ( config.noOp, False )
-                    ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool)
                 ]
                 (List.indexedMap (\i item -> viewItem i item config) filtered)
         ]
 
 
-viewItem : Int -> HelpItem -> { a | selected : Int, onSelect : Int -> msg, onCmd : String -> msg, noOp : msg } -> Html msg
+viewItem : Int -> HelpItem -> { a | selected : Int, onCmd : String -> msg, noOp : msg } -> Html msg
 viewItem idx item config =
     let
         isSelected =
@@ -145,7 +94,6 @@ viewItem idx item config =
             , Attr.class ("help-page-item"
                 ++ (if isSelected then " help-page-item-selected" else "")
               )
-            , Ev.onMouseEnter (config.onSelect idx)
             , Ev.onClick
                 (if item.isCommand then
                     config.onCmd item.key
@@ -179,62 +127,6 @@ filterHelpItems term items =
                     Fuzzy.fuzzyMatch lower (String.toLower (item.key ++ " " ++ item.desc))
             )
             items
-
-
--- Navigate to next/previous selectable (non-section) item
-
-nextSelectable : Int -> List HelpItem -> Int
-nextSelectable current items =
-    let
-        len =
-            List.length items
-    in
-    if len == 0 then
-        0
-
-    else
-        let
-            search =
-                List.range (current + 1) (len - 1)
-        in
-        case List.filter (\i -> not (isSectionAt i items)) search of
-            idx :: _ ->
-                idx
-
-            [] ->
-                current
-
-
-prevSelectable : Int -> List HelpItem -> Int
-prevSelectable current items =
-    let
-        len =
-            List.length items
-    in
-    if len == 0 then
-        0
-
-    else
-        let
-            search =
-                List.range 0 (current - 1) |> List.reverse
-        in
-        case List.filter (\i -> not (isSectionAt i items)) search of
-            idx :: _ ->
-                idx
-
-            [] ->
-                current
-
-
-isSectionAt : Int -> List HelpItem -> Bool
-isSectionAt idx items =
-    case List.head (List.drop idx items) of
-        Just item ->
-            item.isSection
-
-        Nothing ->
-            False
 
 
 helpItems : List HelpItem

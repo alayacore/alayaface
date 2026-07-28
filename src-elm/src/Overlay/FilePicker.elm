@@ -17,13 +17,10 @@ view :
     , loading : Bool
     , noOp : msg
     , onInput : String -> msg
-    , onSelect : Int -> msg
     , onConfirm : msg
     , onPick : Int -> msg
     , onUrlConfirm : msg
     , onToggleMode : msg
-    , focusInput : msg
-    , focusList : msg
     }
     -> Html msg
 view config =
@@ -36,9 +33,6 @@ view config =
                 "Paste a URL…"
             else
                 "Type a path or filter files…"
-
-        filteredLen =
-            List.length config.entries
     in
     Html.div [ Attr.class "fp-page" ]
         [ Html.div [ Attr.class "fp-page-input-row" ]
@@ -57,7 +51,7 @@ view config =
                 , Attr.placeholder placeholder
                 , Attr.autofocus True
                 , Ev.preventDefaultOn "keydown" <|
-                    D.map5 (\key ctrl alt shift code ->
+                    D.map2 (\key ctrl ->
                         -- Backspace at root "/": prevent deletion (no parent)
                         if key == "Backspace" && config.input == "/" && not isUrlMode then
                             ( config.noOp, True )
@@ -69,32 +63,9 @@ view config =
                             else
                                 ( config.onConfirm, True )
 
-                        -- Arrow keys navigate list (local mode only)
-                        else if key == "ArrowDown" && not ctrl && not alt && not shift && not isUrlMode then
-                            let
-                                newIdx =
-                                    min (config.selected + 1) (max 0 (filteredLen - 1))
-                            in
-                            ( config.onSelect newIdx, True )
-
-                        else if key == "ArrowUp" && not ctrl && not alt && not shift && not isUrlMode then
-                            let
-                                newIdx =
-                                    max 0 (config.selected - 1)
-                            in
-                            ( config.onSelect newIdx, True )
-
-                        -- Tab switches focus to list
-                        else if key == "Tab" && not shift then
-                            ( config.focusList, True )
-
-                        -- Shift+Tab returns focus to input
-                        else if key == "Tab" && shift then
-                            ( config.focusInput, True )
-
                         else
                             ( config.noOp, False )
-                    ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool) (D.field "code" D.string)
+                    ) (D.field "key" D.string) (D.field "ctrlKey" D.bool)
                 ]
                 []
             ]
@@ -115,34 +86,6 @@ view config =
             Keyed.node "div"
                 [ Attr.class "fp-page-list"
                 , Attr.id "fp-page-list"
-                , Attr.tabindex 0
-                , Ev.preventDefaultOn "keydown" <|
-                    D.map5 (\key ctrl alt shift code ->
-                        let
-                            entriesLen =
-                                List.length config.entries
-                        in
-                        if key == "Tab" && shift then
-                            ( config.focusInput, True )
-                        else if key == "Tab" && not shift then
-                            ( config.focusInput, True )
-                        else if key == "Enter" && not ctrl then
-                            ( config.onConfirm, True )
-                        else if key == "ArrowDown" || (key == "j" && not ctrl && not alt && not shift) then
-                            let
-                                newIdx =
-                                    min (config.selected + 1) (max 0 (entriesLen - 1))
-                            in
-                            ( config.onSelect newIdx, True )
-                        else if key == "ArrowUp" || (key == "k" && not ctrl && not alt && not shift) then
-                            let
-                                newIdx =
-                                    max 0 (config.selected - 1)
-                            in
-                            ( config.onSelect newIdx, True )
-                        else
-                            ( config.noOp, False )
-                    ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool) (D.field "code" D.string)
                 ]
                 keyedEntries
         ]

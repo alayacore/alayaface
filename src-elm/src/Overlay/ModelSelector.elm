@@ -19,8 +19,6 @@ view :
     , onConfirm : msg
     , onClose : msg
     , onInput : String -> msg
-    , focusInput : msg
-    , focusList : msg
     }
     -> Html msg
 view config =
@@ -40,26 +38,12 @@ view config =
                 , Attr.placeholder "Search models…"
                 , Attr.autofocus True
                 , Ev.preventDefaultOn "keydown" <|
-                    D.map4 (\key ctrl alt shift ->
-                        if key == "Tab" then
-                            ( config.focusList, True )
-                        else if key == "Enter" && not ctrl then
+                    D.map2 (\key ctrl ->
+                        if key == "Enter" && not ctrl then
                             ( config.onConfirm, True )
-                        else if key == "ArrowDown" then
-                            let
-                                newIdx =
-                                    min (config.selected + 1) (max 0 (List.length filtered - 1))
-                            in
-                            ( config.onSelect newIdx, True )
-                        else if key == "ArrowUp" then
-                            let
-                                newIdx =
-                                    max 0 (config.selected - 1)
-                            in
-                            ( config.onSelect newIdx, True )
                         else
                             ( config.noOp, False )
-                    ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool)
+                    ) (D.field "key" D.string) (D.field "ctrlKey" D.bool)
                 ]
                 []
             ]
@@ -81,32 +65,6 @@ view config =
             Html.div
                 [ Attr.class "sel-page-list"
                 , Attr.id "model-selector-list"
-                , Attr.tabindex 0
-                , Ev.preventDefaultOn "keydown" <|
-                    D.map4 (\key ctrl alt shift ->
-                        let
-                            filteredLen =
-                                List.length filtered
-                        in
-                        if key == "Tab" then
-                            ( config.focusInput, True )
-                        else if key == "Enter" && not ctrl then
-                            ( config.onConfirm, True )
-                        else if key == "ArrowDown" || (key == "j" && not ctrl && not alt && not shift) then
-                            let
-                                newIdx =
-                                    min (config.selected + 1) (max 0 (filteredLen - 1))
-                            in
-                            ( config.onSelect newIdx, True )
-                        else if key == "ArrowUp" || (key == "k" && not ctrl && not alt && not shift) then
-                            let
-                                newIdx =
-                                    max 0 (config.selected - 1)
-                            in
-                            ( config.onSelect newIdx, True )
-                        else
-                            ( config.noOp, False )
-                    ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "altKey" D.bool) (D.field "shiftKey" D.bool)
                 ]
                 (List.indexedMap (\i m -> viewItem i m config) filtered)
         ]

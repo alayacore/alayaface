@@ -20,7 +20,7 @@ import Overlay.ConfirmTool
 import Overlay.McpInit
 import Overlay.FilePicker
 import Overlay.ModelSelector
-import Overlay.HelpWindow exposing (HelpItem, helpItems, filterHelpItems, nextSelectable, view)
+import Overlay.HelpWindow exposing (HelpItem, helpItems, filterHelpItems, view)
 import Markdown
 import Ports
 import Fuzzy
@@ -60,7 +60,6 @@ type alias Model =
     , sessionOrder : List String
     , pendingSwitchOnCreate : Bool
     , inputRows : Int
-    , displayFocused : Bool
     , cursorMsgId : Maybe String
     }
 
@@ -82,7 +81,6 @@ init _ =
       , sessionOrder = []
       , pendingSwitchOnCreate = False
       , inputRows = 1
-      , displayFocused = False
       , cursorMsgId = Nothing
       }
     , Ports.createSession { toolConfirm = Just "execute_command" }
@@ -131,12 +129,6 @@ isOverlayOpen model =
             False
 
 
-restoreFocus : Bool -> Cmd Msg
-restoreFocus displayFocused =
-    if displayFocused then
-        Ports.blurInput {}
-    else
-        Ports.focusElement "msg-input"
 
 
 -- MSG
@@ -208,23 +200,8 @@ type Msg
     | HelpSelectItem Int
     | HelpCmdMsg String
     | FillMcpAuthUrl String
-      -- Display navigation
-    | ToggleFocus
-    | FocusDisplay
-    | FocusInput
-    | MoveCursorUp
-    | MoveCursorDown
-    | ScrollLines Int
-    | ScrollHalfPage Int
-    | GotoTop
-    | GotoBottom
-    | SetCursorMsgId String
-    | ToggleMsgFold String
-    | NavigateToPrevPrompt
-    | NavigateToNextPrompt
       -- Internal
     | NoOp
-    | FocusNow
     | KeyDown String Bool Bool Bool
     | ScrollPosition Float Float Float
 
@@ -300,10 +277,7 @@ update msg model =
                                     if model.atBottom then
                                         Cmd.batch
                                             [ Ports.scrollToBottom {}
-                                            , if not model.displayFocused then
-                                                Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
-                                              else
-                                                Cmd.none
+                                            , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
                                             ]
                                     else
                                         Cmd.none
@@ -344,7 +318,7 @@ update msg model =
 
                                               else
                                                 Nothing
-                                            , if (msgCountChanged && model.atBottom || mcpJustCompleted) && not model.displayFocused then
+                                            , if msgCountChanged && model.atBottom || mcpJustCompleted then
                                                 Just (Task.attempt (\_ -> NoOp) (Dom.focus "msg-input"))
 
                                               else
@@ -499,7 +473,7 @@ update msg model =
                             ( { model | sessions = Dict.insert sid { sess | pendingMcpAuth = Nothing } model.sessions }
                             , Cmd.batch
                                 [ Ports.sendCommand { sessionId = sid, command = ":mcp_decline " ++ server }
-                                , restoreFocus model.displayFocused
+                                , Ports.focusElement "msg-input"
                                 ]
                             )
 
@@ -524,7 +498,7 @@ update msg model =
                       }
                     , Cmd.batch
                         [ Ports.sendCommand { sessionId = sid, command = ":mcp_cancel" }
-                        , restoreFocus model.displayFocused
+                        , Ports.focusElement "msg-input"
                         ]
                     )
 
@@ -547,7 +521,7 @@ update msg model =
                               }
                             , Cmd.batch
                                 [ Ports.sendCommand { sessionId = sid, command = ":mcp_cancel" }
-                                , restoreFocus model.displayFocused
+                                , Ports.focusElement "msg-input"
                                 ]
                             )
 
@@ -586,7 +560,7 @@ update msg model =
                                     }
                                     model.sessions
                               }
-                            , restoreFocus model.displayFocused
+                            , Ports.focusElement "msg-input"
                             )
 
                         Nothing ->
@@ -656,7 +630,7 @@ update msg model =
                                 , filePickerInput = ""
                             }
                           )
-                        , restoreFocus model.displayFocused
+                        , Ports.focusElement "msg-input"
                         )
 
                 Nothing ->
@@ -711,7 +685,7 @@ update msg model =
 
         CloseFilePicker ->
             ( updateActiveSession model (\s -> { s | showFilePicker = False, filePickerSavedLocalPath = "", filePickerSavedUrlPath = "" })
-            , restoreFocus model.displayFocused
+            , Ports.focusElement "msg-input"
             )
 
         FocusElement id ->
@@ -1135,7 +1109,7 @@ update msg model =
                             , staged = sess.staged ++ [ newItem ]
                         }
                       )
-                    , restoreFocus model.displayFocused
+                    , Ports.focusElement "msg-input"
                     )
 
                 Nothing ->
@@ -1178,7 +1152,7 @@ update msg model =
 
         CloseSessionManager ->
             ( { model | showSessionManager = False }
-            , restoreFocus model.displayFocused
+            , Ports.focusElement "msg-input"
             )
 
         SessionDirsResult dirs ->
@@ -1224,7 +1198,7 @@ update msg model =
 
         CloseModelSelector ->
             ( updateActiveSession model (\s -> { s | showModelSelector = False })
-            , restoreFocus model.displayFocused
+            , Ports.focusElement "msg-input"
             )
 
         SetModelSelectorInput val ->
@@ -1286,7 +1260,7 @@ update msg model =
                             ( updateActiveSession model (\sess -> { sess | showModelSelector = False, modelSelectorInput = "" })
                             , Cmd.batch
                                 [ Ports.setModel { sessionId = s.id, modelId = m.id }
-                                , restoreFocus model.displayFocused
+                                , Ports.focusElement "msg-input"
                                 ]
                             )
 
@@ -1302,7 +1276,7 @@ update msg model =
                 { s
                     | showHelpWindow = True
                     , helpFilter = ""
-                    , helpSelected = nextSelectable (-1) helpItems
+                    , helpSelected = 0
                     , helpScroll = 0
                 }
               )
@@ -1311,7 +1285,7 @@ update msg model =
 
         CloseHelpWindow ->
             ( updateActiveSession model (\s -> { s | showHelpWindow = False })
-            , restoreFocus model.displayFocused
+            , Ports.focusElement "msg-input"
             )
 
         SetHelpFilter val ->
@@ -1390,207 +1364,6 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
-        -- Display Navigation
-        ToggleFocus ->
-            if model.displayFocused then
-                ( { model | displayFocused = False }
-                , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
-                )
-            else
-                ( { model | displayFocused = True }
-                , Ports.blurInput {}
-                )
-
-        FocusDisplay ->
-            ( { model | displayFocused = True }
-            , Ports.blurInput {}
-            )
-
-        FocusInput ->
-            ( { model | displayFocused = False }
-            , Task.attempt (\_ -> NoOp) (Dom.focus "msg-input")
-            )
-
-        MoveCursorUp ->
-            case getActiveSession model of
-                Just s ->
-                    let
-                        msgIds =
-                            List.map .id s.messages
-
-                        newCursor =
-                            case model.cursorMsgId of
-                                Just cur ->
-                                    case listElemIndex cur msgIds of
-                                        Just idx ->
-                                            if idx > 0 then
-                                                Just (Maybe.withDefault cur (List.head (List.drop (idx - 1) msgIds)))
-                                            else
-                                                Just cur
-
-                                        Nothing ->
-                                            List.head (List.reverse msgIds)
-
-                                Nothing ->
-                                    List.head (List.reverse msgIds)
-                    in
-                    ( { model | cursorMsgId = newCursor }
-                    , Cmd.none
-                    )
-
-                Nothing ->
-                    ( model, Cmd.none )
-
-        MoveCursorDown ->
-            case getActiveSession model of
-                Just s ->
-                    let
-                        msgIds =
-                            List.map .id s.messages
-
-                        newCursor =
-                            case model.cursorMsgId of
-                                Just cur ->
-                                    case listElemIndex cur msgIds of
-                                        Just idx ->
-                                            if idx < List.length msgIds - 1 then
-                                                Just (Maybe.withDefault cur (List.head (List.drop (idx + 1) msgIds)))
-                                            else
-                                                Just cur
-
-                                        Nothing ->
-                                            List.head msgIds
-
-                                Nothing ->
-                                    List.head msgIds
-                    in
-                    ( { model | cursorMsgId = newCursor }
-                    , Cmd.none
-                    )
-
-                Nothing ->
-                    ( model, Cmd.none )
-
-        ScrollLines n ->
-            ( model, Ports.scrollBy { dx = 0, dy = toFloat (n * 28) } )
-
-        ScrollHalfPage n ->
-            ( model
-            , Ports.scrollBy { dx = 0, dy = toFloat (n * 200) }
-            )
-
-        GotoTop ->
-            ( model, Ports.scrollToY { y = 0 } )
-
-        GotoBottom ->
-            ( model, Ports.scrollToY { y = 999999 } )
-
-        SetCursorMsgId id ->
-            ( { model | cursorMsgId = Just id }, Cmd.none )
-
-        ToggleMsgFold id ->
-            case model.activeId of
-                Just sid ->
-                    let
-                        s =
-                            Dict.get sid model.sessions
-                    in
-                    case s of
-                        Just sess ->
-                            let
-                                newCollapsed =
-                                    if Set.member id sess.collapsedMsgIds then
-                                        Set.remove id sess.collapsedMsgIds
-                                    else
-                                        Set.insert id sess.collapsedMsgIds
-                            in
-                            ( { model | sessions = Dict.insert sid { sess | collapsedMsgIds = newCollapsed } model.sessions }
-                            , Cmd.none
-                            )
-
-                        Nothing ->
-                            ( model, Cmd.none )
-
-                Nothing ->
-                    ( model, Cmd.none )
-
-        NavigateToPrevPrompt ->
-            case getActiveSession model of
-                Just s ->
-                    let
-                        userMsgIds =
-                            List.filterMap
-                                (\m ->
-                                    if m.role == T.User then
-                                        Just m.id
-                                    else
-                                        Nothing
-                                )
-                                s.messages
-
-                        newCursor =
-                            case model.cursorMsgId of
-                                Just cur ->
-                                    case listElemIndex cur userMsgIds of
-                                        Just idx ->
-                                            if idx > 0 then
-                                                Just (Maybe.withDefault cur (List.head (List.drop (idx - 1) userMsgIds)))
-                                            else
-                                                Just cur
-
-                                        Nothing ->
-                                            List.head (List.reverse userMsgIds)
-
-                                Nothing ->
-                                    List.head (List.reverse userMsgIds)
-                    in
-                    ( { model | cursorMsgId = newCursor }
-                    , Cmd.none
-                    )
-
-                Nothing ->
-                    ( model, Cmd.none )
-
-        NavigateToNextPrompt ->
-            case getActiveSession model of
-                Just s ->
-                    let
-                        userMsgIds =
-                            List.filterMap
-                                (\m ->
-                                    if m.role == T.User then
-                                        Just m.id
-                                    else
-                                        Nothing
-                                )
-                                s.messages
-
-                        newCursor =
-                            case model.cursorMsgId of
-                                Just cur ->
-                                    case listElemIndex cur userMsgIds of
-                                        Just idx ->
-                                            if idx < List.length userMsgIds - 1 then
-                                                Just (Maybe.withDefault cur (List.head (List.drop (idx + 1) userMsgIds)))
-                                            else
-                                                Just cur
-
-                                        Nothing ->
-                                            List.head userMsgIds
-
-                                Nothing ->
-                                    List.head userMsgIds
-                    in
-                    ( { model | cursorMsgId = newCursor }
-                    , Cmd.none
-                    )
-
-                Nothing ->
-                    ( model, Cmd.none )
-
-        FocusNow ->
-            ( model, Task.attempt (\_ -> NoOp) (Dom.focus "msg-input") )
-
         ScrollPosition scrollTop scrollHeight clientHeight ->
             let
                 atBottom =
@@ -1619,43 +1392,6 @@ update msg model =
                     Nothing ->
                         ( model, Cmd.none )
 
-            -- Tab toggles focus between display and input (only when no overlay is open)
-            else if key == "Tab" && not (isOverlayOpen model) then
-                update ToggleFocus model
-
-
-            -- Display navigation keys (only when display is focused)
-            else if model.displayFocused then
-                case key of
-                    "j" -> update MoveCursorDown model
-                    "k" -> update MoveCursorUp model
-                    "ArrowDown" -> update MoveCursorDown model
-                    "ArrowUp" -> update MoveCursorUp model
-                    "J" -> update (ScrollLines 1) model  -- Shift+J = scroll down
-                    "K" -> update (ScrollLines -1) model  -- Shift+K = scroll up
-                    "g" -> update GotoTop model
-                    "G" -> update GotoBottom model
-                    "H" -> update GotoTop model           -- H = cursor top
-                    "L" -> update GotoBottom model         -- L = cursor bottom
-                    "M" -> ( model, Cmd.none )             -- M = cursor mid
-                    " " ->                                -- Space = toggle fold
-                        case model.cursorMsgId of
-                            Just cur ->
-                                update (ToggleMsgFold cur) model
-                            Nothing ->
-                                ( model, Cmd.none )
-                    "f" -> update NavigateToNextPrompt model
-                    "b" -> update NavigateToPrevPrompt model
-                    _ ->
-                        -- Ctrl+D and Ctrl+U for half-page scroll
-                        if ctrl && key == "d" then
-                            update (ScrollHalfPage 1) model
-                        else if ctrl && key == "u" then
-                            update (ScrollHalfPage -1) model
-                        else
-                            ( model, Cmd.none )
-
-            -- Regular input (not display focused)
             else
                 ( model, Cmd.none )
 
@@ -2145,7 +1881,7 @@ viewChatArea model session =
         [ Attr.class "chat-area" ]
         [ if hasMessages then
             Html.div [ Attr.class "messages" ]
-                (List.map (viewMessage model.displayFocused model.cursorMsgId) session.messages
+                (List.map (viewMessage model.cursorMsgId) session.messages
 
                     ++ [ Html.div [] [] ]
                 )
@@ -2156,8 +1892,8 @@ viewChatArea model session =
         ]
 
 
-viewMessage : Bool -> Maybe String -> T.Message -> Html Msg
-viewMessage displayFocused cursorMsgId msg =
+viewMessage : Maybe String -> T.Message -> Html Msg
+viewMessage cursorMsgId msg =
     let
         isCursor =
             case cursorMsgId of
@@ -2165,7 +1901,7 @@ viewMessage displayFocused cursorMsgId msg =
                 Nothing -> False
 
         cursorClass =
-            if displayFocused && isCursor then
+            if isCursor then
                 " message-cursor"
             else
                 ""
@@ -2174,7 +1910,7 @@ viewMessage displayFocused cursorMsgId msg =
         T.Assistant ->
             Html.div
                 [ Attr.class ("message message-" ++ T.roleToString msg.role ++ cursorClass)
-                , Ev.onClick (SetCursorMsgId msg.id)
+                , Ev.onClick NoOp
                 ]
                 [ Html.div [ Attr.class "message-content" ]
                     [ Markdown.toHtmlWith
@@ -2203,7 +1939,7 @@ viewMessage displayFocused cursorMsgId msg =
         T.User ->
             Html.div
                 [ Attr.class ("message message-" ++ T.roleToString msg.role ++ cursorClass)
-                , Ev.onClick (SetCursorMsgId msg.id)
+                , Ev.onClick NoOp
                 ]
                 [ case msg.media of
                     Just items ->
@@ -2252,41 +1988,8 @@ viewInputBar model session =
                     , Attr.value session.input
                     , Ev.onInput SetInput
                     , Ev.preventDefaultOn "keydown" <|
-                        let
-                            displayFocused =
-                                model.displayFocused
-                        in
                         D.map3 (\key ctrl shift ->
-                            if displayFocused then
-                                case key of
-                                    "j" -> ( MoveCursorDown, True )
-                                    "k" -> ( MoveCursorUp, True )
-                                    "J" -> ( ScrollLines 1, True )
-                                    "K" -> ( ScrollLines -1, True )
-                                    "g" -> ( GotoTop, True )
-                                    "G" -> ( GotoBottom, True )
-                                    "H" -> ( GotoTop, True )
-                                    "L" -> ( GotoBottom, True )
-                                    "f" -> ( NavigateToNextPrompt, True )
-                                    "b" -> ( NavigateToPrevPrompt, True )
-                                    " " ->
-                                        case model.cursorMsgId of
-                                            Just cur ->
-                                                ( ToggleMsgFold cur, True )
-                                            Nothing ->
-                                                ( NoOp, False )
-                                    _ ->
-                                        if ctrl && key == "d" then
-                                            ( ScrollHalfPage 1, True )
-                                        else if ctrl && key == "u" then
-                                            ( ScrollHalfPage -1, True )
-                                        else if key == "Enter" && not ctrl && not shift then
-                                            ( SendPrompt, True )
-                                        else if key == "Enter" && shift then
-                                            ( NoOp, False )
-                                        else
-                                            ( NoOp, False )
-                            else if key == "Enter" && not ctrl && not shift then
+                            if key == "Enter" && not ctrl && not shift then
                                 ( SendPrompt, True )
                             else if key == "Enter" && shift then
                                 ( NoOp, False )
@@ -2449,13 +2152,10 @@ viewFilePickerOverlay model =
                         , loading = s.filePickerLoading
                         , noOp = NoOp
                         , onInput = SetFilePickerInput
-                        , onSelect = FilePickerSelectItem
                         , onConfirm = FilePickerConfirmItem
                         , onPick = FilePickerPickItem
                         , onUrlConfirm = ConfirmFilePickerUrl
                         , onToggleMode = FilePickerToggleMode
-                        , focusInput = FocusElement "fp-page-input"
-                        , focusList = FocusElement "fp-page-list"
                         }
                     ]
             else
@@ -2484,8 +2184,6 @@ viewModelSelectorOverlay model =
                         , onConfirm = ModelSelectorConfirmItem
                         , onClose = CloseModelSelector
                         , onInput = SetModelSelectorInput
-                        , focusInput = FocusElement "model-selector-input"
-                        , focusList = FocusElement "model-selector-list"
                         }
                     ]
             else
@@ -2509,10 +2207,7 @@ viewHelpWindowOverlay model =
                         , selected = s.helpSelected
                         , noOp = NoOp
                         , onFilter = SetHelpFilter
-                        , onSelect = HelpSelectItem
                         , onCmd = HelpCmdMsg
-                        , focusInput = FocusElement "help-filter-input"
-                        , focusList = FocusElement "help-page-list"
                         }
                     ]
             else
