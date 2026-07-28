@@ -19,6 +19,7 @@ view :
     , onInput : String -> msg
     , onSelect : Int -> msg
     , onConfirm : msg
+    , onPick : Int -> msg
     , onUrlConfirm : msg
     , onToggleMode : msg
     , focusInput : msg
@@ -147,13 +148,12 @@ view config =
         ]
 
 
-viewEntry : Int -> T.DirEntry -> { a | selected : Int, onConfirm : msg } -> Html msg
+viewEntry : Int -> T.DirEntry -> { a | selected : Int, onPick : Int -> msg } -> Html msg
 viewEntry idx entry config =
     Html.div
         [ Attr.id ("fp-item-" ++ entry.name)
         , Attr.class ("fp-page-item" ++ (if idx == config.selected then " fp-page-item-selected" else ""))
-        , Ev.onClick
-            (config.onConfirm)
+        , Ev.onClick (config.onPick idx)
         ]
         [ Html.span [ Attr.class "fp-page-item-icon" ] [ Html.text (if entry.isDir then "📁" else "📄") ]
         , Html.span [ Attr.class "fp-page-item-name" ] [ Html.text entry.name ]

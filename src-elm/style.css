@@ -1611,14 +1611,10 @@ html {
 .input-footer-left {
   display: flex;
   align-items: center;
+  gap: 2px;
 }
 
-.input-hint {
-  font-size: 0.72rem;
-  color: #666;
-}
-
-.attach-btn-small {
+.footer-btn {
   background: none;
   border: none;
   color: #888;
@@ -1629,8 +1625,8 @@ html {
   border-radius: 4px;
   transition: background 0.12s, color 0.12s;
 }
-.attach-btn-small:hover { background: rgba(255,255,255,0.08); color: #ddd; }
-.attach-btn-small:disabled { opacity: 0.3; cursor: not-allowed; }
+.footer-btn:hover { background: rgba(255,255,255,0.08); color: #ddd; }
+.footer-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 
 .input-footer-right {
   display: flex;
@@ -1662,10 +1658,6 @@ html {
 }
 @media (prefers-color-scheme: light) {
   .input-area { background: transparent; color: #1a1a2e; }
-}
-@media (prefers-color-scheme: light) {
-  .attach-btn-small { color: #999; }
-  .attach-btn-small:hover { background: rgba(0,0,0,0.05); color: #555; }
 }
 @media (prefers-color-scheme: light) {
   .input-textarea { background: white; color: #1a1a2e; }

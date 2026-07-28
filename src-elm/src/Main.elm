@@ -174,6 +174,7 @@ type Msg
     | FilePickerNavigateDir String
     | FilePickerSelectItem Int
     | FilePickerConfirmItem
+    | FilePickerPickItem Int
     | FilePickerKeyDown Int
     | FilePickerToggleMode
     | FilePickerNavigateUp
@@ -909,6 +910,74 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
+        FilePickerPickItem idx ->
+            -- Pick an item by index (from click). Same logic as ConfirmItem but uses
+            -- the explicit clicked index instead of keyboard-selected index.
+            case getActiveSession model of
+                Just s ->
+                    let
+                        entries =
+                            filterEntries s
+                    in
+                    case List.head (List.drop idx entries) of
+                        Just entry ->
+                            if entry.isDir then
+                                let
+                                    inputVal =
+                                        s.filePickerInput
+
+                                    newInput =
+                                        if String.endsWith "/" inputVal then
+                                            inputVal ++ entry.name ++ "/"
+                                        else
+                                            case lastIndexOf '/' inputVal of
+                                                Just sl ->
+                                                    String.left (sl + 1) inputVal ++ entry.name ++ "/"
+
+                                                Nothing ->
+                                                    entry.name ++ "/"
+
+                                    newDir =
+                                        if s.filePickerDir == "" then
+                                            entry.name
+                                        else
+                                            s.filePickerDir ++ "/" ++ entry.name
+                                in
+                                ( updateActiveSession model (\sess ->
+                                    { sess
+                                        | filePickerLoading = True
+                                        , filePickerInput = newInput
+                                        , filePickerFilter = ""
+                                        , filePickerSelected = idx
+                                    }
+                                  )
+                                , Ports.fsResolvePath { path = newDir }
+                                )
+
+                            else
+                                let
+                                    fullPath =
+                                        if s.filePickerDir == "" then
+                                            entry.name
+                                        else
+                                            s.filePickerDir ++ "/" ++ entry.name
+                                in
+                                ( updateActiveSession model (\sess ->
+                                    { sess
+                                        | filePickerLoading = True
+                                        , pendingFileName = entry.name
+                                        , filePickerSelected = idx
+                                    }
+                                  )
+                                , Ports.fsReadFileDataUri { path = fullPath }
+                                )
+
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
         FilePickerToggleMode ->
             case getActiveSession model of
                 Just s ->
@@ -1554,29 +1623,6 @@ update msg model =
             else if key == "Tab" && not (isOverlayOpen model) then
                 update ToggleFocus model
 
-            -- Ctrl+G cancels task
-            else if key == "g" && ctrl then
-                update CancelTask model
-
-            -- Ctrl+L opens model selector
-            else if key == "l" && ctrl && not alt then
-                update OpenModelSelector model
-
-            -- Ctrl+H opens help
-            else if key == "h" && ctrl && not alt then
-                update OpenHelpWindow model
-
-            -- Ctrl+A opens file picker
-            else if key == "a" && ctrl && not alt && not model.showSessionManager then
-                case getActiveSession model of
-                    Just s ->
-                        if not s.showFilePicker then
-                            update OpenFilePicker model
-                        else
-                            ( model, Cmd.none )
-
-                    Nothing ->
-                        ( model, Cmd.none )
 
             -- Display navigation keys (only when display is focused)
             else if model.displayFocused then
@@ -2255,20 +2301,26 @@ viewInputBar model session =
             , Html.div [ Attr.class "input-footer" ]
                 [ Html.div [ Attr.class "input-footer-left" ]
                     [ Html.button
-                        [ Attr.class "attach-btn-small"
+                        [ Attr.class "footer-btn"
                         , Ev.onClick OpenFilePicker
-                        , Attr.title "Attach media (Ctrl+A)"
+                        , Attr.title "Attach media"
                         , Attr.disabled (not session.connected)
                         ]
                         [ Html.text "📎" ]
-                    , Html.span [ Attr.class "input-hint" ]
-                        [ Html.text
-                            (if model.displayFocused then
-                                "Tab ← input  ·  j/k ↑↓  ·  g/G top/btm  ·  Space fold"
-                             else
-                                "Ctrl+L Model  ·  Ctrl+H Help  ·  ↵ Send"
-                            )
-                        ] ]
+                    , Html.button
+                        [ Attr.class "footer-btn"
+                        , Ev.onClick OpenModelSelector
+                        , Attr.title "Select model"
+                        , Attr.disabled (not session.connected)
+                        ]
+                        [ Html.text "🧠" ]
+                    , Html.button
+                        [ Attr.class "footer-btn"
+                        , Ev.onClick OpenHelpWindow
+                        , Attr.title "Help"
+                        ]
+                        [ Html.text "?" ]
+                    ]
                 , Html.div [ Attr.class "input-footer-right" ]
                     [ Html.button
                         [ Attr.class ("send-btn" ++ (if session.taskRunning then " cancel" else ""))
@@ -2399,6 +2451,7 @@ viewFilePickerOverlay model =
                         , onInput = SetFilePickerInput
                         , onSelect = FilePickerSelectItem
                         , onConfirm = FilePickerConfirmItem
+                        , onPick = FilePickerPickItem
                         , onUrlConfirm = ConfirmFilePickerUrl
                         , onToggleMode = FilePickerToggleMode
                         , focusInput = FocusElement "fp-page-input"
