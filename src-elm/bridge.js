@@ -115,29 +115,14 @@
       });
     });
 
-    on("openUrl", function (data) {
-      var w = window.__TAURI__;
-      if (w.plugins && w.plugins.opener) {
-        w.plugins.opener.openUrl(data.url);
-      } else {
-        window.open(data.url, "_blank");
-      }
-    });
-
-    on("scrollToBottom", function () {
+        on("scrollToBottom", function () {
       window.scrollTo({
         top: document.documentElement.scrollHeight,
         behavior: "auto",
       });
     });
 
-    on("getStderrLog", function (data) {
-      invoke("get_stderr_log", { sessionId: data.sessionId }).then(function (lines) {
-        app.ports.onStderrLog.send(lines);
-      });
-    });
-
-    on("startMcpAuthFlow", function (data) {
+        on("startMcpAuthFlow", function (data) {
       invoke("start_mcp_auth_flow", {
         sessionId: data.sessionId,
         serverName: data.serverName,
@@ -157,19 +142,7 @@
       });
     });
 
-    on("scrollBy", function (data) {
-      window.scrollBy({ top: data.dy, left: data.dx, behavior: "smooth" });
-    });
-
-    on("scrollToY", function (data) {
-      window.scrollTo({ top: data.y, behavior: "smooth" });
-    });
-
-    on("blurInput", function () {
-      document.getElementById("msg-input").blur();
-    });
-
-    on("focusElement", function (id) {
+                on("focusElement", function (id) {
       requestAnimationFrame(function () {
         var el = document.getElementById(id);
         if (el) { el.focus(); }
@@ -183,13 +156,7 @@
       });
     });
 
-    on("copyToClipboard", function (data) {
-      navigator.clipboard.writeText(data.text).catch(function (e) {
-        console.error("copyToClipboard failed:", e);
-      });
-    });
-
-    // 3. Register Tauri event listeners
+        // 3. Register Tauri event listeners
     Promise.all([
       listen("tlv-delta", function (ev) { app.ports.onDelta.send(ev.payload); }),
       listen("tlv-frame", function (ev) { app.ports.onFrame.send(ev.payload); }),

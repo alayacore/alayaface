@@ -20,34 +20,23 @@ port module Ports exposing
     , fsResolvePath
     , fsHomeDir
       -- Window operations
-    , openUrl
       -- Existence
-    , isSessionConnected
-    , listModels
     , -- MCP Auth Flow
       startMcpAuthFlow
     , fillMcpAuthUrl
-    , onMcpAuthUrl
       -- Display navigation
-    , scrollBy
-    , scrollToY
-    , blurInput
-    , copyToClipboard
       -- Inbound subscriptions (Tauri → Elm responses)
     , onSessionCreated
-    , onSessionClosed
     , onSessionDirs
     , onFsListDir
     , onFsHomeDir
     , onFsReadFileDataUri
     , onFsResolvePath
-    , onStderrLog
     , scrollToBottom
     , focusElement
     , scrollIntoView
     , onScroll
     , onWindowMaximized
-    , getStderrLog
     )
 
 import Json.Decode as D
@@ -78,22 +67,13 @@ port fsListDir : { path : String } -> Cmd msg
 port fsReadFileDataUri : { path : String } -> Cmd msg
 port fsResolvePath : { path : String } -> Cmd msg
 port fsHomeDir : {} -> Cmd msg
-port openUrl : { url : String } -> Cmd msg
-port isSessionConnected : { sessionId : String } -> Cmd msg
-port listModels : {} -> Cmd msg
 port startMcpAuthFlow : { sessionId : String, serverName : String, authUrl : String } -> Cmd msg
 port fillMcpAuthUrl : { sessionId : String, serverName : String, authUrl : String } -> Cmd msg
-port onMcpAuthUrl : (String -> msg) -> Sub msg
-port scrollBy : { dx : Float, dy : Float } -> Cmd msg
-port scrollToY : { y : Float } -> Cmd msg
-port blurInput : {} -> Cmd msg
-port copyToClipboard : { text : String } -> Cmd msg
 
 
 -- Inbound responses (Tauri → Elm for command results)
 
 port onSessionCreated : (String -> msg) -> Sub msg
-port onSessionClosed : (String -> msg) -> Sub msg
 port onSessionDirs : (List E.Value -> msg) -> Sub msg
 port onFsListDir : (List E.Value -> msg) -> Sub msg
 port onFsHomeDir : (String -> msg) -> Sub msg
@@ -102,8 +82,6 @@ port onFsReadFileDataUri : (String -> msg) -> Sub msg
 
 -- Debug / Logging
 
-port getStderrLog : { sessionId : String } -> Cmd msg
-port onStderrLog : (List String -> msg) -> Sub msg
 
 -- Focus / Scroll
 

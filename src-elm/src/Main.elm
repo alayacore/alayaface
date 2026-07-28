@@ -1586,24 +1586,6 @@ detectMediaType name =
 
 -- ─── List Helpers ───────────────────────────────────────────────────
 
-listElemIndex : a -> List a -> Maybe Int
-listElemIndex target items =
-    listElemIndexHelp target items 0
-
-
-listElemIndexHelp : a -> List a -> Int -> Maybe Int
-listElemIndexHelp target items idx =
-    case items of
-        first :: rest ->
-            if first == target then
-                Just idx
-            else
-                listElemIndexHelp target rest (idx + 1)
-
-        [] ->
-            Nothing
-
-
 -- ─── String Helpers ─────────────────────────────────────────────────
 
 lastIndexOf : Char -> String -> Maybe Int
@@ -1745,19 +1727,6 @@ viewNoSessionPanel model =
                 , Html.button [ Attr.class "connect-btn", Attr.style "margin-top" "12px", Ev.onClick CreateSession ]
                     [ Html.text "Retry" ]
                 ]
-        ]
-
-
-viewMain : Model -> T.SessionState -> Html Msg
-viewMain model session =
-    Html.div [ Attr.class "app" ]
-        [ Html.node "style"
-            []
-            [ Html.text (".app{--content-width:" ++ String.fromInt model.contentWidth ++ "px}") ]
-        , viewNotifications model
-        , viewSidebar model
-        , Html.div [ Attr.class "main-content" ]
-            [ viewChatArea model session ]
         ]
 
 
