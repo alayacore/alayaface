@@ -115,9 +115,12 @@
       });
     });
 
-        on("scrollToBottom", function () {
-      var el = document.querySelector(".messages");
-      if (el) { el.scrollTop = el.scrollHeight; }
+        on("scrollToBottom", function (data) {
+      var el = document.querySelector("#msg-input-" + data.sessionId);
+      if (el) {
+        var container = el.closest(".messages") || el.closest(".chat-area");
+        if (container) { container.scrollTop = container.scrollHeight; }
+      }
     });
 
         on("startMcpAuthFlow", function (data) {
@@ -165,8 +168,10 @@
       console.error("[bridge] listen() failed:", e);
     });
 
-    // 4. Scroll tracking: send scroll data from focused messages container
+    // 4. Scroll tracking: send scroll data from each messages container
     function sendScroll() {
+      // Send scroll data from the first available messages container
+      // (only the active session's scroll matters for auto-follow)
       var el = document.querySelector(".messages");
       if (el) {
         app.ports.onScroll.send({

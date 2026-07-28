@@ -85,7 +85,7 @@ port onFsReadFileDataUri : (String -> msg) -> Sub msg
 
 -- Focus / Scroll
 
-port scrollToBottom : {} -> Cmd msg
+port scrollToBottom : { sessionId : String } -> Cmd msg
 port focusElement : String -> Cmd msg
 port scrollIntoView : String -> Cmd msg
 port onScroll : ({ scrollTop : Float, scrollHeight : Float, clientHeight : Float } -> msg) -> Sub msg

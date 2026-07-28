@@ -244,7 +244,7 @@ update msg model =
 
                 cmds =
                     if model.pendingSwitchOnCreate || model.activeId == Nothing then
-                        Cmd.batch [ Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ id)), Ports.scrollToBottom {} ]
+                        Cmd.batch [ Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ id)), Ports.scrollToBottom { sessionId = id } ]
                     else
                         Cmd.none
             in
@@ -285,8 +285,11 @@ update msg model =
                                 cmds =
                                     if model.atBottom then
                                         Cmd.batch
-                                            [ Ports.scrollToBottom {}
-                                            , Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ ev.sessionId))
+                                            [ Ports.scrollToBottom { sessionId = ev.sessionId }
+                                            , if model.activeId == Just ev.sessionId then
+                                                Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ ev.sessionId))
+                                              else
+                                                Cmd.none
                                             ]
                                     else
                                         Cmd.none
@@ -323,11 +326,11 @@ update msg model =
                                     Cmd.batch
                                         (List.filterMap identity
                                             [ if msgCountChanged && model.atBottom then
-                                                Just (Ports.scrollToBottom {})
+                                                Just (Ports.scrollToBottom { sessionId = ev.sessionId })
 
                                               else
                                                 Nothing
-                                            , if msgCountChanged && model.atBottom || mcpJustCompleted then
+                                            , if (msgCountChanged && model.atBottom || mcpJustCompleted) && model.activeId == Just ev.sessionId then
                                                 Just (Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ ev.sessionId)))
 
                                               else
