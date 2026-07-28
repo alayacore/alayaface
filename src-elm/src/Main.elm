@@ -1708,38 +1708,49 @@ subscriptions model =
 
 view : Model -> Html Msg
 view model =
-    case getActiveSession model of
-        Just session ->
-            viewMain model session
-
-        Nothing ->
-            viewNoSession model
-
-
-viewNoSession : Model -> Html Msg
-viewNoSession model =
     Html.div [ Attr.class "app" ]
         [ Html.node "style"
             []
             [ Html.text (".app{--content-width:" ++ String.fromInt model.contentWidth ++ "px}") ]
+        , viewNotifications model
         , viewSidebar model
         , Html.div [ Attr.class "main-content" ]
-            [ Html.div [ Attr.class "chat-area chat-area-centered" ]
-                [ if model.initializing then
-                    Html.div [ Attr.class "hs-container-inline" ]
-                        [ Html.div [ Attr.class "hs-logo" ] [ Html.text "AlayaFace" ]
-                        , Html.div [ Attr.class "hs-tagline" ] [ Html.text "Connecting…" ]
-                        ]
+            (if List.isEmpty model.sessionOrder then
+                [ viewNoSessionPanel model ]
 
-                  else
-                    Html.div [ Attr.class "hs-container-inline" ]
-                        [ Html.div [ Attr.class "hs-tagline", Attr.style "color" "#ef4444" ]
-                            [ Html.text (Maybe.withDefault "Failed to start" model.initError) ]
-                        , Html.button [ Attr.class "connect-btn", Attr.style "margin-top" "12px", Ev.onClick CreateSession ]
-                            [ Html.text "Retry" ]
-                        ]
+             else
+                List.map (\id -> viewSessionPanel model id) model.sessionOrder
+            )
+        ]
+
+
+viewSessionPanel : Model -> String -> Html Msg
+viewSessionPanel model id =
+    case Dict.get id model.sessions of
+        Just session ->
+            Html.div [ Attr.class "session-panel" ]
+                [ viewChatArea model session ]
+
+        Nothing ->
+            Html.text ""
+
+
+viewNoSessionPanel : Model -> Html Msg
+viewNoSessionPanel model =
+    Html.div [ Attr.class "chat-area chat-area-centered" ]
+        [ if model.initializing then
+            Html.div [ Attr.class "hs-container-inline" ]
+                [ Html.div [ Attr.class "hs-logo" ] [ Html.text "AlayaFace" ]
+                , Html.div [ Attr.class "hs-tagline" ] [ Html.text "Connecting…" ]
                 ]
-            ]
+
+          else
+            Html.div [ Attr.class "hs-container-inline" ]
+                [ Html.div [ Attr.class "hs-tagline", Attr.style "color" "#ef4444" ]
+                    [ Html.text (Maybe.withDefault "Failed to start" model.initError) ]
+                , Html.button [ Attr.class "connect-btn", Attr.style "margin-top" "12px", Ev.onClick CreateSession ]
+                    [ Html.text "Retry" ]
+                ]
         ]
 
 
