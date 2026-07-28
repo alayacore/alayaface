@@ -118,8 +118,11 @@
         on("scrollToBottom", function (data) {
       var el = document.querySelector("#msg-input-" + data.sessionId);
       if (el) {
-        var container = el.closest(".messages") || el.closest(".chat-area");
-        if (container) { container.scrollTop = container.scrollHeight; }
+        var panel = el.closest(".session-panel") || el.closest(".chat-area");
+        if (panel) {
+          var container = panel.querySelector(".messages");
+          if (container) { container.scrollTop = container.scrollHeight; }
+        }
       }
     });
 
@@ -169,10 +172,8 @@
     });
 
     // 4. Scroll tracking: send scroll data from each messages container
-    function sendScroll() {
-      // Send scroll data from the first available messages container
-      // (only the active session's scroll matters for auto-follow)
-      var el = document.querySelector(".messages");
+    function sendScroll(el) {
+      if (!el) el = document.querySelector(".messages");
       if (el) {
         app.ports.onScroll.send({
           scrollTop: el.scrollTop,
@@ -187,7 +188,7 @@
       document.querySelectorAll(".messages").forEach(function(el) {
         if (!el._scrollAttached) {
           el._scrollAttached = true;
-          el.addEventListener("scroll", sendScroll, { passive: true });
+          el.addEventListener("scroll", function() { sendScroll(el); }, { passive: true });
         }
       });
     }
