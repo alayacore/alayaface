@@ -1757,12 +1757,7 @@ view model =
 viewNoSession : Model -> Html Msg
 viewNoSession model =
     Html.div [ Attr.class "app" ]
-        [ Html.div [ Attr.class "hs-bg-layer" ]
-            [ Html.div [ Attr.class "hs-bg-orb hs-bg-orb-1" ] []
-            , Html.div [ Attr.class "hs-bg-orb hs-bg-orb-2" ] []
-            , Html.div [ Attr.class "hs-bg-orb hs-bg-orb-3" ] []
-            ]
-        , Html.header [ Attr.class "app-header", Attr.attribute "data-tauri-drag-region" "" ]
+        [ Html.header [ Attr.class "app-header", Attr.attribute "data-tauri-drag-region" "" ]
             [ Html.div [ Attr.class "header-top" ]
                 [ Html.button [ Attr.class "connect-btn", Ev.onClick CreateSession ] [ Html.text "+ New Session" ]
                 , viewWindowControls model
@@ -1789,12 +1784,7 @@ viewNoSession model =
 viewMain : Model -> T.SessionState -> Html Msg
 viewMain model session =
     Html.div [ Attr.class "app" ]
-        [ Html.div [ Attr.class "hs-bg-layer" ]
-            [ Html.div [ Attr.class "hs-bg-orb hs-bg-orb-1" ] []
-            , Html.div [ Attr.class "hs-bg-orb hs-bg-orb-2" ] []
-            , Html.div [ Attr.class "hs-bg-orb hs-bg-orb-3" ] []
-            ]
-        , viewNotifications model
+        [ viewNotifications model
         , viewHeader model session
         , viewChatArea model session
         , viewConfirmOverlay session
