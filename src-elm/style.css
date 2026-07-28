@@ -611,7 +611,7 @@ html {
 
 .message-assistant {
   align-self: flex-start;
-  background: transparent;
+  background: rgba(255,255,255,0.04);
   color: #e2e8f0;
 }
 
@@ -1570,6 +1570,14 @@ html {
 
 @media (prefers-color-scheme: light) {
   .input-text { background: transparent; color: #1a1a2e; }
+}
+@media (prefers-color-scheme: light) {
+  .message-assistant { background: #e2e8f0; color: #1a202c; }
+  .message-system { background: #fef9c3; color: #854d0e; }
+  .message-user { border-color: #2563eb; }
+  .message-reasoning-wrap .message-reasoning { color: #666; }
+  .message-reasoning-wrap .reasoning-truncated { color: #888; }
+  .message-tool { color: #888; }
 }
 @media (prefers-color-scheme: light) {
   .input-area { background: transparent; color: #1a1a2e; }
