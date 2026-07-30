@@ -117,7 +117,6 @@ type alias Model =
     , pendingSwitchOnCreate : Bool
     , inputRows : Int
     , cursorMsgId : Maybe String
-    , contentWidth : Int
     , pendingEvents : Dict String (List E.Value)
     , sessionNums : Dict String Int
     , nextSessionNum : Int
@@ -151,7 +150,6 @@ init _ =
       , pendingSwitchOnCreate = False
       , inputRows = 1
       , cursorMsgId = Nothing
-      , contentWidth = 864
       , pendingEvents = Dict.empty
       , sessionNums = Dict.empty
       , nextSessionNum = 1
@@ -2167,7 +2165,7 @@ view model =
     Html.div [ Attr.class "app" ]
         [ Html.node "style"
             []
-            [ Html.text (".app{--content-width:" ++ String.fromInt model.contentWidth ++ "px}") ]
+            [ Html.text (".app{--content-width:" ++ String.fromInt (min 864 (max 400 model.appWidth - 40)) ++ "px}") ]
         , Html.div [ Attr.id "main-content", Attr.class "main-content" ]
             (if List.isEmpty model.sessionOrder then
                 [ viewNoSessionPanel model ]
