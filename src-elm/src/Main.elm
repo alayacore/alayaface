@@ -257,10 +257,8 @@ type Msg
     | SessionDirsResult (List E.Value)
     | ResumeSession String
     | DeleteSession String
-    | SelectAllSessions
       -- Window
     | WindowMaximized Bool
-    | WindowResized Int Int
     | GotContainerSize (Result Dom.Error Dom.Element)
     | RequerySize
       -- Model Selector
@@ -1353,15 +1351,9 @@ update msg model =
         DeleteSession id ->
             ( model, Ports.deleteSessionDir { sessionId = id } )
 
-        SelectAllSessions ->
-            ( model, Cmd.none )
-
         -- Window
         WindowMaximized v ->
             ( { model | isMaximized = v }, Cmd.none )
-
-        WindowResized w h ->
-            ( { model | appWidth = w, appHeight = h }, Cmd.none )
 
         GotContainerSize result ->
             case result of
