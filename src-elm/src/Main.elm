@@ -1903,6 +1903,28 @@ decodeDirEntry val =
         Err _ -> Nothing
 
 
+type alias SessionDir =
+    { id : String
+    , hasSessionFile : Bool
+    , createdAt : String
+    }
+
+
+sessionDirDecoder : D.Decoder SessionDir
+sessionDirDecoder =
+    D.map3 SessionDir
+        (D.field "id" D.string)
+        (D.field "has_session_file" D.bool)
+        (D.field "created_at" D.string)
+
+
+decodeSessionDir : E.Value -> Maybe SessionDir
+decodeSessionDir val =
+    case D.decodeValue sessionDirDecoder val of
+        Ok dir -> Just dir
+        Err _ -> Nothing
+
+
 filterEntries : T.SessionState -> List T.DirEntry
 filterEntries session =
     let
@@ -2197,6 +2219,7 @@ view model =
             )
         , viewGlobalMenu model
         , viewContextMenu model
+        , viewSessionManagerOverlay model
         ]
 
 
@@ -2360,6 +2383,50 @@ viewContextMenu model =
                 ]
             ]
 
+    else
+        Html.text ""
+
+
+viewSessionManagerOverlay : Model -> Html Msg
+viewSessionManagerOverlay model =
+    if model.showSessionManager then
+        let
+            dirs =
+                List.filterMap decodeSessionDir model.sessionDirs
+        in
+        viewOverlay CloseSessionManager
+            [ Html.div [ Attr.class "sel-page" ]
+                [ Html.div [ Attr.class "sel-page-title" ] [ Html.text "Session Manager" ]
+                , if List.isEmpty dirs then
+                    Html.div [ Attr.class "sel-page-status" ] [ Html.text "No saved sessions." ]
+
+                  else
+                    Html.div [ Attr.class "sel-page-list" ]
+                        (List.map (\dir ->
+                            Html.div
+                                [ Attr.class "sel-page-item" ]
+                                [ Html.span [ Attr.class "sel-page-item-name" ] [ Html.text dir.id ]
+                                , Html.button
+                                    [ Attr.class "confirm-page-btn confirm-page-btn-allow"
+                                    , Ev.onClick (ResumeSession dir.id)
+                                    , Attr.style "padding" "4px 10px"
+                                    , Attr.style "font-size" "0.75rem"
+                                    , Attr.style "min-width" "auto"
+                                    ]
+                                    [ Html.text "Resume" ]
+                                , Html.button
+                                    [ Attr.class "confirm-page-btn confirm-page-btn-deny"
+                                    , Ev.onClick (DeleteSession dir.id)
+                                    , Attr.style "padding" "4px 10px"
+                                    , Attr.style "font-size" "0.75rem"
+                                    , Attr.style "min-width" "auto"
+                                    ]
+                                    [ Html.text "Delete" ]
+                                ]
+                            ) dirs
+                        )
+                ]
+            ]
     else
         Html.text ""
 
