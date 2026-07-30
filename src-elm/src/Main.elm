@@ -96,9 +96,6 @@ type alias Model =
     , showSessionManager : Bool
     , sessionDirs : List E.Value
     , isMaximized : Bool
-    , statusMsg : String
-    , notifications : List ( String, String )  -- (id, text)
-    , nextNotifId : Int
     , atBottom : Bool
     , prevMsgCount : Int
     , sessionOrder : List String
@@ -133,9 +130,6 @@ init _ =
       , showSessionManager = False
       , sessionDirs = []
       , isMaximized = False
-      , statusMsg = ""
-      , notifications = []
-      , nextNotifId = 0
       , atBottom = True
       , prevMsgCount = 0
       , sessionOrder = []
@@ -557,7 +551,7 @@ update msg model =
         CancelTask ->
             case model.activeId of
                 Just id ->
-                    ( { model | statusMsg = "Cancelling…" }
+                    ( model
                     , Ports.cancelTask { sessionId = id }
                     )
 
@@ -2152,7 +2146,6 @@ view model =
         [ Html.node "style"
             []
             [ Html.text (".app{--content-width:" ++ String.fromInt model.contentWidth ++ "px}") ]
-        , viewNotifications model
         , Html.div [ Attr.id "main-content", Attr.class "main-content" ]
             (if List.isEmpty model.sessionOrder then
                 [ viewNoSessionPanel model ]
@@ -2767,18 +2760,6 @@ viewHelpWindowOverlay sid session =
             ]
     else
         Html.text ""
-
-
-viewNotifications : Model -> Html Msg
-viewNotifications model =
-    Html.div [ Attr.class "notifications-container" ]
-        (List.map
-            (\( id, text ) ->
-                Html.div [ Attr.class "notification notification-notify", Attr.attribute "key" id ]
-                    [ Html.span [ Attr.class "notification-text" ] [ Html.text text ] ]
-            )
-            model.notifications
-        )
 
 
 -- SVG icons
