@@ -156,12 +156,12 @@ init _ =
       , ctxY = 0
       , ctxHistoryId = ""
       , ctxSessionId = ""
-      , appWidth = 864
-      , appHeight = 600
+      , appWidth = 1400
+      , appHeight = 900
       }
     , Cmd.batch
         [ Ports.createSession { toolConfirm = Just "execute_command" }
-        , Task.perform (\vp -> WindowResized (round vp.viewport.width) (round vp.viewport.height)) Dom.getViewport
+        , Task.attempt GotContainerSize (Dom.getElement "main-content")
         ]
     )
 
@@ -261,6 +261,8 @@ type Msg
       -- Window
     | WindowMaximized Bool
     | WindowResized Int Int
+    | GotContainerSize (Result Dom.Error Dom.Element)
+    | RequerySize
       -- Model Selector
     | OpenModelSelector
     | CloseModelSelector
@@ -1355,6 +1357,22 @@ update msg model =
         WindowResized w h ->
             ( { model | appWidth = w, appHeight = h }, Cmd.none )
 
+        GotContainerSize result ->
+            case result of
+                Ok el ->
+                    ( { model
+                        | appWidth = round el.element.width
+                        , appHeight = round el.element.height
+                      }
+                    , Cmd.none
+                    )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        RequerySize ->
+            ( model, Task.attempt GotContainerSize (Dom.getElement "main-content") )
+
         -- Model Selector
         OpenModelSelector ->
             case getActiveSession model of
@@ -1652,10 +1670,10 @@ update msg model =
                         dy =
                             round mouseY - round info.startMouseY
 
-                        newX =
+                        newRawX =
                             info.startWinX + dx
 
-                        newY =
+                        newRawY =
                             info.startWinY + dy
 
                         -- Look up current window size for right/bottom clamping
@@ -1674,16 +1692,16 @@ update msg model =
                         maxY =
                             max 0 (model.appHeight - winH)
 
-                        clampedX =
-                            clamp 0 maxX newX
+                        newX =
+                            clamp 0 maxX newRawX
 
-                        clampedY =
-                            clamp 0 maxY newY
+                        newY =
+                            clamp 0 maxY newRawY
                     in
                     ( { model
                         | windowPositions =
                             Dict.update info.sessionId
-                                (Maybe.map (\pos -> { pos | x = clampedX, y = clampedY }))
+                                (Maybe.map (\pos -> { pos | x = newX, y = newY }))
                                 model.windowPositions
                       }
                     , Cmd.none
@@ -1752,12 +1770,12 @@ windowDragMoveResize model mouseX mouseY =
                 r =
                     resizeDimensions info.handle dx dy info.startWinX info.startWinY info.startWinW info.startWinH minW minH
 
-                -- Clamp so window stays fully within container
+                -- Clamp so window stays within viewport
                 clampedX =
-                    clamp 0 (max 0 (model.appWidth - r.w)) r.x
+                    max 0 (min (max 0 (model.appWidth - r.w)) r.x)
 
                 clampedY =
-                    clamp 0 (max 0 (model.appHeight - r.h)) r.y
+                    max 0 (min (max 0 (model.appHeight - r.h)) r.y)
 
                 -- If x/y was clamped, adjust w/h so right/bottom edge stays put
                 adjustW =
@@ -2117,7 +2135,7 @@ subscriptions model =
         , Ports.onFsReadFileDataUri (\uri -> FsReadFileResult uri)
         , Ports.onFsResolvePath (\result -> FsResolvePathResult result)
         , Ports.onWindowMaximized (\v -> WindowMaximized v)
-        , Evts.onResize (\w h -> WindowResized w h)
+        , Evts.onResize (\_ _ -> RequerySize)
         , Evts.onKeyDown <|
             D.map4 KeyDown
                 (D.field "key" D.string)
@@ -2138,7 +2156,7 @@ view model =
             []
             [ Html.text (".app{--content-width:" ++ String.fromInt model.contentWidth ++ "px}") ]
         , viewNotifications model
-        , Html.div [ Attr.class "main-content" ]
+        , Html.div [ Attr.id "main-content", Attr.class "main-content" ]
             (if List.isEmpty model.sessionOrder then
                 [ viewNoSessionPanel model ]
 
