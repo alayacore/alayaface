@@ -1608,6 +1608,15 @@ update msg model =
                         Nothing ->
                             ( model, Cmd.none )
 
+            -- Ctrl+W closes the active session window
+            else if key == "w" && ctrl then
+                case model.activeId of
+                    Just sid ->
+                        update (CloseSession sid) model
+
+                    Nothing ->
+                        ( model, Cmd.none )
+
             else
                 ( model, Cmd.none )
 
