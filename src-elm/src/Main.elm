@@ -264,8 +264,6 @@ type Msg
     | WindowDragEnd
       -- Window resizing
     | ResizeStart String ResizeHandle Float Float
-      -- Instant activation on mousedown (before click)
-    | ActivateSession String
       -- Global menu
     | ToggleGlobalMenu
     | CloseGlobalMenu
@@ -342,8 +340,8 @@ update msg model =
                             { x = baseX
                             , y = baseY
                             , z = model.nextZIndex
-                            , w = 480
-                            , h = 480
+                            , w = 560
+                            , h = 640
                             }
                             model.windowPositions
                 , nextZIndex = model.nextZIndex + 1
@@ -1543,21 +1541,6 @@ update msg model =
         ForSession sid innerMsg ->
             update innerMsg { model | activeId = Just sid }
 
-        ActivateSession id ->
-            let
-                newPositions =
-                    Dict.update id
-                        (Maybe.map (\pos -> { pos | z = model.nextZIndex }))
-                        model.windowPositions
-            in
-            ( { model
-                | activeId = Just id
-                , windowPositions = newPositions
-                , nextZIndex = model.nextZIndex + 1
-              }
-            , Cmd.none
-            )
-
         ResizeStart id handle mouseX mouseY ->
             case Dict.get id model.windowPositions of
                 Just pos ->
@@ -2105,7 +2088,6 @@ viewSessionPanel model id =
             Html.div
                 ([ Attr.class panelClasses
                  , Ev.onClick (SwitchSession id)
-                 , Ev.preventDefaultOn "mousedown" (D.succeed ( ActivateSession id, False ))
                  ]
                     ++ positionStyles
                 )
@@ -2122,7 +2104,7 @@ viewSessionPanel model id =
                     , Ev.preventDefaultOn "mousedown"
                         (D.map2
                             (\clientX clientY ->
-                                ( WindowDragStart id clientX clientY, False )
+                                ( WindowDragStart id clientX clientY, True )
                             )
                             (D.field "clientX" D.float)
                             (D.field "clientY" D.float)

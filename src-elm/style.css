@@ -499,8 +499,6 @@ body {
 .session-panel {
   position: absolute;
   min-width: 360px;
-  width: 480px;
-  height: 480px;
   display: flex;
   flex-direction: column;
   border: 1px solid rgba(255,255,255,0.12);
