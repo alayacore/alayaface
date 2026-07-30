@@ -2751,12 +2751,12 @@ resizeDimensions config =
 -- ─── Overlay ──────────────────────────────────────────────────────────
 
 viewOverlay : Msg -> List (Html Msg) -> Html Msg
-viewOverlay onBackdropClick children =
-    Html.div [ Attr.class "overlay", Ev.onClick onBackdropClick ]
+viewOverlay onClose children =
+    Html.div [ Attr.class "overlay" ]
         [ Html.div [ Attr.class "overlay-page", Ev.stopPropagationOn "click" (D.succeed ( NoOp, True )) ]
             ([ Html.button
                 [ Attr.class "overlay-close"
-                , Ev.stopPropagationOn "click" (D.succeed ( onBackdropClick, True ))
+                , Ev.stopPropagationOn "click" (D.succeed ( onClose, True ))
                 , Attr.title "Close"
                 ]
                 [ Html.text "✕" ]
