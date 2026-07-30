@@ -39,7 +39,8 @@ view config =
                 "Type a path or filter files…"
     in
     Html.div [ Attr.class "fp-page" ]
-        [ Html.div [ Attr.class "fp-page-input-row" ]
+        [ Html.div [ Attr.class "sel-page-title" ] [ Html.text "Attach Media" ]
+        , Html.div [ Attr.class "fp-page-input-row" ]
             [ Html.button
                 [ Attr.class "fp-page-prefix"
                 , Ev.onClick config.onToggleMode

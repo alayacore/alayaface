@@ -33,6 +33,8 @@ type alias WindowPos =
     { x : Int
     , y : Int
     , z : Int
+    , w : Int
+    , h : Int
     }
 
 
@@ -42,6 +44,29 @@ type alias DragInfo =
     , startMouseY : Float
     , startWinX : Int
     , startWinY : Int
+    }
+
+
+type ResizeHandle
+    = N
+    | S
+    | W
+    | E
+    | NW
+    | NE
+    | SW
+    | SE
+
+
+type alias ResizeInfo =
+    { sessionId : String
+    , handle : ResizeHandle
+    , startMouseX : Float
+    , startMouseY : Float
+    , startWinX : Int
+    , startWinY : Int
+    , startWinW : Int
+    , startWinH : Int
     }
 
 
@@ -87,6 +112,8 @@ type alias Model =
     , windowPositions : Dict String WindowPos
     , nextZIndex : Int
     , dragInfo : Maybe DragInfo
+    , resizeInfo : Maybe ResizeInfo
+    , showGlobalMenu : Bool
     }
 
 
@@ -115,6 +142,8 @@ init _ =
       , windowPositions = Dict.empty
       , nextZIndex = 1
       , dragInfo = Nothing
+      , resizeInfo = Nothing
+      , showGlobalMenu = False
       }
     , Ports.createSession { toolConfirm = Just "execute_command" }
     )
@@ -233,8 +262,13 @@ type Msg
     | WindowDragStart String Float Float
     | WindowDragMove Float Float
     | WindowDragEnd
+      -- Window resizing
+    | ResizeStart String ResizeHandle Float Float
       -- Instant activation on mousedown (before click)
     | ActivateSession String
+      -- Global menu
+    | ToggleGlobalMenu
+    | CloseGlobalMenu
       -- Internal
     | NoOp
     | KeyDown String Bool Bool Bool
@@ -248,7 +282,7 @@ update msg model =
     case msg of
         -- Session Lifecycle
         CreateSession ->
-            ( { model | pendingSwitchOnCreate = True }
+            ( { model | pendingSwitchOnCreate = True, showGlobalMenu = False }
             , Ports.createSession { toolConfirm = Just "execute_command" }
             )
 
@@ -304,7 +338,14 @@ update msg model =
                             baseY =
                                 60 + remainderBy 5 count * 30
                         in
-                        Dict.insert id { x = baseX, y = baseY, z = model.nextZIndex } model.windowPositions
+                        Dict.insert id
+                            { x = baseX
+                            , y = baseY
+                            , z = model.nextZIndex
+                            , w = 480
+                            , h = 480
+                            }
+                            model.windowPositions
                 , nextZIndex = model.nextZIndex + 1
                 , pendingSwitchOnCreate = False
                 , pendingEvents = Dict.remove id model.pendingEvents
@@ -1237,12 +1278,18 @@ update msg model =
 
         -- Session Manager
         OpenSessionManager ->
-            ( { model | showSessionManager = True }, Ports.listSessionDirs {} )
+            ( { model | showSessionManager = True, showGlobalMenu = False }, Ports.listSessionDirs {} )
 
         CloseSessionManager ->
             ( { model | showSessionManager = False }
             , focusInput model
             )
+
+        ToggleGlobalMenu ->
+            ( { model | showGlobalMenu = not model.showGlobalMenu }, Cmd.none )
+
+        CloseGlobalMenu ->
+            ( { model | showGlobalMenu = False }, Cmd.none )
 
         SessionDirsResult dirs ->
             ( { model | sessionDirs = dirs }, Cmd.none )
@@ -1511,6 +1558,31 @@ update msg model =
             , Cmd.none
             )
 
+        ResizeStart id handle mouseX mouseY ->
+            case Dict.get id model.windowPositions of
+                Just pos ->
+                    ( { model
+                        | resizeInfo =
+                            Just
+                                { sessionId = id
+                                , handle = handle
+                                , startMouseX = mouseX
+                                , startMouseY = mouseY
+                                , startWinX = pos.x
+                                , startWinY = pos.y
+                                , startWinW = pos.w
+                                , startWinH = pos.h
+                                }
+                        , windowPositions = Dict.insert id { pos | z = model.nextZIndex } model.windowPositions
+                        , nextZIndex = model.nextZIndex + 1
+                        , activeId = Just id
+                      }
+                    , Cmd.none
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
         WindowDragStart id mouseX mouseY ->
             case Dict.get id model.windowPositions of
                 Just pos ->
@@ -1559,10 +1631,10 @@ update msg model =
                     )
 
                 Nothing ->
-                    ( model, Cmd.none )
+                    windowDragMoveResize model mouseX mouseY
 
         WindowDragEnd ->
-            ( { model | dragInfo = Nothing }, Cmd.none )
+            ( { model | dragInfo = Nothing, resizeInfo = Nothing }, Cmd.none )
 
         NoOp ->
             ( model, Cmd.none )
@@ -1584,6 +1656,39 @@ updateAfterConfirm model sid =
 
         Nothing ->
             model
+
+
+windowDragMoveResize : Model -> Float -> Float -> ( Model, Cmd Msg )
+windowDragMoveResize model mouseX mouseY =
+    case model.resizeInfo of
+        Just info ->
+            let
+                dx =
+                    round mouseX - round info.startMouseX
+
+                dy =
+                    round mouseY - round info.startMouseY
+
+                minW =
+                    300
+
+                minH =
+                    200
+
+                r =
+                    resizeDimensions info.handle dx dy info.startWinX info.startWinY info.startWinW info.startWinH minW minH
+            in
+            ( { model
+                | windowPositions =
+                    Dict.update info.sessionId
+                        (Maybe.map (\pos -> { pos | x = r.x, y = r.y, w = r.w, h = r.h }))
+                        model.windowPositions
+              }
+            , Cmd.none
+            )
+
+        Nothing ->
+            ( model, Cmd.none )
 
 
 -- Focus an element by ID after a brief delay to ensure the DOM is fully rendered
@@ -1932,7 +2037,6 @@ view model =
             []
             [ Html.text (".app{--content-width:" ++ String.fromInt model.contentWidth ++ "px}") ]
         , viewNotifications model
-        , viewSidebar model
         , Html.div [ Attr.class "main-content" ]
             (if List.isEmpty model.sessionOrder then
                 [ viewNoSessionPanel model ]
@@ -1940,6 +2044,7 @@ view model =
              else
                 List.map (\id -> viewSessionPanel model id) model.sessionOrder
             )
+        , viewGlobalMenu model
         ]
 
 
@@ -1964,6 +2069,8 @@ viewSessionPanel model id =
                         Just p ->
                             [ Attr.style "left" (String.fromInt p.x ++ "px")
                             , Attr.style "top" (String.fromInt p.y ++ "px")
+                            , Attr.style "width" (String.fromInt p.w ++ "px")
+                            , Attr.style "height" (String.fromInt p.h ++ "px")
                             , Attr.style "z-index" (String.fromInt p.z)
                             , Attr.style "position" "absolute"
                             ]
@@ -1974,6 +2081,26 @@ viewSessionPanel model id =
                 panelClasses =
                     "session-panel"
                         ++ (if isActive then " session-panel-active" else "")
+
+                -- Resize handle generator
+                resizeHandle : ResizeHandle -> Html Msg
+                resizeHandle handle =
+                    let
+                        className =
+                            "resize-handle resize-handle-" ++ resizeHandleString handle
+                    in
+                    Html.div
+                        [ Attr.class className
+                        , Ev.preventDefaultOn "mousedown"
+                            (D.map2
+                                (\clientX clientY ->
+                                    ( ResizeStart id handle clientX clientY, True )
+                                )
+                                (D.field "clientX" D.float)
+                                (D.field "clientY" D.float)
+                            )
+                        ]
+                        []
             in
             Html.div
                 ([ Attr.class panelClasses
@@ -1982,7 +2109,15 @@ viewSessionPanel model id =
                  ]
                     ++ positionStyles
                 )
-                [ Html.div
+                [ resizeHandle NW
+                , resizeHandle N
+                , resizeHandle NE
+                , resizeHandle W
+                , resizeHandle E
+                , resizeHandle SW
+                , resizeHandle S
+                , resizeHandle SE
+                , Html.div
                     [ Attr.class "session-bar"
                     , Ev.preventDefaultOn "mousedown"
                         (D.map2
@@ -2013,7 +2148,7 @@ viewSessionPanel model id =
 
 viewNoSessionPanel : Model -> Html Msg
 viewNoSessionPanel model =
-    Html.div [ Attr.class "chat-area chat-area-centered" ]
+    Html.div [ Attr.class "chat-area chat-area-centered no-sessions" ]
         [ if model.initializing then
             Html.div [ Attr.class "hs-container-inline" ]
                 [ Html.div [ Attr.class "hs-logo" ] [ Html.text "AlayaFace" ]
@@ -2021,59 +2156,43 @@ viewNoSessionPanel model =
                 ]
 
           else
-            Html.div [ Attr.class "hs-container-inline" ]
-                [ Html.div [ Attr.class "hs-tagline", Attr.style "color" "#ef4444" ]
-                    [ Html.text (Maybe.withDefault "Failed to start" model.initError) ]
-                , Html.button [ Attr.class "connect-btn", Attr.style "margin-top" "12px", Ev.onClick CreateSession ]
-                    [ Html.text "Retry" ]
-                ]
+            Html.text ""
         ]
 
 
-viewSidebar : Model -> Html Msg
-viewSidebar model =
+viewGlobalMenu : Model -> Html Msg
+viewGlobalMenu model =
     let
-        sessionKeys =
-            model.sessionOrder
-    in
-    Html.nav [ Attr.class "sidebar" ]
-        [ Html.div [ Attr.class "sidebar-tabs" ]
-            (List.indexedMap (\i id -> viewTab i id model) sessionKeys
-                ++ [ Html.button [ Attr.class "sidebar-btn", Ev.onClick CreateSession, Attr.title "New session" ] [ Html.text "+" ]
-                   , Html.button [ Attr.class "sidebar-btn", Ev.onClick OpenSessionManager, Attr.title "Session manager" ] [ Html.text "☰" ]
-                   ]
-            )
-        ]
-
-
-viewTab : Int -> String -> Model -> Html Msg
-viewTab i id model =
-    let
-        session =
-            Dict.get id model.sessions
-
-        isActive =
-            model.activeId == Just id
-
-        isConnected =
-            Maybe.map .connected session |> Maybe.withDefault False
+        isOpen =
+            model.showGlobalMenu
     in
     Html.div
-        [ Attr.class ("sidebar-tab"
-            ++ (if isActive then " sidebar-tab-active" else "")
-            ++ (if not isConnected then " sidebar-tab-disconnected" else "")
-            )
-        , Ev.onClick (SwitchSession id)
+        [ Attr.class ("global-menu" ++ (if isOpen then " open" else ""))
+        , Ev.onMouseLeave CloseGlobalMenu
         ]
-        [ Html.span [ Attr.class "sidebar-tab-dot" ] []
-        , Html.span [ Attr.class "sidebar-tab-label" ] [ Html.text (String.fromInt (i + 1)) ]
-        , Html.button
-            [ Attr.class "sidebar-tab-close"
-            , Ev.onClick (CloseSession id)
-            , Ev.stopPropagationOn "click" (D.succeed ( NoOp, True ))
-            , Attr.title "Close session"
+        [ Html.div
+            [ Attr.class "global-menu-panel" ]
+            [ Html.div
+                [ Attr.class "global-menu-item"
+                , Ev.onClick CreateSession
+                ]
+                [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "+" ]
+                , Html.text " New Session"
+                ]
+            , Html.div
+                [ Attr.class "global-menu-item"
+                , Ev.onClick OpenSessionManager
+                ]
+                [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "☰" ]
+                , Html.text " Session Manager"
+                ]
             ]
-            [ Html.text "✕" ]
+        , Html.button
+            [ Attr.class "global-menu-btn"
+            , Ev.onClick ToggleGlobalMenu
+            , Attr.title "Menu"
+            ]
+            [ Html.text "⚙" ]
         ]
 
 
@@ -2288,13 +2407,66 @@ mediaTypeIcon mt =
         T.Document -> "📄"
 
 
+resizeHandleString : ResizeHandle -> String
+resizeHandleString handle =
+    case handle of
+        N -> "n"
+        S -> "s"
+        W -> "w"
+        E -> "e"
+        NW -> "nw"
+        NE -> "ne"
+        SW -> "sw"
+        SE -> "se"
+
+
+type alias ResizeResult =
+    { x : Int, y : Int, w : Int, h : Int }
+
+
+resizeDimensions : ResizeHandle -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> ResizeResult
+resizeDimensions handle dx dy startX startY startW startH minW minH =
+    case handle of
+        E ->
+            { x = startX, y = startY, w = max minW (startW + dx), h = startH }
+
+        W ->
+            { x = startX + dx, y = startY, w = max minW (startW - dx), h = startH }
+
+        S ->
+            { x = startX, y = startY, w = startW, h = max minH (startH + dy) }
+
+        N ->
+            { x = startX, y = startY + dy, w = startW, h = max minH (startH - dy) }
+
+        NE ->
+            { x = startX, y = startY + dy, w = max minW (startW + dx), h = max minH (startH - dy) }
+
+        NW ->
+            { x = startX + dx, y = startY + dy, w = max minW (startW - dx), h = max minH (startH - dy) }
+
+        SE ->
+            { x = startX, y = startY, w = max minW (startW + dx), h = max minH (startH + dy) }
+
+        SW ->
+            { x = startX + dx, y = startY, w = max minW (startW - dx), h = max minH (startH + dy) }
+
+
 -- ─── Overlay ──────────────────────────────────────────────────────────
 
 viewOverlay : Msg -> List (Html Msg) -> Html Msg
 viewOverlay onBackdropClick children =
     Html.div [ Attr.class "overlay", Ev.onClick onBackdropClick ]
         [ Html.div [ Attr.class "overlay-page", Ev.stopPropagationOn "click" (D.succeed ( NoOp, True )) ]
-            children
+            ([ Html.button
+                [ Attr.class "overlay-close"
+                , Ev.stopPropagationOn "click" (D.succeed ( onBackdropClick, True ))
+                , Attr.title "Close"
+                ]
+                [ Html.text "✕" ]
+             ]
+                ++ children
+            )
         ]
 
 
