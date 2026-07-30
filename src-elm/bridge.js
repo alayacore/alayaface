@@ -198,7 +198,7 @@
     attachScroll();
     // Check for new messages containers periodically (e.g. new sessions)
     var scrollObserver = new MutationObserver(attachScroll);
-    scrollObserver.observe(document.getElementById("root"), { childList: true, subtree: true });
+    scrollObserver.observe(root, { childList: true, subtree: true });
 
     // 5. Window maximize state
     window.__TAURI__.window.getCurrentWindow().isMaximized().then(function (v) {
