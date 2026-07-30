@@ -2424,7 +2424,6 @@ viewMessage cursorMsgId sessionId msg =
         T.Assistant ->
             Html.div
                 ([ Attr.class ("message message-" ++ T.roleToString msg.role ++ cursorClass)
-                 , Ev.onClick NoOp
                  ]
                     ++ ctxAttrs
                 )
@@ -2461,7 +2460,6 @@ viewMessage cursorMsgId sessionId msg =
         T.User ->
             Html.div
                 ([ Attr.class ("message message-" ++ T.roleToString msg.role ++ cursorClass)
-                 , Ev.onClick NoOp
                  ]
                     ++ ctxAttrs
                 )
