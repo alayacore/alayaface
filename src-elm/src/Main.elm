@@ -2212,25 +2212,6 @@ viewSessionPanel model id =
                     "session-panel"
                         ++ (if isActive then " session-panel-active" else "")
 
-                -- Resize handle generator
-                resizeHandle : ResizeHandle -> Html Msg
-                resizeHandle handle =
-                    let
-                        className =
-                            "resize-handle resize-handle-" ++ resizeHandleString handle
-                    in
-                    Html.div
-                        [ Attr.class className
-                        , Ev.preventDefaultOn "mousedown"
-                            (D.map2
-                                (\clientX clientY ->
-                                    ( ResizeStart id handle clientX clientY, True )
-                                )
-                                (D.field "clientX" D.float)
-                                (D.field "clientY" D.float)
-                            )
-                        ]
-                        []
             in
             Html.div
                 ([ Attr.class panelClasses
@@ -2239,14 +2220,14 @@ viewSessionPanel model id =
                  ]
                     ++ positionStyles
                 )
-                [ resizeHandle NW
-                , resizeHandle N
-                , resizeHandle NE
-                , resizeHandle W
-                , resizeHandle E
-                , resizeHandle SW
-                , resizeHandle S
-                , resizeHandle SE
+                [ viewResizeHandle id NW
+                , viewResizeHandle id N
+                , viewResizeHandle id NE
+                , viewResizeHandle id W
+                , viewResizeHandle id E
+                , viewResizeHandle id SW
+                , viewResizeHandle id S
+                , viewResizeHandle id SE
                 , Html.div
                     [ Attr.class "session-bar"
                     , Ev.preventDefaultOn "mousedown"
@@ -2616,6 +2597,26 @@ resizeHandleString handle =
         NE -> "ne"
         SW -> "sw"
         SE -> "se"
+
+
+viewResizeHandle : String -> ResizeHandle -> Html Msg
+viewResizeHandle sid handle =
+    let
+        className =
+            "resize-handle resize-handle-" ++ resizeHandleString handle
+    in
+    Html.div
+        [ Attr.class className
+        , Ev.preventDefaultOn "mousedown"
+            (D.map2
+                (\clientX clientY ->
+                    ( ResizeStart sid handle clientX clientY, True )
+                )
+                (D.field "clientX" D.float)
+                (D.field "clientY" D.float)
+            )
+        ]
+        []
 
 
 type alias ResizeResult =
