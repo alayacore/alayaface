@@ -114,6 +114,13 @@ type alias Model =
     , dragInfo : Maybe DragInfo
     , resizeInfo : Maybe ResizeInfo
     , showGlobalMenu : Bool
+    , ctxVisible : Bool
+    , ctxX : Int
+    , ctxY : Int
+    , ctxHistoryId : String
+    , ctxSessionId : String
+    , appWidth : Int
+    , appHeight : Int
     }
 
 
@@ -144,8 +151,18 @@ init _ =
       , dragInfo = Nothing
       , resizeInfo = Nothing
       , showGlobalMenu = False
+      , ctxVisible = False
+      , ctxX = 0
+      , ctxY = 0
+      , ctxHistoryId = ""
+      , ctxSessionId = ""
+      , appWidth = 864
+      , appHeight = 600
       }
-    , Ports.createSession { toolConfirm = Just "execute_command" }
+    , Cmd.batch
+        [ Ports.createSession { toolConfirm = Just "execute_command" }
+        , Task.perform (\vp -> WindowResized (round vp.viewport.width) (round vp.viewport.height)) Dom.getViewport
+        ]
     )
 
 
@@ -243,6 +260,7 @@ type Msg
     | SelectAllSessions
       -- Window
     | WindowMaximized Bool
+    | WindowResized Int Int
       -- Model Selector
     | OpenModelSelector
     | CloseModelSelector
@@ -264,6 +282,12 @@ type Msg
     | WindowDragEnd
       -- Window resizing
     | ResizeStart String ResizeHandle Float Float
+      -- Instant activation on mousedown
+    | ActivateSession String
+      -- Context menu
+    | ShowCtxMenu Int Int String String
+    | HideCtxMenu
+    | ForkFromCtx
       -- Global menu
     | ToggleGlobalMenu
     | CloseGlobalMenu
@@ -685,6 +709,29 @@ update msg model =
 
                 Nothing ->
                     ( model, Cmd.none )
+
+        ShowCtxMenu x y historyId sessionId ->
+            ( { model
+                | ctxVisible = True
+                , ctxX = x
+                , ctxY = y
+                , ctxHistoryId = historyId
+                , ctxSessionId = sessionId
+              }
+            , Cmd.none
+            )
+
+        HideCtxMenu ->
+            ( { model | ctxVisible = False }, Cmd.none )
+
+        ForkFromCtx ->
+            if model.ctxHistoryId /= "" && model.ctxSessionId /= "" then
+                ( { model | ctxVisible = False, pendingSwitchOnCreate = True }
+                , Ports.forkSession { sourceSessionId = model.ctxSessionId, historyId = model.ctxHistoryId }
+                )
+
+            else
+                ( { model | ctxVisible = False }, Cmd.none )
 
         RemoveStaged stagedId ->
             case model.activeId of
@@ -1305,6 +1352,9 @@ update msg model =
         WindowMaximized v ->
             ( { model | isMaximized = v }, Cmd.none )
 
+        WindowResized w h ->
+            ( { model | appWidth = w, appHeight = h }, Cmd.none )
+
         -- Model Selector
         OpenModelSelector ->
             case getActiveSession model of
@@ -1521,19 +1571,23 @@ update msg model =
 
             -- Escape or Ctrl+[ closes any open overlay
             else if key == "Escape" || (key == "[" && ctrl) then
-                case getActiveSession model of
-                    Just s ->
-                        if s.showModelSelector then
-                            update CloseModelSelector model
-                        else if s.showHelpWindow then
-                            update CloseHelpWindow model
-                        else if s.showFilePicker then
-                            update CloseFilePicker model
-                        else
-                            ( model, Cmd.none )
+                if model.ctxVisible then
+                    ( { model | ctxVisible = False }, Cmd.none )
 
-                    Nothing ->
-                        ( model, Cmd.none )
+                else
+                    case getActiveSession model of
+                        Just s ->
+                            if s.showModelSelector then
+                                update CloseModelSelector model
+                            else if s.showHelpWindow then
+                                update CloseHelpWindow model
+                            else if s.showFilePicker then
+                                update CloseFilePicker model
+                            else
+                                ( model, Cmd.none )
+
+                        Nothing ->
+                            ( model, Cmd.none )
 
             else
                 ( model, Cmd.none )
@@ -1603,11 +1657,33 @@ update msg model =
 
                         newY =
                             info.startWinY + dy
+
+                        -- Look up current window size for right/bottom clamping
+                        winSize =
+                            Dict.get info.sessionId model.windowPositions
+
+                        winW =
+                            Maybe.map .w winSize |> Maybe.withDefault 560
+
+                        winH =
+                            Maybe.map .h winSize |> Maybe.withDefault 640
+
+                        maxX =
+                            max 0 (model.appWidth - winW)
+
+                        maxY =
+                            max 0 (model.appHeight - winH)
+
+                        clampedX =
+                            clamp 0 maxX newX
+
+                        clampedY =
+                            clamp 0 maxY newY
                     in
                     ( { model
                         | windowPositions =
                             Dict.update info.sessionId
-                                (Maybe.map (\pos -> { pos | x = newX, y = newY }))
+                                (Maybe.map (\pos -> { pos | x = clampedX, y = clampedY }))
                                 model.windowPositions
                       }
                     , Cmd.none
@@ -1618,6 +1694,21 @@ update msg model =
 
         WindowDragEnd ->
             ( { model | dragInfo = Nothing, resizeInfo = Nothing }, Cmd.none )
+
+        ActivateSession id ->
+            let
+                newPositions =
+                    Dict.update id
+                        (Maybe.map (\pos -> { pos | z = model.nextZIndex }))
+                        model.windowPositions
+            in
+            ( { model
+                | activeId = Just id
+                , windowPositions = newPositions
+                , nextZIndex = model.nextZIndex + 1
+              }
+            , Cmd.none
+            )
 
         NoOp ->
             ( model, Cmd.none )
@@ -1660,11 +1751,37 @@ windowDragMoveResize model mouseX mouseY =
 
                 r =
                     resizeDimensions info.handle dx dy info.startWinX info.startWinY info.startWinW info.startWinH minW minH
+
+                -- Clamp so window stays fully within container
+                clampedX =
+                    clamp 0 (max 0 (model.appWidth - r.w)) r.x
+
+                clampedY =
+                    clamp 0 (max 0 (model.appHeight - r.h)) r.y
+
+                -- If x/y was clamped, adjust w/h so right/bottom edge stays put
+                adjustW =
+                    if clampedX /= r.x then
+                        r.w + (r.x - clampedX)
+                    else
+                        r.w
+
+                adjustH =
+                    if clampedY /= r.y then
+                        r.h + (r.y - clampedY)
+                    else
+                        r.h
+
+                finalW =
+                    max minW adjustW
+
+                finalH =
+                    max minH adjustH
             in
             ( { model
                 | windowPositions =
                     Dict.update info.sessionId
-                        (Maybe.map (\pos -> { pos | x = r.x, y = r.y, w = r.w, h = r.h }))
+                        (Maybe.map (\pos -> { pos | x = clampedX, y = clampedY, w = finalW, h = finalH }))
                         model.windowPositions
               }
             , Cmd.none
@@ -2000,6 +2117,7 @@ subscriptions model =
         , Ports.onFsReadFileDataUri (\uri -> FsReadFileResult uri)
         , Ports.onFsResolvePath (\result -> FsResolvePathResult result)
         , Ports.onWindowMaximized (\v -> WindowMaximized v)
+        , Evts.onResize (\w h -> WindowResized w h)
         , Evts.onKeyDown <|
             D.map4 KeyDown
                 (D.field "key" D.string)
@@ -2028,6 +2146,7 @@ view model =
                 List.map (\id -> viewSessionPanel model id) model.sessionOrder
             )
         , viewGlobalMenu model
+        , viewContextMenu model
         ]
 
 
@@ -2088,6 +2207,7 @@ viewSessionPanel model id =
             Html.div
                 ([ Attr.class panelClasses
                  , Ev.onClick (SwitchSession id)
+                 , Ev.on "mousedown" (D.succeed (ActivateSession id))
                  ]
                     ++ positionStyles
                 )
@@ -2178,6 +2298,35 @@ viewGlobalMenu model =
         ]
 
 
+viewContextMenu : Model -> Html Msg
+viewContextMenu model =
+    if model.ctxVisible then
+        Html.div
+            [ Attr.class "ctx-overlay"
+            , Ev.onClick HideCtxMenu
+            , Ev.preventDefaultOn "contextmenu" (D.succeed ( HideCtxMenu, True ))
+            ]
+            [ Html.div
+                [ Attr.class "ctx-menu"
+                , Attr.style "left" (String.fromInt model.ctxX ++ "px")
+                , Attr.style "top" (String.fromInt model.ctxY ++ "px")
+                , Ev.stopPropagationOn "click" (D.succeed ( NoOp, True ))
+                , Ev.stopPropagationOn "contextmenu" (D.succeed ( NoOp, True ))
+                ]
+                [ Html.div
+                    [ Attr.class "ctx-menu-item"
+                    , Ev.onClick ForkFromCtx
+                    ]
+                    [ Html.span [ Attr.class "ctx-menu-icon" ] [ Html.text "⑂" ]
+                    , Html.text "Fork"
+                    ]
+                ]
+            ]
+
+    else
+        Html.text ""
+
+
 viewChatArea : Model -> T.SessionState -> Html Msg
 viewChatArea model session =
     let
@@ -2188,7 +2337,7 @@ viewChatArea model session =
         [ Attr.class "chat-area" ]
         [ if hasMessages then
             Html.div [ Attr.class "messages" ]
-                (List.map (viewMessage model.cursorMsgId) session.messages
+                (List.map (viewMessage model.cursorMsgId session.id) session.messages
 
                     ++ [ Html.div [] [] ]
                 )
@@ -2204,8 +2353,8 @@ viewChatArea model session =
         ]
 
 
-viewMessage : Maybe String -> T.Message -> Html Msg
-viewMessage cursorMsgId msg =
+viewMessage : Maybe String -> String -> T.Message -> Html Msg
+viewMessage cursorMsgId sessionId msg =
     let
         isCursor =
             case cursorMsgId of
@@ -2217,13 +2366,38 @@ viewMessage cursorMsgId msg =
                 " message-cursor"
             else
                 ""
+
+        hasHistoryId =
+            msg.historyId /= Nothing
+
+        -- Right-click handler for messages with historyId
+        ctxAttrs =
+            case msg.historyId of
+                Just hid ->
+                    [ Ev.preventDefaultOn "contextmenu"
+                        (D.map2
+                            (\clientX clientY ->
+                                ( ShowCtxMenu (round clientX) (round clientY) hid sessionId, True )
+                            )
+                            (D.field "clientX" D.float)
+                            (D.field "clientY" D.float)
+                        )
+                    ]
+
+                Nothing ->
+                    []
+
+        baseClass =
+            "message message-" ++ T.roleToString msg.role ++ cursorClass
     in
     case msg.role of
         T.Assistant ->
             Html.div
-                [ Attr.class ("message message-" ++ T.roleToString msg.role ++ cursorClass)
-                , Ev.onClick NoOp
-                ]
+                ([ Attr.class ("message message-" ++ T.roleToString msg.role ++ cursorClass)
+                 , Ev.onClick NoOp
+                 ]
+                    ++ ctxAttrs
+                )
                 [ Html.div [ Attr.class "message-content" ]
                     [ Markdown.toHtmlWith
                         { githubFlavored = Just { tables = True, breaks = True }
@@ -2238,21 +2412,29 @@ viewMessage cursorMsgId msg =
 
         T.Reasoning ->
             Html.div [ Attr.class "message-reasoning-wrap" ]
-                [ Html.div [ Attr.class ("message message-reasoning" ++ cursorClass) ]
+                [ Html.div
+                    ([ Attr.class ("message message-reasoning" ++ cursorClass) ]
+                        ++ ctxAttrs
+                    )
                     [ Html.text msg.content ]
                 ]
 
         T.Tool ->
             Html.div [ Attr.class "message-reasoning-wrap" ]
-                [ Html.div [ Attr.class ("message message-tool" ++ cursorClass) ]
+                [ Html.div
+                    ([ Attr.class ("message message-tool" ++ cursorClass) ]
+                        ++ ctxAttrs
+                    )
                     [ Html.text msg.content ]
                 ]
 
         T.User ->
             Html.div
-                [ Attr.class ("message message-" ++ T.roleToString msg.role ++ cursorClass)
-                , Ev.onClick NoOp
-                ]
+                ([ Attr.class ("message message-" ++ T.roleToString msg.role ++ cursorClass)
+                 , Ev.onClick NoOp
+                 ]
+                    ++ ctxAttrs
+                )
                 [ case msg.media of
                     Just items ->
                         Html.div [ Attr.class "hs-staged-row" ]
@@ -2266,7 +2448,9 @@ viewMessage cursorMsgId msg =
 
         T.System ->
             Html.div
-                [ Attr.class ("message message-" ++ T.roleToString msg.role ++ cursorClass) ]
+                ([ Attr.class ("message message-" ++ T.roleToString msg.role ++ cursorClass) ]
+                    ++ ctxAttrs
+                )
                 [ Html.div [ Attr.class "message-content" ]
                     (List.map (\line -> Html.span [] [ Html.text line ]) (String.lines msg.content))
                 ]
