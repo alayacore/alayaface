@@ -2260,7 +2260,13 @@ viewSessionPanel model id =
                     , Attr.title "Drag to move"
                     ]
                     [ Html.span [ Attr.class "session-bar-title" ]
-                        [ Html.text ("Session " ++ String.fromInt idx) ]
+                        [ Html.text
+                            (if session.activeModelName /= "" then
+                                "Session " ++ String.fromInt idx ++ " — " ++ session.activeModelName
+                             else
+                                "Session " ++ String.fromInt idx
+                            )
+                        ]
                     , Html.button
                         [ Attr.class "session-bar-close"
                         , Ev.stopPropagationOn "mousedown" (D.succeed ( NoOp, True ))
