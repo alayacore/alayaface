@@ -85,6 +85,17 @@ minWinH : Int
 minWinH = 200
 
 
+-- Shared Markdown render config
+
+markdownOptions : Markdown.Options
+markdownOptions =
+    { githubFlavored = Just { tables = True, breaks = True }
+    , defaultHighlighting = Nothing
+    , sanitize = False
+    , smartypants = False
+    }
+
+
 -- MAIN
 
 main : Program Flags Model Msg
@@ -2422,12 +2433,7 @@ viewMessage cursorMsgId sessionId msg =
                     ++ ctxAttrs
                 )
                 [ Html.div [ Attr.class "message-content" ]
-                    [ Markdown.toHtmlWith
-                        { githubFlavored = Just { tables = True, breaks = True }
-                        , defaultHighlighting = Nothing
-                        , sanitize = False
-                        , smartypants = False
-                        }
+                    [ Markdown.toHtmlWith markdownOptions
                         [ Attr.class "md" ]
                         msg.content
                     ]
