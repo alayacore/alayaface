@@ -368,14 +368,16 @@ update msg model =
                     else
                         let
                             -- Cascade: each new window offsets from previous
-                            count =
-                                Dict.size model.windowPositions
+                            -- Use nextSessionNum (monotonically increasing) to avoid
+                            -- overlapping with existing windows after session closures
+                            n =
+                                model.nextSessionNum
 
                             baseX =
-                                60 + remainderBy 5 count * 40
+                                60 + remainderBy 6 n * 50
 
                             baseY =
-                                60 + remainderBy 5 count * 30
+                                60 + remainderBy 4 n * 40
                         in
                         Dict.insert id
                             { x = baseX
