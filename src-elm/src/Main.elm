@@ -70,6 +70,21 @@ type alias ResizeInfo =
     }
 
 
+-- Constants
+
+defaultWinW : Int
+defaultWinW = 560
+
+defaultWinH : Int
+defaultWinH = 640
+
+minWinW : Int
+minWinW = 300
+
+minWinH : Int
+minWinH = 200
+
+
 -- MAIN
 
 main : Program Flags Model Msg
@@ -357,8 +372,8 @@ update msg model =
                             { x = baseX
                             , y = baseY
                             , z = model.nextZIndex
-                            , w = 560
-                            , h = 640
+                            , w = defaultWinW
+                            , h = defaultWinH
                             }
                             model.windowPositions
                 , nextZIndex = model.nextZIndex + 1
@@ -1753,10 +1768,10 @@ handleResizeMove model mouseX mouseY =
                     round mouseY - round info.startMouseY
 
                 minW =
-                    300
+                    minWinW
 
                 minH =
-                    200
+                    minWinH
 
                 r =
                     resizeDimensions info.handle dx dy info.startWinX info.startWinY info.startWinW info.startWinH minW minH
