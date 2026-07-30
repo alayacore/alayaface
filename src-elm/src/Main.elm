@@ -811,19 +811,25 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
         SwitchSession id ->
-            let
-                newPositions =
-                    Dict.update id
-                        (Maybe.map (\pos -> { pos | z = model.nextZIndex }))
-                        model.windowPositions
-            in
-            ( { model
-                | activeId = Just id
-                , windowPositions = newPositions
-                , nextZIndex = model.nextZIndex + 1
-              }
-            , Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ id))
-            )
+            if model.activeId == Just id then
+                -- Already active: just focus the input, no z-index bump
+                ( model
+                , Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ id))
+                )
+            else
+                let
+                    newPositions =
+                        Dict.update id
+                            (Maybe.map (\pos -> { pos | z = model.nextZIndex }))
+                            model.windowPositions
+                in
+                ( { model
+                    | activeId = Just id
+                    , windowPositions = newPositions
+                    , nextZIndex = model.nextZIndex + 1
+                  }
+                , Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ id))
+                )
 
         -- File Picker
         OpenFilePicker ->
@@ -1714,19 +1720,22 @@ update msg model =
             ( { model | dragInfo = Nothing, resizeInfo = Nothing }, Cmd.none )
 
         ActivateSession id ->
-            let
-                newPositions =
-                    Dict.update id
-                        (Maybe.map (\pos -> { pos | z = model.nextZIndex }))
-                        model.windowPositions
-            in
-            ( { model
-                | activeId = Just id
-                , windowPositions = newPositions
-                , nextZIndex = model.nextZIndex + 1
-              }
-            , Cmd.none
-            )
+            if model.activeId == Just id then
+                ( model, Cmd.none )
+            else
+                let
+                    newPositions =
+                        Dict.update id
+                            (Maybe.map (\pos -> { pos | z = model.nextZIndex }))
+                            model.windowPositions
+                in
+                ( { model
+                    | activeId = Just id
+                    , windowPositions = newPositions
+                    , nextZIndex = model.nextZIndex + 1
+                  }
+                , Cmd.none
+                )
 
         NoOp ->
             ( model, Cmd.none )
