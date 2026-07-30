@@ -1696,7 +1696,7 @@ update msg model =
                     )
 
                 Nothing ->
-                    windowDragMoveResize model mouseX mouseY
+                    handleResizeMove model mouseX mouseY
 
         WindowDragEnd ->
             ( { model | dragInfo = Nothing, resizeInfo = Nothing }, Cmd.none )
@@ -1741,8 +1741,8 @@ updateAfterConfirm model sid =
             model
 
 
-windowDragMoveResize : Model -> Float -> Float -> ( Model, Cmd Msg )
-windowDragMoveResize model mouseX mouseY =
+handleResizeMove : Model -> Float -> Float -> ( Model, Cmd Msg )
+handleResizeMove model mouseX mouseY =
     case model.resizeInfo of
         Just info ->
             let
