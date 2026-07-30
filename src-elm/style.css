@@ -1179,7 +1179,6 @@ body {
   z-index: 200;
   padding: 0;
   overflow-y: auto;
-  pointer-events: none;
 }
 
 .overlay-page {
