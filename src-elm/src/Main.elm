@@ -1766,15 +1766,22 @@ handleResizeMove model mouseX mouseY =
 
                 dy =
                     round mouseY - round info.startMouseY
-
-                minW =
-                    minWinW
-
-                minH =
-                    minWinH
+            in
+            let
+                config =
+                    { handle = info.handle
+                    , dx = dx
+                    , dy = dy
+                    , startX = info.startWinX
+                    , startY = info.startWinY
+                    , startW = info.startWinW
+                    , startH = info.startWinH
+                    , minW = minWinW
+                    , minH = minWinH
+                    }
 
                 r =
-                    resizeDimensions info.handle dx dy info.startWinX info.startWinY info.startWinW info.startWinH minW minH
+                    resizeDimensions config
 
                 -- Clamp so window stays within viewport
                 clampedX =
@@ -1797,10 +1804,10 @@ handleResizeMove model mouseX mouseY =
                         r.h
 
                 finalW =
-                    max minW adjustW
+                    max minWinW adjustW
 
                 finalH =
-                    max minH adjustH
+                    max minWinH adjustH
             in
             ( { model
                 | windowPositions =
@@ -2613,32 +2620,45 @@ type alias ResizeResult =
     { x : Int, y : Int, w : Int, h : Int }
 
 
-resizeDimensions : ResizeHandle -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> ResizeResult
-resizeDimensions handle dx dy startX startY startW startH minW minH =
-    case handle of
+type alias ResizeConfig =
+    { handle : ResizeHandle
+    , dx : Int
+    , dy : Int
+    , startX : Int
+    , startY : Int
+    , startW : Int
+    , startH : Int
+    , minW : Int
+    , minH : Int
+    }
+
+
+resizeDimensions : ResizeConfig -> ResizeResult
+resizeDimensions config =
+    case config.handle of
         E ->
-            { x = startX, y = startY, w = max minW (startW + dx), h = startH }
+            { x = config.startX, y = config.startY, w = max config.minW (config.startW + config.dx), h = config.startH }
 
         W ->
-            { x = startX + dx, y = startY, w = max minW (startW - dx), h = startH }
+            { x = config.startX + config.dx, y = config.startY, w = max config.minW (config.startW - config.dx), h = config.startH }
 
         S ->
-            { x = startX, y = startY, w = startW, h = max minH (startH + dy) }
+            { x = config.startX, y = config.startY, w = config.startW, h = max config.minH (config.startH + config.dy) }
 
         N ->
-            { x = startX, y = startY + dy, w = startW, h = max minH (startH - dy) }
+            { x = config.startX, y = config.startY + config.dy, w = config.startW, h = max config.minH (config.startH - config.dy) }
 
         NE ->
-            { x = startX, y = startY + dy, w = max minW (startW + dx), h = max minH (startH - dy) }
+            { x = config.startX, y = config.startY + config.dy, w = max config.minW (config.startW + config.dx), h = max config.minH (config.startH - config.dy) }
 
         NW ->
-            { x = startX + dx, y = startY + dy, w = max minW (startW - dx), h = max minH (startH - dy) }
+            { x = config.startX + config.dx, y = config.startY + config.dy, w = max config.minW (config.startW - config.dx), h = max config.minH (config.startH - config.dy) }
 
         SE ->
-            { x = startX, y = startY, w = max minW (startW + dx), h = max minH (startH + dy) }
+            { x = config.startX, y = config.startY, w = max config.minW (config.startW + config.dx), h = max config.minH (config.startH + config.dy) }
 
         SW ->
-            { x = startX + dx, y = startY, w = max minW (startW - dx), h = max minH (startH + dy) }
+            { x = config.startX + config.dx, y = config.startY, w = max config.minW (config.startW - config.dx), h = max config.minH (config.startH + config.dy) }
 
 
 -- ─── Overlay ──────────────────────────────────────────────────────────
