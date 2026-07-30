@@ -244,7 +244,6 @@ type Msg
     | FilePickerSelectItem Int
     | FilePickerConfirmItem
     | FilePickerPickItem Int
-    | FilePickerKeyDown Int
     | FilePickerToggleMode
     | FilePickerNavigateUp
     | FsListDirResult (List E.Value)
@@ -1216,9 +1215,6 @@ update msg model =
 
                 Nothing ->
                     ( model, Cmd.none )
-
-        FilePickerKeyDown _ ->
-            ( model, Cmd.none )
 
         FsListDirResult entries ->
             let
