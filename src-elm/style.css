@@ -208,7 +208,7 @@ body {
   flex-direction: column;
   align-items: center;
   gap: 10px;
-  padding: 12px 0;
+  padding: 0;
   background: transparent;
   width: 100%;
   max-width: var(--content-width);
@@ -451,22 +451,115 @@ body {
 
 .main-content {
   flex: 1;
-  display: flex;
-  flex-direction: row;
+  position: relative;
   min-width: 0;
-  overflow-x: auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* No-session state fills the main content area */
+.chat-area-centered {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
 }
 
 .session-panel {
-  flex: 1;
-  min-width: 300px;
+  position: absolute;
+  min-width: 360px;
+  width: 480px;
+  height: 480px;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px;
+  background: rgba(15,15,26,0.98);
+  box-shadow: 0 4px 24px rgba(0,0,0,0.4), 0 1px 4px rgba(0,0,0,0.2);
+  overflow: hidden;
+  transition: box-shadow 0.15s;
 }
-.session-panel:last-child { border-right: none; }
 .session-panel-active {
-  box-shadow: inset 0 0 0 1px rgba(99,102,241,0.3);
+  box-shadow: 0 4px 32px rgba(99,102,241,0.2), 0 0 0 1px rgba(99,102,241,0.3);
+}
+
+@media (prefers-color-scheme: light) {
+  .session-panel {
+    background: rgba(248,248,248,0.98);
+    border-color: rgba(0,0,0,0.1);
+    box-shadow: 0 4px 24px rgba(0,0,0,0.08), 0 1px 4px rgba(0,0,0,0.04);
+  }
+  .session-panel-active {
+    box-shadow: 0 4px 32px rgba(99,102,241,0.12), 0 0 0 1px rgba(99,102,241,0.2);
+  }
+}
+
+/* ─── Session Bar (draggable title bar) ─────────────────────────────── */
+
+.session-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  background: rgba(255,255,255,0.04);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  flex-shrink: 0;
+  min-height: 28px;
+  transition: background 0.12s;
+}
+.session-bar:hover {
+  background: rgba(255,255,255,0.07);
+}
+.session-bar:active {
+  cursor: grabbing;
+  background: rgba(99,102,241,0.12);
+}
+
+.session-bar-title {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #888;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
+.session-bar-close {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: transparent;
+  cursor: pointer;
+  font-size: 0.6rem;
+  padding: 2px 4px;
+  line-height: 1;
+  border-radius: 2px;
+  transition: color 0.12s, background 0.12s;
+  margin-left: 6px;
+}
+.session-bar:hover .session-bar-close { color: #888; }
+.session-bar-close:hover {
+  color: #e94560 !important;
+  background: rgba(233,69,96,0.1);
+}
+
+@media (prefers-color-scheme: light) {
+  .session-bar {
+    background: rgba(0,0,0,0.03);
+    border-bottom-color: rgba(0,0,0,0.06);
+  }
+  .session-bar:hover { background: rgba(0,0,0,0.05); }
+  .session-bar:active { background: rgba(99,102,241,0.08); }
+  .session-bar-title { color: #999; }
 }
 
 /* ─── Model Selector ───────────────────────────────────────────────── */
@@ -560,6 +653,7 @@ body {
   position: relative;
   z-index: 1;
   overflow: hidden;
+  padding: 10px;
 }
 
 .messages {

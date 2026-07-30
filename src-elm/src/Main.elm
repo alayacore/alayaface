@@ -27,6 +27,24 @@ import Ports
 import Fuzzy
 
 
+-- TYPE ALIASES
+
+type alias WindowPos =
+    { x : Int
+    , y : Int
+    , z : Int
+    }
+
+
+type alias DragInfo =
+    { sessionId : String
+    , startMouseX : Float
+    , startMouseY : Float
+    , startWinX : Int
+    , startWinY : Int
+    }
+
+
 -- MAIN
 
 main : Program Flags Model Msg
@@ -64,6 +82,11 @@ type alias Model =
     , cursorMsgId : Maybe String
     , contentWidth : Int
     , pendingEvents : Dict String (List E.Value)
+    , sessionNums : Dict String Int
+    , nextSessionNum : Int
+    , windowPositions : Dict String WindowPos
+    , nextZIndex : Int
+    , dragInfo : Maybe DragInfo
     }
 
 
@@ -87,6 +110,11 @@ init _ =
       , cursorMsgId = Nothing
       , contentWidth = 864
       , pendingEvents = Dict.empty
+      , sessionNums = Dict.empty
+      , nextSessionNum = 1
+      , windowPositions = Dict.empty
+      , nextZIndex = 1
+      , dragInfo = Nothing
       }
     , Ports.createSession { toolConfirm = Just "execute_command" }
     )
@@ -201,6 +229,12 @@ type Msg
     | FillMcpAuthUrl String
       -- Session wrapper
     | ForSession String Msg
+      -- Window dragging
+    | WindowDragStart String Float Float
+    | WindowDragMove Float Float
+    | WindowDragEnd
+      -- Instant activation on mousedown (before click)
+    | ActivateSession String
       -- Internal
     | NoOp
     | KeyDown String Bool Bool Bool
@@ -253,6 +287,25 @@ update msg model =
                 , initializing = False
                 , atBottom = True
                 , sessionOrder = model.sessionOrder ++ [ id ]
+                , sessionNums = Dict.insert id model.nextSessionNum model.sessionNums
+                , nextSessionNum = model.nextSessionNum + 1
+                , windowPositions =
+                    if Dict.member id model.windowPositions then
+                        model.windowPositions
+                    else
+                        let
+                            -- Cascade: each new window offsets from previous
+                            count =
+                                Dict.size model.windowPositions
+
+                            baseX =
+                                60 + remainderBy 5 count * 40
+
+                            baseY =
+                                60 + remainderBy 5 count * 30
+                        in
+                        Dict.insert id { x = baseX, y = baseY, z = model.nextZIndex } model.windowPositions
+                , nextZIndex = model.nextZIndex + 1
                 , pendingSwitchOnCreate = False
                 , pendingEvents = Dict.remove id model.pendingEvents
               }
@@ -263,6 +316,8 @@ update msg model =
             ( { model
                 | sessions = Dict.remove id model.sessions
                 , sessionOrder = List.filter (\k -> k /= id) model.sessionOrder
+                , sessionNums = Dict.remove id model.sessionNums
+                , windowPositions = Dict.remove id model.windowPositions
                 , activeId =
                     if model.activeId == Just id then
                         List.head (List.reverse (List.filter (\k -> k /= id) model.sessionOrder))
@@ -668,7 +723,19 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
         SwitchSession id ->
-            ( { model | activeId = Just id }, Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ id)) )
+            let
+                newPositions =
+                    Dict.update id
+                        (Maybe.map (\pos -> { pos | z = model.nextZIndex }))
+                        model.windowPositions
+            in
+            ( { model
+                | activeId = Just id
+                , windowPositions = newPositions
+                , nextZIndex = model.nextZIndex + 1
+              }
+            , Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ id))
+            )
 
         -- File Picker
         OpenFilePicker ->
@@ -1429,6 +1496,74 @@ update msg model =
         ForSession sid innerMsg ->
             update innerMsg { model | activeId = Just sid }
 
+        ActivateSession id ->
+            let
+                newPositions =
+                    Dict.update id
+                        (Maybe.map (\pos -> { pos | z = model.nextZIndex }))
+                        model.windowPositions
+            in
+            ( { model
+                | activeId = Just id
+                , windowPositions = newPositions
+                , nextZIndex = model.nextZIndex + 1
+              }
+            , Cmd.none
+            )
+
+        WindowDragStart id mouseX mouseY ->
+            case Dict.get id model.windowPositions of
+                Just pos ->
+                    ( { model
+                        | dragInfo =
+                            Just
+                                { sessionId = id
+                                , startMouseX = mouseX
+                                , startMouseY = mouseY
+                                , startWinX = pos.x
+                                , startWinY = pos.y
+                                }
+                        , windowPositions = Dict.insert id { pos | z = model.nextZIndex } model.windowPositions
+                        , nextZIndex = model.nextZIndex + 1
+                        , activeId = Just id
+                      }
+                    , Cmd.none
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        WindowDragMove mouseX mouseY ->
+            case model.dragInfo of
+                Just info ->
+                    let
+                        dx =
+                            round mouseX - round info.startMouseX
+
+                        dy =
+                            round mouseY - round info.startMouseY
+
+                        newX =
+                            info.startWinX + dx
+
+                        newY =
+                            info.startWinY + dy
+                    in
+                    ( { model
+                        | windowPositions =
+                            Dict.update info.sessionId
+                                (Maybe.map (\pos -> { pos | x = newX, y = newY }))
+                                model.windowPositions
+                      }
+                    , Cmd.none
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        WindowDragEnd ->
+            ( { model | dragInfo = Nothing }, Cmd.none )
+
         NoOp ->
             ( model, Cmd.none )
 
@@ -1695,8 +1830,6 @@ detectMediaType name =
         "htm" -> T.Document
         _ -> T.Document
 
--- ─── List Helpers ───────────────────────────────────────────────────
-
 -- ─── String Helpers ─────────────────────────────────────────────────
 
 lastIndexOf : Char -> String -> Maybe Int
@@ -1785,6 +1918,8 @@ subscriptions model =
                 (D.field "ctrlKey" D.bool)
                 (D.field "altKey" D.bool)
                 (D.field "defaultPrevented" D.bool)
+        , Evts.onMouseMove (D.map2 WindowDragMove (D.field "clientX" D.float) (D.field "clientY" D.float))
+        , Evts.onMouseUp (D.succeed WindowDragEnd)
         ]
 
 
@@ -1812,11 +1947,65 @@ viewSessionPanel : Model -> String -> Html Msg
 viewSessionPanel model id =
     case Dict.get id model.sessions of
         Just session ->
+            let
+                isActive =
+                    model.activeId == Just id
+
+                idx =
+                    case Dict.get id model.sessionNums of
+                        Just n -> n
+                        Nothing -> 0
+
+                winPos =
+                    Dict.get id model.windowPositions
+
+                positionStyles =
+                    case winPos of
+                        Just p ->
+                            [ Attr.style "left" (String.fromInt p.x ++ "px")
+                            , Attr.style "top" (String.fromInt p.y ++ "px")
+                            , Attr.style "z-index" (String.fromInt p.z)
+                            , Attr.style "position" "absolute"
+                            ]
+
+                        Nothing ->
+                            []
+
+                panelClasses =
+                    "session-panel"
+                        ++ (if isActive then " session-panel-active" else "")
+            in
             Html.div
-                [ Attr.class ("session-panel" ++ (if model.activeId == Just id then " session-panel-active" else ""))
-                , Ev.onClick (SwitchSession id)
+                ([ Attr.class panelClasses
+                 , Ev.onClick (SwitchSession id)
+                 , Ev.preventDefaultOn "mousedown" (D.succeed ( ActivateSession id, False ))
+                 ]
+                    ++ positionStyles
+                )
+                [ Html.div
+                    [ Attr.class "session-bar"
+                    , Ev.preventDefaultOn "mousedown"
+                        (D.map2
+                            (\clientX clientY ->
+                                ( WindowDragStart id clientX clientY, False )
+                            )
+                            (D.field "clientX" D.float)
+                            (D.field "clientY" D.float)
+                        )
+                    , Attr.title "Drag to move"
+                    ]
+                    [ Html.span [ Attr.class "session-bar-title" ]
+                        [ Html.text ("Session " ++ String.fromInt idx) ]
+                    , Html.button
+                        [ Attr.class "session-bar-close"
+                        , Ev.stopPropagationOn "mousedown" (D.succeed ( NoOp, True ))
+                        , Ev.stopPropagationOn "click" (D.succeed ( CloseSession id, True ))
+                        , Attr.title "Close session"
+                        ]
+                        [ Html.text "✕" ]
+                    ]
+                , viewChatArea model session
                 ]
-                [ viewChatArea model session ]
 
         Nothing ->
             Html.text ""
