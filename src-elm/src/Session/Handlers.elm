@@ -16,9 +16,15 @@ import Session.Protocol exposing (..)
 
 modelInfoDecoder : D.Decoder ModelInfo
 modelInfoDecoder =
-    D.map2 ModelInfo
+    D.map8 ModelInfo
         (D.field "id" D.int)
         (D.field "name" D.string)
+        (D.field "protocol_type" D.string)
+        (D.field "base_url" D.string)
+        (D.field "api_key" D.string)
+        (D.field "model_name" D.string)
+        (D.oneOf [ D.field "context_limit" D.int, D.succeed 0 ])
+        (D.oneOf [ D.field "max_tokens" D.int, D.succeed 0 ])
 
 
 -- Delta Event Handler (At/Ar)

@@ -15,11 +15,19 @@ view :
     , selected : Int
     , activeModelId : Maybe Int
     , activeModelName : String
+    , confirmDeleteId : Maybe Int
+    , canDelete : Bool
+    , dirty : Bool
     , noOp : msg
     , onSelect : Int -> msg
     , onConfirm : msg
     , onClose : msg
     , onInput : String -> msg
+    , onEdit : Int -> msg
+    , onDelete : Int -> msg
+    , onDeleteConfirm : Int -> msg
+    , onDeleteCancel : msg
+    , onAdd : msg
     }
     -> Html msg
 view config =
@@ -31,7 +39,11 @@ view config =
             "model-selector-input-" ++ config.sessionId
     in
     Html.div [ Attr.class "sel-page" ]
-        [ Html.div [ Attr.class "sel-page-title" ] [ Html.text "Model Selector" ]
+        [ Html.div
+            [ Attr.class "sel-page-title"
+            , Attr.title (if config.dirty then "Unsaved changes" else "")
+            ]
+            [ Html.text ("Model Selector" ++ (if config.dirty then " *" else "")) ]
         , Html.div [ Attr.class "sel-page-input-row" ]
             [ Html.input
                 [ Attr.class "sel-page-input"
@@ -50,14 +62,17 @@ view config =
                 ]
                 []
             ]
-        , if config.activeModelName /= "" then
-            Html.div [ Attr.class "sel-page-current" ]
-                [ Html.span [ Attr.class "sel-page-current-label" ] [ Html.text "Current: " ]
-                , Html.span [ Attr.class "sel-page-current-name" ] [ Html.text config.activeModelName ]
+        , Html.div [ Attr.class "sel-page-current" ]
+            [ Html.span [ Attr.class "sel-page-current-label" ] [ Html.text "Current: " ]
+            , Html.span [ Attr.class "sel-page-current-name" ]
+                [ Html.text (if config.activeModelName == "" then "none" else config.activeModelName) ]
+            , Html.button
+                [ Attr.class "sel-page-add-btn"
+                , Ev.stopPropagationOn "click" (D.succeed ( config.onAdd, True ))
+                , Attr.title "Add model"
                 ]
-
-          else
-            Html.text ""
+                [ Html.text "+ Add" ]
+            ]
         , if List.isEmpty config.models then
             Html.div [ Attr.class "sel-page-status" ] [ Html.text "No models configured." ]
 
@@ -73,7 +88,7 @@ view config =
         ]
 
 
-viewItem : Int -> T.ModelInfo -> { a | sessionId : String, selected : Int, activeModelId : Maybe Int, onSelect : Int -> msg, onConfirm : msg, noOp : msg } -> Html msg
+viewItem : Int -> T.ModelInfo -> { a | sessionId : String, selected : Int, activeModelId : Maybe Int, confirmDeleteId : Maybe Int, canDelete : Bool, onSelect : Int -> msg, onConfirm : msg, noOp : msg, onEdit : Int -> msg, onDelete : Int -> msg, onDeleteConfirm : Int -> msg, onDeleteCancel : msg } -> Html msg
 viewItem idx model config =
     let
         isSelected =
@@ -81,6 +96,12 @@ viewItem idx model config =
 
         isActive =
             config.activeModelId == Just model.id
+
+        isConfirmingDelete =
+            config.confirmDeleteId == Just model.id
+
+        stopClick msg =
+            Ev.stopPropagationOn "click" (D.succeed ( msg, True ))
     in
     Html.div
         [ Attr.id ("model-selector-item-" ++ config.sessionId ++ "-" ++ String.fromInt model.id)
@@ -95,6 +116,46 @@ viewItem idx model config =
         , Html.span [ Attr.class "sel-page-item-name" ] [ Html.text model.name ]
         , Html.span [ Attr.class "sel-page-item-check" ]
             [ if isActive then Html.text "●" else Html.text "" ]
+        , if isConfirmingDelete then
+            Html.span [ Attr.class "sel-page-item-actions" ]
+                [ Html.button
+                    [ Attr.class "sel-page-action sel-page-action-danger"
+                    , stopClick (config.onDeleteConfirm model.id)
+                    ]
+                    [ Html.text "Confirm" ]
+                , Html.button
+                    [ Attr.class "sel-page-action"
+                    , stopClick config.onDeleteCancel
+                    ]
+                    [ Html.text "Cancel" ]
+                ]
+
+          else
+            Html.span [ Attr.class "sel-page-item-actions" ]
+                [ Html.button
+                    [ Attr.class "sel-page-action"
+                    , Attr.disabled isActive
+                    , Attr.title (if isActive then "Active model cannot be edited" else "Edit model")
+                    , stopClick (config.onEdit model.id)
+                    ]
+                    [ Html.text "Edit" ]
+                , Html.button
+                    [ Attr.class "sel-page-action sel-page-action-danger"
+                    , Attr.disabled (isActive || not config.canDelete)
+                    , Attr.title
+                        (if isActive then
+                            "Active model cannot be deleted"
+
+                         else if not config.canDelete then
+                            "At least one model must remain"
+
+                         else
+                            "Delete model"
+                        )
+                    , stopClick (config.onDelete model.id)
+                    ]
+                    [ Html.text "Delete" ]
+                ]
         ]
 
 

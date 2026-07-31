@@ -14,13 +14,14 @@ import Html.Keyed as Keyed
 import Json.Decode as D
 import Json.Encode as E
 import Time
-import Session.Types as T
+import Session.Types as T exposing (ModelSelPage(..))
 import Session.Protocol as P
 import Session.Handlers as H
 import Overlay.ConfirmTool
 import Overlay.McpInit
 import Overlay.FilePicker
 import Overlay.ModelSelector
+import Overlay.ModelEditor
 import Overlay.HelpWindow exposing (HelpItem, filterHelpItems, view)
 import Markdown
 import Ports
@@ -284,6 +285,18 @@ type Msg
     | SetModelSelectorInput String
     | ModelSelectorSelectItem Int
     | ModelSelectorConfirmItem
+    | ModelSelectorEditModel Int
+    | ModelSelectorAddModel
+    | ModelSelectorEditBack
+    | ModelSelectorEditSave
+    | ModelSelectorEditField String String
+    | ModelSelectorDeleteModel Int
+    | ModelSelectorConfirmDelete Int
+    | ModelSelectorCancelDelete
+    | ModelSelectorConfirmSync
+    | ModelSelectorDiscardClose
+    | ModelSelectorCancelSyncPrompt
+    | ModelSelectorSyncResult Bool String
       -- Help Window
     | OpenHelpWindow
     | CloseHelpWindow
@@ -481,13 +494,25 @@ update msg model =
                                                 Nothing
                                             ]
                                         )
+
+                                updatedModel =
+                                    { model
+                                        | sessions = Dict.insert ev.sessionId newSession model.sessions
+                                        , prevMsgCount = List.length newSession.messages
+                                    }
                             in
-                            ( { model
-                                | sessions = Dict.insert ev.sessionId newSession model.sessions
-                                , prevMsgCount = List.length newSession.messages
-                              }
-                            , cmds
-                            )
+                            -- model_sync completes asynchronously via CO:
+                            -- success closes the overlay, failure keeps it open
+                            case decodeSyncOutcome raw of
+                                Just ( isError, message ) ->
+                                    if newSession.modelSelectorPage == ModelSelSyncing then
+                                        update (ForSession ev.sessionId (ModelSelectorSyncResult isError message)) updatedModel
+
+                                    else
+                                        ( updatedModel, cmds )
+
+                                Nothing ->
+                                    ( updatedModel, cmds )
 
                         Nothing ->
                             -- Buffer for when session is registered
@@ -507,16 +532,34 @@ update msg model =
                 Ok ev ->
                     case Dict.get ev.sessionId model.sessions of
                         Just session ->
-                            ( { model
-                                | sessions = Dict.insert ev.sessionId
+                            let
+                                updated =
                                     { session
                                         | connected = ev.connected
                                         , statusMsg = ev.message
                                     }
-                                    model.sessions
-                              }
-                            , Cmd.none
-                            )
+                            in
+                            if not ev.connected && session.modelSelectorPage == ModelSelSyncing then
+                                -- A disconnect means the model_sync CO will
+                                -- never arrive — fail the sync instead of
+                                -- leaving the overlay stuck.
+                                ( { model
+                                    | sessions = Dict.insert ev.sessionId
+                                        { updated
+                                            | modelSelectorPage = ModelSelSyncFailed
+                                            , modelSelectorSyncError = Just "Session disconnected during sync"
+                                        }
+                                        model.sessions
+                                  }
+                                , Cmd.none
+                                )
+
+                            else
+                                ( { model
+                                    | sessions = Dict.insert ev.sessionId updated model.sessions
+                                  }
+                                , Cmd.none
+                                )
 
                         Nothing ->
                             -- Buffer for when session is registered
@@ -1397,6 +1440,11 @@ update msg model =
                             , modelSelectorInput = ""
                             , modelSelectorSelected = 0
                             , modelSelectorScroll = 0
+                            , modelSelectorPage = ModelSelList
+                            , modelSelectorWorking = sess.models
+                            , modelSelectorDraft = Nothing
+                            , modelSelectorSyncError = Nothing
+                            , modelSelectorConfirmDelete = Nothing
                         }
                       )
                     , Cmd.batch
@@ -1409,15 +1457,39 @@ update msg model =
                     ( model, Cmd.none )
 
         CloseModelSelector ->
-            ( updateActiveSession model (\s -> { s | showModelSelector = False })
-            , focusInput model
-            )
+            case getActiveSession model of
+                Just s ->
+                    if s.modelSelectorPage == ModelSelSyncing then
+                        -- Do not allow closing while a sync is in flight
+                        ( model, Cmd.none )
+
+                    else if s.modelSelectorWorking /= s.models then
+                        -- Unsaved edits: ask before closing
+                        ( updateActiveSession model (\sess -> { sess | modelSelectorPage = ModelSelConfirmSync })
+                        , Cmd.none )
+
+                    else
+                        ( updateActiveSession model (\sess ->
+                            { sess
+                                | showModelSelector = False
+                                , modelSelectorPage = ModelSelList
+                                , modelSelectorWorking = []
+                                , modelSelectorDraft = Nothing
+                                , modelSelectorSyncError = Nothing
+                                , modelSelectorConfirmDelete = Nothing
+                            }
+                          )
+                        , focusInput model
+                        )
+
+                Nothing ->
+                    ( model, Cmd.none )
 
         SetModelSelectorInput val ->
             ( updateActiveSession model (\s ->
                 let
                     filtered =
-                        filterModels s.models val
+                        filterModels s.modelSelectorWorking val
 
                     -- Clamp selected index if filter reduces list
                     clampedSelected =
@@ -1441,7 +1513,7 @@ update msg model =
                         Just s ->
                             let
                                 filtered =
-                                    filterModels s.models s.modelSelectorInput
+                                    filterModels s.modelSelectorWorking s.modelSelectorInput
                             in
                             case List.head (List.drop idx filtered) of
                                 Just m ->
@@ -1462,22 +1534,236 @@ update msg model =
                 Just s ->
                     let
                         filtered =
-                            filterModels s.models s.modelSelectorInput
+                            filterModels s.modelSelectorWorking s.modelSelectorInput
 
                         selectedModel =
                             List.head (List.drop s.modelSelectorSelected filtered)
                     in
                     case selectedModel of
                         Just m ->
-                            ( updateActiveSession model (\sess -> { sess | showModelSelector = False, modelSelectorInput = "" })
+                            if s.modelSelectorWorking /= s.models then
+                                -- Unsaved edits: ask to sync before leaving
+                                ( updateActiveSession model (\sess -> { sess | modelSelectorPage = ModelSelConfirmSync })
+                                , Cmd.none )
+
+                            else
+                                ( updateActiveSession model (\sess -> { sess | showModelSelector = False, modelSelectorInput = "" })
+                                , Cmd.batch
+                                    [ Ports.setModel { sessionId = s.id, modelId = m.id }
+                                    , focusInput model
+                                    ]
+                                )
+
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        ModelSelectorEditModel id ->
+            case getActiveSession model of
+                Just s ->
+                    case List.filter (\m -> m.id == id) s.modelSelectorWorking |> List.head of
+                        Just m ->
+                            ( updateActiveSession model (\sess ->
+                                { sess
+                                    | modelSelectorPage = ModelSelEdit
+                                    , modelSelectorDraft = Just (draftFromModel m)
+                                    , modelSelectorConfirmDelete = Nothing
+                                }
+                              )
                             , Cmd.batch
-                                [ Ports.setModel { sessionId = s.id, modelId = m.id }
-                                , focusInput model
+                                [ focusAfterDelay ("model-editor-name-" ++ s.id)
+                                , Ports.setCursorPos ("model-editor-name-" ++ s.id)
                                 ]
                             )
 
                         Nothing ->
                             ( model, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        ModelSelectorAddModel ->
+            case getActiveSession model of
+                Just s ->
+                    ( updateActiveSession model (\sess ->
+                        { sess
+                            | modelSelectorPage = ModelSelEdit
+                            , modelSelectorDraft = Just T.emptyDraft
+                            , modelSelectorConfirmDelete = Nothing
+                        }
+                      )
+                    , Cmd.batch
+                        [ focusAfterDelay ("model-editor-name-" ++ s.id)
+                        , Ports.setCursorPos ("model-editor-name-" ++ s.id)
+                        ]
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        ModelSelectorEditBack ->
+            case getActiveSession model of
+                Just s ->
+                    ( updateActiveSession model (\sess ->
+                        { sess
+                            | modelSelectorPage = ModelSelList
+                            , modelSelectorDraft = Nothing
+                        }
+                      )
+                    , Cmd.batch
+                        [ focusAfterDelay ("model-selector-input-" ++ s.id)
+                        , Ports.setCursorPos ("model-selector-input-" ++ s.id)
+                        ]
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        ModelSelectorEditSave ->
+            case getActiveSession model of
+                Just s ->
+                    case s.modelSelectorDraft of
+                        Just draft ->
+                            let
+                                newModel =
+                                    modelFromDraft draft
+
+                                working =
+                                    if draft.id == 0 then
+                                        -- Assign a unique temporary id (backend
+                                        -- reassigns ids on sync anyway)
+                                        let
+                                            nextId =
+                                                List.foldl (\m acc -> max acc m.id) 0 s.modelSelectorWorking + 1
+                                        in
+                                        s.modelSelectorWorking ++ [ { newModel | id = nextId } ]
+
+                                    else
+                                        List.map
+                                            (\m -> if m.id == draft.id then newModel else m)
+                                            s.modelSelectorWorking
+                            in
+                            ( updateActiveSession model (\sess ->
+                                { sess
+                                    | modelSelectorPage = ModelSelList
+                                    , modelSelectorDraft = Nothing
+                                    , modelSelectorWorking = working
+                                }
+                              )
+                            , Cmd.batch
+                                [ focusAfterDelay ("model-selector-input-" ++ s.id)
+                                , Ports.setCursorPos ("model-selector-input-" ++ s.id)
+                                ]
+                            )
+
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        ModelSelectorEditField field value ->
+            ( updateActiveSession model (\sess ->
+                { sess
+                    | modelSelectorDraft =
+                        Maybe.map (updateDraftField field value) sess.modelSelectorDraft
+                }
+              )
+            , Cmd.none
+            )
+
+        ModelSelectorDeleteModel id ->
+            ( updateActiveSession model (\sess -> { sess | modelSelectorConfirmDelete = Just id })
+            , Cmd.none
+            )
+
+        ModelSelectorConfirmDelete id ->
+            ( updateActiveSession model (\sess ->
+                { sess
+                    | modelSelectorWorking = List.filter (\m -> m.id /= id) sess.modelSelectorWorking
+                    , modelSelectorConfirmDelete = Nothing
+                }
+              )
+            , Cmd.none
+            )
+
+        ModelSelectorCancelDelete ->
+            ( updateActiveSession model (\sess -> { sess | modelSelectorConfirmDelete = Nothing })
+            , Cmd.none
+            )
+
+        ModelSelectorConfirmSync ->
+            case getActiveSession model of
+                Just s ->
+                    ( updateActiveSession model (\sess -> { sess | modelSelectorPage = ModelSelSyncing })
+                    , Ports.modelSync
+                        { sessionId = s.id
+                        , config = encodeModels s.modelSelectorWorking
+                        }
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        ModelSelectorDiscardClose ->
+            ( updateActiveSession model (\sess ->
+                { sess
+                    | showModelSelector = False
+                    , modelSelectorPage = ModelSelList
+                    , modelSelectorWorking = []
+                    , modelSelectorDraft = Nothing
+                    , modelSelectorSyncError = Nothing
+                    , modelSelectorConfirmDelete = Nothing
+                }
+              )
+            , focusInput model
+            )
+
+        ModelSelectorCancelSyncPrompt ->
+            case getActiveSession model of
+                Just s ->
+                    ( updateActiveSession model (\sess -> { sess | modelSelectorPage = ModelSelList })
+                    , Cmd.batch
+                        [ focusAfterDelay ("model-selector-input-" ++ s.id)
+                        , Ports.setCursorPos ("model-selector-input-" ++ s.id)
+                        ]
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        ModelSelectorSyncResult isError message ->
+            case getActiveSession model of
+                Just s ->
+                    if s.modelSelectorPage == ModelSelSyncing then
+                        if isError then
+                            ( updateActiveSession model (\sess ->
+                                { sess
+                                    | modelSelectorPage = ModelSelSyncFailed
+                                    , modelSelectorSyncError = Just message
+                                }
+                              )
+                            , Cmd.none
+                            )
+
+                        else
+                            ( updateActiveSession model (\sess ->
+                                { sess
+                                    | showModelSelector = False
+                                    , modelSelectorPage = ModelSelList
+                                    , modelSelectorWorking = []
+                                    , modelSelectorDraft = Nothing
+                                    , modelSelectorSyncError = Nothing
+                                    , modelSelectorConfirmDelete = Nothing
+                                }
+                              )
+                            , focusInput model
+                            )
+
+                    else
+                        ( model, Cmd.none )
 
                 Nothing ->
                     ( model, Cmd.none )
@@ -1601,25 +1887,14 @@ update msg model =
             if defaultPrevented then
                 ( model, Cmd.none )
 
-            -- Escape or Ctrl+[ closes any open overlay
+            -- Escape or Ctrl+[ dismisses the context menu.
+            -- Overlays are closed via their close buttons only (no Escape).
             else if key == "Escape" || (key == "[" && ctrl) then
                 if model.ctxVisible then
                     ( { model | ctxVisible = False }, Cmd.none )
 
                 else
-                    case getActiveSession model of
-                        Just s ->
-                            if s.showModelSelector then
-                                update CloseModelSelector model
-                            else if s.showHelpWindow then
-                                update CloseHelpWindow model
-                            else if s.showFilePicker then
-                                update CloseFilePicker model
-                            else
-                                ( model, Cmd.none )
-
-                        Nothing ->
-                            ( model, Cmd.none )
+                    ( model, Cmd.none )
 
             -- Ctrl+W closes the active session window
             else if key == "w" && ctrl then
@@ -2144,6 +2419,120 @@ filterModels models term =
 
     else
         List.filter (\m -> Fuzzy.fuzzyMatch (String.toLower trimmed) (String.toLower m.name)) models
+
+
+draftFromModel : T.ModelInfo -> T.ModelDraft
+draftFromModel m =
+    { id = m.id
+    , name = m.name
+    , protocolType = m.protocolType
+    , baseUrl = m.baseUrl
+    , apiKey = m.apiKey
+    , modelName = m.modelName
+    , contextLimit = String.fromInt m.contextLimit
+    , maxTokens = String.fromInt m.maxTokens
+    }
+
+
+modelFromDraft : T.ModelDraft -> T.ModelInfo
+modelFromDraft d =
+    { id = d.id
+    , name = String.trim d.name
+    , protocolType = String.trim d.protocolType
+    , baseUrl = String.trim d.baseUrl
+    , apiKey = d.apiKey
+    , modelName = String.trim d.modelName
+    , contextLimit = String.toInt d.contextLimit |> Maybe.withDefault 0
+    , maxTokens = String.toInt d.maxTokens |> Maybe.withDefault 0
+    }
+
+
+updateDraftField : String -> String -> T.ModelDraft -> T.ModelDraft
+updateDraftField field value draft =
+    case field of
+        "name" ->
+            { draft | name = value }
+
+        "protocol_type" ->
+            { draft | protocolType = value }
+
+        "base_url" ->
+            { draft | baseUrl = value }
+
+        "api_key" ->
+            { draft | apiKey = value }
+
+        "model_name" ->
+            { draft | modelName = value }
+
+        "context_limit" ->
+            { draft | contextLimit = value }
+
+        "max_tokens" ->
+            { draft | maxTokens = value }
+
+        _ ->
+            draft
+
+
+encodeModels : List T.ModelInfo -> String
+encodeModels models =
+    E.encode 0 (E.list encodeModel models)
+
+
+encodeModel : T.ModelInfo -> E.Value
+encodeModel m =
+    E.object
+        [ ( "id", E.int m.id )
+        , ( "name", E.string m.name )
+        , ( "protocol_type", E.string m.protocolType )
+        , ( "base_url", E.string m.baseUrl )
+        , ( "api_key", E.string m.apiKey )
+        , ( "model_name", E.string m.modelName )
+        , ( "context_limit", E.int m.contextLimit )
+        , ( "max_tokens", E.int m.maxTokens )
+        ]
+
+
+-- Decode a model_sync CO result: Just ( isError, message ) when the frame
+-- is a CO for the model_sync command, Nothing otherwise.
+decodeSyncOutcome : E.Value -> Maybe ( Bool, String )
+decodeSyncOutcome raw =
+    case D.decodeValue P.frameEventDecoder raw of
+        Ok ev ->
+            if ev.tag == "CO" then
+                case ev.json of
+                    Just json ->
+                        let
+                            name =
+                                D.decodeValue (D.field "name" D.string) json
+                                    |> Result.toMaybe
+                                    |> Maybe.withDefault ""
+
+                            isError =
+                                D.decodeValue (D.field "is_error" D.bool) json
+                                    |> Result.toMaybe
+                                    |> Maybe.withDefault False
+
+                            message =
+                                D.decodeValue (D.field "output" (D.field "message" D.string)) json
+                                    |> Result.toMaybe
+                                    |> Maybe.withDefault ""
+                        in
+                        if name == "model_sync" then
+                            Just ( isError, message )
+
+                        else
+                            Nothing
+
+                    Nothing ->
+                        Nothing
+
+            else
+                Nothing
+
+        Err _ ->
+            Nothing
 
 
 -- ─── Help Items ──────────────────────────────────────────────────────
@@ -2846,22 +3235,120 @@ viewModelSelectorOverlay : String -> T.SessionState -> Html Msg
 viewModelSelectorOverlay sid session =
     if session.showModelSelector then
         viewOverlay (ForSession sid CloseModelSelector)
-            [ Overlay.ModelSelector.view
-                { sessionId = sid
-                , models = session.models
-                , input = session.modelSelectorInput
-                , selected = session.modelSelectorSelected
-                , activeModelId = session.activeModelId
-                , activeModelName = session.activeModelName
-                , noOp = NoOp
-                , onSelect = \i -> ForSession sid (ModelSelectorSelectItem i)
-                , onConfirm = ForSession sid ModelSelectorConfirmItem
-                , onClose = ForSession sid CloseModelSelector
-                , onInput = \v -> ForSession sid (SetModelSelectorInput v)
-                }
+            [ case session.modelSelectorPage of
+                ModelSelEdit ->
+                    case session.modelSelectorDraft of
+                        Just draft ->
+                            Overlay.ModelEditor.view
+                                { sessionId = sid
+                                , draft = draft
+                                , isNew = draft.id == 0
+                                , onBack = ForSession sid ModelSelectorEditBack
+                                , onSave = ForSession sid ModelSelectorEditSave
+                                , onField = \field value -> ForSession sid (ModelSelectorEditField field value)
+                                }
+
+                        Nothing ->
+                            Html.text ""
+
+                ModelSelConfirmSync ->
+                    viewSyncPrompt (session.modelSelectorWorking /= session.models) sid
+
+                ModelSelSyncing ->
+                    Html.div [ Attr.class "sel-page" ]
+                        [ viewSelTitle (session.modelSelectorWorking /= session.models)
+                        , Html.div [ Attr.class "sel-page-status" ] [ Html.text "Syncing…" ]
+                        ]
+
+                ModelSelSyncFailed ->
+                    viewSyncFailed (session.modelSelectorWorking /= session.models) sid session
+
+                ModelSelList ->
+                    Overlay.ModelSelector.view
+                        { sessionId = sid
+                        , models = session.modelSelectorWorking
+                        , input = session.modelSelectorInput
+                        , selected = session.modelSelectorSelected
+                        , activeModelId = session.activeModelId
+                        , activeModelName = session.activeModelName
+                        , confirmDeleteId = session.modelSelectorConfirmDelete
+                        , canDelete = List.length session.modelSelectorWorking > 1
+                        , dirty = session.modelSelectorWorking /= session.models
+                        , noOp = NoOp
+                        , onSelect = \i -> ForSession sid (ModelSelectorSelectItem i)
+                        , onConfirm = ForSession sid ModelSelectorConfirmItem
+                        , onClose = ForSession sid CloseModelSelector
+                        , onInput = \v -> ForSession sid (SetModelSelectorInput v)
+                        , onEdit = \id -> ForSession sid (ModelSelectorEditModel id)
+                        , onDelete = \id -> ForSession sid (ModelSelectorDeleteModel id)
+                        , onDeleteConfirm = \id -> ForSession sid (ModelSelectorConfirmDelete id)
+                        , onDeleteCancel = ForSession sid ModelSelectorCancelDelete
+                        , onAdd = ForSession sid ModelSelectorAddModel
+                        }
             ]
     else
         Html.text ""
+
+
+viewSelTitle : Bool -> Html Msg
+viewSelTitle dirty =
+    Html.div
+        [ Attr.class "sel-page-title"
+        , Attr.title (if dirty then "Unsaved changes" else "")
+        ]
+        [ Html.text ("Model Selector" ++ (if dirty then " *" else "")) ]
+
+
+viewSyncPrompt : Bool -> String -> Html Msg
+viewSyncPrompt dirty sid =
+    Html.div [ Attr.class "sel-page" ]
+        [ viewSelTitle dirty
+        , Html.div [ Attr.class "sel-page-status" ]
+            [ Html.text "You have unsaved changes. Sync them now?" ]
+        , Html.div [ Attr.class "sel-page-actions" ]
+            [ Html.button
+                [ Attr.class "me-save-btn"
+                , Ev.onClick (ForSession sid ModelSelectorConfirmSync)
+                ]
+                [ Html.text "Sync & Close" ]
+            , Html.button
+                [ Attr.class "me-cancel-btn"
+                , Ev.onClick (ForSession sid ModelSelectorDiscardClose)
+                ]
+                [ Html.text "Discard & Close" ]
+            , Html.button
+                [ Attr.class "me-cancel-btn"
+                , Ev.onClick (ForSession sid ModelSelectorCancelSyncPrompt)
+                ]
+                [ Html.text "Cancel" ]
+            ]
+        ]
+
+
+viewSyncFailed : Bool -> String -> T.SessionState -> Html Msg
+viewSyncFailed dirty sid session =
+    Html.div [ Attr.class "sel-page" ]
+        [ viewSelTitle dirty
+        , Html.div [ Attr.class "sel-page-status sel-page-status-error" ]
+            [ Html.text ("Sync failed: " ++ Maybe.withDefault "Unknown error" session.modelSelectorSyncError) ]
+        , Html.div [ Attr.class "sel-page-actions" ]
+            [ Html.button
+                [ Attr.class "me-save-btn"
+                , Ev.onClick (ForSession sid ModelSelectorConfirmSync)
+                ]
+                [ Html.text "Retry" ]
+            , Html.button
+                [ Attr.class "me-cancel-btn"
+                , Ev.onClick (ForSession sid ModelSelectorCancelSyncPrompt)
+                ]
+                [ Html.text "Back to List" ]
+            , Html.button
+                [ Attr.class "me-cancel-btn"
+                , Ev.onClick (ForSession sid ModelSelectorDiscardClose)
+                ]
+                [ Html.text "Discard & Close" ]
+            ]
+        ]
 
 
 -- ─── Help Window Overlay ─────────────────────────────────────────────

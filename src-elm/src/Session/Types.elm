@@ -13,8 +13,11 @@ module Session.Types exposing
     , NotifType(..)
     , SessionState
     , ModelInfo
+    , ModelDraft
+    , ModelSelPage(..)
     , ThemeInfo
     , emptySession
+    , emptyDraft
     , PendingConfirm
     , FileMode(..)
     , DirEntry
@@ -220,6 +223,11 @@ type alias SessionState =
     , modelSelectorInput : String
     , modelSelectorSelected : Int
     , modelSelectorScroll : Int
+    , modelSelectorPage : ModelSelPage
+    , modelSelectorWorking : List ModelInfo
+    , modelSelectorDraft : Maybe ModelDraft
+    , modelSelectorSyncError : Maybe String
+    , modelSelectorConfirmDelete : Maybe Int
     , showHelpWindow : Bool
     , helpFilter : String
     , helpSelected : Int
@@ -230,6 +238,45 @@ type alias SessionState =
 type alias ModelInfo =
     { id : Int
     , name : String
+    , protocolType : String
+    , baseUrl : String
+    , apiKey : String
+    , modelName : String
+    , contextLimit : Int
+    , maxTokens : Int
+    }
+
+
+type alias ModelDraft =
+    { id : Int
+    , name : String
+    , protocolType : String
+    , baseUrl : String
+    , apiKey : String
+    , modelName : String
+    , contextLimit : String
+    , maxTokens : String
+    }
+
+
+type ModelSelPage
+    = ModelSelList
+    | ModelSelEdit
+    | ModelSelConfirmSync
+    | ModelSelSyncing
+    | ModelSelSyncFailed
+
+
+emptyDraft : ModelDraft
+emptyDraft =
+    { id = 0
+    , name = ""
+    , protocolType = "openai"
+    , baseUrl = ""
+    , apiKey = ""
+    , modelName = ""
+    , contextLimit = "0"
+    , maxTokens = "0"
     }
 
 
@@ -292,6 +339,11 @@ emptySession id =
     , modelSelectorInput = ""
     , modelSelectorSelected = 0
     , modelSelectorScroll = 0
+    , modelSelectorPage = ModelSelList
+    , modelSelectorWorking = []
+    , modelSelectorDraft = Nothing
+    , modelSelectorSyncError = Nothing
+    , modelSelectorConfirmDelete = Nothing
     , showHelpWindow = False
     , helpFilter = ""
     , helpSelected = 0

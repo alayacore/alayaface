@@ -64,16 +64,16 @@ All three now use `focusAfterDelay` on open.
   autofocus behavior interferes with programmatic focus control.
 - **`pointer-events: none` on `.overlay`**: prevents the overlay
   backdrop from intercepting clicks on the input bar buttons.
-- **Escape key fix**: Escape now dispatches `CloseModelSelector` /
-  `CloseHelpWindow` / `CloseFilePicker` via `update`, closing the
-  overlay and returning focus to the prompt input. Previously it only
-  set `activeId` without closing anything.
+- **Escape key**: Overlays are **not** closed by Escape — they are closed
+  exclusively via their close (✕) buttons. Escape only dismisses the
+  right-click context menu. This prevents accidental dismissal of overlays
+  that hold state (e.g. the model editor).
 
 ## Files Changed
 
 | File | Change |
 |------|--------|
-| `src/Main.elm` | Added `focusAfterDelay`, `Process` import; changed all overlay open handlers to use `focusAfterDelay` + `Ports.setCursorPos`; changed `focusInput` to use `Dom.focus`; fixed Escape handler |
+| `src/Main.elm` | Added `focusAfterDelay`, `Process` import; changed all overlay open handlers to use `focusAfterDelay` + `Ports.setCursorPos`; changed `focusInput` to use `Dom.focus`; removed Escape-close for overlays (only the context menu dismisses via Escape) |
 | `src/Ports.elm` | Added `setCursorPos` port |
 | `bridge.js` | `focusElement` port deprecated (no-op); added `setCursorPos` handler; removed `requestAnimationFrame` wrapper from `scrollIntoView` |
 | `style.css` | Added `pointer-events: none` to `.overlay`, `pointer-events: auto` to `.overlay-page` |

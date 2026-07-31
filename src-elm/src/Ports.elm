@@ -9,6 +9,7 @@ port module Ports exposing
     , sendPrompt
     , cancelTask
     , setModel
+    , modelSync
     , confirmTool
     , sendMcpDecline
     , sendMcpCancel
@@ -59,6 +60,7 @@ port closeSession : { sessionId : String } -> Cmd msg
 port sendPrompt : { sessionId : String, text : String, media : List E.Value } -> Cmd msg
 port cancelTask : { sessionId : String } -> Cmd msg
 port setModel : { sessionId : String, modelId : Int } -> Cmd msg
+port modelSync : { sessionId : String, config : String } -> Cmd msg
 port confirmTool : { sessionId : String, id : String, allowed : Bool } -> Cmd msg
 port sendMcpDecline : { sessionId : String, server : String } -> Cmd msg
 port sendMcpCancel : { sessionId : String } -> Cmd msg

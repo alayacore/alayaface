@@ -55,6 +55,12 @@
       });
     });
 
+    on("modelSync", function (data) {
+      invoke("alayacore_model_sync", {
+        sessionId: data.sessionId, config: data.config,
+      });
+    });
+
     on("confirmTool", function (data) {
       invoke("alayacore_confirm", {
         sessionId: data.sessionId, id: data.id, allowed: data.allowed,
