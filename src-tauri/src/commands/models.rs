@@ -29,7 +29,7 @@ pub async fn list_models(
     // Ask any connected session
     {
         let map = sessions.0.lock().await;
-        for (_sid, handle) in map.iter() {
+        for (sid, handle) in map.iter() {
             if handle.connected.load(std::sync::atomic::Ordering::SeqCst) {
                 let mut stdin = handle.stdin.lock().await;
                 let payload = serde_json::json!({
@@ -37,7 +37,10 @@ pub async fn list_models(
                     "name": "model_load",
                     "input": "",
                 });
-                let _ = tlv::write_frame(&mut *stdin, tlv::TAG_CMD_INPUT, &payload.to_string());
+                let payload_str = payload.to_string();
+                let preview: String = payload_str.chars().take(200).collect();
+                log::info!("[tlv] >> {} {} {}b {}", sid, tlv::TAG_CMD_INPUT, payload_str.len(), preview);
+                let _ = tlv::write_frame(&mut *stdin, tlv::TAG_CMD_INPUT, &payload_str);
                 let _ = stdin.flush();
                 let cache = model_cache.0.lock().unwrap();
                 if !cache.is_empty() {
@@ -75,6 +78,8 @@ pub async fn list_models(
         }
         match tlv::read_frame(&mut stdout) {
             Ok(Some(frame)) => {
+                let preview: String = frame.value.chars().take(200).collect();
+                log::info!("[tlv] << temp {} {}b {}", frame.tag, frame.value.len(), preview);
                 if frame.tag == "SM" {
                     if let Ok(env) = serde_json::from_str::<tlv::SystemMsgEnvelope>(&frame.value) {
                         if env.msg_type == "model_list" {
@@ -141,6 +146,8 @@ fn read_models_from_temp(
         }
         match tlv::read_frame(&mut stdout) {
             Ok(Some(frame)) => {
+                let preview: String = frame.value.chars().take(200).collect();
+                log::info!("[tlv] << temp {} {}b {}", frame.tag, frame.value.len(), preview);
                 if frame.tag == "SM" {
                     if let Ok(env) = serde_json::from_str::<tlv::SystemMsgEnvelope>(&frame.value) {
                         if env.msg_type == "model_list" {
@@ -214,7 +221,10 @@ pub async fn sync_default_models(
         "name": "model_sync",
         "input": config,
     });
-    let _ = tlv::write_frame(&mut stdin, tlv::TAG_CMD_INPUT, &payload.to_string());
+    let payload_str = payload.to_string();
+    let preview: String = payload_str.chars().take(200).collect();
+    log::info!("[tlv] >> temp {} {}b {}", tlv::TAG_CMD_INPUT, payload_str.len(), preview);
+    let _ = tlv::write_frame(&mut stdin, tlv::TAG_CMD_INPUT, &payload_str);
     let _ = stdin.flush();
 
     let start = std::time::Instant::now();
@@ -225,6 +235,8 @@ pub async fn sync_default_models(
         }
         match tlv::read_frame(&mut stdout) {
             Ok(Some(frame)) => {
+                let preview: String = frame.value.chars().take(200).collect();
+                log::info!("[tlv] << temp {} {}b {}", frame.tag, frame.value.len(), preview);
                 if frame.tag == "SM" {
                     // Refresh the shared cache with the synced list
                     if let Ok(env) = serde_json::from_str::<tlv::SystemMsgEnvelope>(&frame.value) {

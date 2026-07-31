@@ -55,7 +55,7 @@ pub(crate) async fn send_raw(
 
     // Log outgoing frame for debugging
     let preview: String = value.chars().take(200).collect();
-    log::debug!("[tlv] >> {} {} {}b {}", session_id, tag, value.len(), preview);
+    log::info!("[tlv] >> {} {} {}b {}", session_id, tag, value.len(), preview);
 
     Ok(())
 }

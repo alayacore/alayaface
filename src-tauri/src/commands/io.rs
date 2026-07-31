@@ -42,11 +42,16 @@ pub async fn alayacore_send_prompt(
             "document" => tlv::TAG_USER_DOC,
             _ => return Err(format!("Unknown media type: {}", item.media_type)),
         };
+        let preview: String = item.uri.chars().take(200).collect();
+        log::info!("[tlv] >> {} {} {}b {}", session_id, tag, item.uri.len(), preview);
         tlv::write_frame(&mut *stdin, tag, &item.uri).map_err(|e| format!("Write error: {e}"))?;
     }
     if !text.is_empty() {
+        let preview: String = text.chars().take(200).collect();
+        log::info!("[tlv] >> {} {} {}b {}", session_id, tlv::TAG_USER_TEXT, text.len(), preview);
         tlv::write_frame(&mut *stdin, tlv::TAG_USER_TEXT, &text).map_err(|e| format!("Write error: {e}"))?;
     }
+    log::info!("[tlv] >> {} {} 0b", session_id, tlv::TAG_USER_END);
     tlv::write_frame(&mut *stdin, tlv::TAG_USER_END, "").map_err(|e| format!("Write error: {e}"))?;
     stdin.flush().map_err(|e| format!("Flush error: {e}"))?;
     Ok(())

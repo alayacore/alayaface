@@ -82,7 +82,7 @@ fn dispatch_frame(
 
     // Log every incoming frame for debugging
     let preview: String = raw_value.chars().take(200).collect();
-    log::debug!("[tlv] << {} {} {}b {}", sid, tag, raw_value.len(), preview);
+    log::info!("[tlv] << {} {} {}b {}", sid, tag, raw_value.len(), preview);
 
     // Cache model_list from SM frames (always, before any other processing)
     if tag == "SM" {
