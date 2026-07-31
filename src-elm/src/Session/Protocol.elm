@@ -33,6 +33,8 @@ type Tag
     | AssistantTool
     | UserToolResult
     | SystemMsg
+    | CommandIn
+    | CommandOut
     | AssistantTextDelta
     | AssistantReasoningDelta
     | ToolArgDelta
@@ -53,6 +55,8 @@ tagToString t =
         AssistantTool -> "AF"
         UserToolResult -> "UF"
         SystemMsg -> "SM"
+        CommandIn -> "CI"
+        CommandOut -> "CO"
         AssistantTextDelta -> "At"
         AssistantReasoningDelta -> "Ar"
         ToolArgDelta -> "Af"
@@ -73,6 +77,8 @@ tagFromString s =
         "AF" -> AssistantTool
         "UF" -> UserToolResult
         "SM" -> SystemMsg
+        "CI" -> CommandIn
+        "CO" -> CommandOut
         "At" -> AssistantTextDelta
         "Ar" -> AssistantReasoningDelta
         "Af" -> ToolArgDelta

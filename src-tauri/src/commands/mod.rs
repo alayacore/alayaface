@@ -69,6 +69,31 @@ pub(crate) fn resolve_binary(binary_path: &str) -> String {
     }
 }
 
+/// Send a command to a session as a CI frame (the new command RPC protocol).
+///
+/// Generates a call ID, serializes `{"id","name","input"}` into a CI frame,
+/// and records the call ID → name mapping so the stdout reader can attach
+/// the command name to the matching CO frame (CO carries only the ID).
+/// Returns the generated call ID on success.
+pub(crate) async fn send_cmd(
+    map: &std::collections::HashMap<String, crate::session::SessionHandle>,
+    session_id: &str,
+    name: &str,
+    input: &str,
+) -> Result<String, String> {
+    let id = uuid::Uuid::new_v4().to_string();
+    // Register the mapping BEFORE writing the frame — the CO reply can
+    // arrive as soon as the CI frame is flushed.
+    let handle = crate::session::get(map, session_id)?;
+    handle.pending_commands.lock().await.insert(id.clone(), name.to_string());
+    let payload = serde_json::json!({ "id": id, "name": name, "input": input });
+    if let Err(e) = send_raw(map, session_id, tlv::TAG_CMD_INPUT, &payload.to_string()).await {
+        handle.pending_commands.lock().await.remove(&id);
+        return Err(e);
+    }
+    Ok(id)
+}
+
 /// Wait for a file to stabilize (size unchanged for a short period).
 pub(crate) async fn wait_for_file(path: &str) -> Result<(), String> {
     let target_path = std::path::Path::new(path);
@@ -95,18 +120,20 @@ pub(crate) async fn wait_for_file(path: &str) -> Result<(), String> {
     }
 }
 
-/// Macro to generate simple command functions that send a fixed text to the session.
+/// Macro to generate simple command functions that send a fixed command
+/// (no arguments) to the session as a CI frame.
 #[macro_export]
 macro_rules! send_cmd {
-    ($name:ident, $fmt:expr) => {
+    ($name:ident, $cmd_name:expr) => {
         #[tauri::command]
         pub async fn $name(
             session_id: String,
             sessions: State<'_, SessionMap>,
         ) -> Result<(), String> {
             let map = sessions.0.lock().await;
-            $crate::commands::send_raw(&map, &session_id, tlv::TAG_USER_TEXT, $fmt).await?;
-            $crate::commands::send_raw(&map, &session_id, tlv::TAG_USER_END, "").await
+            $crate::commands::send_cmd(&map, &session_id, $cmd_name, "")
+                .await
+                .map(|_| ())
         }
     };
 }

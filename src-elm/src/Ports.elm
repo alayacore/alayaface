@@ -10,7 +10,8 @@ port module Ports exposing
     , cancelTask
     , setModel
     , confirmTool
-    , sendCommand
+    , sendMcpDecline
+    , sendMcpCancel
     , forkSession
     , resumeSession
     , listSessionDirs
@@ -59,7 +60,8 @@ port sendPrompt : { sessionId : String, text : String, media : List E.Value } ->
 port cancelTask : { sessionId : String } -> Cmd msg
 port setModel : { sessionId : String, modelId : Int } -> Cmd msg
 port confirmTool : { sessionId : String, id : String, allowed : Bool } -> Cmd msg
-port sendCommand : { sessionId : String, command : String } -> Cmd msg
+port sendMcpDecline : { sessionId : String, server : String } -> Cmd msg
+port sendMcpCancel : { sessionId : String } -> Cmd msg
 port forkSession : { sourceSessionId : String, historyId : String } -> Cmd msg
 port resumeSession : { sessionId : String } -> Cmd msg
 port listSessionDirs : {} -> Cmd msg

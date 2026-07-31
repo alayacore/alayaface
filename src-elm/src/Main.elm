@@ -636,7 +636,7 @@ update msg model =
                 Just sess ->
                     ( { model | sessions = Dict.insert sid { sess | pendingMcpAuth = Nothing } model.sessions }
                     , Cmd.batch
-                        [ Ports.sendCommand { sessionId = sid, command = ":mcp_decline " ++ server }
+                        [ Ports.sendMcpDecline { sessionId = sid, server = server }
                         , focusInput model
                         ]
                     )
@@ -658,7 +658,7 @@ update msg model =
                         model.sessions
                       }
                     , Cmd.batch
-                        [ Ports.sendCommand { sessionId = sid, command = ":mcp_cancel" }
+                        [ Ports.sendMcpCancel { sessionId = sid }
                         , focusInput model
                         ]
                     )
@@ -675,7 +675,7 @@ update msg model =
                             model.sessions
                       }
                     , Cmd.batch
-                        [ Ports.sendCommand { sessionId = sid, command = ":mcp_cancel" }
+                        [ Ports.sendMcpCancel { sessionId = sid }
                         , focusInput model
                         ]
                     )

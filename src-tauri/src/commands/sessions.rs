@@ -3,7 +3,7 @@
 //! Commands for creating, resuming, closing, and forking sessions,
 //! plus listing/deleting session directories.
 
-use crate::commands::{resolve_binary, send_raw, wait_for_file, SessionDirInfo};
+use crate::commands::{resolve_binary, wait_for_file, SessionDirInfo};
 use crate::dirs;
 use crate::session::{self, SessionMap};
 use crate::ModelCache;
@@ -191,9 +191,8 @@ pub async fn fork_session(
     // Tell source alayacore to fork
     {
         let map = sessions.0.lock().await;
-        let cmd = format!(":fork {} {}", history_id, target_file);
-        send_raw(&map, &source_session_id, crate::tlv::TAG_USER_TEXT, &cmd).await?;
-        send_raw(&map, &source_session_id, crate::tlv::TAG_USER_END, "").await?;
+        let input = format!("{} {}", history_id, target_file);
+        crate::commands::send_cmd(&map, &source_session_id, "fork", &input).await?;
     }
 
     // Wait for session file to stabilize

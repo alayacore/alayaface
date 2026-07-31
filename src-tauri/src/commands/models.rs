@@ -31,8 +31,12 @@ pub async fn list_models(
         for (_sid, handle) in map.iter() {
             if handle.connected.load(std::sync::atomic::Ordering::SeqCst) {
                 let mut stdin = handle.stdin.lock().await;
-                let _ = tlv::write_frame(&mut *stdin, tlv::TAG_USER_TEXT, ":model_load");
-                let _ = tlv::write_frame(&mut *stdin, tlv::TAG_USER_END, "");
+                let payload = serde_json::json!({
+                    "id": uuid::Uuid::new_v4().to_string(),
+                    "name": "model_load",
+                    "input": "",
+                });
+                let _ = tlv::write_frame(&mut *stdin, tlv::TAG_CMD_INPUT, &payload.to_string());
                 let _ = stdin.flush();
                 let cache = model_cache.0.lock().unwrap();
                 if !cache.is_empty() {

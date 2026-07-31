@@ -6,7 +6,6 @@
 
 use crate::commands::SessionMap;
 use crate::session;
-use crate::tlv;
 
 use std::io::{BufRead, Write};
 use tauri::State;
@@ -151,28 +150,18 @@ fn send_mcp_result(
     let rt = tokio::runtime::Runtime::new().map_err(|e| format!("Runtime error: {e}"))?;
     rt.block_on(async {
         let map = sessions_arc.lock().await;
-        let handle = session::get(&map, session_id)?;
-        let mut stdin = handle.stdin.lock().await;
 
         match code {
             Some(c) => {
-                let cmd = format!(":mcp_confirm {} {} {}", server_name, c, redirect_uri);
-                log::info!("[mcp_auth] Sending: {}", cmd);
-                tlv::write_frame(&mut *stdin, tlv::TAG_USER_TEXT, &cmd)
-                    .map_err(|e| format!("Write error: {e}"))?;
-                tlv::write_frame(&mut *stdin, tlv::TAG_USER_END, "")
-                    .map_err(|e| format!("Write error: {e}"))?;
+                let input = format!("{} {} {}", server_name, c, redirect_uri);
+                log::info!("[mcp_auth] Sending mcp_confirm: {}", input);
+                crate::commands::send_cmd(&map, session_id, "mcp_confirm", &input).await?;
             }
             None => {
-                log::info!("[mcp_auth] Auth failed/cancelled — sending :mcp_decline {}", server_name);
-                let cmd = format!(":mcp_decline {}", server_name);
-                tlv::write_frame(&mut *stdin, tlv::TAG_USER_TEXT, &cmd)
-                    .map_err(|e| format!("Write error: {e}"))?;
-                tlv::write_frame(&mut *stdin, tlv::TAG_USER_END, "")
-                    .map_err(|e| format!("Write error: {e}"))?;
+                log::info!("[mcp_auth] Auth failed/cancelled — sending mcp_decline {}", server_name);
+                crate::commands::send_cmd(&map, session_id, "mcp_decline", server_name).await?;
             }
         }
-        stdin.flush().map_err(|e| format!("Flush error: {e}"))?;
         Ok(())
     })
 }

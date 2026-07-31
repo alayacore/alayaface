@@ -116,6 +116,11 @@ handleFrameEvent s ev =
             Just json -> handleToolResultFrame s json ev.historyId
             Nothing -> s
 
+    else if ev.tag == "CO" then
+        case ev.json of
+            Just json -> handleCommandResultFrame s json
+            Nothing -> s
+
     else if ev.tag == "Af" then
         case ev.json of
             Just json -> handleToolDeltaFrame s json
@@ -609,6 +614,106 @@ handleSystemMcp s data =
 
         Nothing ->
             s
+
+
+-- Command Result Frame (CO)
+
+-- CO carries only the call ID; the reader injects the command `name`
+-- (resolved from the CI we sent) into the JSON so we can render results
+-- without tracking call IDs on the frontend. Success results with useful
+-- info (save/fork/mcp) become System messages; errors become error-style
+-- System messages. Silent commands (cancel, reason, model_set, ...) render
+-- nothing — the state change itself is the confirmation.
+handleCommandResultFrame : SessionState -> D.Value -> SessionState
+handleCommandResultFrame s json =
+    let
+        isError =
+            D.decodeValue (D.field "is_error" D.bool) json
+                |> Result.toMaybe
+                |> Maybe.withDefault False
+
+        output =
+            D.decodeValue (D.field "output" D.value) json |> Result.toMaybe
+
+        name =
+            D.decodeValue (D.field "name" D.string) json
+                |> Result.toMaybe
+                |> Maybe.withDefault ""
+    in
+    if isError then
+        let
+            code =
+                output
+                    |> Maybe.andThen (\o -> D.decodeValue (D.field "code" D.string) o |> Result.toMaybe)
+                    |> Maybe.withDefault ""
+
+            message =
+                output
+                    |> Maybe.andThen (\o -> D.decodeValue (D.field "message" D.string) o |> Result.toMaybe)
+                    |> Maybe.withDefault "Command failed"
+
+            prefix =
+                if code == "" then
+                    "[error: "
+                else
+                    "[error: " ++ code ++ ": "
+        in
+        appendSystemMessage s (prefix ++ message ++ "]")
+
+    else
+        case renderCommandResult name output of
+            Just text ->
+                appendSystemMessage s text
+
+            Nothing ->
+                s
+
+
+renderCommandResult : String -> Maybe D.Value -> Maybe String
+renderCommandResult name output =
+    let
+        str key =
+            output
+                |> Maybe.andThen (\o -> D.decodeValue (D.field key D.string) o |> Result.toMaybe)
+                |> Maybe.withDefault ""
+
+        int key =
+            output
+                |> Maybe.andThen (\o -> D.decodeValue (D.field key D.int) o |> Result.toMaybe)
+                |> Maybe.withDefault 0
+    in
+    case name of
+        "save" ->
+            Just ("Session saved to " ++ str "path")
+
+        "fork" ->
+            Just ("Session forked to " ++ str "path" ++ " (up to content ID " ++ String.fromInt (int "history_id") ++ ")")
+
+        "mcp_confirm" ->
+            Just ("MCP auth code received for \"" ++ str "server" ++ "\".")
+
+        "mcp_decline" ->
+            Just ("MCP authorization for \"" ++ str "server" ++ "\" declined.")
+
+        _ ->
+            Nothing
+
+
+appendSystemMessage : SessionState -> String -> SessionState
+appendSystemMessage s text =
+    let
+        newMsg =
+            { id = "sys-" ++ String.fromInt (List.length s.messages)
+            , role = System
+            , content = text
+            , toolId = Nothing
+            , toolName = Nothing
+            , isError = False
+            , historyId = Nothing
+            , media = Nothing
+            }
+    in
+    { s | messages = s.messages ++ [ newMsg ] }
 
 
 -- Tool Call Frame (AF)

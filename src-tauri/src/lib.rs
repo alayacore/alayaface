@@ -58,6 +58,8 @@ pub fn run() {
             commands::alayacore_continue,
             commands::alayacore_summarize,
             commands::alayacore_confirm,
+            commands::alayacore_mcp_decline,
+            commands::alayacore_mcp_cancel,
             commands::alayacore_send_raw_frame,
             commands::get_stderr_log,
             commands::list_models,

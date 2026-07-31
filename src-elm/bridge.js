@@ -61,10 +61,14 @@
       });
     });
 
-    on("sendCommand", function (data) {
-      invoke("alayacore_send_message", {
-        sessionId: data.sessionId, text: data.command,
+    on("sendMcpDecline", function (data) {
+      invoke("alayacore_mcp_decline", {
+        sessionId: data.sessionId, server: data.server,
       });
+    });
+
+    on("sendMcpCancel", function (data) {
+      invoke("alayacore_mcp_cancel", { sessionId: data.sessionId });
     });
 
     on("forkSession", function (data) {

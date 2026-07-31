@@ -20,6 +20,10 @@ pub struct SessionHandle {
     pub stdin: Arc<Mutex<std::process::ChildStdin>>,
     pub connected: Arc<AtomicBool>,
     pub stderr_log: Arc<Mutex<Vec<String>>>,
+    /// Pending command call IDs → command names (CI sent, CO not yet received).
+    /// Used by the stdout reader to attach the command name to CO frames
+    /// (CO carries only the call ID; the name comes from the CI we sent).
+    pub pending_commands: Arc<Mutex<std::collections::HashMap<String, String>>>,
     /// The child process — kept for explicit cleanup on close.
     /// Uses std::sync::Mutex so Drop can access it (sync context).
     pub child: Arc<std::sync::Mutex<Option<std::process::Child>>>,
@@ -65,11 +69,13 @@ pub async fn create(cfg: SessionConfig<'_>) -> Result<String, String> {
     let stderr_log = Arc::new(Mutex::new(Vec::new()));
     let stdin = Arc::new(Mutex::new(proc.stdin));
     let child = Arc::new(std::sync::Mutex::new(Some(proc.child)));
+    let pending_commands = Arc::new(Mutex::new(std::collections::HashMap::new()));
 
     let handle = SessionHandle {
         stdin: stdin.clone(),
         connected: connected.clone(),
         stderr_log: stderr_log.clone(),
+        pending_commands: pending_commands.clone(),
         child: child.clone(),
         session_dir: cfg.session_dir,
     };
@@ -85,6 +91,7 @@ pub async fn create(cfg: SessionConfig<'_>) -> Result<String, String> {
         connected,
         cfg.model_cache.0.clone(),
         child.clone(),
+        pending_commands,
     );
 
     let _ = cfg.app.emit("core-status", StatusEvent {

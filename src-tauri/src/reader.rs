@@ -26,6 +26,7 @@ pub fn spawn_stdout_reader(
     connected: Arc<AtomicBool>,
     model_cache: Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
     child: Arc<std::sync::Mutex<Option<std::process::Child>>>,
+    pending_commands: Arc<tokio::sync::Mutex<std::collections::HashMap<String, String>>>,
 ) {
     std::thread::spawn(move || {
         let sid = session_id;
@@ -41,7 +42,7 @@ pub fn spawn_stdout_reader(
         loop {
             match tlv::read_frame(&mut stdout) {
                 Ok(Some(frame)) => {
-                    dispatch_frame(&app, &sid, &frame, &model_cache);
+                    dispatch_frame(&app, &sid, &frame, &model_cache, &pending_commands);
                 }
                 Ok(None) => {
                     connected.store(false, Ordering::SeqCst);
@@ -74,6 +75,7 @@ fn dispatch_frame(
     sid: &str,
     frame: &tlv::Frame,
     model_cache: &Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    pending_commands: &Arc<tokio::sync::Mutex<std::collections::HashMap<String, String>>>,
 ) {
     let tag = &frame.tag;
     let raw_value = &frame.value;
@@ -101,7 +103,9 @@ fn dispatch_frame(
         "AT" | "AR" => handle_complete_frame(app, sid, tag, raw_value),
         // ─── Tool argument delta (Af) ────────────────────────────
         "Af" => handle_tool_delta_frame(app, sid, raw_value),
-        // ─── JSON frames (AF, UF, SM) ────────────────────────────
+        // ─── Command output (CO) ─────────────────────────────────
+        "CO" => handle_cmd_output_frame(app, sid, raw_value, pending_commands),
+        // ─── JSON frames (AF, UF) ────────────────────────────────
         "AF" | "UF" => handle_json_frame(app, sid, tag, raw_value),
         "SM" => handle_sm_frame(app, sid, raw_value),
         // ─── Everything else (user echoes, unknown) ─────────────
@@ -199,6 +203,37 @@ fn handle_json_frame(app: &AppHandle, sid: &str, tag: &str, raw_value: &str) {
         history_id,
         content,
         json: json_val,
+        user_content_type: None,
+    });
+}
+
+/// Handle CO command output frames.
+///
+/// CO carries only the call ID — the command name is resolved from the
+/// pending-commands registry (populated when the CI was sent) and injected
+/// into the JSON payload so the frontend can render the result without
+/// tracking call IDs itself.
+fn handle_cmd_output_frame(
+    app: &AppHandle,
+    sid: &str,
+    raw_value: &str,
+    pending_commands: &Arc<tokio::sync::Mutex<std::collections::HashMap<String, String>>>,
+) {
+    let mut json_val = serde_json::from_str::<serde_json::Value>(raw_value)
+        .unwrap_or(serde_json::Value::Null);
+    if let Some(obj) = json_val.as_object_mut() {
+        let call_id = obj.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        if let Some(name) = pending_commands.blocking_lock().remove(call_id) {
+            obj.insert("name".to_string(), serde_json::Value::String(name));
+        }
+    }
+    let _ = app.emit("tlv-frame", FrameEvent {
+        session_id: sid.to_string(),
+        tag: "CO".to_string(),
+        raw_value: raw_value.to_string(),
+        history_id: None,
+        content: Some(raw_value.to_string()),
+        json: Some(json_val),
         user_content_type: None,
     });
 }
