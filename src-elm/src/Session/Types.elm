@@ -265,6 +265,7 @@ type ModelSelPage
     | ModelSelConfirmSync
     | ModelSelSyncing
     | ModelSelSyncFailed
+    | ModelSelLoading
 
 
 emptyDraft : ModelDraft

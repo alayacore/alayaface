@@ -71,6 +71,38 @@ type alias ResizeInfo =
     }
 
 
+-- Default (global) model list editor state. Edits ~/.alayaface/config/model.conf,
+-- which only affects newly created sessions.
+
+type alias DefaultModelsEditor =
+    { show : Bool
+    , page : ModelSelPage
+    , input : String
+    , selected : Int
+    , original : List T.ModelInfo
+    , working : List T.ModelInfo
+    , draft : Maybe T.ModelDraft
+    , syncError : Maybe String
+    , loadError : Maybe String
+    , confirmDelete : Maybe Int
+    }
+
+
+emptyDefaultModelsEditor : DefaultModelsEditor
+emptyDefaultModelsEditor =
+    { show = False
+    , page = ModelSelList
+    , input = ""
+    , selected = 0
+    , original = []
+    , working = []
+    , draft = Nothing
+    , syncError = Nothing
+    , loadError = Nothing
+    , confirmDelete = Nothing
+    }
+
+
 -- Constants
 
 defaultWinW : Int
@@ -137,6 +169,7 @@ type alias Model =
     , dragInfo : Maybe DragInfo
     , resizeInfo : Maybe ResizeInfo
     , showGlobalMenu : Bool
+    , defaultModelsEditor : DefaultModelsEditor
     , ctxVisible : Bool
     , ctxX : Int
     , ctxY : Int
@@ -170,6 +203,7 @@ init _ =
       , dragInfo = Nothing
       , resizeInfo = Nothing
       , showGlobalMenu = False
+      , defaultModelsEditor = emptyDefaultModelsEditor
       , ctxVisible = False
       , ctxX = 0
       , ctxY = 0
@@ -297,6 +331,25 @@ type Msg
     | ModelSelectorDiscardClose
     | ModelSelectorCancelSyncPrompt
     | ModelSelectorSyncResult Bool String
+      -- Default (global) model list editor
+    | OpenDefaultModelsEditor
+    | CloseDefaultModelsEditor
+    | SetDefaultModelsInput String
+    | DefaultModelsSelectItem Int
+    | DefaultModelsConfirmItem
+    | DefaultModelsEditModel Int
+    | DefaultModelsAddModel
+    | DefaultModelsEditBack
+    | DefaultModelsEditSave
+    | DefaultModelsEditField String String
+    | DefaultModelsDeleteModel Int
+    | DefaultModelsConfirmDelete Int
+    | DefaultModelsCancelDelete
+    | DefaultModelsConfirmSync
+    | DefaultModelsDiscardClose
+    | DefaultModelsCancelSyncPrompt
+    | DefaultModelsListResult E.Value
+    | DefaultModelsSyncResult E.Value
       -- Help Window
     | OpenHelpWindow
     | CloseHelpWindow
@@ -1768,6 +1821,362 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
+        -- Default (global) Model List Editor
+        OpenDefaultModelsEditor ->
+            ( { model
+                | defaultModelsEditor =
+                    { emptyDefaultModelsEditor
+                        | show = True
+                        , page = ModelSelLoading
+                    }
+                , showGlobalMenu = False
+              }
+            , Ports.listDefaultModels {}
+            )
+
+        CloseDefaultModelsEditor ->
+            let
+                ed =
+                    model.defaultModelsEditor
+            in
+            if ed.page == ModelSelSyncing then
+                -- Do not allow closing while a sync is in flight
+                ( model, Cmd.none )
+
+            else if ed.working /= ed.original then
+                -- Unsaved edits: ask before closing
+                ( { model | defaultModelsEditor = { ed | page = ModelSelConfirmSync } }
+                , Cmd.none
+                )
+
+            else
+                ( { model | defaultModelsEditor = emptyDefaultModelsEditor }
+                , Cmd.none
+                )
+
+        DefaultModelsListResult raw ->
+            case D.decodeValue defaultModelsListResultDecoder raw of
+                Ok res ->
+                    let
+                        ed =
+                            model.defaultModelsEditor
+                    in
+                    if res.ok then
+                        ( { model
+                            | defaultModelsEditor =
+                                { ed
+                                    | page = ModelSelList
+                                    , original = res.models
+                                    , working = res.models
+                                    , loadError = Nothing
+                                }
+                          }
+                        , Cmd.batch
+                            [ focusAfterDelay "model-selector-input-default"
+                            , Ports.setCursorPos "model-selector-input-default"
+                            ]
+                        )
+
+                    else
+                        ( { model
+                            | defaultModelsEditor =
+                                { ed
+                                    | page = ModelSelList
+                                    , loadError = Just res.error
+                                }
+                          }
+                        , Cmd.none
+                        )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        SetDefaultModelsInput val ->
+            let
+                ed =
+                    model.defaultModelsEditor
+
+                filtered =
+                    filterModels ed.working val
+
+                clampedSelected =
+                    if List.length filtered <= ed.selected then
+                        max 0 (List.length filtered - 1)
+                    else
+                        ed.selected
+            in
+            ( { model
+                | defaultModelsEditor =
+                    { ed
+                        | input = val
+                        , selected = clampedSelected
+                    }
+              }
+            , Cmd.none
+            )
+
+        DefaultModelsSelectItem idx ->
+            let
+                ed =
+                    model.defaultModelsEditor
+
+                filtered =
+                    filterModels ed.working ed.input
+
+                scrollCmd =
+                    case List.head (List.drop idx filtered) of
+                        Just m ->
+                            Ports.scrollIntoView ("model-selector-item-default-" ++ String.fromInt m.id)
+
+                        Nothing ->
+                            Cmd.none
+            in
+            ( { model | defaultModelsEditor = { ed | selected = idx } }
+            , scrollCmd
+            )
+
+        DefaultModelsConfirmItem ->
+            let
+                ed =
+                    model.defaultModelsEditor
+
+                filtered =
+                    filterModels ed.working ed.input
+
+                selectedModel =
+                    List.head (List.drop ed.selected filtered)
+            in
+            case selectedModel of
+                Just m ->
+                    ( { model
+                        | defaultModelsEditor =
+                            { ed
+                                | page = ModelSelEdit
+                                , draft = Just (draftFromModel m)
+                                , confirmDelete = Nothing
+                            }
+                      }
+                    , Cmd.batch
+                        [ focusAfterDelay "model-editor-name-default"
+                        , Ports.setCursorPos "model-editor-name-default"
+                        ]
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        DefaultModelsEditModel id ->
+            let
+                ed =
+                    model.defaultModelsEditor
+            in
+            case List.filter (\m -> m.id == id) ed.working |> List.head of
+                Just m ->
+                    ( { model
+                        | defaultModelsEditor =
+                            { ed
+                                | page = ModelSelEdit
+                                , draft = Just (draftFromModel m)
+                                , confirmDelete = Nothing
+                            }
+                      }
+                    , Cmd.batch
+                        [ focusAfterDelay "model-editor-name-default"
+                        , Ports.setCursorPos "model-editor-name-default"
+                        ]
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        DefaultModelsAddModel ->
+            let
+                ed =
+                    model.defaultModelsEditor
+            in
+            ( { model
+                | defaultModelsEditor =
+                    { ed
+                        | page = ModelSelEdit
+                        , draft = Just T.emptyDraft
+                        , confirmDelete = Nothing
+                    }
+              }
+            , Cmd.batch
+                [ focusAfterDelay "model-editor-name-default"
+                , Ports.setCursorPos "model-editor-name-default"
+                ]
+            )
+
+        DefaultModelsEditBack ->
+            let
+                ed =
+                    model.defaultModelsEditor
+            in
+            ( { model
+                | defaultModelsEditor =
+                    { ed
+                        | page = ModelSelList
+                        , draft = Nothing
+                    }
+              }
+            , Cmd.batch
+                [ focusAfterDelay "model-selector-input-default"
+                , Ports.setCursorPos "model-selector-input-default"
+                ]
+            )
+
+        DefaultModelsEditSave ->
+            case model.defaultModelsEditor.draft of
+                Just draft ->
+                    let
+                        ed =
+                            model.defaultModelsEditor
+
+                        newModel =
+                            modelFromDraft draft
+
+                        working =
+                            if draft.id == 0 then
+                                let
+                                    nextId =
+                                        List.foldl (\m acc -> max acc m.id) 0 ed.working + 1
+                                in
+                                ed.working ++ [ { newModel | id = nextId } ]
+
+                            else
+                                List.map
+                                    (\m -> if m.id == draft.id then newModel else m)
+                                    ed.working
+                    in
+                    ( { model
+                        | defaultModelsEditor =
+                            { ed
+                                | page = ModelSelList
+                                , working = working
+                                , draft = Nothing
+                            }
+                      }
+                    , Cmd.batch
+                        [ focusAfterDelay "model-selector-input-default"
+                        , Ports.setCursorPos "model-selector-input-default"
+                        ]
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        DefaultModelsEditField field value ->
+            let
+                ed =
+                    model.defaultModelsEditor
+            in
+            ( { model
+                | defaultModelsEditor =
+                    { ed
+                        | draft = Maybe.map (updateDraftField field value) ed.draft
+                    }
+              }
+            , Cmd.none
+            )
+
+        DefaultModelsDeleteModel id ->
+            let
+                ed =
+                    model.defaultModelsEditor
+            in
+            ( { model
+                | defaultModelsEditor = { ed | confirmDelete = Just id }
+              }
+            , Cmd.none
+            )
+
+        DefaultModelsConfirmDelete id ->
+            let
+                ed =
+                    model.defaultModelsEditor
+            in
+            ( { model
+                | defaultModelsEditor =
+                    { ed
+                        | working = List.filter (\m -> m.id /= id) ed.working
+                        , confirmDelete = Nothing
+                    }
+              }
+            , Cmd.none
+            )
+
+        DefaultModelsCancelDelete ->
+            let
+                ed =
+                    model.defaultModelsEditor
+            in
+            ( { model
+                | defaultModelsEditor = { ed | confirmDelete = Nothing }
+              }
+            , Cmd.none
+            )
+
+        DefaultModelsConfirmSync ->
+            let
+                ed =
+                    model.defaultModelsEditor
+            in
+            ( { model
+                | defaultModelsEditor = { ed | page = ModelSelSyncing }
+              }
+            , Ports.syncDefaultModels
+                { config = encodeModels ed.working }
+            )
+
+        DefaultModelsDiscardClose ->
+            ( { model | defaultModelsEditor = emptyDefaultModelsEditor }
+            , Cmd.none
+            )
+
+        DefaultModelsCancelSyncPrompt ->
+            let
+                ed =
+                    model.defaultModelsEditor
+            in
+            ( { model
+                | defaultModelsEditor = { ed | page = ModelSelList }
+              }
+            , Cmd.batch
+                [ focusAfterDelay "model-selector-input-default"
+                , Ports.setCursorPos "model-selector-input-default"
+                ]
+            )
+
+        DefaultModelsSyncResult raw ->
+            case D.decodeValue defaultModelsSyncResultDecoder raw of
+                Ok res ->
+                    let
+                        ed =
+                            model.defaultModelsEditor
+                    in
+                    if ed.page /= ModelSelSyncing then
+                        ( model, Cmd.none )
+
+                    else if res.ok then
+                        ( { model | defaultModelsEditor = emptyDefaultModelsEditor }
+                        , Cmd.none
+                        )
+
+                    else
+                        ( { model
+                            | defaultModelsEditor =
+                                { ed
+                                    | page = ModelSelSyncFailed
+                                    , syncError = Just res.error
+                                }
+                          }
+                        , Cmd.none
+                        )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
         -- Help Window
         OpenHelpWindow ->
             case getActiveSession model of
@@ -2535,6 +2944,23 @@ decodeSyncOutcome raw =
             Nothing
 
 
+defaultModelsListResultDecoder : D.Decoder { ok : Bool, models : List T.ModelInfo, error : String }
+defaultModelsListResultDecoder =
+    D.map3
+        (\ok models error -> { ok = ok, models = models, error = error })
+        (D.field "ok" D.bool)
+        (D.field "models" (D.list H.modelInfoDecoder))
+        (D.field "error" D.string)
+
+
+defaultModelsSyncResultDecoder : D.Decoder { ok : Bool, error : String }
+defaultModelsSyncResultDecoder =
+    D.map2
+        (\ok error -> { ok = ok, error = error })
+        (D.field "ok" D.bool)
+        (D.field "error" D.string)
+
+
 -- ─── Help Items ──────────────────────────────────────────────────────
 
 helpItems : List HelpItem
@@ -2572,6 +2998,8 @@ subscriptions model =
         , Ports.onDelta (\raw -> DeltaEvent raw)
         , Ports.onFrame (\raw -> FrameEvent raw)
         , Ports.onStatus (\raw -> StatusEvent raw)
+        , Ports.onDefaultModelsList (\raw -> DefaultModelsListResult raw)
+        , Ports.onDefaultModelsSyncResult (\raw -> DefaultModelsSyncResult raw)
         , Ports.onSessionCreated (\id -> SessionCreated id)
         , Ports.onSessionDirs (\dirs -> SessionDirsResult dirs)
         , Ports.onFsListDir (\entries -> FsListDirResult entries)
@@ -2609,6 +3037,7 @@ view model =
         , viewGlobalMenu model
         , viewContextMenu model
         , viewSessionManagerOverlay model
+        , viewDefaultModelsEditorOverlay model
         ]
 
 
@@ -2736,6 +3165,13 @@ viewGlobalMenu model =
                 ]
                 [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "☰" ]
                 , Html.text " Session Manager"
+                ]
+            , Html.div
+                [ Attr.class "global-menu-item"
+                , Ev.onClick OpenDefaultModelsEditor
+                ]
+                [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "◈" ]
+                , Html.text " Edit Default Models"
                 ]
             ]
         , Html.button
@@ -3252,7 +3688,11 @@ viewModelSelectorOverlay sid session =
                             Html.text ""
 
                 ModelSelConfirmSync ->
-                    viewSyncPrompt (session.modelSelectorWorking /= session.models) sid
+                    viewSyncPrompt (session.modelSelectorWorking /= session.models)
+                        { onConfirm = ForSession sid ModelSelectorConfirmSync
+                        , onDiscard = ForSession sid ModelSelectorDiscardClose
+                        , onCancel = ForSession sid ModelSelectorCancelSyncPrompt
+                        }
 
                 ModelSelSyncing ->
                     Html.div [ Attr.class "sel-page" ]
@@ -3261,7 +3701,19 @@ viewModelSelectorOverlay sid session =
                         ]
 
                 ModelSelSyncFailed ->
-                    viewSyncFailed (session.modelSelectorWorking /= session.models) sid session
+                    viewSyncFailed
+                        (session.modelSelectorWorking /= session.models)
+                        (Maybe.withDefault "Unknown error" session.modelSelectorSyncError)
+                        { onRetry = ForSession sid ModelSelectorConfirmSync
+                        , onBack = ForSession sid ModelSelectorCancelSyncPrompt
+                        , onDiscard = ForSession sid ModelSelectorDiscardClose
+                        }
+
+                ModelSelLoading ->
+                    Html.div [ Attr.class "sel-page" ]
+                        [ viewSelTitle False
+                        , Html.div [ Attr.class "sel-page-status" ] [ Html.text "Loading…" ]
+                        ]
 
                 ModelSelList ->
                     Overlay.ModelSelector.view
@@ -3274,6 +3726,7 @@ viewModelSelectorOverlay sid session =
                         , confirmDeleteId = session.modelSelectorConfirmDelete
                         , canDelete = List.length session.modelSelectorWorking > 1
                         , dirty = session.modelSelectorWorking /= session.models
+                        , error = Nothing
                         , noOp = NoOp
                         , onSelect = \i -> ForSession sid (ModelSelectorSelectItem i)
                         , onConfirm = ForSession sid ModelSelectorConfirmItem
@@ -3290,7 +3743,87 @@ viewModelSelectorOverlay sid session =
         Html.text ""
 
 
-viewSelTitle : Bool -> Html Msg
+viewDefaultModelsEditorOverlay : Model -> Html Msg
+viewDefaultModelsEditorOverlay model =
+    let
+        ed =
+            model.defaultModelsEditor
+    in
+    if ed.show then
+        viewOverlay CloseDefaultModelsEditor
+            [ case ed.page of
+                ModelSelEdit ->
+                    case ed.draft of
+                        Just draft ->
+                            Overlay.ModelEditor.view
+                                { sessionId = "default"
+                                , draft = draft
+                                , isNew = draft.id == 0
+                                , onBack = DefaultModelsEditBack
+                                , onSave = DefaultModelsEditSave
+                                , onField = DefaultModelsEditField
+                                }
+
+                        Nothing ->
+                            Html.text ""
+
+                ModelSelConfirmSync ->
+                    viewSyncPrompt (ed.working /= ed.original)
+                        { onConfirm = DefaultModelsConfirmSync
+                        , onDiscard = DefaultModelsDiscardClose
+                        , onCancel = DefaultModelsCancelSyncPrompt
+                        }
+
+                ModelSelSyncing ->
+                    Html.div [ Attr.class "sel-page" ]
+                        [ viewSelTitle (ed.working /= ed.original)
+                        , Html.div [ Attr.class "sel-page-status" ] [ Html.text "Syncing…" ]
+                        ]
+
+                ModelSelSyncFailed ->
+                    viewSyncFailed
+                        (ed.working /= ed.original)
+                        (Maybe.withDefault "Unknown error" ed.syncError)
+                        { onRetry = DefaultModelsConfirmSync
+                        , onBack = DefaultModelsCancelSyncPrompt
+                        , onDiscard = DefaultModelsDiscardClose
+                        }
+
+                ModelSelLoading ->
+                    Html.div [ Attr.class "sel-page" ]
+                        [ viewSelTitle False
+                        , Html.div [ Attr.class "sel-page-status" ] [ Html.text "Loading…" ]
+                        ]
+
+                ModelSelList ->
+                    Overlay.ModelSelector.view
+                        { sessionId = "default"
+                        , models = ed.working
+                        , input = ed.input
+                        , selected = ed.selected
+                        , activeModelId = Nothing
+                        , activeModelName = ""
+                        , confirmDeleteId = ed.confirmDelete
+                        , canDelete = List.length ed.working > 1
+                        , dirty = ed.working /= ed.original
+                        , error = ed.loadError
+                        , noOp = NoOp
+                        , onSelect = DefaultModelsSelectItem
+                        , onConfirm = DefaultModelsConfirmItem
+                        , onClose = CloseDefaultModelsEditor
+                        , onInput = SetDefaultModelsInput
+                        , onEdit = DefaultModelsEditModel
+                        , onDelete = DefaultModelsDeleteModel
+                        , onDeleteConfirm = DefaultModelsConfirmDelete
+                        , onDeleteCancel = DefaultModelsCancelDelete
+                        , onAdd = DefaultModelsAddModel
+                        }
+            ]
+    else
+        Html.text ""
+
+
+viewSelTitle : Bool -> Html msg
 viewSelTitle dirty =
     Html.div
         [ Attr.class "sel-page-title"
@@ -3299,8 +3832,8 @@ viewSelTitle dirty =
         [ Html.text ("Model Selector" ++ (if dirty then " *" else "")) ]
 
 
-viewSyncPrompt : Bool -> String -> Html Msg
-viewSyncPrompt dirty sid =
+viewSyncPrompt : Bool -> { onConfirm : msg, onDiscard : msg, onCancel : msg } -> Html msg
+viewSyncPrompt dirty callbacks =
     Html.div [ Attr.class "sel-page" ]
         [ viewSelTitle dirty
         , Html.div [ Attr.class "sel-page-status" ]
@@ -3308,43 +3841,43 @@ viewSyncPrompt dirty sid =
         , Html.div [ Attr.class "sel-page-actions" ]
             [ Html.button
                 [ Attr.class "me-save-btn"
-                , Ev.onClick (ForSession sid ModelSelectorConfirmSync)
+                , Ev.onClick callbacks.onConfirm
                 ]
                 [ Html.text "Sync & Close" ]
             , Html.button
                 [ Attr.class "me-cancel-btn"
-                , Ev.onClick (ForSession sid ModelSelectorDiscardClose)
+                , Ev.onClick callbacks.onDiscard
                 ]
                 [ Html.text "Discard & Close" ]
             , Html.button
                 [ Attr.class "me-cancel-btn"
-                , Ev.onClick (ForSession sid ModelSelectorCancelSyncPrompt)
+                , Ev.onClick callbacks.onCancel
                 ]
                 [ Html.text "Cancel" ]
             ]
         ]
 
 
-viewSyncFailed : Bool -> String -> T.SessionState -> Html Msg
-viewSyncFailed dirty sid session =
+viewSyncFailed : Bool -> String -> { onRetry : msg, onBack : msg, onDiscard : msg } -> Html msg
+viewSyncFailed dirty error callbacks =
     Html.div [ Attr.class "sel-page" ]
         [ viewSelTitle dirty
         , Html.div [ Attr.class "sel-page-status sel-page-status-error" ]
-            [ Html.text ("Sync failed: " ++ Maybe.withDefault "Unknown error" session.modelSelectorSyncError) ]
+            [ Html.text ("Sync failed: " ++ error) ]
         , Html.div [ Attr.class "sel-page-actions" ]
             [ Html.button
                 [ Attr.class "me-save-btn"
-                , Ev.onClick (ForSession sid ModelSelectorConfirmSync)
+                , Ev.onClick callbacks.onRetry
                 ]
                 [ Html.text "Retry" ]
             , Html.button
                 [ Attr.class "me-cancel-btn"
-                , Ev.onClick (ForSession sid ModelSelectorCancelSyncPrompt)
+                , Ev.onClick callbacks.onBack
                 ]
                 [ Html.text "Back to List" ]
             , Html.button
                 [ Attr.class "me-cancel-btn"
-                , Ev.onClick (ForSession sid ModelSelectorDiscardClose)
+                , Ev.onClick callbacks.onDiscard
                 ]
                 [ Html.text "Discard & Close" ]
             ]

@@ -10,6 +10,11 @@ port module Ports exposing
     , cancelTask
     , setModel
     , modelSync
+      -- Default (global) model list editor
+    , listDefaultModels
+    , syncDefaultModels
+    , onDefaultModelsList
+    , onDefaultModelsSyncResult
     , confirmTool
     , sendMcpDecline
     , sendMcpCancel
@@ -61,6 +66,10 @@ port sendPrompt : { sessionId : String, text : String, media : List E.Value } ->
 port cancelTask : { sessionId : String } -> Cmd msg
 port setModel : { sessionId : String, modelId : Int } -> Cmd msg
 port modelSync : { sessionId : String, config : String } -> Cmd msg
+port listDefaultModels : {} -> Cmd msg
+port syncDefaultModels : { config : String } -> Cmd msg
+port onDefaultModelsList : (E.Value -> msg) -> Sub msg
+port onDefaultModelsSyncResult : (E.Value -> msg) -> Sub msg
 port confirmTool : { sessionId : String, id : String, allowed : Bool } -> Cmd msg
 port sendMcpDecline : { sessionId : String, server : String } -> Cmd msg
 port sendMcpCancel : { sessionId : String } -> Cmd msg

@@ -61,6 +61,30 @@
       });
     });
 
+    on("listDefaultModels", function () {
+      invoke("list_default_models", { binaryPath: "" })
+        .then(function (models) {
+          app.ports.onDefaultModelsList.send({ ok: true, models: models, error: "" });
+        })
+        .catch(function (err) {
+          app.ports.onDefaultModelsList.send({
+            ok: false, models: [], error: String((err && err.message) || err),
+          });
+        });
+    });
+
+    on("syncDefaultModels", function (data) {
+      invoke("sync_default_models", { binaryPath: "", config: data.config })
+        .then(function () {
+          app.ports.onDefaultModelsSyncResult.send({ ok: true, error: "" });
+        })
+        .catch(function (err) {
+          app.ports.onDefaultModelsSyncResult.send({
+            ok: false, error: String((err && err.message) || err),
+          });
+        });
+    });
+
     on("confirmTool", function (data) {
       invoke("alayacore_confirm", {
         sessionId: data.sessionId, id: data.id, allowed: data.allowed,

@@ -18,6 +18,7 @@ view :
     , confirmDeleteId : Maybe Int
     , canDelete : Bool
     , dirty : Bool
+    , error : Maybe String
     , noOp : msg
     , onSelect : Int -> msg
     , onConfirm : msg
@@ -44,6 +45,13 @@ view config =
             , Attr.title (if config.dirty then "Unsaved changes" else "")
             ]
             [ Html.text ("Model Selector" ++ (if config.dirty then " *" else "")) ]
+        , case config.error of
+            Just err ->
+                Html.div [ Attr.class "sel-page-status sel-page-status-error" ]
+                    [ Html.text ("Failed to load models: " ++ err) ]
+
+            Nothing ->
+                Html.text ""
         , Html.div [ Attr.class "sel-page-input-row" ]
             [ Html.input
                 [ Attr.class "sel-page-input"

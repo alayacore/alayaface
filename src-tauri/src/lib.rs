@@ -63,6 +63,8 @@ pub fn run() {
             commands::alayacore_send_raw_frame,
             commands::get_stderr_log,
             commands::list_models,
+            commands::list_default_models,
+            commands::sync_default_models,
             commands::fs_list_dir,
             commands::fs_home_dir,
             commands::fs_resolve_path,
