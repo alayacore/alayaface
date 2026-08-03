@@ -85,6 +85,30 @@
         });
     });
 
+    on("listDefaultMcp", function () {
+      invoke("list_default_mcp")
+        .then(function (servers) {
+          app.ports.onDefaultMcpList.send({ ok: true, servers: servers, error: "" });
+        })
+        .catch(function (err) {
+          app.ports.onDefaultMcpList.send({
+            ok: false, servers: [], error: String((err && err.message) || err),
+          });
+        });
+    });
+
+    on("syncDefaultMcp", function (data) {
+      invoke("sync_default_mcp", { config: data.config })
+        .then(function () {
+          app.ports.onDefaultMcpSyncResult.send({ ok: true, error: "" });
+        })
+        .catch(function (err) {
+          app.ports.onDefaultMcpSyncResult.send({
+            ok: false, error: String((err && err.message) || err),
+          });
+        });
+    });
+
     on("confirmTool", function (data) {
       invoke("alayacore_confirm", {
         sessionId: data.sessionId, id: data.id, allowed: data.allowed,

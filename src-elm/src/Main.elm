@@ -22,6 +22,8 @@ import Overlay.McpInit
 import Overlay.FilePicker
 import Overlay.ModelSelector
 import Overlay.ModelEditor
+import Overlay.McpSelector
+import Overlay.McpEditor
 import Overlay.HelpWindow exposing (HelpItem, filterHelpItems, view)
 import Markdown
 import Ports
@@ -103,6 +105,35 @@ emptyDefaultModelsEditor =
     }
 
 
+type alias McpEditor =
+    { show : Bool
+    , page : ModelSelPage
+    , input : String
+    , selected : Int
+    , original : List T.McpInfo
+    , working : List T.McpInfo
+    , draft : Maybe T.McpDraft
+    , syncError : Maybe String
+    , loadError : Maybe String
+    , confirmDelete : Maybe Int
+    }
+
+
+emptyMcpEditor : McpEditor
+emptyMcpEditor =
+    { show = False
+    , page = ModelSelList
+    , input = ""
+    , selected = 0
+    , original = []
+    , working = []
+    , draft = Nothing
+    , syncError = Nothing
+    , loadError = Nothing
+    , confirmDelete = Nothing
+    }
+
+
 -- Constants
 
 defaultWinW : Int
@@ -170,6 +201,7 @@ type alias Model =
     , resizeInfo : Maybe ResizeInfo
     , showGlobalMenu : Bool
     , defaultModelsEditor : DefaultModelsEditor
+    , mcpEditor : McpEditor
     , ctxVisible : Bool
     , ctxX : Int
     , ctxY : Int
@@ -204,6 +236,7 @@ init _ =
       , resizeInfo = Nothing
       , showGlobalMenu = False
       , defaultModelsEditor = emptyDefaultModelsEditor
+      , mcpEditor = emptyMcpEditor
       , ctxVisible = False
       , ctxX = 0
       , ctxY = 0
@@ -350,6 +383,25 @@ type Msg
     | DefaultModelsCancelSyncPrompt
     | DefaultModelsListResult E.Value
     | DefaultModelsSyncResult E.Value
+      -- MCP server editor
+    | OpenMcpEditor
+    | CloseMcpEditor
+    | SetMcpInput String
+    | McpSelectItem Int
+    | McpConfirmItem
+    | McpEditServer Int
+    | McpAddServer
+    | McpEditBack
+    | McpEditSave
+    | McpEditField String String
+    | McpDeleteServer Int
+    | McpConfirmDelete Int
+    | McpCancelDelete
+    | McpConfirmSync
+    | McpDiscardClose
+    | McpCancelSyncPrompt
+    | McpListResult E.Value
+    | McpSyncResult E.Value
       -- Help Window
     | OpenHelpWindow
     | CloseHelpWindow
@@ -2177,6 +2229,365 @@ update msg model =
                 Err _ ->
                     ( model, Cmd.none )
 
+        OpenMcpEditor ->
+            ( { model
+                | mcpEditor =
+                    { emptyMcpEditor
+                        | show = True
+                        , page = ModelSelLoading
+                    }
+                , showGlobalMenu = False
+              }
+            , Ports.listDefaultMcp {}
+            )
+
+        CloseMcpEditor ->
+            let
+                ed =
+                    model.mcpEditor
+            in
+            if ed.page == ModelSelSyncing then
+                -- Do not allow closing while a sync is in flight
+                ( model, Cmd.none )
+
+            else if ed.working /= ed.original then
+                -- Unsaved edits: ask before closing
+                ( { model | mcpEditor = { ed | page = ModelSelConfirmSync } }
+                , Cmd.none
+                )
+
+            else
+                ( { model | mcpEditor = emptyMcpEditor }
+                , Cmd.none
+                )
+
+        McpListResult raw ->
+            case D.decodeValue mcpListResultDecoder raw of
+                Ok res ->
+                    let
+                        ed =
+                            model.mcpEditor
+
+                        -- mcp.conf has no id field; assign stable unique ids here
+                        servers =
+                            List.indexedMap (\i s -> { s | id = i + 1 }) res.servers
+                    in
+                    if res.ok then
+                        ( { model
+                            | mcpEditor =
+                                { ed
+                                    | page = ModelSelList
+                                    , original = servers
+                                    , working = servers
+                                    , loadError = Nothing
+                                }
+                          }
+                        , Cmd.batch
+                            [ focusAfterDelay "mcp-selector-input-default"
+                            , Ports.setCursorPos "mcp-selector-input-default"
+                            ]
+                        )
+
+                    else
+                        ( { model
+                            | mcpEditor =
+                                { ed
+                                    | page = ModelSelList
+                                    , loadError = Just res.error
+                                }
+                          }
+                        , Cmd.none
+                        )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        SetMcpInput val ->
+            let
+                ed =
+                    model.mcpEditor
+
+                filtered =
+                    filterMcpServers ed.working val
+
+                clampedSelected =
+                    if List.length filtered <= ed.selected then
+                        max 0 (List.length filtered - 1)
+                    else
+                        ed.selected
+            in
+            ( { model
+                | mcpEditor =
+                    { ed
+                        | input = val
+                        , selected = clampedSelected
+                    }
+              }
+            , Cmd.none
+            )
+
+        McpSelectItem idx ->
+            let
+                ed =
+                    model.mcpEditor
+
+                filtered =
+                    filterMcpServers ed.working ed.input
+
+                scrollCmd =
+                    case List.head (List.drop idx filtered) of
+                        Just s ->
+                            Ports.scrollIntoView ("mcp-selector-item-default-" ++ String.fromInt s.id)
+
+                        Nothing ->
+                            Cmd.none
+            in
+            ( { model | mcpEditor = { ed | selected = idx } }
+            , scrollCmd
+            )
+
+        McpConfirmItem ->
+            let
+                ed =
+                    model.mcpEditor
+
+                filtered =
+                    filterMcpServers ed.working ed.input
+
+                selectedServer =
+                    List.head (List.drop ed.selected filtered)
+            in
+            case selectedServer of
+                Just s ->
+                    ( { model
+                        | mcpEditor =
+                            { ed
+                                | page = ModelSelEdit
+                                , draft = Just (draftFromMcp s)
+                                , confirmDelete = Nothing
+                            }
+                      }
+                    , Cmd.batch
+                        [ focusAfterDelay "mcp-editor-server-default"
+                        , Ports.setCursorPos "mcp-editor-server-default"
+                        ]
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        McpEditServer id ->
+            let
+                ed =
+                    model.mcpEditor
+            in
+            case List.filter (\s -> s.id == id) ed.working |> List.head of
+                Just s ->
+                    ( { model
+                        | mcpEditor =
+                            { ed
+                                | page = ModelSelEdit
+                                , draft = Just (draftFromMcp s)
+                                , confirmDelete = Nothing
+                            }
+                      }
+                    , Cmd.batch
+                        [ focusAfterDelay "mcp-editor-server-default"
+                        , Ports.setCursorPos "mcp-editor-server-default"
+                        ]
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        McpAddServer ->
+            let
+                ed =
+                    model.mcpEditor
+            in
+            ( { model
+                | mcpEditor =
+                    { ed
+                        | page = ModelSelEdit
+                        , draft = Just T.emptyMcpDraft
+                        , confirmDelete = Nothing
+                    }
+              }
+            , Cmd.batch
+                [ focusAfterDelay "mcp-editor-server-default"
+                , Ports.setCursorPos "mcp-editor-server-default"
+                ]
+            )
+
+        McpEditBack ->
+            let
+                ed =
+                    model.mcpEditor
+            in
+            ( { model
+                | mcpEditor =
+                    { ed
+                        | page = ModelSelList
+                        , draft = Nothing
+                    }
+              }
+            , Cmd.batch
+                [ focusAfterDelay "mcp-selector-input-default"
+                , Ports.setCursorPos "mcp-selector-input-default"
+                ]
+            )
+
+        McpEditSave ->
+            case model.mcpEditor.draft of
+                Just draft ->
+                    let
+                        ed =
+                            model.mcpEditor
+
+                        newServer =
+                            mcpFromDraft draft
+
+                        working =
+                            if draft.id == 0 then
+                                let
+                                    nextId =
+                                        List.foldl (\s acc -> max acc s.id) 0 ed.working + 1
+                                in
+                                ed.working ++ [ { newServer | id = nextId } ]
+
+                            else
+                                List.map
+                                    (\s -> if s.id == draft.id then newServer else s)
+                                    ed.working
+                    in
+                    ( { model
+                        | mcpEditor =
+                            { ed
+                                | page = ModelSelList
+                                , working = working
+                                , draft = Nothing
+                            }
+                      }
+                    , Cmd.batch
+                        [ focusAfterDelay "mcp-selector-input-default"
+                        , Ports.setCursorPos "mcp-selector-input-default"
+                        ]
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        McpEditField field value ->
+            let
+                ed =
+                    model.mcpEditor
+            in
+            ( { model
+                | mcpEditor =
+                    { ed
+                        | draft = Maybe.map (updateMcpDraftField field value) ed.draft
+                    }
+              }
+            , Cmd.none
+            )
+
+        McpDeleteServer id ->
+            let
+                ed =
+                    model.mcpEditor
+            in
+            ( { model
+                | mcpEditor = { ed | confirmDelete = Just id }
+              }
+            , Cmd.none
+            )
+
+        McpConfirmDelete id ->
+            let
+                ed =
+                    model.mcpEditor
+            in
+            ( { model
+                | mcpEditor =
+                    { ed
+                        | working = List.filter (\s -> s.id /= id) ed.working
+                        , confirmDelete = Nothing
+                    }
+              }
+            , Cmd.none
+            )
+
+        McpCancelDelete ->
+            let
+                ed =
+                    model.mcpEditor
+            in
+            ( { model
+                | mcpEditor = { ed | confirmDelete = Nothing }
+              }
+            , Cmd.none
+            )
+
+        McpConfirmSync ->
+            let
+                ed =
+                    model.mcpEditor
+            in
+            ( { model
+                | mcpEditor = { ed | page = ModelSelSyncing }
+              }
+            , Ports.syncDefaultMcp
+                { config = encodeMcpServers ed.working }
+            )
+
+        McpDiscardClose ->
+            ( { model | mcpEditor = emptyMcpEditor }
+            , Cmd.none
+            )
+
+        McpCancelSyncPrompt ->
+            let
+                ed =
+                    model.mcpEditor
+            in
+            ( { model
+                | mcpEditor = { ed | page = ModelSelList }
+              }
+            , Cmd.batch
+                [ focusAfterDelay "mcp-selector-input-default"
+                , Ports.setCursorPos "mcp-selector-input-default"
+                ]
+            )
+
+        McpSyncResult raw ->
+            case D.decodeValue mcpSyncResultDecoder raw of
+                Ok res ->
+                    let
+                        ed =
+                            model.mcpEditor
+                    in
+                    if ed.page /= ModelSelSyncing then
+                        ( model, Cmd.none )
+
+                    else if res.ok then
+                        ( { model | mcpEditor = emptyMcpEditor }
+                        , Cmd.none
+                        )
+
+                    else
+                        ( { model
+                            | mcpEditor =
+                                { ed
+                                    | page = ModelSelSyncFailed
+                                    , syncError = Just res.error
+                                }
+                          }
+                        , Cmd.none
+                        )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
         -- Help Window
         OpenHelpWindow ->
             case getActiveSession model of
@@ -2830,6 +3241,119 @@ filterModels models term =
         List.filter (\m -> Fuzzy.fuzzyMatch (String.toLower trimmed) (String.toLower m.name)) models
 
 
+filterMcpServers : List T.McpInfo -> String -> List T.McpInfo
+filterMcpServers servers term =
+    let
+        trimmed =
+            String.trim term
+    in
+    if String.isEmpty trimmed then
+        servers
+
+    else
+        List.filter (\s -> Fuzzy.fuzzyMatch (String.toLower trimmed) (String.toLower s.server)) servers
+
+
+draftFromMcp : T.McpInfo -> T.McpDraft
+draftFromMcp s =
+    { id = s.id
+    , type_ = s.type_
+    , server = s.server
+    , url = s.url
+    , command = s.command
+    , args = s.args
+    , env = s.env
+    , authType = s.authType
+    , authToken = s.authToken
+    , authClientId = s.authClientId
+    , authClientSecret = s.authClientSecret
+    , protoVersion = s.protoVersion
+    }
+
+
+mcpFromDraft : T.McpDraft -> T.McpInfo
+mcpFromDraft d =
+    { id = d.id
+    , type_ = d.type_
+    , server = String.trim d.server
+    , url = String.trim d.url
+    , command = String.trim d.command
+    , args = String.trim d.args
+    , env = String.trim d.env
+    , authType = String.trim d.authType
+    , authToken = String.trim d.authToken
+    , authClientId = String.trim d.authClientId
+    , authClientSecret = String.trim d.authClientSecret
+    , protoVersion = String.trim d.protoVersion
+    }
+
+
+updateMcpDraftField : String -> String -> T.McpDraft -> T.McpDraft
+updateMcpDraftField field value draft =
+    case field of
+        "type" ->
+            -- Switching kind clears the other kind's fields to avoid residue
+            if value == "http" then
+                { draft | type_ = value, command = "", args = "", env = "" }
+
+            else
+                { draft | type_ = value, url = "" }
+
+        "server" ->
+            { draft | server = value }
+
+        "url" ->
+            { draft | url = value }
+
+        "command" ->
+            { draft | command = value }
+
+        "args" ->
+            { draft | args = value }
+
+        "env" ->
+            { draft | env = value }
+
+        "auth-type" ->
+            { draft | authType = value }
+
+        "auth-token" ->
+            { draft | authToken = value }
+
+        "auth-client-id" ->
+            { draft | authClientId = value }
+
+        "auth-client-secret" ->
+            { draft | authClientSecret = value }
+
+        "proto-version" ->
+            { draft | protoVersion = value }
+
+        _ ->
+            draft
+
+
+encodeMcpServers : List T.McpInfo -> String
+encodeMcpServers servers =
+    E.encode 0 (E.list encodeMcpServer servers)
+
+
+encodeMcpServer : T.McpInfo -> E.Value
+encodeMcpServer s =
+    E.object
+        [ ( "server", E.string s.server )
+        , ( "url", E.string s.url )
+        , ( "command", E.string s.command )
+        , ( "args", E.string s.args )
+        , ( "env", E.string s.env )
+        , ( "auth_type", E.string s.authType )
+        , ( "auth_token", E.string s.authToken )
+        , ( "auth_client_id", E.string s.authClientId )
+        , ( "auth_client_secret", E.string s.authClientSecret )
+        , ( "proto_version", E.string s.protoVersion )
+        ]
+
+
 draftFromModel : T.ModelInfo -> T.ModelDraft
 draftFromModel m =
     { id = m.id
@@ -2961,6 +3485,50 @@ defaultModelsSyncResultDecoder =
         (D.field "error" D.string)
 
 
+mcpInfoDecoder : D.Decoder T.McpInfo
+mcpInfoDecoder =
+    D.succeed T.McpInfo
+        |> andMap (D.succeed 0)
+        |> andMap (optionalString "type")
+        |> andMap (D.field "server" D.string)
+        |> andMap (optionalString "url")
+        |> andMap (optionalString "command")
+        |> andMap (optionalString "args")
+        |> andMap (optionalString "env")
+        |> andMap (optionalString "auth_type")
+        |> andMap (optionalString "auth_token")
+        |> andMap (optionalString "auth_client_id")
+        |> andMap (optionalString "auth_client_secret")
+        |> andMap (optionalString "proto_version")
+
+
+andMap : D.Decoder a -> D.Decoder (a -> b) -> D.Decoder b
+andMap dx df =
+    D.map2 (\f x -> f x) df dx
+
+
+optionalString : String -> D.Decoder String
+optionalString key =
+    D.oneOf [ D.field key D.string, D.succeed "" ]
+
+
+mcpListResultDecoder : D.Decoder { ok : Bool, servers : List T.McpInfo, error : String }
+mcpListResultDecoder =
+    D.map3
+        (\ok servers error -> { ok = ok, servers = servers, error = error })
+        (D.field "ok" D.bool)
+        (D.field "servers" (D.list mcpInfoDecoder))
+        (D.field "error" D.string)
+
+
+mcpSyncResultDecoder : D.Decoder { ok : Bool, error : String }
+mcpSyncResultDecoder =
+    D.map2
+        (\ok error -> { ok = ok, error = error })
+        (D.field "ok" D.bool)
+        (D.field "error" D.string)
+
+
 -- ─── Help Items ──────────────────────────────────────────────────────
 
 helpItems : List HelpItem
@@ -3000,6 +3568,8 @@ subscriptions model =
         , Ports.onStatus (\raw -> StatusEvent raw)
         , Ports.onDefaultModelsList (\raw -> DefaultModelsListResult raw)
         , Ports.onDefaultModelsSyncResult (\raw -> DefaultModelsSyncResult raw)
+        , Ports.onDefaultMcpList (\raw -> McpListResult raw)
+        , Ports.onDefaultMcpSyncResult (\raw -> McpSyncResult raw)
         , Ports.onSessionCreated (\id -> SessionCreated id)
         , Ports.onSessionDirs (\dirs -> SessionDirsResult dirs)
         , Ports.onFsListDir (\entries -> FsListDirResult entries)
@@ -3038,6 +3608,7 @@ view model =
         , viewContextMenu model
         , viewSessionManagerOverlay model
         , viewDefaultModelsEditorOverlay model
+        , viewMcpEditorOverlay model
         ]
 
 
@@ -3172,6 +3743,13 @@ viewGlobalMenu model =
                 ]
                 [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "◈" ]
                 , Html.text " Edit Default Models"
+                ]
+            , Html.div
+                [ Attr.class "global-menu-item"
+                , Ev.onClick OpenMcpEditor
+                ]
+                [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "🔌" ]
+                , Html.text " Edit MCP Servers"
                 ]
             ]
         , Html.button
@@ -3833,6 +4411,145 @@ viewDefaultModelsEditorOverlay model =
             ]
     else
         Html.text ""
+
+
+viewMcpEditorOverlay : Model -> Html Msg
+viewMcpEditorOverlay model =
+    let
+        ed =
+            model.mcpEditor
+    in
+    if ed.show then
+        viewOverlay CloseMcpEditor
+            [ case ed.page of
+                ModelSelEdit ->
+                    case ed.draft of
+                        Just draft ->
+                            Overlay.McpEditor.view
+                                { sessionId = "default"
+                                , draft = draft
+                                , isNew = draft.id == 0
+                                , onBack = McpEditBack
+                                , onSave = McpEditSave
+                                , onField = McpEditField
+                                }
+
+                        Nothing ->
+                            Html.text ""
+
+                ModelSelConfirmSync ->
+                    viewMcpSyncPrompt (ed.working /= ed.original)
+                        { onConfirm = McpConfirmSync
+                        , onDiscard = McpDiscardClose
+                        , onCancel = McpCancelSyncPrompt
+                        }
+
+                ModelSelSyncing ->
+                    Html.div [ Attr.class "sel-page" ]
+                        [ viewMcpSelTitle (ed.working /= ed.original)
+                        , Html.div [ Attr.class "sel-page-status" ] [ Html.text "Syncing…" ]
+                        ]
+
+                ModelSelSyncFailed ->
+                    viewMcpSyncFailed
+                        (ed.working /= ed.original)
+                        (Maybe.withDefault "Unknown error" ed.syncError)
+                        { onRetry = McpConfirmSync
+                        , onBack = McpCancelSyncPrompt
+                        , onDiscard = McpDiscardClose
+                        }
+
+                ModelSelLoading ->
+                    Html.div [ Attr.class "sel-page" ]
+                        [ viewMcpSelTitle False
+                        , Html.div [ Attr.class "sel-page-status" ] [ Html.text "Loading…" ]
+                        ]
+
+                ModelSelList ->
+                    Overlay.McpSelector.view
+                        { sessionId = "default"
+                        , servers = ed.working
+                        , input = ed.input
+                        , selected = ed.selected
+                        , confirmDeleteId = ed.confirmDelete
+                        , canDelete = List.length ed.working > 1
+                        , dirty = ed.working /= ed.original
+                        , error = ed.loadError
+                        , noOp = NoOp
+                        , onSelect = McpSelectItem
+                        , onConfirm = McpConfirmItem
+                        , onClose = CloseMcpEditor
+                        , onInput = SetMcpInput
+                        , onEdit = McpEditServer
+                        , onDelete = McpDeleteServer
+                        , onDeleteConfirm = McpConfirmDelete
+                        , onDeleteCancel = McpCancelDelete
+                        , onAdd = McpAddServer
+                        }
+            ]
+    else
+        Html.text ""
+
+
+viewMcpSelTitle : Bool -> Html msg
+viewMcpSelTitle dirty =
+    Html.div
+        [ Attr.class "sel-page-title"
+        , Attr.title (if dirty then "Unsaved changes" else "")
+        ]
+        [ Html.text ("MCP Servers" ++ (if dirty then " *" else "")) ]
+
+
+viewMcpSyncPrompt : Bool -> { onConfirm : msg, onDiscard : msg, onCancel : msg } -> Html msg
+viewMcpSyncPrompt dirty callbacks =
+    Html.div [ Attr.class "sel-page" ]
+        [ viewMcpSelTitle dirty
+        , Html.div [ Attr.class "sel-page-status" ]
+            [ Html.text "You have unsaved changes. Sync them now?" ]
+        , Html.div [ Attr.class "sel-page-actions" ]
+            [ Html.button
+                [ Attr.class "me-save-btn"
+                , Ev.onClick callbacks.onConfirm
+                ]
+                [ Html.text "Sync & Close" ]
+            , Html.button
+                [ Attr.class "me-cancel-btn"
+                , Ev.onClick callbacks.onDiscard
+                ]
+                [ Html.text "Discard & Close" ]
+            , Html.button
+                [ Attr.class "me-cancel-btn"
+                , Ev.onClick callbacks.onCancel
+                ]
+                [ Html.text "Cancel" ]
+            ]
+        ]
+
+
+viewMcpSyncFailed : Bool -> String -> { onRetry : msg, onBack : msg, onDiscard : msg } -> Html msg
+viewMcpSyncFailed dirty error callbacks =
+    Html.div [ Attr.class "sel-page" ]
+        [ viewMcpSelTitle dirty
+        , Html.div [ Attr.class "sel-page-status sel-page-status-error" ]
+            [ Html.text ("Sync failed: " ++ error) ]
+        , Html.div [ Attr.class "sel-page-actions" ]
+            [ Html.button
+                [ Attr.class "me-save-btn"
+                , Ev.onClick callbacks.onRetry
+                ]
+                [ Html.text "Retry" ]
+            , Html.button
+                [ Attr.class "me-cancel-btn"
+                , Ev.onClick callbacks.onBack
+                ]
+                [ Html.text "Back" ]
+            , Html.button
+                [ Attr.class "me-cancel-btn"
+                , Ev.onClick callbacks.onDiscard
+                ]
+                [ Html.text "Discard & Close" ]
+            ]
+        ]
 
 
 viewSelTitle : Bool -> Html msg

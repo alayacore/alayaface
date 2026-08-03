@@ -12,6 +12,9 @@ module Session.Types exposing
     , SessionState
     , ModelInfo
     , ModelDraft
+    , McpInfo
+    , McpDraft
+    , emptyMcpDraft
     , ModelSelPage(..)
     , ThemeInfo
     , emptySession
@@ -244,6 +247,58 @@ type alias ModelDraft =
     , modelName : String
     , contextLimit : String
     , maxTokens : String
+    }
+
+
+-- MCP server (mirrors mcp.conf key-value blocks; args/env kept as raw JSON text)
+-- `type` is a UI concept (http/stdio) inferred from url presence; not persisted.
+
+type alias McpInfo =
+    { id : Int
+    , type_ : String
+    , server : String
+    , url : String
+    , command : String
+    , args : String
+    , env : String
+    , authType : String
+    , authToken : String
+    , authClientId : String
+    , authClientSecret : String
+    , protoVersion : String
+    }
+
+
+type alias McpDraft =
+    { id : Int
+    , type_ : String
+    , server : String
+    , url : String
+    , command : String
+    , args : String
+    , env : String
+    , authType : String
+    , authToken : String
+    , authClientId : String
+    , authClientSecret : String
+    , protoVersion : String
+    }
+
+
+emptyMcpDraft : McpDraft
+emptyMcpDraft =
+    { id = 0
+    , type_ = "http"
+    , server = ""
+    , url = ""
+    , command = ""
+    , args = ""
+    , env = ""
+    , authType = ""
+    , authToken = ""
+    , authClientId = ""
+    , authClientSecret = ""
+    , protoVersion = ""
     }
 
 

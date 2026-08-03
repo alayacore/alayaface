@@ -15,6 +15,11 @@ port module Ports exposing
     , syncDefaultModels
     , onDefaultModelsList
     , onDefaultModelsSyncResult
+      -- Default (global) MCP server editor
+    , listDefaultMcp
+    , syncDefaultMcp
+    , onDefaultMcpList
+    , onDefaultMcpSyncResult
     , confirmTool
     , sendMcpDecline
     , sendMcpCancel
@@ -70,6 +75,10 @@ port listDefaultModels : {} -> Cmd msg
 port syncDefaultModels : { config : String } -> Cmd msg
 port onDefaultModelsList : (E.Value -> msg) -> Sub msg
 port onDefaultModelsSyncResult : (E.Value -> msg) -> Sub msg
+port listDefaultMcp : {} -> Cmd msg
+port syncDefaultMcp : { config : String } -> Cmd msg
+port onDefaultMcpList : (E.Value -> msg) -> Sub msg
+port onDefaultMcpSyncResult : (E.Value -> msg) -> Sub msg
 port confirmTool : { sessionId : String, id : String, allowed : Bool } -> Cmd msg
 port sendMcpDecline : { sessionId : String, server : String } -> Cmd msg
 port sendMcpCancel : { sessionId : String } -> Cmd msg
