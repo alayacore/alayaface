@@ -700,15 +700,8 @@ body {
 .message-assistant {
   align-self: flex-start;
   background: rgba(255,255,255,0.04);
+  border: 2px solid transparent;
   color: #e2e8f0;
-}
-
-.message-reasoning {
-  color: #555;
-  font-style: italic;
-  padding: 4px 8px;
-  font-size: 0.85rem;
-  line-height: 1.5;
 }
 
 /* ─── Reasoning Fold ───────────────────────────────────────────────── */
@@ -747,13 +740,13 @@ body {
 }
 
 .message-reasoning-wrap .message-reasoning {
-  color: #555;
-  font-style: italic;
-  padding: 4px 8px;
-  font-size: 0.85rem;
+  color: #aaa;
+  font-style: normal;
+  padding: 10px 14px;
+  font-size: 1rem;
   line-height: 1.5;
   background: transparent;
-  border-left: none;
+  border: 1px solid rgba(255, 255, 255, 0.18);
 }
 
 .message-reasoning-wrap .message-reasoning.reasoning-collapsed {
@@ -772,7 +765,6 @@ body {
   .reasoning-header { color: #aaa; }
   .reasoning-header:hover { background: rgba(0, 0, 0, 0.02); }
   .reasoning-toggle { color: #aaa; }
-  .message-reasoning-wrap .message-reasoning { color: #aaa; }
   .message-reasoning-wrap .reasoning-truncated { color: #ccc; }
   .message-tool { color: #999; }
 }
@@ -805,14 +797,14 @@ body {
 .message-notify {
   align-self: flex-start;
   background: rgba(250, 204, 21, 0.12);
-  border: 1px solid rgba(250, 204, 21, 0.35);
+  border: 2px solid rgba(250, 204, 21, 0.35);
   color: #fde68a;
 }
 
 .message-error {
   align-self: flex-start;
   background: rgba(239, 68, 68, 0.14);
-  border: 1px solid rgba(239, 68, 68, 0.4);
+  border: 2px solid rgba(239, 68, 68, 0.4);
   color: #fca5a5;
 }
 
@@ -1547,6 +1539,11 @@ body {
   line-height: 1.5;
 }
 
+/* Keep the outer box height consistent with user/notify/error bubbles:
+   no extra margin on the first/last paragraph. */
+.md p:first-child { margin-top: 0; }
+.md p:last-child { margin-bottom: 0; }
+
 .md ul, .md ol {
   margin: 4px 0;
   padding-left: 20px;
@@ -1715,7 +1712,7 @@ body {
   .message-notify { background: #fef9c3; border-color: #fde68a; color: #854d0e; }
   .message-error { background: #fee2e2; border-color: #fecaca; color: #991b1b; }
   .message-user { border-color: #2563eb; }
-  .message-reasoning-wrap .message-reasoning { color: #666; }
+  .message-reasoning-wrap .message-reasoning { color: #888; border-color: rgba(0, 0, 0, 0.2); }
   .message-reasoning-wrap .reasoning-truncated { color: #888; }
   .message-tool { color: #888; }
 }
