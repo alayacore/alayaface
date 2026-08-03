@@ -9,8 +9,6 @@ module Session.Types exposing
     , StagedMedia
     , Message
     , ToolCall
-    , NotificationItem
-    , NotifType(..)
     , SessionState
     , ModelInfo
     , ModelDraft
@@ -93,6 +91,8 @@ type Role
     | Tool
     | System
     | Reasoning
+    | Notify
+    | Error
 
 
 roleToString : Role -> String
@@ -103,6 +103,8 @@ roleToString r =
         Tool -> "tool"
         System -> "system"
         Reasoning -> "reasoning"
+        Notify -> "notify"
+        Error -> "error"
 
 
 roleFromString : String -> Maybe Role
@@ -113,6 +115,8 @@ roleFromString s =
         "tool" -> Just Tool
         "system" -> Just System
         "reasoning" -> Just Reasoning
+        "notify" -> Just Notify
+        "error" -> Just Error
         _ -> Nothing
 
 
@@ -144,21 +148,6 @@ type alias ToolCall =
     }
 
 
--- Notification
-
-type alias NotificationItem =
-    { id : String
-    , notifType : NotifType
-    , text : String
-    , timestamp : Int
-    }
-
-
-type NotifType
-    = Notify
-    | Error
-
-
 -- Pending Confirm
 
 type alias PendingConfirm =
@@ -188,7 +177,6 @@ type alias SessionState =
     , historyRoles : Dict String String
     , toolCalls : Dict String ToolCall
     , stderrLines : List String
-    , notifications : List NotificationItem
     , input : String
     , sendPending : Bool
     , processedEchoIds : Set.Set String
@@ -306,7 +294,6 @@ emptySession id =
     , historyRoles = Dict.empty
     , toolCalls = Dict.empty
     , stderrLines = []
-    , notifications = []
     , input = ""
     , sendPending = False
     , processedEchoIds = Set.empty

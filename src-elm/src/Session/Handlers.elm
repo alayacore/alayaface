@@ -442,14 +442,18 @@ handleSystemError s data =
             D.decodeValue (D.field "text" D.string) data
                 |> Result.withDefault "Unknown error"
 
-        notif =
-            { id = "err-" ++ String.fromInt (List.length s.notifications)
-            , notifType = Error
-            , text = text
-            , timestamp = 0
+        msg =
+            { id = "err-" ++ String.fromInt (List.length s.messages)
+            , role = Error
+            , content = text
+            , toolId = Nothing
+            , toolName = Nothing
+            , isError = True
+            , historyId = Nothing
+            , media = Nothing
             }
     in
-    { s | notifications = s.notifications ++ [ notif ] }
+    { s | messages = s.messages ++ [ msg ] }
 
 
 handleSystemNotify : SessionState -> D.Value -> SessionState
@@ -458,16 +462,19 @@ handleSystemNotify s data =
         text =
             D.decodeValue (D.field "text" D.string) data
                 |> Result.withDefault ""
+
+        msg =
+            { id = "notify-" ++ String.fromInt (List.length s.messages)
+            , role = Notify
+            , content = text
+            , toolId = Nothing
+            , toolName = Nothing
+            , isError = False
+            , historyId = Nothing
+            , media = Nothing
+            }
     in
-    { s
-        | notifications = s.notifications
-            ++ [ { id = "notify-" ++ String.fromInt (List.length s.notifications)
-                 , notifType = Notify
-                 , text = text
-                 , timestamp = 0
-                 }
-               ]
-    }
+    { s | messages = s.messages ++ [ msg ] }
 
 
 handleSystemModelList : SessionState -> D.Value -> SessionState
@@ -627,9 +634,9 @@ handleSystemMcp s data =
 -- CO carries only the call ID; the reader injects the command `name`
 -- (resolved from the CI we sent) into the JSON so we can render results
 -- without tracking call IDs on the frontend. Success results with useful
--- info (save/fork/mcp) become System messages; errors become error-style
--- System messages. Silent commands (cancel, reason, model_set, ...) render
--- nothing — the state change itself is the confirmation.
+-- info (save/fork/mcp) become Notify-style messages; errors become
+-- Error-style messages. Silent commands (cancel, reason, model_set, ...)
+-- render nothing — the state change itself is the confirmation.
 handleCommandResultFrame : SessionState -> D.Value -> SessionState
 handleCommandResultFrame s json =
     let
@@ -658,18 +665,18 @@ handleCommandResultFrame s json =
                     |> Maybe.andThen (\o -> D.decodeValue (D.field "message" D.string) o |> Result.toMaybe)
                     |> Maybe.withDefault "Command failed"
 
-            prefix =
+            text =
                 if code == "" then
-                    "[error: "
+                    message
                 else
-                    "[error: " ++ code ++ ": "
+                    code ++ ": " ++ message
         in
-        appendSystemMessage s (prefix ++ message ++ "]")
+        appendSystemMessage s Error text
 
     else
         case renderCommandResult name output of
             Just text ->
-                appendSystemMessage s text
+                appendSystemMessage s Notify text
 
             Nothing ->
                 s
@@ -705,12 +712,12 @@ renderCommandResult name output =
             Nothing
 
 
-appendSystemMessage : SessionState -> String -> SessionState
-appendSystemMessage s text =
+appendSystemMessage : SessionState -> Role -> String -> SessionState
+appendSystemMessage s role text =
     let
         newMsg =
             { id = "sys-" ++ String.fromInt (List.length s.messages)
-            , role = System
+            , role = role
             , content = text
             , toolId = Nothing
             , toolName = Nothing

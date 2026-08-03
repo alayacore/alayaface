@@ -3377,6 +3377,18 @@ viewMessage cursorMsgId sessionId msg =
                     (List.map (\line -> Html.span [] [ Html.text line ]) (String.lines msg.content))
                 ]
 
+        T.Notify ->
+            Html.div [ Attr.class ("message message-notify" ++ cursorClass) ]
+                [ Html.div [ Attr.class "message-content" ]
+                    [ Html.text msg.content ]
+                ]
+
+        T.Error ->
+            Html.div [ Attr.class ("message message-error" ++ cursorClass) ]
+                [ Html.div [ Attr.class "message-content" ]
+                    [ Html.text msg.content ]
+                ]
+
 
 viewInputBar : Model -> T.SessionState -> Html Msg
 viewInputBar model session =
