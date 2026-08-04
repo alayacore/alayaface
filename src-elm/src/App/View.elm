@@ -300,7 +300,7 @@ viewChatArea model session =
         [ Attr.class "chat-area" ]
         [ if hasMessages then
             Html.div [ Attr.class "messages" ]
-                (List.map (viewMessage model.cursorMsgId session.id) session.messages
+                (List.map (viewMessage model.cursorMsgId session) session.messages
 
                     ++ [ Html.div [] [] ]
                 )
@@ -316,8 +316,8 @@ viewChatArea model session =
         ]
 
 
-viewMessage : Maybe String -> String -> T.Message -> Html Msg
-viewMessage cursorMsgId sessionId msg =
+viewMessage : Maybe String -> T.SessionState -> T.Message -> Html Msg
+viewMessage cursorMsgId session msg =
     let
         isCursor =
             case cursorMsgId of
@@ -330,8 +330,14 @@ viewMessage cursorMsgId sessionId msg =
             else
                 ""
 
-        hasHistoryId =
-            msg.historyId /= Nothing
+        collapsed =
+            T.isMsgCollapsed session.msgCollapsed msg
+
+        collapsedClass =
+            if collapsed then
+                " collapsed"
+            else
+                ""
 
         -- Right-click handler for messages with historyId
         ctxAttrs =
@@ -340,7 +346,7 @@ viewMessage cursorMsgId sessionId msg =
                     [ Ev.preventDefaultOn "contextmenu"
                         (D.map2
                             (\clientX clientY ->
-                                ( ShowCtxMenu (round clientX) (round clientY) hid sessionId, True )
+                                ( ShowCtxMenu (round clientX) (round clientY) hid session.id, True )
                             )
                             (D.field "clientX" D.float)
                             (D.field "clientY" D.float)
@@ -350,16 +356,95 @@ viewMessage cursorMsgId sessionId msg =
                 Nothing ->
                     []
 
-        baseClass =
-            "message message-" ++ T.roleToString msg.role ++ cursorClass
+        frameClass =
+            "message message-" ++ T.roleToString msg.role ++ collapsedClass ++ cursorClass
     in
+    Html.div
+        ([ Attr.class frameClass ]
+            ++ ctxAttrs
+        )
+        [ Html.div
+            [ Attr.class "msg-header"
+            , Ev.onClick (ToggleMsgCollapse session.id msg.id)
+            , Attr.title (if collapsed then "Expand" else "Collapse")
+            ]
+            (viewMsgHeader msg collapsed)
+        , if collapsed then
+            Html.text ""
+
+          else
+            viewMsgBody msg
+        ]
+
+
+-- Header row of a message window: role label, optional tool info, and a
+-- one-line preview when collapsed. The whole row toggles on click.
+viewMsgHeader : T.Message -> Bool -> List (Html Msg)
+viewMsgHeader msg collapsed =
+    [ Html.span [ Attr.class "msg-label" ]
+        [ Html.text (String.toUpper (T.roleToString msg.role)) ]
+    , case msg.role of
+        T.Tool ->
+            Html.span [ Attr.class "msg-tool-info" ]
+                [ Html.span [ Attr.class "msg-name" ]
+                    [ Html.text (Maybe.withDefault "" msg.toolName) ]
+                , Html.span [ Attr.class "msg-status" ]
+                    [ Html.text (toolStatus msg) ]
+                ]
+
+        _ ->
+            Html.text ""
+    , if collapsed && msg.role /= T.Tool then
+        Html.span [ Attr.class "msg-preview" ]
+            [ Html.text (previewText msg) ]
+
+      else
+        Html.text ""
+    ]
+
+
+-- Tool state icon derived from the message, no handler changes:
+-- ❌ error (UF error), ⏳ running (AF/Af/Uf stages), ✅ done (UF success).
+toolStatus : T.Message -> String
+toolStatus msg =
+    if msg.isError then
+        "❌"
+
+    else if String.startsWith "🔧" (String.trim msg.content) then
+        "⏳"
+
+    else
+        "✅"
+
+
+-- One-line preview used by the collapsed header. Shows the first line of
+-- the body, truncated to 80 chars with an ellipsis.
+previewText : T.Message -> String
+previewText msg =
+    let
+        first =
+            case List.head (String.lines msg.content) of
+                Just l ->
+                    String.trim l
+
+                Nothing ->
+                    ""
+    in
+    if String.isEmpty first then
+        ""
+
+    else if String.length first > 80 then
+        String.left 80 first ++ "…"
+
+    else
+        first
+
+
+viewMsgBody : T.Message -> Html Msg
+viewMsgBody msg =
     case msg.role of
         T.Assistant ->
-            Html.div
-                ([ Attr.class ("message message-" ++ T.roleToString msg.role ++ cursorClass)
-                 ]
-                    ++ ctxAttrs
-                )
+            Html.div [ Attr.class "msg-body" ]
                 [ Html.div [ Attr.class "message-content" ]
                     [ Markdown.toHtmlWith markdownOptions
                         [ Attr.class "md" ]
@@ -368,34 +453,20 @@ viewMessage cursorMsgId sessionId msg =
                 ]
 
         T.Reasoning ->
-            Html.div [ Attr.class "message-reasoning-wrap" ]
-                [ Html.div
-                    ([ Attr.class ("message message-reasoning" ++ cursorClass) ]
-                        ++ ctxAttrs
-                    )
-                    [ Html.text msg.content ]
-                ]
+            Html.div [ Attr.class "msg-body" ]
+                [ Html.text msg.content ]
 
         T.Tool ->
-            Html.div [ Attr.class "message-reasoning-wrap" ]
-                [ Html.div
-                    ([ Attr.class ("message message-tool" ++ cursorClass) ]
-                        ++ ctxAttrs
-                    )
-                    [ Html.div [ Attr.class "message-content" ]
-                        [ Markdown.toHtmlWith markdownOptions
-                            [ Attr.class "md" ]
-                            msg.content
-                        ]
+            Html.div [ Attr.class "msg-body" ]
+                [ Html.div [ Attr.class "message-content" ]
+                    [ Markdown.toHtmlWith markdownOptions
+                        [ Attr.class "md" ]
+                        msg.content
                     ]
                 ]
 
         T.User ->
-            Html.div
-                ([ Attr.class ("message message-" ++ T.roleToString msg.role ++ cursorClass)
-                 ]
-                    ++ ctxAttrs
-                )
+            Html.div [ Attr.class "msg-body" ]
                 [ case msg.media of
                     Just items ->
                         Html.div [ Attr.class "hs-staged-row" ]
@@ -408,22 +479,19 @@ viewMessage cursorMsgId sessionId msg =
                 ]
 
         T.System ->
-            Html.div
-                ([ Attr.class ("message message-" ++ T.roleToString msg.role ++ cursorClass) ]
-                    ++ ctxAttrs
-                )
+            Html.div [ Attr.class "msg-body" ]
                 [ Html.div [ Attr.class "message-content" ]
                     (List.map (\line -> Html.span [] [ Html.text line ]) (String.lines msg.content))
                 ]
 
         T.Notify ->
-            Html.div [ Attr.class ("message message-notify" ++ cursorClass) ]
+            Html.div [ Attr.class "msg-body" ]
                 [ Html.div [ Attr.class "message-content" ]
                     [ Html.text msg.content ]
                 ]
 
         T.Error ->
-            Html.div [ Attr.class ("message message-error" ++ cursorClass) ]
+            Html.div [ Attr.class "msg-body" ]
                 [ Html.div [ Attr.class "message-content" ]
                     [ Html.text msg.content ]
                 ]

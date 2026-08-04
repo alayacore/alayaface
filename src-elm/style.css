@@ -676,12 +676,10 @@ body {
 /* ─── Messages ─────────────────────────────────────────────────────── */
 
 .message {
-  padding: 10px 14px;
   border-radius: 4px;
   max-width: var(--content-width);
   width: 100%;
   word-wrap: break-word;
-  white-space: pre-wrap;
   white-space: pre-wrap;
   font-size: 1rem;
   line-height: 1.5;
@@ -704,80 +702,85 @@ body {
   color: #e2e8f0;
 }
 
-/* ─── Reasoning Fold ───────────────────────────────────────────────── */
+/* ─── Message Window (header + body) ──────────────────────────────── */
 
-.message-reasoning-wrap {
-  align-self: flex-start;
-  width: 100%;
-  max-width: var(--content-width);
-}
+/* Every message renders as a collapsible window: a clickable header row
+   (role label, optional tool info, collapsed preview) and a body. Tool
+   and reasoning windows start collapsed; user/assistant start expanded. */
 
-.reasoning-header {
+.msg-header {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 14px 3px;
   cursor: pointer;
   user-select: none;
-  color: #555;
-  font-size: 0.75rem;
-  border-radius: 4px;
-  transition: background 0.12s;
-}
-.reasoning-header:hover { background: rgba(255, 255, 255, 0.03); }
-
-.reasoning-toggle {
-  font-size: 0.5rem;
-  color: #555;
-  display: inline-block;
-  width: 0.6rem;
-  text-align: center;
-}
-
-.reasoning-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  color: #777;
+  transition: color 0.12s;
+}
+.msg-header:hover { color: #ccc; }
+
+.msg-label {
+  font-weight: 600;
+  flex-shrink: 0;
 }
 
-.message-reasoning-wrap .message-reasoning {
+.msg-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+  letter-spacing: 0;
+  text-transform: none;
+  color: #888;
+}
+
+.msg-tool-info {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.msg-name {
+  font-weight: 600;
   color: #aaa;
-  font-style: normal;
-  padding: 10px 14px;
-  font-size: 1rem;
-  line-height: 1.5;
-  background: transparent;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.msg-status {
+  font-size: 0.8rem;
+  letter-spacing: 0;
+}
+
+.msg-body {
+  padding: 4px 14px 10px;
+}
+
+/* Collapsed: header-only summary row, visually lighter */
+.message.collapsed {
+  opacity: 0.8;
+}
+
+.message-reasoning {
   border: 1px solid rgba(255, 255, 255, 0.18);
 }
-
-.message-reasoning-wrap .message-reasoning.reasoning-collapsed {
-  opacity: 0.65;
-}
-
-.message-reasoning-wrap .reasoning-truncated {
-  display: block;
-  color: #666;
-  font-size: 0.75rem;
-  letter-spacing: 0.1em;
-  margin-bottom: 2px;
-}
-
-@media (prefers-color-scheme: light) {
-  .reasoning-header { color: #aaa; }
-  .reasoning-header:hover { background: rgba(0, 0, 0, 0.02); }
-  .reasoning-toggle { color: #aaa; }
-  .message-reasoning-wrap .reasoning-truncated { color: #ccc; }
-  .message-tool { color: #999; }
+.message-reasoning .msg-body {
+  color: #aaa;
 }
 
 .message-tool {
-  color: #666;
-  font-size: 0.8rem;
-  padding: 4px 8px;
-  line-height: 1.5;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #aaa;
 }
-
-.message-tool.tool-collapsed {
-  display: none;
+.message-tool .msg-body {
+  color: #aaa;
 }
 
 .message-system {
@@ -788,7 +791,7 @@ body {
   text-align: center;
   max-width: 90%;
 }
-.message-system .message-content {
+.message-system .msg-body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1469,33 +1472,6 @@ body {
 
   
 
-/* ─── Tool Icon ────────────────────────────────────────────────────── */
-
-.tool-icon {
-  font-size: 0.75rem;
-  width: 0.8rem;
-  text-align: center;
-}
-.tool-ok { color: #4ade80; }
-.tool-error { color: #f87171; }
-
-/* ─── Tool Content ─────────────────────────────────────────────────── */
-
-.message-tool-content {
-  color: #666;
-  font-size: 0.8rem;
-  padding: 4px 8px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
-@media (prefers-color-scheme: light) {
-  .message-tool-content { color: #999; }
-  .tool-ok { color: #16a34a; }
-  .tool-error { color: #dc2626; }
-}
-
 /* ─── Responsive ───────────────────────────────────────────────────── */
 
 @media (max-width: 700px) {
@@ -1712,9 +1688,12 @@ body {
   .message-notify { background: #fef9c3; border-color: #fde68a; color: #854d0e; }
   .message-error { background: #fee2e2; border-color: #fecaca; color: #991b1b; }
   .message-user { border-color: #2563eb; }
-  .message-reasoning-wrap .message-reasoning { color: #888; border-color: rgba(0, 0, 0, 0.2); }
-  .message-reasoning-wrap .reasoning-truncated { color: #888; }
-  .message-tool { color: #888; }
+  .message-reasoning, .message-tool { border-color: rgba(0, 0, 0, 0.2); }
+  .message-reasoning .msg-body, .message-tool .msg-body { color: #888; }
+  .msg-header { color: #999; }
+  .msg-header:hover { color: #444; }
+  .msg-preview { color: #999; }
+  .msg-name { color: #666; }
 }
 @media (prefers-color-scheme: light) {
   .input-area { background: transparent; color: #1a1a2e; }

@@ -537,6 +537,18 @@ update msg model =
         HideCtxMenu ->
             ( { model | ctxVisible = False }, Cmd.none )
 
+        ToggleMsgCollapse sid msgId ->
+            ( updateSession model sid (\sess ->
+                case List.filter (\m -> m.id == msgId) sess.messages |> List.head of
+                    Just m ->
+                        { sess | msgCollapsed = T.toggleMsgCollapsed sess.msgCollapsed m }
+
+                    Nothing ->
+                        sess
+              )
+            , Cmd.none
+            )
+
         ForkFromCtx ->
             if model.ctxHistoryId /= "" && model.ctxSessionId /= "" then
                 ( { model | ctxVisible = False, pendingSwitchOnCreate = True }

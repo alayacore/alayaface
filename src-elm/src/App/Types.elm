@@ -226,6 +226,8 @@ type Msg
     | ShowCtxMenu Int Int String String
     | HideCtxMenu
     | ForkFromCtx
+      -- Message collapse/expand
+    | ToggleMsgCollapse String String
       -- Global menu
     | ToggleGlobalMenu
     | CloseGlobalMenu

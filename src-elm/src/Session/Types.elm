@@ -8,6 +8,9 @@ module Session.Types exposing
     , MediaItem
     , StagedMedia
     , Message
+    , defaultCollapsed
+    , isMsgCollapsed
+    , toggleMsgCollapsed
     , ToolCall
     , SessionState
     , ModelInfo
@@ -138,6 +141,41 @@ type alias Message =
     }
 
 
+-- Message Collapse
+--
+-- Collapse state is a Dict keyed by message id holding the user's
+-- EXPLICIT choice (True = collapsed, False = expanded). Messages without
+-- an entry fall back to a role-based default, so tool/reasoning windows
+-- start collapsed while user/assistant start expanded.
+
+defaultCollapsed : Role -> Bool
+defaultCollapsed role =
+    case role of
+        Tool ->
+            True
+
+        Reasoning ->
+            True
+
+        _ ->
+            False
+
+
+isMsgCollapsed : Dict String Bool -> Message -> Bool
+isMsgCollapsed dict msg =
+    case Dict.get msg.id dict of
+        Just v ->
+            v
+
+        Nothing ->
+            defaultCollapsed msg.role
+
+
+toggleMsgCollapsed : Dict String Bool -> Message -> Dict String Bool
+toggleMsgCollapsed dict msg =
+    Dict.insert msg.id (not (isMsgCollapsed dict msg)) dict
+
+
 -- Tool Call
 
 type alias ToolCall =
@@ -184,7 +222,7 @@ type alias SessionState =
     , input : String
     , sendPending : Bool
     , processedEchoIds : Set.Set String
-    , collapsedMsgIds : Set.Set String
+    , msgCollapsed : Dict.Dict String Bool
     , pendingConfirm : List PendingConfirm
     , pendingMcpAuth : Maybe PendingConfirm
     , pendingMcpAuths : List PendingConfirm
@@ -344,7 +382,7 @@ emptySession id =
     , input = ""
     , sendPending = False
     , processedEchoIds = Set.empty
-    , collapsedMsgIds = Set.empty
+    , msgCollapsed = Dict.empty
     , pendingConfirm = []
     , pendingMcpAuth = Nothing
     , pendingMcpAuths = []
