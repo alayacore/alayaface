@@ -33,7 +33,14 @@ pub async fn create_session(
     };
     let session_file = session_dir.join("session.alaya").to_string_lossy().to_string();
 
-    let tc = tool_confirm.unwrap_or_default();
+    let tc = match tool_confirm {
+        // Explicit per-session override wins; otherwise use the global setting.
+        Some(v) if !v.trim().is_empty() => v,
+        _ => crate::commands::effective_tool_confirm().unwrap_or_else(|e| {
+            log::warn!("[settings] tool-confirm unavailable, spawning without it: {e}");
+            String::new()
+        }),
+    };
     log::info!("Spawning: {} --rawio --config-path {} --session {}", &bin, &effective_config, &session_file);
     if !tc.is_empty() {
         log::info!("  with --tool-confirm={}", &tc);

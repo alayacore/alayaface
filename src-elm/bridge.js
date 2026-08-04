@@ -109,6 +109,34 @@
         });
     });
 
+    on("listGlobalSettings", function () {
+      invoke("get_global_settings")
+        .then(function (res) {
+          app.ports.onGlobalSettingsList.send({
+            ok: true, tool_confirm: (res && res.tool_confirm) || "", error: "",
+          });
+        })
+        .catch(function (err) {
+          app.ports.onGlobalSettingsList.send({
+            ok: false, tool_confirm: "", error: String((err && err.message) || err),
+          });
+        });
+    });
+
+    on("syncGlobalSettings", function (data) {
+      invoke("sync_global_settings", {
+        config: JSON.stringify({ tool_confirm: data.toolConfirm || "" }),
+      })
+        .then(function () {
+          app.ports.onGlobalSettingsSyncResult.send({ ok: true, error: "" });
+        })
+        .catch(function (err) {
+          app.ports.onGlobalSettingsSyncResult.send({
+            ok: false, error: String((err && err.message) || err),
+          });
+        });
+    });
+
     on("confirmTool", function (data) {
       invoke("alayacore_confirm", {
         sessionId: data.sessionId, id: data.id, allowed: data.allowed,

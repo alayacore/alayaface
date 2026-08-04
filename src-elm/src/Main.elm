@@ -18,6 +18,7 @@ import Session.Types as T exposing (ModelSelPage(..))
 import Session.Protocol as P
 import Session.Handlers as H
 import Overlay.ConfirmTool
+import Overlay.Settings
 import Overlay.McpInit
 import Overlay.FilePicker
 import Overlay.ModelSelector
@@ -134,6 +135,25 @@ emptyMcpEditor =
     }
 
 
+type alias SettingsEditor =
+    { show : Bool
+    , loading : Bool
+    , syncing : Bool
+    , toolConfirm : String
+    , error : Maybe String
+    }
+
+
+emptySettingsEditor : SettingsEditor
+emptySettingsEditor =
+    { show = False
+    , loading = False
+    , syncing = False
+    , toolConfirm = ""
+    , error = Nothing
+    }
+
+
 -- Constants
 
 defaultWinW : Int
@@ -202,6 +222,7 @@ type alias Model =
     , showGlobalMenu : Bool
     , defaultModelsEditor : DefaultModelsEditor
     , mcpEditor : McpEditor
+    , settingsEditor : SettingsEditor
     , ctxVisible : Bool
     , ctxX : Int
     , ctxY : Int
@@ -237,6 +258,7 @@ init _ =
       , showGlobalMenu = False
       , defaultModelsEditor = emptyDefaultModelsEditor
       , mcpEditor = emptyMcpEditor
+      , settingsEditor = emptySettingsEditor
       , ctxVisible = False
       , ctxX = 0
       , ctxY = 0
@@ -246,7 +268,7 @@ init _ =
       , appHeight = 900
       }
     , Cmd.batch
-        [ Ports.createSession { toolConfirm = Just "execute_command" }
+        [ Ports.createSession { toolConfirm = Nothing }
         , Task.attempt GotContainerSize (Dom.getElement "main-content")
         ]
     )
@@ -402,6 +424,13 @@ type Msg
     | McpCancelSyncPrompt
     | McpListResult E.Value
     | McpSyncResult E.Value
+      -- Global settings
+    | OpenSettingsEditor
+    | CloseSettingsEditor
+    | SetToolConfirm String
+    | SettingsSave
+    | SettingsListResult E.Value
+    | SettingsSyncResult E.Value
       -- Help Window
     | OpenHelpWindow
     | CloseHelpWindow
@@ -440,7 +469,7 @@ update msg model =
         -- Session Lifecycle
         CreateSession ->
             ( { model | pendingSwitchOnCreate = True, showGlobalMenu = False }
-            , Ports.createSession { toolConfirm = Just "execute_command" }
+            , Ports.createSession { toolConfirm = Nothing }
             )
 
         SessionCreated id ->
@@ -2588,6 +2617,121 @@ update msg model =
                 Err _ ->
                     ( model, Cmd.none )
 
+        -- Global Settings
+        OpenSettingsEditor ->
+            ( { model
+                | settingsEditor =
+                    { emptySettingsEditor
+                        | show = True
+                        , loading = True
+                    }
+                , showGlobalMenu = False
+              }
+            , Ports.listGlobalSettings {}
+            )
+
+        CloseSettingsEditor ->
+            let
+                ed =
+                    model.settingsEditor
+            in
+            if ed.syncing then
+                -- Do not allow closing while a sync is in flight
+                ( model, Cmd.none )
+
+            else
+                ( { model | settingsEditor = emptySettingsEditor }
+                , Cmd.none
+                )
+
+        SetToolConfirm val ->
+            let
+                ed =
+                    model.settingsEditor
+            in
+            ( { model
+                | settingsEditor =
+                    { ed
+                        | toolConfirm = val
+                        , error = Nothing
+                    }
+              }
+            , Cmd.none
+            )
+
+        SettingsSave ->
+            let
+                ed =
+                    model.settingsEditor
+            in
+            ( { model
+                | settingsEditor = { ed | syncing = True, error = Nothing }
+              }
+            , Ports.syncGlobalSettings { toolConfirm = ed.toolConfirm }
+            )
+
+        SettingsListResult raw ->
+            case D.decodeValue settingsListResultDecoder raw of
+                Ok res ->
+                    let
+                        ed =
+                            model.settingsEditor
+                    in
+                    if res.ok then
+                        ( { model
+                            | settingsEditor =
+                                { ed
+                                    | loading = False
+                                    , toolConfirm = res.toolConfirm
+                                    , error = Nothing
+                                }
+                          }
+                        , Cmd.batch
+                            [ focusAfterDelay "settings-tool-confirm"
+                            , Ports.setCursorPos "settings-tool-confirm"
+                            ]
+                        )
+
+                    else
+                        ( { model
+                            | settingsEditor =
+                                { ed
+                                    | loading = False
+                                    , error = Just res.error
+                                }
+                          }
+                        , Cmd.none
+                        )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        SettingsSyncResult raw ->
+            case D.decodeValue settingsSyncResultDecoder raw of
+                Ok res ->
+                    if res.ok then
+                        ( { model | settingsEditor = emptySettingsEditor }
+                        , Cmd.none
+                        )
+
+                    else
+                        let
+                            ed =
+                                model.settingsEditor
+                        in
+                        ( { model
+                            | settingsEditor =
+                                { ed
+                                    | syncing = False
+                                    , error = Just res.error
+                                }
+                          }
+                        , Cmd.none
+                        )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
         -- Help Window
         OpenHelpWindow ->
             case getActiveSession model of
@@ -3537,6 +3681,23 @@ mcpSyncResultDecoder =
         (D.field "error" D.string)
 
 
+settingsListResultDecoder : D.Decoder { ok : Bool, toolConfirm : String, error : String }
+settingsListResultDecoder =
+    D.map3
+        (\ok toolConfirm error -> { ok = ok, toolConfirm = toolConfirm, error = error })
+        (D.field "ok" D.bool)
+        (D.field "tool_confirm" D.string)
+        (D.field "error" D.string)
+
+
+settingsSyncResultDecoder : D.Decoder { ok : Bool, error : String }
+settingsSyncResultDecoder =
+    D.map2
+        (\ok error -> { ok = ok, error = error })
+        (D.field "ok" D.bool)
+        (D.field "error" D.string)
+
+
 -- ─── Help Items ──────────────────────────────────────────────────────
 
 helpItems : List HelpItem
@@ -3578,6 +3739,8 @@ subscriptions model =
         , Ports.onDefaultModelsSyncResult (\raw -> DefaultModelsSyncResult raw)
         , Ports.onDefaultMcpList (\raw -> McpListResult raw)
         , Ports.onDefaultMcpSyncResult (\raw -> McpSyncResult raw)
+        , Ports.onGlobalSettingsList (\raw -> SettingsListResult raw)
+        , Ports.onGlobalSettingsSyncResult (\raw -> SettingsSyncResult raw)
         , Ports.onSessionCreated (\id -> SessionCreated id)
         , Ports.onSessionDirs (\dirs -> SessionDirsResult dirs)
         , Ports.onFsListDir (\entries -> FsListDirResult entries)
@@ -3617,6 +3780,7 @@ view model =
         , viewSessionManagerOverlay model
         , viewDefaultModelsEditorOverlay model
         , viewMcpEditorOverlay model
+        , viewSettingsEditorOverlay model
         ]
 
 
@@ -3758,6 +3922,13 @@ viewGlobalMenu model =
                 ]
                 [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "🔌" ]
                 , Html.text " Edit MCP Servers"
+                ]
+            , Html.div
+                [ Attr.class "global-menu-item"
+                , Ev.onClick OpenSettingsEditor
+                ]
+                [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "⚙" ]
+                , Html.text " Settings"
                 ]
             ]
         , Html.button
@@ -4506,6 +4677,28 @@ viewMcpSelTitle dirty =
         , Attr.title (if dirty then "Unsaved changes" else "")
         ]
         [ Html.text ("MCP Servers" ++ (if dirty then " *" else "")) ]
+
+
+viewSettingsEditorOverlay : Model -> Html Msg
+viewSettingsEditorOverlay model =
+    let
+        ed =
+            model.settingsEditor
+    in
+    if ed.show then
+        viewOverlay CloseSettingsEditor
+            [ Overlay.Settings.view
+                { toolConfirm = ed.toolConfirm
+                , loading = ed.loading
+                , syncing = ed.syncing
+                , error = ed.error
+                , onInput = SetToolConfirm
+                , onSave = SettingsSave
+                , onCancel = CloseSettingsEditor
+                }
+            ]
+    else
+        Html.text ""
 
 
 viewMcpSyncPrompt : Bool -> { onConfirm : msg, onDiscard : msg, onCancel : msg } -> Html msg

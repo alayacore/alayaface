@@ -8,6 +8,7 @@ pub mod cmd;
 pub mod mcp;
 pub mod fs;
 pub mod models;
+pub mod settings;
 
 pub use crate::session::SessionMap;
 pub use sessions::*;
@@ -16,6 +17,7 @@ pub use cmd::*;
 pub use mcp::*;
 pub use fs::*;
 pub use models::*;
+pub use settings::*;
 
 use crate::alayacore;
 use crate::tlv;

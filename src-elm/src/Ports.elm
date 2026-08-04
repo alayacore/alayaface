@@ -20,6 +20,11 @@ port module Ports exposing
     , syncDefaultMcp
     , onDefaultMcpList
     , onDefaultMcpSyncResult
+      -- Global settings
+    , listGlobalSettings
+    , syncGlobalSettings
+    , onGlobalSettingsList
+    , onGlobalSettingsSyncResult
     , confirmTool
     , sendMcpDecline
     , sendMcpCancel
@@ -79,6 +84,10 @@ port listDefaultMcp : {} -> Cmd msg
 port syncDefaultMcp : { config : String } -> Cmd msg
 port onDefaultMcpList : (E.Value -> msg) -> Sub msg
 port onDefaultMcpSyncResult : (E.Value -> msg) -> Sub msg
+port listGlobalSettings : {} -> Cmd msg
+port syncGlobalSettings : { toolConfirm : String } -> Cmd msg
+port onGlobalSettingsList : (E.Value -> msg) -> Sub msg
+port onGlobalSettingsSyncResult : (E.Value -> msg) -> Sub msg
 port confirmTool : { sessionId : String, id : String, allowed : Bool } -> Cmd msg
 port sendMcpDecline : { sessionId : String, server : String } -> Cmd msg
 port sendMcpCancel : { sessionId : String } -> Cmd msg

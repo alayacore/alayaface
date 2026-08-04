@@ -73,6 +73,8 @@ pub fn run() {
             commands::fill_mcp_auth_url,
             commands::list_default_mcp,
             commands::sync_default_mcp,
+            commands::get_global_settings,
+            commands::sync_global_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
