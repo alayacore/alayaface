@@ -183,10 +183,11 @@ updateDraft fn st =
 
 
 {-| Persist the current draft into `working`. New items (draft id 0)
-are appended with the next free id; existing items are replaced.
+are appended with the next free id (via `setItemId`); existing items
+are replaced by id.
 -}
-saveItem : (draft -> Int) -> (draft -> item) -> (item -> Int) -> State item draft -> State item draft
-saveItem draftId draftToItem itemId st =
+saveItem : (draft -> Int) -> (draft -> item) -> (item -> Int) -> (Int -> item -> item) -> State item draft -> State item draft
+saveItem draftId draftToItem itemId setItemId st =
     case st.draft of
         Just draft ->
             let
@@ -199,7 +200,7 @@ saveItem draftId draftToItem itemId st =
                             nextId =
                                 List.foldl (\m acc -> max acc (itemId m)) 0 st.working + 1
                         in
-                        st.working ++ [ newItem ]
+                        st.working ++ [ setItemId nextId newItem ]
 
                     else
                         List.map

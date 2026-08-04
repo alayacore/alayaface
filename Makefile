@@ -1,4 +1,4 @@
-.PHONY: all elm run dev build clean
+.PHONY: all elm run dev build test clean
 
 ELM     := elm
 CARGO   := cargo
@@ -21,6 +21,11 @@ dev: run
 # Build release binary
 build: elm
 	cd $(TAURI) && $(CARGO) build --release
+
+# Run all test suites (Rust unit tests + Elm tests)
+test:
+	cd $(TAURI) && $(CARGO) test
+	cd $(ELM_SRC) && elm-test
 
 # Clean build artifacts
 clean:

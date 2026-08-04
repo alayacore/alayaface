@@ -8,17 +8,23 @@ Built with **Elm** for the frontend and **Rust** for the Tauri backend.
 ```
 src-elm/              ← Elm frontend (no npm, no bundler)
 ├── src/
-│   ├── Main.elm       — App entry, model/update/view/subscriptions
+│   ├── Main.elm       — Thin app shell: main/init/subscriptions
+│   ├── App/
+│   │   ├── Types.elm  — App-level Model, Msg, editor/window types
+│   │   ├── Update.elm — All update logic (transport, overlays, windows)
+│   │   └── View.elm   — All view functions
 │   ├── Ports.elm      — All Tauri IPC ports (inbound + outbound)
 │   ├── Fuzzy.elm      — Fuzzy string matching
 │   └── Session/
 │       ├── Types.elm    — SessionState, Message, ToolCall, etc.
 │       ├── Protocol.elm — TLV tag constants, event decoders
+│       ├── Selector.elm — Shared list-selector state machine (pure)
 │       └── Handlers.elm — Pure event handlers (no side effects)
 ├── bridge.js          — Plain JS bridge: Elm ports ↔ Tauri __TAURI__
 ├── index.html         — Entry point (loaded by Tauri webview)
 ├── style.css          — Application styles
-└── homescreen.css     — Home screen / welcome styles
+├── homescreen.css     — Home screen / welcome styles
+└── tests/             — Elm unit tests (elm-test)
 
 src-tauri/            ← Rust Tauri backend
 ├── src/
@@ -58,6 +64,7 @@ Main.elm → view → HTML
 ## Requirements
 
 - [Elm](https://elm-lang.org/) 0.19.2 (`elm` in PATH)
+- [elm-test](https://elm-test.readthedocs.io/) for running the Elm test suite
 - [Rust](https://www.rust-lang.org/) with Cargo
 - [AlayaCore](https://github.com/alayacore/alayacore) binary (`alayacore` in PATH or `ALAYACORE_BIN` env var)
 - Linux: `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, etc. (see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/))
@@ -77,6 +84,7 @@ make elm    # Compile Elm frontend only (src-elm/ → elm.js)
 make run    # Compile Elm + launch Tauri
 make dev    # Alias for run
 make build  # Release build
+make test   # Run Rust unit tests + Elm tests
 make clean  # Remove build artifacts
 ```
 

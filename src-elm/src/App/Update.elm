@@ -1312,7 +1312,7 @@ update msg model =
         ModelSelectorEditSave ->
             case getActiveSession model of
                 Just s ->
-                    ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.saveItem (\d -> d.id) modelFromDraft (\m -> m.id) sess.modelSelector })
+                    ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.saveItem (\d -> d.id) modelFromDraft (\m -> m.id) (\id m -> { m | id = id }) sess.modelSelector })
                     , Cmd.batch
                         [ focusAfterDelay ("model-selector-input-" ++ s.id)
                         , Ports.setCursorPos ("model-selector-input-" ++ s.id)
@@ -1559,7 +1559,7 @@ update msg model =
             in
             ( { model
                 | defaultModelsEditor =
-                    { ed | state = Sel.saveItem (\d -> d.id) modelFromDraft (\m -> m.id) ed.state }
+                    { ed | state = Sel.saveItem (\d -> d.id) modelFromDraft (\m -> m.id) (\id m -> { m | id = id }) ed.state }
               }
             , Cmd.batch
                 [ focusAfterDelay "model-selector-input-default"
@@ -1841,7 +1841,7 @@ update msg model =
             in
             ( { model
                 | mcpEditor =
-                    { ed | state = Sel.saveItem (\d -> d.id) mcpFromDraft (\s -> s.id) ed.state }
+                    { ed | state = Sel.saveItem (\d -> d.id) mcpFromDraft (\s -> s.id) (\id s -> { s | id = id }) ed.state }
               }
             , Cmd.batch
                 [ focusAfterDelay "mcp-selector-input-default"
