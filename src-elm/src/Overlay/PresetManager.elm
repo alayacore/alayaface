@@ -198,9 +198,8 @@ viewRow config p =
                                     [ Attr.class "pm-btn pm-btn-danger"
                                     , Attr.disabled config.busy
                                     , Ev.onClick (config.onDelete p.name)
-                                    , Attr.title "Delete"
                                     ]
-                                    [ Html.text "🗑" ]
+                                    [ Html.text "Delete" ]
                                 ]
 
                         editRow =
