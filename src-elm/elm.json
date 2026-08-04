@@ -15,7 +15,9 @@
         },
         "indirect": {
             "elm/virtual-dom": "1.0.3",
-            "elm/url": "1.0.0"
+            "elm/url": "1.0.0",
+            "elm/random": "1.0.0",
+            "elm/bytes": "1.0.8"
         }
     },
     "test-dependencies": {
