@@ -396,26 +396,16 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
-        McpAuthConfirm sid ->
+        McpAuthConfirm sid server ->
             case Dict.get sid model.sessions of
                 Just s ->
-                    case s.pendingMcpAuth of
+                    case List.filter (\a -> a.server == server) s.pendingMcpAuths |> List.head of
                         Just auth ->
-                            let
-                                newSessions =
-                                    Dict.insert sid { s | pendingMcpAuth = Nothing } model.sessions
-
-                                authUrl =
-                                    Maybe.withDefault "" auth.toolInput
-
-                                serverName =
-                                    Maybe.withDefault "" auth.toolName
-                            in
-                            ( { model | sessions = newSessions }
+                            ( { model | sessions = Dict.insert sid { s | mcpAuthRunning = Just server } model.sessions }
                             , Ports.startMcpAuthFlow
                                 { sessionId = sid
-                                , serverName = serverName
-                                , authUrl = authUrl
+                                , serverName = server
+                                , authUrl = auth.url
                                 }
                             )
 
@@ -428,7 +418,19 @@ update msg model =
         McpAuthDeny sid server ->
             case Dict.get sid model.sessions of
                 Just sess ->
-                    ( { model | sessions = Dict.insert sid { sess | pendingMcpAuth = Nothing } model.sessions }
+                    ( { model
+                        | sessions = Dict.insert sid
+                            { sess
+                                | pendingMcpAuths = List.filter (\a -> a.server /= server) sess.pendingMcpAuths
+                                , mcpAuthRunning =
+                                    if sess.mcpAuthRunning == Just server then
+                                        Nothing
+
+                                    else
+                                        sess.mcpAuthRunning
+                            }
+                            model.sessions
+                      }
                     , Cmd.batch
                         [ Ports.sendMcpDecline { sessionId = sid, server = server }
                         , focusInput model
@@ -445,8 +447,8 @@ update msg model =
                         (Maybe.map (\sess ->
                             { sess
                                 | mcpStatus = Nothing
-                                , pendingMcpAuth = Nothing
                                 , pendingMcpAuths = []
+                                , mcpAuthRunning = Nothing
                             }
                         ))
                         model.sessions
@@ -465,7 +467,11 @@ update msg model =
                 Just sess ->
                     ( { model
                         | sessions = Dict.insert sid
-                            { sess | pendingMcpAuth = Nothing, mcpStatus = Nothing }
+                            { sess
+                                | pendingMcpAuths = []
+                                , mcpAuthRunning = Nothing
+                                , mcpStatus = Nothing
+                            }
                             model.sessions
                       }
                     , Cmd.batch
@@ -480,28 +486,9 @@ update msg model =
         CloseConfirm sid ->
             case Dict.get sid model.sessions of
                 Just sess ->
-                    -- Pop next pending MCP auth from queue if any
-                    let
-                        nextAuth =
-                            case sess.pendingMcpAuths of
-                                next :: rest ->
-                                    Just next
-
-                                [] ->
-                                    Nothing
-
-                        newQueue =
-                            case sess.pendingMcpAuths of
-                                _ :: rest -> rest
-                                [] -> []
-                    in
                     ( { model
                         | sessions = Dict.insert sid
-                            { sess
-                                | pendingConfirm = []
-                                , pendingMcpAuth = nextAuth
-                                , pendingMcpAuths = newQueue
-                            }
+                            { sess | pendingConfirm = [] }
                             model.sessions
                       }
                     , focusInput model
@@ -2379,22 +2366,15 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
-        FillMcpAuthUrl url ->
+        FillMcpAuthUrl server url ->
             case getActiveSession model of
                 Just s ->
-                    let
-                        serverName =
-                            case s.pendingMcpAuth of
-                                Just auth ->
-                                    Maybe.withDefault "" auth.toolName
-
-                                Nothing ->
-                                    ""
-                    in
-                    ( model
+                    ( updateActiveSession model (\sess ->
+                        { sess | mcpAuthRunning = Just server }
+                      )
                     , Ports.fillMcpAuthUrl
                         { sessionId = s.id
-                        , serverName = serverName
+                        , serverName = server
                         , authUrl = url
                         }
                     )

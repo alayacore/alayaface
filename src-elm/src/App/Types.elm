@@ -91,7 +91,7 @@ type Msg
     | CancelTask
     | SetModel Int
     | ConfirmTool String String Bool
-    | McpAuthConfirm String
+    | McpAuthConfirm String String
     | CloseMcpAuthOverlay String
     | McpAuthDeny String String
     | McpCancelAll String
@@ -211,7 +211,7 @@ type Msg
     | SetHelpFilter String
     | HelpSelectItem Int
     | HelpCmdMsg String
-    | FillMcpAuthUrl String
+    | FillMcpAuthUrl String String
       -- Session wrapper
     | ForSession String Msg
       -- Window dragging

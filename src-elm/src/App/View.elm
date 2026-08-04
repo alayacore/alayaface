@@ -702,12 +702,13 @@ viewMcpInitOverlay sid session =
             [ Overlay.McpInit.view
                 { mcpStatus = session.mcpStatus
                 , mcpServers = session.mcpServers
-                , pendingMcpAuth = session.pendingMcpAuth
+                , pendingAuths = session.pendingMcpAuths
+                , authRunning = session.mcpAuthRunning
                 , onClose = CloseMcpAuthOverlay sid
                 , onCancelAll = McpCancelAll sid
-                , onAuthConfirm = McpAuthConfirm sid
+                , onAuthConfirm = \server -> McpAuthConfirm sid server
                 , onAuthDeny = \s -> McpAuthDeny sid s
-                , onFillUrl = \url -> ForSession sid (FillMcpAuthUrl url)
+                , onFillUrl = \server url -> ForSession sid (FillMcpAuthUrl server url)
                 }
             ]
 

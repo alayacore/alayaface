@@ -588,10 +588,17 @@ handleSystemMcp s data =
             { s | mcpStatus = Just "connecting", mcpServers = newServers }
 
         Just "connected" ->
-            -- Remove server from list
+            -- Remove server from list and any pending auth for it
             { s
                 | mcpStatus = Just "connecting"
                 , mcpServers = List.filter (\n -> n /= server) s.mcpServers
+                , pendingMcpAuths = List.filter (\a -> a.server /= server) s.pendingMcpAuths
+                , mcpAuthRunning =
+                    if s.mcpAuthRunning == Just server then
+                        Nothing
+
+                    else
+                        s.mcpAuthRunning
             }
 
         Just "failed" ->
@@ -603,16 +610,35 @@ handleSystemMcp s data =
             { s
                 | mcpStatus = Just (if List.isEmpty remaining then "failed" else "connecting")
                 , mcpServers = remaining
+                , pendingMcpAuths = List.filter (\a -> a.server /= server) s.pendingMcpAuths
+                , mcpAuthRunning =
+                    if s.mcpAuthRunning == Just server then
+                        Nothing
+
+                    else
+                        s.mcpAuthRunning
             }
 
         Just "auth_required" ->
+            -- One entry per server: replace any existing entry for this
+            -- server (refreshes the URL) so repeated requests don't stack.
             let
-                newPending =
-                    { id = server, toolName = Just server, toolInput = url }
+                newAuth =
+                    { server = server
+                    , url = Maybe.withDefault "" url
+                    }
+
+                cleaned =
+                    List.filter (\a -> a.server /= server) s.pendingMcpAuths
             in
             { s
-                | pendingMcpAuths = s.pendingMcpAuths ++ [ newPending ]
-                , pendingMcpAuth = Just newPending
+                | pendingMcpAuths = cleaned ++ [ newAuth ]
+                , mcpAuthRunning =
+                    if s.mcpAuthRunning == Just server then
+                        Nothing
+
+                    else
+                        s.mcpAuthRunning
                 , mcpStatus = Just "auth_required"
             }
 
@@ -623,8 +649,8 @@ handleSystemMcp s data =
             { s
                 | mcpStatus = Nothing
                 , mcpServers = []
-                , pendingMcpAuth = Nothing
                 , pendingMcpAuths = []
+                , mcpAuthRunning = Nothing
             }
 
         Just st ->

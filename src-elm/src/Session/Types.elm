@@ -23,6 +23,7 @@ module Session.Types exposing
     , emptySession
     , emptyDraft
     , PendingConfirm
+    , McpAuth
     , FileMode(..)
     , DirEntry
     )
@@ -199,6 +200,15 @@ type alias PendingConfirm =
     }
 
 
+-- MCP OAuth request for one server. Multiple servers can need
+-- authorization during a single init; each is tracked independently.
+
+type alias McpAuth =
+    { server : String
+    , url : String
+    }
+
+
 -- Session State
 
 type alias SessionState =
@@ -224,8 +234,8 @@ type alias SessionState =
     , processedEchoIds : Set.Set String
     , msgCollapsed : Dict.Dict String Bool
     , pendingConfirm : List PendingConfirm
-    , pendingMcpAuth : Maybe PendingConfirm
-    , pendingMcpAuths : List PendingConfirm
+    , pendingMcpAuths : List McpAuth
+    , mcpAuthRunning : Maybe String
     , showFilePicker : Bool
     , filePickerType : MediaType
     , filePickerMode : FileMode
@@ -384,8 +394,8 @@ emptySession id =
     , processedEchoIds = Set.empty
     , msgCollapsed = Dict.empty
     , pendingConfirm = []
-    , pendingMcpAuth = Nothing
     , pendingMcpAuths = []
+    , mcpAuthRunning = Nothing
     , showFilePicker = False
     , filePickerType = Image
     , filePickerMode = Local
