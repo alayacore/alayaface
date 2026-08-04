@@ -767,7 +767,7 @@ handleToolCallFrame s json historyId =
                 newMsg =
                     { id = "tool-" ++ toolId
                     , role = Tool
-                    , content = "🔧 **" ++ name ++ "**"
+                    , content = ""
                     , toolId = Just toolId
                     , toolName = Just name
                     , isError = False
@@ -849,21 +849,15 @@ handleToolResultFrame s json historyId =
         tc =
             Dict.get toolId s.toolCalls
 
-        toolName =
-            Maybe.map .name tc |> Maybe.withDefault "Tool"
-
-        prefix =
-            if isError then
-                "❌ **" ++ toolName ++ "** (error)"
-            else
-                "✅ **" ++ toolName ++ "**"
-
+        -- The window header already shows the tool name and status icon,
+        -- so the body carries only the raw output text — no markdown
+        -- fences, no emoji prefix.
         newMsgs =
             List.map
                 (\m ->
                     if m.toolId == Just toolId then
                         { m
-                            | content = prefix ++ "\n```\n" ++ outStr ++ "\n```"
+                            | content = outStr
                             , isError = isError
                             , historyId = Maybe.map (\h -> h) historyId
                         }
@@ -872,11 +866,12 @@ handleToolResultFrame s json historyId =
                 )
                 s.messages
 
-        -- Authoritative UF overwrites any live Uf preview (snapshot).
+        -- Authoritative UF overwrites any live Uf preview (snapshot) and
+        -- ends input streaming (Af), so the header status flips to done.
         newToolCalls =
             case Dict.get toolId s.toolCalls of
                 Just existingTc ->
-                    Dict.insert toolId { existingTc | output = Nothing } s.toolCalls
+                    Dict.insert toolId { existingTc | output = Nothing, accumulatedDelta = Nothing } s.toolCalls
 
                 Nothing ->
                     s.toolCalls
@@ -947,7 +942,7 @@ handleToolDeltaFrame s json =
                         List.map
                             (\m ->
                                 if m.toolId == Just toolId then
-                                    { m | content = "🔧 **" ++ tc.name ++ "**\n```json\n" ++ accumulated ++ "\n```" }
+                                    { m | content = accumulated }
                                 else
                                     m
                             )
@@ -994,7 +989,7 @@ handleToolPreviewFrame s json =
                         List.map
                             (\m ->
                                 if m.toolId == Just toolId then
-                                    { m | content = "🔧 **" ++ tc.name ++ "**\n```\n" ++ text ++ "\n```" }
+                                    { m | content = text }
                                 else
                                     m
                             )

@@ -368,7 +368,7 @@ viewMessage cursorMsgId session msg =
             , Ev.onClick (ToggleMsgCollapse session.id msg.id)
             , Attr.title (if collapsed then "Expand" else "Collapse")
             ]
-            (viewMsgHeader msg collapsed)
+            (viewMsgHeader session msg collapsed)
         , if collapsed then
             Html.text ""
 
@@ -379,8 +379,8 @@ viewMessage cursorMsgId session msg =
 
 -- Header row of a message window: role label, optional tool info, and a
 -- one-line preview when collapsed. The whole row toggles on click.
-viewMsgHeader : T.Message -> Bool -> List (Html Msg)
-viewMsgHeader msg collapsed =
+viewMsgHeader : T.SessionState -> T.Message -> Bool -> List (Html Msg)
+viewMsgHeader session msg collapsed =
     [ Html.span [ Attr.class "msg-label" ]
         [ Html.text (String.toUpper (T.roleToString msg.role)) ]
     , case msg.role of
@@ -389,7 +389,7 @@ viewMsgHeader msg collapsed =
                 [ Html.span [ Attr.class "msg-name" ]
                     [ Html.text (Maybe.withDefault "" msg.toolName) ]
                 , Html.span [ Attr.class "msg-status" ]
-                    [ Html.text (toolStatus msg) ]
+                    [ Html.text (toolStatus session msg) ]
                 ]
 
         _ ->
@@ -403,18 +403,24 @@ viewMsgHeader msg collapsed =
     ]
 
 
--- Tool state icon derived from the message, no handler changes:
--- ❌ error (UF error), ⏳ running (AF/Af/Uf stages), ✅ done (UF success).
-toolStatus : T.Message -> String
-toolStatus msg =
+-- Tool state icon derived from the tool call lifecycle:
+-- ❌ error (UF error), ⏳ running (input streaming / preview), ✅ done.
+toolStatus : T.SessionState -> T.Message -> String
+toolStatus session msg =
     if msg.isError then
         "❌"
 
-    else if String.startsWith "🔧" (String.trim msg.content) then
-        "⏳"
-
     else
-        "✅"
+        case Dict.get (Maybe.withDefault "" msg.toolId) session.toolCalls of
+            Just tc ->
+                if tc.output /= Nothing || tc.accumulatedDelta /= Nothing || tc.inputReceived then
+                    "⏳"
+
+                else
+                    "✅"
+
+            Nothing ->
+                "✅"
 
 
 -- One-line preview used by the collapsed header. Shows the first line of
@@ -457,13 +463,15 @@ viewMsgBody msg =
                 [ Html.text msg.content ]
 
         T.Tool ->
-            Html.div [ Attr.class "msg-body" ]
-                [ Html.div [ Attr.class "message-content" ]
-                    [ Markdown.toHtmlWith markdownOptions
-                        [ Attr.class "md" ]
-                        msg.content
-                    ]
-                ]
+            -- Plain text output — no markdown, no code fence border. The
+            -- header carries the tool name and status, so the body is just
+            -- the raw input/output text (empty while nothing has arrived).
+            if String.isEmpty (String.trim msg.content) then
+                Html.text ""
+
+            else
+                Html.div [ Attr.class "msg-body" ]
+                    [ Html.text msg.content ]
 
         T.User ->
             Html.div [ Attr.class "msg-body" ]

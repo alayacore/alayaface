@@ -1,6 +1,7 @@
 module HandlersTest exposing (tests)
 
 import Expect
+import Dict
 import Json.Decode as D
 import Json.Encode as E
 import Test exposing (Test, describe, test)
@@ -81,8 +82,13 @@ withToolCall =
 tests : Test
 tests =
     describe "Session.Handlers tool frames"
-        [ describe "UF (authoritative result)"
-            [ test "renders text output blocks joined by newline" <|
+        [ describe "AF (tool call)"
+            [ test "creates a message with empty body (header only)" <|
+                \_ ->
+                    Expect.equal "" (msgContent withToolCall)
+            ]
+        , describe "UF (authoritative result)"
+            [ test "renders text output blocks joined by newline (no prefix)" <|
                 \_ ->
                     let
                         s =
@@ -98,12 +104,7 @@ tests =
                                         )
                                     )
                     in
-                    msgContent s
-                        |> Expect.all
-                            [ contains "✅"
-                            , contains "hello"
-                            , contains "world"
-                            ]
+                    Expect.equal "hello\nworld" (msgContent s)
             , test "falls back to placeholder when output has no text" <|
                 \_ ->
                     let
@@ -112,7 +113,7 @@ tests =
                                 |> applyFrame (frame "UF" (toolResult "t1" (E.list identity [])))
                     in
                     contains "<output received>" (msgContent s)
-            , test "renders error code and message" <|
+            , test "renders error code and message (no prefix)" <|
                 \_ ->
                     let
                         s =
@@ -132,11 +133,7 @@ tests =
                                         )
                                     )
                     in
-                    msgContent s
-                        |> Expect.all
-                            [ contains "❌"
-                            , contains "E2: boom"
-                            ]
+                    Expect.equal "E2: boom" (msgContent s)
             , test "truncates long output" <|
                 \_ ->
                     let
@@ -156,6 +153,33 @@ tests =
                                     )
                     in
                     contains "truncated" (msgContent s)
+            , test "ends input streaming so the header status flips to done" <|
+                \_ ->
+                    let
+                        delta v =
+                            frame "Af"
+                                (E.object
+                                    [ ( "id", E.string "t1" )
+                                    , ( "delta", E.string v )
+                                    ]
+                                )
+
+                        s =
+                            withToolCall
+                                |> applyFrame (delta "{\"cmd\":\"ls\"}")
+                                |> applyFrame (frame "UF" (toolResult "t1" (E.list identity [])))
+
+                        tc =
+                            Dict.get "t1" s.toolCalls
+                    in
+                    case tc of
+                        Just t ->
+                            Expect.equal
+                                ( Nothing, Nothing )
+                                ( t.output, t.accumulatedDelta )
+
+                        Nothing ->
+                            Expect.fail "tool call missing after UF"
             ]
         , describe "Uf (ephemeral preview)"
             [ test "is a snapshot: each frame replaces the previous" <|
