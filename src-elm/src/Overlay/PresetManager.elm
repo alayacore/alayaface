@@ -166,7 +166,7 @@ viewRow config p =
                                 [ Attr.class ("pm-row" ++ (if p.isActive then " pm-row-active" else "")) ]
                                 [ Html.span [ Attr.class "pm-name" ] [ Html.text p.name ]
                                 , if p.isActive then
-                                    Html.span [ Attr.class "pm-badge" ] [ Html.text "Active" ]
+                                    Html.text ""
 
                                   else
                                     Html.button
@@ -198,8 +198,9 @@ viewRow config p =
                                     [ Attr.class "pm-btn pm-btn-danger"
                                     , Attr.disabled config.busy
                                     , Ev.onClick (config.onDelete p.name)
+                                    , Attr.title "Delete"
                                     ]
-                                    [ Html.text "Delete" ]
+                                    [ Html.text "🗑" ]
                                 ]
 
                         editRow =

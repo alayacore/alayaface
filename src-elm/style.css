@@ -2100,20 +2100,6 @@ body {
 
 /* ─── Presets ──────────────────────────────────────────────────────── */
 
-/* The Active badge sits inline in the row, sized like a button so the
-   row doesn't shift when a row toggles between "Use" and "Active". */
-.pm-badge {
-  font-size: 0.72rem;
-  color: #4ade80;
-  padding: 3px 10px;
-  min-width: 56px;
-  text-align: center;
-  border: 1px solid rgba(74, 222, 128, 0.4);
-  border-radius: 4px;
-  background: rgba(74, 222, 128, 0.08);
-  flex-shrink: 0;
-}
-
 .pm-list {
   display: flex;
   flex-direction: column;
@@ -2201,7 +2187,6 @@ body {
 .pm-btn:disabled { opacity: 0.5; cursor: default; }
 
 @media (prefers-color-scheme: light) {
-  .pm-badge { color: #16a34a; border-color: rgba(34, 197, 94, 0.5); background: rgba(34, 197, 94, 0.07); }
   .pm-row { border-color: #d8d8e0; background: rgba(0,0,0,0.02); }
   .pm-row-active { border-color: rgba(22, 163, 74, 0.4); background: rgba(34, 197, 94, 0.07); }
   .pm-name { color: #1a1a2e; }
