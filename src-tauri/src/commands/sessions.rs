@@ -31,7 +31,7 @@ pub async fn create_session(
     } else {
         config_path
     };
-    let session_file = session_dir.join("session.md").to_string_lossy().to_string();
+    let session_file = session_dir.join("session.alaya").to_string_lossy().to_string();
 
     let tc = tool_confirm.unwrap_or_default();
     log::info!("Spawning: {} --rawio --config-path {} --session {}", &bin, &effective_config, &session_file);
@@ -60,7 +60,7 @@ pub async fn resume_session(
     model_cache: State<'_, ModelCache>,
 ) -> Result<String, String> {
     let sessions_dir = dirs::alayaface_dir().join("sessions").join(&session_id);
-    let session_file = sessions_dir.join("session.md");
+    let session_file = sessions_dir.join("session.alaya");
     let config_dir = sessions_dir.join("config");
 
     if !sessions_dir.exists() {
@@ -140,7 +140,7 @@ pub async fn list_session_dirs() -> Result<Vec<SessionDirInfo>, String> {
             continue;
         }
         let id = entry.file_name().to_string_lossy().to_string();
-        let session_file = path.join("session.md");
+        let session_file = path.join("session.alaya");
         let created_at = path.metadata().ok()
             .and_then(|m| m.created().ok())
             .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs().to_string())
@@ -183,7 +183,7 @@ pub async fn fork_session(
     let (_template_dir, sessions_dir) = dirs::ensure()?;
     let new_id = Uuid::new_v4().to_string();
     let new_session_dir = dirs::create_session_dir(&sessions_dir, &new_id)?;
-    let target_file = new_session_dir.join("session.md").to_string_lossy().to_string();
+    let target_file = new_session_dir.join("session.alaya").to_string_lossy().to_string();
     let config_path = new_session_dir.join("config").to_string_lossy().to_string();
 
     log::info!("Forking {} up to history {} → {}", &source_session_id, &history_id, &target_file);

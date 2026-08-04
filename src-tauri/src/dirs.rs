@@ -9,7 +9,7 @@
 //!     sessions/
 //!       <uuid>/
 //!         config/   (copy of template)
-//!         session.md
+//!         session.alaya
 
 use std::path::PathBuf;
 
@@ -63,11 +63,11 @@ pub fn ensure() -> Result<(PathBuf, PathBuf), String> {
     Ok((config, sessions))
 }
 
-/// Create a session directory with config copy and empty session.md.
+/// Create a session directory with config copy. The session.alaya file
+/// itself is created by alayacore when the session starts.
 pub fn create_session_dir(sessions_dir: &PathBuf, uuid: &str) -> Result<PathBuf, String> {
     let session_dir = sessions_dir.join(uuid);
     let dst_config = session_dir.join("config");
-    let session_file = session_dir.join("session.md");
 
     let template = sessions_dir
         .parent()
@@ -75,8 +75,6 @@ pub fn create_session_dir(sessions_dir: &PathBuf, uuid: &str) -> Result<PathBuf,
         .unwrap_or_else(|| alayaface_dir().join("config"));
 
     copy_dir(&template, &dst_config)?;
-    std::fs::write(&session_file, "")
-        .map_err(|e| format!("Cannot create {:?}: {}", session_file, e))?;
 
     Ok(session_dir)
 }

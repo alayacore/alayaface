@@ -15,6 +15,7 @@ module Session.Types exposing
     , McpInfo
     , McpDraft
     , emptyMcpDraft
+    , latestMcpProtoVersion
     , ModelSelPage(..)
     , ThemeInfo
     , emptySession
@@ -298,8 +299,15 @@ emptyMcpDraft =
     , authToken = ""
     , authClientId = ""
     , authClientSecret = ""
-    , protoVersion = ""
+    , protoVersion = latestMcpProtoVersion
     }
+
+
+-- Latest MCP protocol version used as the default for new servers.
+-- Keep in sync with the `known` list in Overlay/McpEditor.protoVersionOptions.
+latestMcpProtoVersion : String
+latestMcpProtoVersion =
+    "2026-07-28"
 
 
 type ModelSelPage

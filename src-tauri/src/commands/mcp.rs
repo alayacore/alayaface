@@ -306,20 +306,28 @@ fn write_mcp_conf(servers: &[serde_json::Value]) -> String {
 }
 
 /// List the default (global) MCP server list from ~/.alayaface/config/mcp.conf.
+/// A missing mcp.conf is treated as an empty server list (first run), not an error.
 #[tauri::command]
 pub async fn list_default_mcp() -> Result<Vec<serde_json::Value>, String> {
     let (config_dir, _) = dirs::ensure()?;
     let path = config_dir.join("mcp.conf");
-    let text = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read mcp.conf: {e}"))?;
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            log::info!("[mcp] mcp.conf not found, treating as empty list");
+            return Ok(Vec::new());
+        }
+        Err(e) => return Err(format!("Failed to read mcp.conf: {e}")),
+    };
     let servers = parse_mcp_conf(&text);
     log::info!("[mcp] Listed {} servers from mcp.conf", servers.len());
     Ok(servers)
 }
 
 /// Replace the default (global) MCP server list in ~/.alayaface/config/mcp.conf.
-/// Validates server names (required, unique) and args/env JSON, then writes
-/// atomically (temp file + rename).
+/// Validates per server kind: names must be unique; http servers need a url and
+/// auth fields per auth-type; stdio servers need a command and args/env as JSON.
+/// Writes atomically (temp file + rename).
 #[tauri::command]
 pub async fn sync_default_mcp(config: String) -> Result<(), String> {
     let servers: Vec<serde_json::Value> = serde_json::from_str(&config)
@@ -335,29 +343,44 @@ pub async fn sync_default_mcp(config: String) -> Result<(), String> {
         if !names.insert(name.to_string()) {
             return Err(format!("Duplicate server name: {name}"));
         }
-        for key in ["args", "env"] {
-            if let Some(v) = obj.get(key) {
-                match v {
-                    serde_json::Value::String(sv) => {
-                        let parsed: serde_json::Value = serde_json::from_str(sv)
-                            .map_err(|e| format!("Server {name}: {key} is not valid JSON: {e}"))?;
-                        if key == "args" && !parsed.is_array() {
-                            return Err(format!("Server {name}: args must be a JSON array"));
-                        }
-                        if key == "env" && !parsed.is_object() {
-                            return Err(format!("Server {name}: env must be a JSON object"));
-                        }
+
+        // Server kind is inferred the same way as parse_mcp_conf: URL → http,
+        // otherwise stdio. Different kinds validate different fields:
+        //   http  → auth fields per auth-type; args/env are not applicable.
+        //   stdio → command required; args must be a JSON array, env a JSON object.
+        let url = obj.get("url").and_then(|v| v.as_str()).map(str::trim).unwrap_or("");
+        if !url.is_empty() {
+            let auth_type = obj.get("auth_type").and_then(|v| v.as_str()).map(str::trim).unwrap_or("");
+            match auth_type {
+                "authorization_code" => {
+                    let cid = obj.get("auth_client_id").and_then(|v| v.as_str()).map(str::trim).unwrap_or("");
+                    let secret = obj.get("auth_client_secret").and_then(|v| v.as_str()).map(str::trim).unwrap_or("");
+                    if cid.is_empty() {
+                        return Err(format!(
+                            "Server {name}: auth-client-id is required for authorization_code auth"
+                        ));
                     }
-                    _ => {
-                        if key == "args" && !v.is_array() {
-                            return Err(format!("Server {name}: args must be a JSON array"));
-                        }
-                        if key == "env" && !v.is_object() {
-                            return Err(format!("Server {name}: env must be a JSON object"));
-                        }
+                    if secret.is_empty() {
+                        return Err(format!(
+                            "Server {name}: auth-client-secret is required for authorization_code auth"
+                        ));
                     }
                 }
+                "static" => {
+                    let token = obj.get("auth_token").and_then(|v| v.as_str()).map(str::trim).unwrap_or("");
+                    if token.is_empty() {
+                        return Err(format!("Server {name}: auth-token is required for static auth"));
+                    }
+                }
+                _ => {}
             }
+        } else {
+            let command = obj.get("command").and_then(|v| v.as_str()).map(str::trim).unwrap_or("");
+            if command.is_empty() {
+                return Err(format!("Server {name}: command is required for stdio servers"));
+            }
+            validate_json_field(obj, &name, "args", true)?;
+            validate_json_field(obj, &name, "env", false)?;
         }
     }
 
@@ -368,6 +391,39 @@ pub async fn sync_default_mcp(config: String) -> Result<(), String> {
     std::fs::write(&tmp, &text).map_err(|e| format!("Failed to write mcp.conf: {e}"))?;
     std::fs::rename(&tmp, &path).map_err(|e| format!("Failed to replace mcp.conf: {e}"))?;
     log::info!("[mcp] Wrote {} servers to mcp.conf", servers.len());
+    Ok(())
+}
+
+/// Validate that a field holding raw JSON text parses as a JSON array
+/// (`want_array`) or object. An absent or empty/whitespace-only value is
+/// treated as "not set" and skipped.
+fn validate_json_field(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    name: &str,
+    key: &str,
+    want_array: bool,
+) -> Result<(), String> {
+    let Some(v) = obj.get(key) else { return Ok(()) };
+    let kind = if want_array { "array" } else { "object" };
+    match v {
+        serde_json::Value::String(sv) => {
+            if sv.trim().is_empty() {
+                return Ok(());
+            }
+            let parsed: serde_json::Value = serde_json::from_str(sv)
+                .map_err(|e| format!("Server {name}: {key} is not valid JSON: {e}"))?;
+            let ok = if want_array { parsed.is_array() } else { parsed.is_object() };
+            if !ok {
+                return Err(format!("Server {name}: {key} must be a JSON {kind}"));
+            }
+        }
+        _ => {
+            let ok = if want_array { v.is_array() } else { v.is_object() };
+            if !ok {
+                return Err(format!("Server {name}: {key} must be a JSON {kind}"));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -426,12 +482,80 @@ env: {"RUST_LOG": "info"}
 
     #[test]
     fn sync_validates() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        // Invalid args JSON must be rejected
-        let bad = r#"[{"server":"x","args":"not json"}]"#;
-        assert!(rt.block_on(sync_default_mcp(bad.to_string())).is_err());
+        let _guard = HOME_LOCK.lock().unwrap();
+        // Invalid args JSON must be rejected (stdio server)
+        let bad = r#"[{"server":"x","command":"bin","args":"not json"}]"#;
+        assert!(sync_isolated(bad).is_err());
         // Duplicate names must be rejected
         let dup = r#"[{"server":"x"},{"server":"x"}]"#;
-        assert!(rt.block_on(sync_default_mcp(dup.to_string())).is_err());
+        assert!(sync_isolated(dup).is_err());
+        // stdio server without a command must be rejected
+        let no_cmd = r#"[{"server":"x","command":""}]"#;
+        assert!(sync_isolated(no_cmd).is_err());
+        // http server with authorization_code but no client id/secret must be rejected
+        let http_no_oauth = r#"[{"server":"x","url":"https://example.com/mcp","auth_type":"authorization_code"}]"#;
+        assert!(sync_isolated(http_no_oauth).is_err());
+        // http server with static auth but no token must be rejected
+        let http_no_token = r#"[{"server":"x","url":"https://example.com/mcp","auth_type":"static"}]"#;
+        assert!(sync_isolated(http_no_token).is_err());
     }
+
+    #[test]
+    fn sync_accepts_empty_args_env() {
+        let _guard = HOME_LOCK.lock().unwrap();
+        // HTTP server: empty args/env strings must not be validated (not applicable)
+        let http = r#"[{"server":"exa","url":"https://mcp.exa.ai/mcp","args":"","env":""}]"#;
+        assert!(sync_isolated(http).is_ok());
+        // STDIO server: empty args/env are treated as unset and accepted
+        let stdio = r#"[{"server":"blah","command":"my-mcp","args":"","env":""}]"#;
+        assert!(sync_isolated(stdio).is_ok());
+        // STDIO server with valid JSON args/env accepted
+        let stdio_ok = r#"[{"server":"blah","command":"my-mcp","args":"[\"--foo\"]","env":"{\"RUST_LOG\":\"info\"}"}]"#;
+        assert!(sync_isolated(stdio_ok).is_ok());
+    }
+
+    #[tokio::test]
+    async fn list_default_mcp_missing_file_returns_empty() {
+        let _guard = HOME_LOCK.lock().unwrap();
+        // Isolate HOME so ~/.alayaface/config/mcp.conf does not exist yet.
+        let old_home = std::env::var_os("HOME");
+        let tmp = std::env::temp_dir().join(format!("alayaface-mcp-list-test-{}", std::process::id()));
+        std::env::set_var("HOME", &tmp);
+        let result = list_default_mcp().await;
+        match old_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+        // A missing mcp.conf must be an empty list, not an error.
+        assert_eq!(result.unwrap(), Vec::<serde_json::Value>::new());
+    }
+
+    // ─── Helpers ────────────────────────────────────────────────────
+
+    /// Serializes tests that mutate the HOME env var so they don't
+    /// interfere with each other or the real ~/.alayaface config.
+    static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Run sync_default_mcp with HOME pointed at an isolated temp dir,
+    /// so successful writes never touch the developer's real mcp.conf.
+    fn sync_isolated(config: &str) -> Result<(), String> {
+        let old_home = std::env::var_os("HOME");
+        let tmp = std::env::temp_dir().join(format!(
+            "alayaface-mcp-sync-test-{}-{}",
+            std::process::id(),
+            SYNC_TEST_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        ));
+        std::env::set_var("HOME", &tmp);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let res = rt.block_on(sync_default_mcp(config.to_string()));
+        match old_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+        res
+    }
+
+    static SYNC_TEST_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 }

@@ -3267,7 +3267,15 @@ draftFromMcp s =
     , authToken = s.authToken
     , authClientId = s.authClientId
     , authClientSecret = s.authClientSecret
-    , protoVersion = s.protoVersion
+    , protoVersion =
+        -- Old configs may lack proto-version; default it to the latest so
+        -- the dropdown shows the real value instead of silently selecting
+        -- the first option while the draft stays empty.
+        if String.isEmpty (String.trim s.protoVersion) then
+            T.latestMcpProtoVersion
+
+        else
+            s.protoVersion
     }
 
 
