@@ -1,7 +1,5 @@
 module Session.Protocol exposing
-    ( Tag(..)
-    , tagToString
-    , tagFromString
+    ( userEchoTags
     , isUserEchoTag
     , DeltaEvent
     , FrameEvent
@@ -19,74 +17,7 @@ import Json.Decode as D
 import Json.Encode as E
 
 
--- Tags
-
-type Tag
-    = UserText
-    | UserImage
-    | UserVideo
-    | UserAudio
-    | UserDoc
-    | UserEnd
-    | AssistantText
-    | AssistantReasoning
-    | AssistantTool
-    | UserToolResult
-    | SystemMsg
-    | CommandIn
-    | CommandOut
-    | AssistantTextDelta
-    | AssistantReasoningDelta
-    | ToolArgDelta
-    | ToolResultPreview
-    | UnknownTag String
-
-
-tagToString : Tag -> String
-tagToString t =
-    case t of
-        UserText -> "UT"
-        UserImage -> "UI"
-        UserVideo -> "UV"
-        UserAudio -> "UA"
-        UserDoc -> "UD"
-        UserEnd -> "UE"
-        AssistantText -> "AT"
-        AssistantReasoning -> "AR"
-        AssistantTool -> "AF"
-        UserToolResult -> "UF"
-        SystemMsg -> "SM"
-        CommandIn -> "CI"
-        CommandOut -> "CO"
-        AssistantTextDelta -> "At"
-        AssistantReasoningDelta -> "Ar"
-        ToolArgDelta -> "Af"
-        ToolResultPreview -> "Uf"
-        UnknownTag s -> s
-
-
-tagFromString : String -> Tag
-tagFromString s =
-    case s of
-        "UT" -> UserText
-        "UI" -> UserImage
-        "UV" -> UserVideo
-        "UA" -> UserAudio
-        "UD" -> UserDoc
-        "UE" -> UserEnd
-        "AT" -> AssistantText
-        "AR" -> AssistantReasoning
-        "AF" -> AssistantTool
-        "UF" -> UserToolResult
-        "SM" -> SystemMsg
-        "CI" -> CommandIn
-        "CO" -> CommandOut
-        "At" -> AssistantTextDelta
-        "Ar" -> AssistantReasoningDelta
-        "Af" -> ToolArgDelta
-        "Uf" -> ToolResultPreview
-        _ -> UnknownTag s
-
+-- User echo tags (UT/UI/UV/UA/UD appear on stdout as echoes)
 
 userEchoTags : List String
 userEchoTags =

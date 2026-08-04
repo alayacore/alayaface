@@ -360,6 +360,20 @@ getActiveSession model =
             Nothing
 
 
+-- Buffer an inbound event for a session that has not been registered
+-- yet (e.g. transport events racing session creation). The buffered
+-- events are flushed when the session appears (see SessionCreated).
+bufferPendingEvent : Model -> String -> E.Value -> ( Model, Cmd Msg )
+bufferPendingEvent model sessionId raw =
+    let
+        existing =
+            Dict.get sessionId model.pendingEvents |> Maybe.withDefault []
+    in
+    ( { model | pendingEvents = Dict.insert sessionId (existing ++ [ raw ]) model.pendingEvents }
+    , Cmd.none
+    )
+
+
 
 -- MSG
 
@@ -646,14 +660,7 @@ update msg model =
                             )
 
                         Nothing ->
-                            -- Buffer for when session is registered
-                            let
-                                existing =
-                                    Dict.get ev.sessionId model.pendingEvents |> Maybe.withDefault []
-                            in
-                            ( { model | pendingEvents = Dict.insert ev.sessionId (existing ++ [ raw ]) model.pendingEvents }
-                            , Cmd.none
-                            )
+                            bufferPendingEvent model ev.sessionId raw
 
                 Err _ ->
                     ( model, Cmd.none )
@@ -709,14 +716,7 @@ update msg model =
                                     ( updatedModel, cmds )
 
                         Nothing ->
-                            -- Buffer for when session is registered
-                            let
-                                existing =
-                                    Dict.get ev.sessionId model.pendingEvents |> Maybe.withDefault []
-                            in
-                            ( { model | pendingEvents = Dict.insert ev.sessionId (existing ++ [ raw ]) model.pendingEvents }
-                            , Cmd.none
-                            )
+                            bufferPendingEvent model ev.sessionId raw
 
                 Err _ ->
                     ( model, Cmd.none )
@@ -756,14 +756,7 @@ update msg model =
                                 )
 
                         Nothing ->
-                            -- Buffer for when session is registered
-                            let
-                                existing =
-                                    Dict.get ev.sessionId model.pendingEvents |> Maybe.withDefault []
-                            in
-                            ( { model | pendingEvents = Dict.insert ev.sessionId (existing ++ [ raw ]) model.pendingEvents }
-                            , Cmd.none
-                            )
+                            bufferPendingEvent model ev.sessionId raw
 
                 Err _ ->
                     ( model, Cmd.none )
@@ -4406,7 +4399,12 @@ viewMessage cursorMsgId sessionId msg =
                     ([ Attr.class ("message message-tool" ++ cursorClass) ]
                         ++ ctxAttrs
                     )
-                    [ Html.text msg.content ]
+                    [ Html.div [ Attr.class "message-content" ]
+                        [ Markdown.toHtmlWith markdownOptions
+                            [ Attr.class "md" ]
+                            msg.content
+                        ]
+                    ]
                 ]
 
         T.User ->

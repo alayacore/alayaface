@@ -786,6 +786,10 @@ handleToolCallFrame s json historyId =
 
 -- Tool Result Frame (UF)
 
+-- The authoritative tool result. Output is a JSON array of content
+-- blocks (text, image, ...); text blocks are joined for display and
+-- truncated to keep the transcript readable. On error, output is a
+-- uniform {"code","message"} object.
 handleToolResultFrame : SessionState -> D.Value -> Maybe String -> SessionState
 handleToolResultFrame s json historyId =
     let
@@ -800,9 +804,47 @@ handleToolResultFrame s json historyId =
     in
     let
         outStr =
-            case output of
-                Just _ -> "<output received>"
-                Nothing -> ""
+            if isError then
+                case output of
+                    Just o ->
+                        let
+                            code =
+                                D.decodeValue (D.field "code" D.string) o
+                                    |> Result.toMaybe
+                                    |> Maybe.withDefault ""
+
+                            message =
+                                D.decodeValue (D.field "message" D.string) o
+                                    |> Result.toMaybe
+                                    |> Maybe.withDefault ""
+                        in
+                        if message == "" then
+                            "<output received>"
+
+                        else if code == "" then
+                            message
+
+                        else
+                            code ++ ": " ++ message
+
+                    Nothing ->
+                        "<output received>"
+
+            else
+                case output of
+                    Just o ->
+                        let
+                            text =
+                                toolOutputText o
+                        in
+                        if String.isEmpty text then
+                            "<output received>"
+
+                        else
+                            truncateToolOutput text
+
+                    Nothing ->
+                        "<output received>"
 
         tc =
             Dict.get toolId s.toolCalls
@@ -840,6 +882,38 @@ handleToolResultFrame s json historyId =
                     s.toolCalls
     in
     { s | messages = newMsgs, toolCalls = newToolCalls }
+
+
+-- Extract readable text from a tool output value (array of content
+-- blocks, e.g. [{"type":"text","text":"..."}, ...]).
+toolOutputText : D.Value -> String
+toolOutputText value =
+    case D.decodeValue (D.list outputBlockText) value of
+        Ok texts ->
+            texts
+                |> List.filter (not << String.isEmpty)
+                |> String.join "\n"
+
+        Err _ ->
+            ""
+
+
+outputBlockText : D.Decoder String
+outputBlockText =
+    D.oneOf
+        [ D.field "text" D.string
+        , D.succeed ""
+        ]
+
+
+-- Keep tool output bounded so long results do not flood the transcript.
+truncateToolOutput : String -> String
+truncateToolOutput text =
+    if String.length text > 8000 then
+        String.left 8000 text ++ "\n… (truncated)"
+
+    else
+        text
 
 
 -- Tool Delta Frame (Af)
