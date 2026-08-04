@@ -74,7 +74,7 @@ pub fn run() {
             commands::list_default_mcp,
             commands::sync_default_mcp,
             commands::list_presets,
-            commands::create_preset,
+            commands::copy_preset,
             commands::rename_preset,
             commands::delete_preset,
             commands::set_active_preset,

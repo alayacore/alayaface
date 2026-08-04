@@ -31,35 +31,27 @@ pub async fn list_presets() -> Result<Vec<PresetInfo>, String> {
         .collect())
 }
 
-/// Create a new preset. If the active preset exists, its config is cloned
-/// (models, MCP servers, settings all carry over); otherwise defaults are
-/// seeded from ~/.alayacore or built-in templates.
+/// Create a new preset as a copy of an existing source preset.
 #[tauri::command]
-pub async fn create_preset(name: String) -> Result<(), String> {
+pub async fn copy_preset(source: String, name: String) -> Result<(), String> {
+    let source = validate_name(&source)?;
     let name = validate_name(&name)?;
     dirs::ensure()?;
 
+    if source == name {
+        return Err("Source and new preset have the same name".to_string());
+    }
+    let src = dirs::preset_dir(&source);
+    if !src.exists() {
+        return Err(format!("Preset not found: {source}"));
+    }
     let dir = dirs::preset_dir(&name);
     if dir.exists() {
         return Err(format!("Preset already exists: {name}"));
     }
 
-    let cloned = match dirs::read_active_preset() {
-        Ok(active) => {
-            let src = dirs::preset_dir(&active);
-            src.exists() && src != dir && dirs::clone_preset_dir(&src, &dir).is_ok()
-        }
-        Err(_) => false,
-    };
-    if !cloned {
-        dirs::create_preset_defaults(&dir)?;
-    }
-
-    log::info!(
-        "[presets] Created preset {:?} ({})",
-        name,
-        if cloned { "cloned from active" } else { "from defaults" }
-    );
+    dirs::clone_preset_dir(&src, &dir)?;
+    log::info!("[presets] Copied preset {:?} → {:?}", source, name);
     Ok(())
 }
 
@@ -161,11 +153,20 @@ mod tests {
             assert_eq!(list[0].name, "Default");
             assert!(list[0].is_active);
 
-            // Create a second preset by cloning Default.
-            rt.block_on(create_preset("work".to_string())).unwrap();
+            // Create a second preset by copying Default.
+            rt.block_on(copy_preset("Default".to_string(), "work".to_string()))
+                .unwrap();
             let list = rt.block_on(list_presets()).unwrap();
             assert_eq!(list.len(), 2);
             assert!(list.iter().any(|p| p.name == "work" && !p.is_active));
+
+            // Copying a nonexistent source or an existing target is rejected.
+            assert!(rt
+                .block_on(copy_preset("nope".to_string(), "x".to_string()))
+                .is_err());
+            assert!(rt
+                .block_on(copy_preset("Default".to_string(), "Default".to_string()))
+                .is_err());
 
             // Switch active.
             rt.block_on(set_active_preset("work".to_string())).unwrap();
@@ -197,10 +198,18 @@ mod tests {
     fn invalid_names_rejected() {
         crate::dirs::isolated_home(|| {
             let rt = tokio::runtime::Runtime::new().unwrap();
-            assert!(rt.block_on(create_preset("a/b".to_string())).is_err());
-            assert!(rt.block_on(create_preset("..".to_string())).is_err());
-            assert!(rt.block_on(create_preset("has space".to_string())).is_err());
-            assert!(rt.block_on(create_preset("".to_string())).is_err());
+            assert!(rt
+                .block_on(copy_preset("Default".to_string(), "a/b".to_string()))
+                .is_err());
+            assert!(rt
+                .block_on(copy_preset("Default".to_string(), "..".to_string()))
+                .is_err());
+            assert!(rt
+                .block_on(copy_preset("Default".to_string(), "has space".to_string()))
+                .is_err());
+            assert!(rt
+                .block_on(copy_preset("Default".to_string(), "".to_string()))
+                .is_err());
         });
     }
 }

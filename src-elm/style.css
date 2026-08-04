@@ -2111,14 +2111,6 @@ body {
   align-self: flex-start;
 }
 
-.pm-new-row {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.pm-new-row .me-field-input { flex: 1; }
-
 .pm-list {
   display: flex;
   flex-direction: column;

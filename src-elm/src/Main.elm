@@ -171,7 +171,6 @@ type alias PresetManager =
     { show : Bool
     , loading : Bool
     , busy : Bool
-    , newName : String
     , renaming : Maybe String
     , renameInput : String
     , editing : Maybe String
@@ -185,7 +184,6 @@ emptyPresetManager =
     { show = False
     , loading = False
     , busy = False
-    , newName = ""
     , renaming = Nothing
     , renameInput = ""
     , editing = Nothing
@@ -481,8 +479,7 @@ type Msg
       -- Presets
     | OpenPresetManager
     | ClosePresetManager
-    | SetPresetNewName String
-    | PresetCreate
+    | PresetCopy String
     | PresetSetActive String
     | PresetRenameStart String
     | SetPresetRenameInput String
@@ -2829,18 +2826,7 @@ update msg model =
                 , Cmd.none
                 )
 
-        SetPresetNewName val ->
-            let
-                pm =
-                    model.presetManager
-            in
-            ( { model
-                | presetManager = { pm | newName = val, error = Nothing }
-              }
-            , Cmd.none
-            )
-
-        PresetCreate ->
+        PresetCopy source ->
             let
                 pm =
                     model.presetManager
@@ -2848,7 +2834,10 @@ update msg model =
             ( { model
                 | presetManager = { pm | busy = True, error = Nothing }
               }
-            , Ports.createPreset { name = pm.newName }
+            , Ports.copyPreset
+                { source = source
+                , name = nextCopyName source model.presets
+                }
             )
 
         PresetSetActive name ->
@@ -3006,7 +2995,6 @@ update msg model =
                             | presetManager =
                                 { pm
                                     | busy = False
-                                    , newName = ""
                                     , renaming = Nothing
                                     , renameInput = ""
                                     , confirmDelete = Nothing
@@ -5014,6 +5002,35 @@ viewSettingsEditorOverlay model =
         Html.text ""
 
 
+-- Pick an unused copy name for duplicating a preset: "<source> copy",
+-- then "<source> copy 2", "3", … until it's free.
+nextCopyName : String -> List PresetInfo -> String
+nextCopyName source presets =
+    let
+        taken =
+            List.map .name presets |> Set.fromList
+
+        base =
+            source ++ " copy"
+
+        find n =
+            let
+                cand =
+                    base ++ " " ++ String.fromInt n
+            in
+            if Set.member cand taken then
+                find (n + 1)
+
+            else
+                cand
+    in
+    if Set.member base taken then
+        find 2
+
+    else
+        base
+
+
 viewPresetManagerOverlay : Model -> Html Msg
 viewPresetManagerOverlay model =
     let
@@ -5026,14 +5043,12 @@ viewPresetManagerOverlay model =
                 { presets = model.presets
                 , loading = pm.loading
                 , busy = pm.busy
-                , newName = pm.newName
                 , renaming = pm.renaming
                 , renameInput = pm.renameInput
                 , editing = pm.editing
                 , confirmDelete = pm.confirmDelete
                 , error = pm.error
-                , onInput = SetPresetNewName
-                , onCreate = PresetCreate
+                , onCopy = PresetCopy
                 , onSetActive = PresetSetActive
                 , onRenameStart = PresetRenameStart
                 , onRenameInput = SetPresetRenameInput

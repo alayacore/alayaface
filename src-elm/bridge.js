@@ -154,8 +154,10 @@
         });
     });
 
-    on("createPreset", function (data) {
-      invoke("create_preset", { name: data.name || "" })
+    on("copyPreset", function (data) {
+      invoke("copy_preset", {
+        source: (data && data.source) || "", name: (data && data.name) || "",
+      })
         .then(function () { app.ports.onPresetActionResult.send({ ok: true, error: "" }); })
         .catch(function (err) {
           app.ports.onPresetActionResult.send({

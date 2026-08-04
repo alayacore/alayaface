@@ -27,7 +27,7 @@ port module Ports exposing
     , onGlobalSettingsSyncResult
       -- Presets
     , listPresets
-    , createPreset
+    , copyPreset
     , renamePreset
     , deletePreset
     , setActivePreset
@@ -97,7 +97,7 @@ port syncGlobalSettings : { preset : String, toolConfirm : String } -> Cmd msg
 port onGlobalSettingsList : (E.Value -> msg) -> Sub msg
 port onGlobalSettingsSyncResult : (E.Value -> msg) -> Sub msg
 port listPresets : {} -> Cmd msg
-port createPreset : { name : String } -> Cmd msg
+port copyPreset : { source : String, name : String } -> Cmd msg
 port renamePreset : { oldName : String, newName : String } -> Cmd msg
 port deletePreset : { name : String } -> Cmd msg
 port setActivePreset : { name : String } -> Cmd msg

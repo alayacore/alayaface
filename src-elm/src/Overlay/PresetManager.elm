@@ -15,14 +15,12 @@ view :
     { presets : List PresetInfo
     , loading : Bool
     , busy : Bool
-    , newName : String
     , renaming : Maybe String
     , renameInput : String
     , editing : Maybe String
     , confirmDelete : Maybe String
     , error : Maybe String
-    , onInput : String -> msg
-    , onCreate : msg
+    , onCopy : String -> msg
     , onSetActive : String -> msg
     , onRenameStart : String -> msg
     , onRenameInput : String -> msg
@@ -41,7 +39,7 @@ view config =
     Html.div [ Attr.class "sel-page" ]
         [ Html.div [ Attr.class "sel-page-title" ] [ Html.text "Presets" ]
         , Html.div [ Attr.class "me-hint" ]
-            [ Html.text "Each preset is a full config set (models, MCP servers, tool-confirm settings). Use one to make it the template for new sessions; Edit opens its config — you can edit any preset without switching." ]
+            [ Html.text "Each preset is a full config set (models, MCP servers, tool-confirm settings). Use one to make it the template for new sessions; Copy duplicates it; Edit opens its config — you can edit any preset without switching." ]
         , case config.error of
             Just err ->
                 Html.div [ Attr.class "sel-page-status sel-page-status-error" ]
@@ -52,32 +50,12 @@ view config =
         , if config.loading then
             Html.div [ Attr.class "sel-page-status" ] [ Html.text "Loading…" ]
 
-          else
-            Html.div []
-                [ Html.div [ Attr.class "pm-new-row" ]
-                    [ Html.input
-                        [ Attr.class "me-field-input"
-                        , Attr.type_ "text"
-                        , Attr.value config.newName
-                        , Attr.placeholder "New preset name"
-                        , Attr.disabled config.busy
-                        , Ev.onInput config.onInput
-                        ]
-                        []
-                    , Html.button
-                        [ Attr.class "me-save-btn"
-                        , Attr.disabled (config.busy || String.isEmpty (String.trim config.newName))
-                        , Ev.onClick config.onCreate
-                        ]
-                        [ Html.text (if config.busy then "Working…" else "Create") ]
-                    ]
-                , if List.isEmpty config.presets then
-                    Html.div [ Attr.class "sel-page-status" ] [ Html.text "No presets yet." ]
+          else if List.isEmpty config.presets then
+            Html.div [ Attr.class "sel-page-status" ] [ Html.text "No presets yet." ]
 
-                  else
-                    Html.div [ Attr.class "pm-list" ]
-                        (List.concatMap (viewRow config) config.presets)
-                ]
+          else
+            Html.div [ Attr.class "pm-list" ]
+                (List.concatMap (viewRow config) config.presets)
         ]
 
 
@@ -88,6 +66,7 @@ viewRow :
         , editing : Maybe String
         , busy : Bool
         , confirmDelete : Maybe String
+        , onCopy : String -> msg
         , onSetActive : String -> msg
         , onRenameStart : String -> msg
         , onRenameInput : String -> msg
@@ -196,6 +175,13 @@ viewRow config p =
                                         , Ev.onClick (config.onSetActive p.name)
                                         ]
                                         [ Html.text "Use" ]
+                                , Html.button
+                                    [ Attr.class "pm-btn"
+                                    , Attr.disabled config.busy
+                                    , Ev.onClick (config.onCopy p.name)
+                                    , Attr.title "Duplicate this preset"
+                                    ]
+                                    [ Html.text "Copy" ]
                                 , Html.button
                                     [ Attr.class "pm-btn"
                                     , Attr.disabled config.busy
