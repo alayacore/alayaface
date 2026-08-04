@@ -102,10 +102,7 @@ async fn start_mcp_auth_inner(
                     url::form_urlencoded::parse(query_str.as_bytes())
                         .into_owned()
                         .collect();
-                let http_body = format!(
-                    "<!DOCTYPE html><html><body style='display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;'>                    <div style='text-align:center;'><h2>Authorization {}</h2>                    <p style='color:#666;'>You can close this window.</p></div></body></html>",
-                    if params.contains_key("code") { "Successful" } else { "Failed" }
-                );
+                let http_body = auth_callback_page(&sname, params.contains_key("code"));
                 let http_response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
                     http_body.len(), http_body
@@ -170,6 +167,25 @@ fn send_mcp_result(
         }
         Ok(())
     })
+}
+
+/// HTML page shown in the browser after the OAuth callback completes.
+/// Includes the server name so the user can tell which server the
+/// authorization was for (multiple servers may be authorized in one init).
+fn auth_callback_page(server_name: &str, success: bool) -> String {
+    format!(
+        "<!DOCTYPE html><html><body style='display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;'>                    <div style='text-align:center;'><h2>Authorization {}</h2>                    <p style='color:#666;'>Server: {}</p>                    <p style='color:#666;'>You can close this window.</p></div></body></html>",
+        if success { "Successful" } else { "Failed" },
+        html_escape(server_name)
+    )
+}
+
+/// Minimal HTML escaping for config values shown in the callback page.
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 // ─── Default (global) MCP server list ────────────────────────────────
@@ -432,6 +448,25 @@ fn validate_json_field(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auth_callback_page_shows_server_name() {
+        let ok = auth_callback_page("github", true);
+        assert!(ok.contains("Authorization Successful"));
+        assert!(ok.contains("Server: github"));
+        assert!(ok.contains("You can close this window"));
+
+        let failed = auth_callback_page("gitlab", false);
+        assert!(failed.contains("Authorization Failed"));
+        assert!(failed.contains("Server: gitlab"));
+    }
+
+    #[test]
+    fn auth_callback_page_escapes_server_name() {
+        let body = auth_callback_page("a<b&c\"d", true);
+        assert!(body.contains("Server: a&lt;b&amp;c&quot;d"));
+        assert!(!body.contains("a<b&c"));
+    }
 
     #[test]
     fn parse_skips_commented_blocks() {
