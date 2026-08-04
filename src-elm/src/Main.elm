@@ -5002,8 +5002,9 @@ viewSettingsEditorOverlay model =
         Html.text ""
 
 
--- Pick an unused copy name for duplicating a preset: "<source> copy",
--- then "<source> copy 2", "3", … until it's free.
+-- Pick an unused copy name for duplicating a preset: "<source>-copy",
+-- then "<source>-copy-2", "-3", … until it's free. Hyphens keep the name
+-- valid (letters, digits, '-' and '_' only — no spaces).
 nextCopyName : String -> List PresetInfo -> String
 nextCopyName source presets =
     let
@@ -5011,12 +5012,12 @@ nextCopyName source presets =
             List.map .name presets |> Set.fromList
 
         base =
-            source ++ " copy"
+            source ++ "-copy"
 
         find n =
             let
                 cand =
-                    base ++ " " ++ String.fromInt n
+                    base ++ "-" ++ String.fromInt n
             in
             if Set.member cand taken then
                 find (n + 1)
