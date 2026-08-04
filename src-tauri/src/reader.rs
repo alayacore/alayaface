@@ -102,7 +102,9 @@ fn dispatch_frame(
         // ─── Complete/authoritative (AT, AR) ──────────────────────
         "AT" | "AR" => handle_complete_frame(app, sid, tag, raw_value),
         // ─── Tool argument delta (Af) ────────────────────────────
-        "Af" => handle_tool_delta_frame(app, sid, raw_value),
+        // Af shares the JSON frame path with AF/UF/Uf (identical
+        // \x00<id>\x00<JSON> wire format); only the tag differs.
+        "Af" => handle_json_frame(app, sid, "Af", raw_value),
         // ─── Command output (CO) ─────────────────────────────────
         "CO" => handle_cmd_output_frame(app, sid, raw_value, pending_commands),
         // ─── JSON frames (AF, UF, Uf) ───────────────────────────
@@ -162,33 +164,11 @@ fn handle_complete_frame(app: &AppHandle, sid: &str, tag: &str, raw_value: &str)
     });
 }
 
-/// Handle Af tool argument delta frames.
-fn handle_tool_delta_frame(app: &AppHandle, sid: &str, raw_value: &str) {
-    let parts = tlv::unwrap_delta(raw_value);
-    let mut json_val = None;
-    let history_id = if parts.has_delta {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&parts.content) {
-            json_val = Some(v);
-        }
-        Some(parts.history_id)
-    } else {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw_value) {
-            json_val = Some(v);
-        }
-        None
-    };
-    let _ = app.emit("tlv-frame", FrameEvent {
-        session_id: sid.to_string(),
-        tag: "Af".to_string(),
-        raw_value: raw_value.to_string(),
-        history_id,
-        content: Some(parts.content),
-        json: json_val,
-        user_content_type: None,
-    });
-}
-
-/// Handle AF/UF JSON frames.
+/// Handle AF/UF/Uf/Af JSON frames.
+///
+/// All of these share the same wire format: either raw JSON or a
+/// NUL-delimited history ID prefix followed by JSON. The parsed JSON
+/// (when present) is forwarded so the frontend can decode it by tag.
 fn handle_json_frame(app: &AppHandle, sid: &str, tag: &str, raw_value: &str) {
     let parts = tlv::unwrap_delta(raw_value);
     let (history_id, content, json_val) = if parts.has_delta {

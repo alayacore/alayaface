@@ -3,7 +3,7 @@
 //! Lists available models by checking cache, then asking a connected session,
 //! then falling back to a temporary alayacore process.
 
-use crate::commands::{resolve_binary, SessionMap};
+use crate::commands::{resolve_binary, send_cmd, SessionMap};
 use crate::dirs;
 use crate::tlv;
 use crate::ModelCache;
@@ -31,17 +31,9 @@ pub async fn list_models(
         let map = sessions.0.lock().await;
         for (sid, handle) in map.iter() {
             if handle.connected.load(std::sync::atomic::Ordering::SeqCst) {
-                let mut stdin = handle.stdin.lock().await;
-                let payload = serde_json::json!({
-                    "id": uuid::Uuid::new_v4().to_string(),
-                    "name": "model_load",
-                    "input": "",
-                });
-                let payload_str = payload.to_string();
-                let preview: String = payload_str.chars().take(200).collect();
-                log::info!("[tlv] >> {} {} {}b {}", sid, tlv::TAG_CMD_INPUT, payload_str.len(), preview);
-                let _ = tlv::write_frame(&mut *stdin, tlv::TAG_CMD_INPUT, &payload_str);
-                let _ = stdin.flush();
+                // send_cmd registers the call ID → name mapping so the
+                // matching CO frame is rendered with the command name.
+                let _ = send_cmd(&map, sid, "model_load", "").await;
                 let cache = model_cache.0.lock().unwrap();
                 if !cache.is_empty() {
                     return Ok(cache.clone());

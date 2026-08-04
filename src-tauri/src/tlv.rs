@@ -231,3 +231,104 @@ pub struct CmdResultMsg {
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_error: bool,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encode_read_roundtrip() {
+        let mut buf = Vec::new();
+        write_frame(&mut buf, "UT", "hello \u{0000} world").unwrap();
+
+        let mut reader = buf.as_slice();
+        let frame = read_frame(&mut reader).unwrap().unwrap();
+        assert_eq!(frame.tag, "UT");
+        assert_eq!(frame.value, "hello \u{0000} world");
+        // Whole buffer consumed.
+        assert!(read_frame(&mut reader).unwrap().is_none());
+    }
+
+    #[test]
+    fn encode_uses_big_endian_length() {
+        let value = "x".repeat(300);
+        let buf = encode("UT", &value);
+        // [tag 2][len 4][value]
+        assert_eq!(&buf[0..2], b"UT");
+        assert_eq!(u32::from_be_bytes([buf[2], buf[3], buf[4], buf[5]]), 300);
+        assert_eq!(&buf[6..], value.as_bytes());
+    }
+
+    #[test]
+    fn read_frame_eof_returns_none() {
+        let mut reader: &[u8] = &[];
+        assert!(read_frame(&mut reader).unwrap().is_none());
+    }
+
+    #[test]
+    fn unwrap_delta_without_nul_prefix() {
+        let parts = unwrap_delta("plain");
+        assert!(!parts.has_delta);
+        assert_eq!(parts.history_id, "");
+        assert_eq!(parts.content, "plain");
+    }
+
+    #[test]
+    fn unwrap_delta_empty_value() {
+        let parts = unwrap_delta("");
+        assert!(!parts.has_delta);
+        assert_eq!(parts.content, "");
+    }
+
+    #[test]
+    fn unwrap_delta_with_empty_id() {
+        let parts = unwrap_delta("\u{0000}\u{0000}content");
+        assert!(!parts.has_delta);
+    }
+
+    #[test]
+    fn unwrap_delta_valid() {
+        let parts = unwrap_delta("\u{0000}abc-123\u{0000}{\"id\":\"t1\"}");
+        assert!(parts.has_delta);
+        assert_eq!(parts.history_id, "abc-123");
+        assert_eq!(parts.content, "{\"id\":\"t1\"}");
+    }
+
+    #[test]
+    fn unwrap_delta_keeps_embedded_nuls_in_content() {
+        // Content after the history ID may itself contain NULs (raw values).
+        let parts = unwrap_delta("\u{0000}id\u{0000}a\u{0000}b");
+        assert!(parts.has_delta);
+        assert_eq!(parts.history_id, "id");
+        assert_eq!(parts.content, "a\u{0000}b");
+    }
+
+    #[test]
+    fn wrap_delta_roundtrips() {
+        let wrapped = wrap_delta("h1", "payload");
+        let parts = unwrap_delta(&wrapped);
+        assert!(parts.has_delta);
+        assert_eq!(parts.history_id, "h1");
+        assert_eq!(parts.content, "payload");
+    }
+
+    #[test]
+    fn json_payloads_roundtrip() {
+        let output = ToolOutputData {
+            id: "t5".into(),
+            output: serde_json::json!([{"type": "text", "text": "ok"}]),
+            is_error: false,
+        };
+        let s = serde_json::to_string(&output).unwrap();
+        let back: ToolOutputData = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.id, "t5");
+        assert!(!back.is_error);
+        assert_eq!(back.output[0]["text"], "ok");
+
+        let cmd = CmdMsg { id: "c1".into(), name: "save".into(), input: "/tmp/x".into() };
+        let s = serde_json::to_string(&cmd).unwrap();
+        let back: CmdMsg = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.name, "save");
+        assert_eq!(back.input, "/tmp/x");
+    }
+}
