@@ -4883,31 +4883,28 @@ viewDefaultModelsEditorOverlay model =
                         ]
 
                 ModelSelList ->
-                    Html.div []
-                        [ viewPresetBadge model
-                        , Overlay.ModelSelector.view
-                            { sessionId = "default"
-                            , models = ed.working
-                            , input = ed.input
-                            , selected = ed.selected
-                            , activeModelId = Nothing
-                            , activeModelName = ""
-                            , confirmDeleteId = ed.confirmDelete
-                            , canDelete = List.length ed.working > 1
-                            , dirty = ed.working /= ed.original
-                            , error = ed.loadError
-                            , noOp = NoOp
-                            , onSelect = DefaultModelsSelectItem
-                            , onConfirm = DefaultModelsConfirmItem
-                            , onClose = CloseDefaultModelsEditor
-                            , onInput = SetDefaultModelsInput
-                            , onEdit = DefaultModelsEditModel
-                            , onDelete = DefaultModelsDeleteModel
-                            , onDeleteConfirm = DefaultModelsConfirmDelete
-                            , onDeleteCancel = DefaultModelsCancelDelete
-                            , onAdd = DefaultModelsAddModel
-                            }
-                        ]
+                    Overlay.ModelSelector.view
+                        { sessionId = "default"
+                        , models = ed.working
+                        , input = ed.input
+                        , selected = ed.selected
+                        , activeModelId = Nothing
+                        , activeModelName = ""
+                        , confirmDeleteId = ed.confirmDelete
+                        , canDelete = List.length ed.working > 1
+                        , dirty = ed.working /= ed.original
+                        , error = ed.loadError
+                        , noOp = NoOp
+                        , onSelect = DefaultModelsSelectItem
+                        , onConfirm = DefaultModelsConfirmItem
+                        , onClose = CloseDefaultModelsEditor
+                        , onInput = SetDefaultModelsInput
+                        , onEdit = DefaultModelsEditModel
+                        , onDelete = DefaultModelsDeleteModel
+                        , onDeleteConfirm = DefaultModelsConfirmDelete
+                        , onDeleteCancel = DefaultModelsCancelDelete
+                        , onAdd = DefaultModelsAddModel
+                        }
             ]
     else
         Html.text ""
@@ -4966,29 +4963,26 @@ viewMcpEditorOverlay model =
                         ]
 
                 ModelSelList ->
-                    Html.div []
-                        [ viewPresetBadge model
-                        , Overlay.McpSelector.view
-                            { sessionId = "default"
-                            , servers = ed.working
-                            , input = ed.input
-                            , selected = ed.selected
-                            , confirmDeleteId = ed.confirmDelete
-                            , canDelete = List.length ed.working > 1
-                            , dirty = ed.working /= ed.original
-                            , error = ed.loadError
-                            , noOp = NoOp
-                            , onSelect = McpSelectItem
-                            , onConfirm = McpConfirmItem
-                            , onClose = CloseMcpEditor
-                            , onInput = SetMcpInput
-                            , onEdit = McpEditServer
-                            , onDelete = McpDeleteServer
-                            , onDeleteConfirm = McpConfirmDelete
-                            , onDeleteCancel = McpCancelDelete
-                            , onAdd = McpAddServer
-                            }
-                        ]
+                    Overlay.McpSelector.view
+                        { sessionId = "default"
+                        , servers = ed.working
+                        , input = ed.input
+                        , selected = ed.selected
+                        , confirmDeleteId = ed.confirmDelete
+                        , canDelete = List.length ed.working > 1
+                        , dirty = ed.working /= ed.original
+                        , error = ed.loadError
+                        , noOp = NoOp
+                        , onSelect = McpSelectItem
+                        , onConfirm = McpConfirmItem
+                        , onClose = CloseMcpEditor
+                        , onInput = SetMcpInput
+                        , onEdit = McpEditServer
+                        , onDelete = McpDeleteServer
+                        , onDeleteConfirm = McpConfirmDelete
+                        , onDeleteCancel = McpCancelDelete
+                        , onAdd = McpAddServer
+                        }
             ]
     else
         Html.text ""
@@ -5012,8 +5006,7 @@ viewSettingsEditorOverlay model =
     if ed.show then
         viewOverlay CloseSettingsEditor
             [ Overlay.Settings.view
-                { preset = model.activePreset
-                , toolConfirm = ed.toolConfirm
+                { toolConfirm = ed.toolConfirm
                 , loading = ed.loading
                 , syncing = ed.syncing
                 , error = ed.error
@@ -5024,20 +5017,6 @@ viewSettingsEditorOverlay model =
             ]
     else
         Html.text ""
-
-
-viewPresetBadge : Model -> Html Msg
-viewPresetBadge model =
-    Html.div [ Attr.class "pm-badge" ]
-        [ Html.text
-            ("Preset: "
-                ++ (if model.activePreset == "" then
-                        "Default"
-                    else
-                        model.activePreset
-                   )
-            )
-        ]
 
 
 viewPresetManagerOverlay : Model -> Html Msg

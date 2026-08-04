@@ -6,8 +6,7 @@ import Html.Events as Ev
 
 
 view :
-    { preset : String
-    , toolConfirm : String
+    { toolConfirm : String
     , loading : Bool
     , syncing : Bool
     , error : Maybe String
@@ -20,8 +19,7 @@ view config =
     Html.div [ Attr.class "me-page" ]
         [ Html.div [ Attr.class "me-page-header" ]
             [ Html.button [ Attr.class "me-back-btn", Ev.onClick config.onCancel ] [ Html.text "← Back" ]
-            , Html.div [ Attr.class "me-page-title" ]
-                [ Html.text ("Settings" ++ (if config.preset /= "" then " — " ++ config.preset else "")) ]
+            , Html.div [ Attr.class "me-page-title" ] [ Html.text "Settings" ]
             ]
         , if config.loading then
             Html.div [ Attr.class "sel-page-status" ] [ Html.text "Loading…" ]
