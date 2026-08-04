@@ -105,8 +105,10 @@ fn dispatch_frame(
         "Af" => handle_tool_delta_frame(app, sid, raw_value),
         // ─── Command output (CO) ─────────────────────────────────
         "CO" => handle_cmd_output_frame(app, sid, raw_value, pending_commands),
-        // ─── JSON frames (AF, UF) ────────────────────────────────
-        "AF" | "UF" => handle_json_frame(app, sid, tag, raw_value),
+        // ─── JSON frames (AF, UF, Uf) ───────────────────────────
+        // Uf is a tool result preview snapshot: same \x00<id>\x00<JSON>
+        // wire format, so handle_json_frame parses it identically.
+        "AF" | "UF" | "Uf" => handle_json_frame(app, sid, tag, raw_value),
         "SM" => handle_sm_frame(app, sid, raw_value),
         // ─── Everything else (user echoes, unknown) ─────────────
         _ => handle_other_frame(app, sid, tag, raw_value),

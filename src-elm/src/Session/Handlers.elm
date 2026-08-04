@@ -132,6 +132,11 @@ handleFrameEvent s ev =
             Just json -> handleToolDeltaFrame s json
             Nothing -> s
 
+    else if ev.tag == "Uf" then
+        case ev.json of
+            Just json -> handleToolPreviewFrame s json
+            Nothing -> s
+
     else
         s
 
@@ -824,8 +829,17 @@ handleToolResultFrame s json historyId =
                         m
                 )
                 s.messages
+
+        -- Authoritative UF overwrites any live Uf preview (snapshot).
+        newToolCalls =
+            case Dict.get toolId s.toolCalls of
+                Just existingTc ->
+                    Dict.insert toolId { existingTc | output = Nothing } s.toolCalls
+
+                Nothing ->
+                    s.toolCalls
     in
-    { s | messages = newMsgs }
+    { s | messages = newMsgs, toolCalls = newToolCalls }
 
 
 -- Tool Delta Frame (Af)
@@ -860,6 +874,53 @@ handleToolDeltaFrame s json =
                             (\m ->
                                 if m.toolId == Just toolId then
                                     { m | content = "🔧 **" ++ tc.name ++ "**\n```json\n" ++ accumulated ++ "\n```" }
+                                else
+                                    m
+                            )
+                            s.messages
+                in
+                { s
+                    | toolCalls = newToolCalls
+                    , messages = newMsgs
+                }
+
+            Nothing ->
+                s
+
+
+-- Tool Result Preview Frame (Uf)
+
+-- Uf is an ephemeral, display-only tool result preview **snapshot**:
+-- each frame replaces the previous one (never concatenated), and the
+-- authoritative UF overwrites it. Unknown tool IDs are ignored — AF
+-- always precedes Uf in practice (a tool must start before it streams).
+handleToolPreviewFrame : SessionState -> D.Value -> SessionState
+handleToolPreviewFrame s json =
+    let
+        toolId =
+            D.decodeValue (D.field "id" D.string) json |> Result.toMaybe |> Maybe.withDefault ""
+
+        text =
+            D.decodeValue (D.field "text" D.string) json |> Result.toMaybe |> Maybe.withDefault ""
+    in
+    if String.isEmpty toolId then
+        s
+
+    else
+        case Dict.get toolId s.toolCalls of
+            Just tc ->
+                let
+                    newTc =
+                        { tc | output = Just text }
+
+                    newToolCalls =
+                        Dict.insert toolId newTc s.toolCalls
+
+                    newMsgs =
+                        List.map
+                            (\m ->
+                                if m.toolId == Just toolId then
+                                    { m | content = "🔧 **" ++ tc.name ++ "**\n```\n" ++ text ++ "\n```" }
                                 else
                                     m
                             )

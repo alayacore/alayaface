@@ -103,6 +103,7 @@ Key tags:
 | At  | stdout    | Assistant text streaming delta |
 | Ar  | stdout    | Assistant reasoning streaming delta |
 | Af  | stdout    | Tool argument streaming delta |
+| Uf  | stdout    | Tool result preview snapshot (ephemeral, display-only; UF overwrites) |
 | AT  | stdout    | Assistant text complete |
 | AR  | stdout    | Assistant reasoning complete |
 | AF  | stdout    | Tool call lifecycle |

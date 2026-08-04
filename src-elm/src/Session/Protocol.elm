@@ -38,6 +38,7 @@ type Tag
     | AssistantTextDelta
     | AssistantReasoningDelta
     | ToolArgDelta
+    | ToolResultPreview
     | UnknownTag String
 
 
@@ -60,6 +61,7 @@ tagToString t =
         AssistantTextDelta -> "At"
         AssistantReasoningDelta -> "Ar"
         ToolArgDelta -> "Af"
+        ToolResultPreview -> "Uf"
         UnknownTag s -> s
 
 
@@ -82,6 +84,7 @@ tagFromString s =
         "At" -> AssistantTextDelta
         "Ar" -> AssistantReasoningDelta
         "Af" -> ToolArgDelta
+        "Uf" -> ToolResultPreview
         _ -> UnknownTag s
 
 

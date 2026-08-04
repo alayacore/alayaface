@@ -15,6 +15,8 @@
 //!   At   Assistant text streaming delta (\x00<id>\x00<content>)
 //!   Ar   Assistant reasoning streaming delta (\x00<id>\x00<content>)
 //!   Af   Function/tool argument streaming delta (\x00<id>\x00<JSON delta>)
+//!   Uf   Function/tool result preview snapshot, ephemeral/display-only
+//!        (\x00<id>\x00<JSON {"id","text"}>; never authoritative — UF overwrites)
 //!   AT   Assistant text complete/authoritative (\x00<id>\x00<content>; empty if deltas preceded it)
 //!   AR   Assistant reasoning complete/authoritative (\x00<id>\x00<content>; empty if deltas preceded it)
 //!   AF   Function/tool lifecycle (\x00<id>\x00<JSON>)
@@ -54,6 +56,9 @@ pub const TAG_CMD_OUTPUT: &str = "CO";
 pub const TAG_ASSISTANT_TEXT_DELTA: &str = "At";
 pub const TAG_ASSISTANT_REASONING_DELTA: &str = "Ar";
 pub const TAG_TOOL_ARG_DELTA: &str = "Af";
+/// Ephemeral tool result preview snapshot (display-only; never
+/// authoritative — the complete result always arrives via UF).
+pub const TAG_USER_F_DELTA: &str = "Uf";
 
 /// Encode a TLV frame into bytes.
 /// Format: [2-byte tag][4-byte length (big-endian)][value bytes]
