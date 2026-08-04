@@ -75,8 +75,8 @@ type alias ResizeInfo =
     }
 
 
--- Default (global) model list editor state. Edits ~/.alayaface/config/model.conf,
--- which only affects newly created sessions.
+-- Default (global) model list editor state. Edits a specific preset's
+-- model.conf (the preset is chosen when opening from the preset manager).
 
 type alias DefaultModelsEditor =
     { show : Bool
@@ -89,6 +89,7 @@ type alias DefaultModelsEditor =
     , syncError : Maybe String
     , loadError : Maybe String
     , confirmDelete : Maybe Int
+    , preset : String
     }
 
 
@@ -104,6 +105,7 @@ emptyDefaultModelsEditor =
     , syncError = Nothing
     , loadError = Nothing
     , confirmDelete = Nothing
+    , preset = ""
     }
 
 
@@ -118,6 +120,7 @@ type alias McpEditor =
     , syncError : Maybe String
     , loadError : Maybe String
     , confirmDelete : Maybe Int
+    , preset : String
     }
 
 
@@ -133,6 +136,7 @@ emptyMcpEditor =
     , syncError = Nothing
     , loadError = Nothing
     , confirmDelete = Nothing
+    , preset = ""
     }
 
 
@@ -142,6 +146,7 @@ type alias SettingsEditor =
     , syncing : Bool
     , toolConfirm : String
     , error : Maybe String
+    , preset : String
     }
 
 
@@ -152,6 +157,7 @@ emptySettingsEditor =
     , syncing = False
     , toolConfirm = ""
     , error = Nothing
+    , preset = ""
     }
 
 
@@ -168,6 +174,7 @@ type alias PresetManager =
     , newName : String
     , renaming : Maybe String
     , renameInput : String
+    , editing : Maybe String
     , confirmDelete : Maybe String
     , error : Maybe String
     }
@@ -181,6 +188,7 @@ emptyPresetManager =
     , newName = ""
     , renaming = Nothing
     , renameInput = ""
+    , editing = Nothing
     , confirmDelete = Nothing
     , error = Nothing
     }
@@ -425,8 +433,8 @@ type Msg
     | ModelSelectorDiscardClose
     | ModelSelectorCancelSyncPrompt
     | ModelSelectorSyncResult Bool String
-      -- Default (global) model list editor
-    | OpenDefaultModelsEditor
+      -- Default (global) model list editor (targets a specific preset)
+    | EditPresetModels String
     | CloseDefaultModelsEditor
     | SetDefaultModelsInput String
     | DefaultModelsSelectItem Int
@@ -444,8 +452,8 @@ type Msg
     | DefaultModelsCancelSyncPrompt
     | DefaultModelsListResult E.Value
     | DefaultModelsSyncResult E.Value
-      -- MCP server editor
-    | OpenMcpEditor
+      -- MCP server editor (targets a specific preset)
+    | EditPresetMcp String
     | CloseMcpEditor
     | SetMcpInput String
     | McpSelectItem Int
@@ -463,8 +471,8 @@ type Msg
     | McpCancelSyncPrompt
     | McpListResult E.Value
     | McpSyncResult E.Value
-      -- Global settings
-    | OpenSettingsEditor
+      -- Global settings (targets a specific preset)
+    | EditPresetSettings String
     | CloseSettingsEditor
     | SetToolConfirm String
     | SettingsSave
@@ -480,6 +488,7 @@ type Msg
     | SetPresetRenameInput String
     | PresetRenameSave String
     | PresetRenameCancel
+    | PresetToggleEdit String
     | PresetDelete String
     | PresetConfirmDelete String
     | PresetCancelDelete
@@ -1956,17 +1965,19 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
-        -- Default (global) Model List Editor
-        OpenDefaultModelsEditor ->
+        -- Default (global) Model List Editor (targets a specific preset)
+        EditPresetModels preset ->
             ( { model
                 | defaultModelsEditor =
                     { emptyDefaultModelsEditor
                         | show = True
                         , page = ModelSelLoading
+                        , preset = preset
                     }
+                , presetManager = emptyPresetManager
                 , showGlobalMenu = False
               }
-            , Ports.listDefaultModels {}
+            , Ports.listDefaultModels { preset = preset }
             )
 
         CloseDefaultModelsEditor ->
@@ -2261,7 +2272,9 @@ update msg model =
                 | defaultModelsEditor = { ed | page = ModelSelSyncing }
               }
             , Ports.syncDefaultModels
-                { config = encodeModels ed.working }
+                { preset = ed.preset
+                , config = encodeModels ed.working
+                }
             )
 
         DefaultModelsDiscardClose ->
@@ -2312,16 +2325,18 @@ update msg model =
                 Err _ ->
                     ( model, Cmd.none )
 
-        OpenMcpEditor ->
+        EditPresetMcp preset ->
             ( { model
                 | mcpEditor =
                     { emptyMcpEditor
                         | show = True
                         , page = ModelSelLoading
+                        , preset = preset
                     }
+                , presetManager = emptyPresetManager
                 , showGlobalMenu = False
               }
-            , Ports.listDefaultMcp {}
+            , Ports.listDefaultMcp { preset = preset }
             )
 
         CloseMcpEditor ->
@@ -2620,7 +2635,9 @@ update msg model =
                 | mcpEditor = { ed | page = ModelSelSyncing }
               }
             , Ports.syncDefaultMcp
-                { config = encodeMcpServers ed.working }
+                { preset = ed.preset
+                , config = encodeMcpServers ed.working
+                }
             )
 
         McpDiscardClose ->
@@ -2671,17 +2688,19 @@ update msg model =
                 Err _ ->
                     ( model, Cmd.none )
 
-        -- Global Settings
-        OpenSettingsEditor ->
+        -- Global Settings (targets a specific preset)
+        EditPresetSettings preset ->
             ( { model
                 | settingsEditor =
                     { emptySettingsEditor
                         | show = True
                         , loading = True
+                        , preset = preset
                     }
+                , presetManager = emptyPresetManager
                 , showGlobalMenu = False
               }
-            , Ports.listGlobalSettings {}
+            , Ports.listGlobalSettings { preset = preset }
             )
 
         CloseSettingsEditor ->
@@ -2721,7 +2740,7 @@ update msg model =
             ( { model
                 | settingsEditor = { ed | syncing = True, error = Nothing }
               }
-            , Ports.syncGlobalSettings { toolConfirm = ed.toolConfirm }
+            , Ports.syncGlobalSettings { preset = ed.preset, toolConfirm = ed.toolConfirm }
             )
 
         SettingsListResult raw ->
@@ -2890,6 +2909,24 @@ update msg model =
             , Cmd.none
             )
 
+        PresetToggleEdit name ->
+            let
+                pm =
+                    model.presetManager
+            in
+            ( { model
+                | presetManager =
+                    { pm
+                        | editing =
+                            if pm.editing == Just name then
+                                Nothing
+                            else
+                                Just name
+                    }
+              }
+            , Cmd.none
+            )
+
         PresetDelete name ->
             let
                 pm =
@@ -2937,29 +2974,11 @@ update msg model =
                                     res.presets
                                     |> List.head
                                     |> Maybe.withDefault ""
-
-                            activeChanged =
-                                active /= model.activePreset
-
-                            -- Editors target the active preset: if it changed,
-                            -- close any open editors so they can't write to the
-                            -- wrong (old) preset.
-                            closeIfChanged show editor current =
-                                if activeChanged && show then
-                                    editor
-                                else
-                                    current
                         in
                         ( { model
                             | presets = res.presets
                             , activePreset = active
                             , presetManager = { pm | loading = False, error = Nothing }
-                            , defaultModelsEditor =
-                                closeIfChanged model.defaultModelsEditor.show emptyDefaultModelsEditor model.defaultModelsEditor
-                            , mcpEditor =
-                                closeIfChanged model.mcpEditor.show emptyMcpEditor model.mcpEditor
-                            , settingsEditor =
-                                closeIfChanged model.settingsEditor.show emptySettingsEditor model.settingsEditor
                           }
                         , Cmd.none
                         )
@@ -4227,27 +4246,6 @@ viewGlobalMenu model =
                            )
                     )
                 ]
-            , Html.div
-                [ Attr.class "global-menu-item"
-                , Ev.onClick OpenDefaultModelsEditor
-                ]
-                [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "◈" ]
-                , Html.text " Edit Default Models"
-                ]
-            , Html.div
-                [ Attr.class "global-menu-item"
-                , Ev.onClick OpenMcpEditor
-                ]
-                [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "🔌" ]
-                , Html.text " Edit MCP Servers"
-                ]
-            , Html.div
-                [ Attr.class "global-menu-item"
-                , Ev.onClick OpenSettingsEditor
-                ]
-                [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "⚙" ]
-                , Html.text " Settings"
-                ]
             ]
         , Html.button
             [ Attr.class "global-menu-btn"
@@ -5034,6 +5032,7 @@ viewPresetManagerOverlay model =
                 , newName = pm.newName
                 , renaming = pm.renaming
                 , renameInput = pm.renameInput
+                , editing = pm.editing
                 , confirmDelete = pm.confirmDelete
                 , error = pm.error
                 , onInput = SetPresetNewName
@@ -5043,6 +5042,10 @@ viewPresetManagerOverlay model =
                 , onRenameInput = SetPresetRenameInput
                 , onRenameSave = PresetRenameSave
                 , onRenameCancel = PresetRenameCancel
+                , onToggleEdit = PresetToggleEdit
+                , onEditModels = EditPresetModels
+                , onEditMcp = EditPresetMcp
+                , onEditSettings = EditPresetSettings
                 , onDelete = PresetDelete
                 , onDeleteConfirm = PresetConfirmDelete
                 , onDeleteCancel = PresetCancelDelete

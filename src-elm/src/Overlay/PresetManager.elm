@@ -18,6 +18,7 @@ view :
     , newName : String
     , renaming : Maybe String
     , renameInput : String
+    , editing : Maybe String
     , confirmDelete : Maybe String
     , error : Maybe String
     , onInput : String -> msg
@@ -27,6 +28,10 @@ view :
     , onRenameInput : String -> msg
     , onRenameSave : String -> msg
     , onRenameCancel : msg
+    , onToggleEdit : String -> msg
+    , onEditModels : String -> msg
+    , onEditMcp : String -> msg
+    , onEditSettings : String -> msg
     , onDelete : String -> msg
     , onDeleteConfirm : String -> msg
     , onDeleteCancel : msg
@@ -36,7 +41,7 @@ view config =
     Html.div [ Attr.class "sel-page" ]
         [ Html.div [ Attr.class "sel-page-title" ] [ Html.text "Presets" ]
         , Html.div [ Attr.class "me-hint" ]
-            [ Html.text "Each preset is a full config set (models, MCP servers, tool-confirm settings). New sessions and the editors below use the active preset. Running sessions keep their own copy." ]
+            [ Html.text "Each preset is a full config set (models, MCP servers, tool-confirm settings). Use one to make it the template for new sessions; Edit opens its config — you can edit any preset without switching." ]
         , case config.error of
             Just err ->
                 Html.div [ Attr.class "sel-page-status sel-page-status-error" ]
@@ -71,17 +76,38 @@ view config =
 
                   else
                     Html.div [ Attr.class "pm-list" ]
-                        (List.map (viewRow config) config.presets)
+                        (List.concatMap (viewRow config) config.presets)
                 ]
         ]
 
 
-viewRow : { a | renaming : Maybe String, renameInput : String, busy : Bool, confirmDelete : Maybe String, onSetActive : String -> msg, onRenameStart : String -> msg, onRenameInput : String -> msg, onRenameSave : String -> msg, onRenameCancel : msg, onDelete : String -> msg, onDeleteConfirm : String -> msg, onDeleteCancel : msg } -> PresetInfo -> Html msg
+viewRow :
+    { a
+        | renaming : Maybe String
+        , renameInput : String
+        , editing : Maybe String
+        , busy : Bool
+        , confirmDelete : Maybe String
+        , onSetActive : String -> msg
+        , onRenameStart : String -> msg
+        , onRenameInput : String -> msg
+        , onRenameSave : String -> msg
+        , onRenameCancel : msg
+        , onToggleEdit : String -> msg
+        , onEditModels : String -> msg
+        , onEditMcp : String -> msg
+        , onEditSettings : String -> msg
+        , onDelete : String -> msg
+        , onDeleteConfirm : String -> msg
+        , onDeleteCancel : msg
+    }
+    -> PresetInfo
+    -> List (Html msg)
 viewRow config p =
     case config.confirmDelete of
         Just name ->
             if name == p.name then
-                Html.div [ Attr.class "pm-row pm-row-confirm" ]
+                [ Html.div [ Attr.class "pm-row pm-row-confirm" ]
                     [ Html.span [ Attr.class "pm-name" ] [ Html.text p.name ]
                     , Html.span [ Attr.class "pm-confirm-text" ] [ Html.text "Delete this preset?" ]
                     , Html.button
@@ -97,9 +123,10 @@ viewRow config p =
                         ]
                         [ Html.text "Cancel" ]
                     ]
+                ]
 
             else
-                Html.div [ Attr.class "pm-row" ]
+                [ Html.div [ Attr.class "pm-row" ]
                     [ Html.span [ Attr.class "pm-name" ] [ Html.text p.name ]
                     , Html.button
                         [ Attr.class "pm-btn"
@@ -108,12 +135,13 @@ viewRow config p =
                         ]
                         [ Html.text "Delete" ]
                     ]
+                ]
 
         Nothing ->
             case config.renaming of
                 Just name ->
                     if name == p.name then
-                        Html.div [ Attr.class "pm-row pm-row-renaming" ]
+                        [ Html.div [ Attr.class "pm-row pm-row-renaming" ]
                             [ Html.input
                                 [ Attr.class "me-field-input"
                                 , Attr.type_ "text"
@@ -135,9 +163,10 @@ viewRow config p =
                                 ]
                                 [ Html.text "Cancel" ]
                             ]
+                        ]
 
                     else
-                        Html.div [ Attr.class "pm-row" ]
+                        [ Html.div [ Attr.class "pm-row" ]
                             [ Html.span [ Attr.class "pm-name" ] [ Html.text p.name ]
                             , Html.button
                                 [ Attr.class "pm-btn"
@@ -146,31 +175,74 @@ viewRow config p =
                                 ]
                                 [ Html.text "Rename" ]
                             ]
+                        ]
 
                 Nothing ->
-                    Html.div
-                        [ Attr.class ("pm-row" ++ (if p.isActive then " pm-row-active" else "")) ]
-                        [ Html.span [ Attr.class "pm-name" ] [ Html.text p.name ]
-                        , if p.isActive then
-                            Html.span [ Attr.class "pm-badge" ] [ Html.text "Active" ]
+                    let
+                        isEditing =
+                            config.editing == Just p.name
 
-                          else
-                            Html.button
-                                [ Attr.class "pm-btn pm-btn-primary"
-                                , Attr.disabled config.busy
-                                , Ev.onClick (config.onSetActive p.name)
+                        mainRow =
+                            Html.div
+                                [ Attr.class ("pm-row" ++ (if p.isActive then " pm-row-active" else "")) ]
+                                [ Html.span [ Attr.class "pm-name" ] [ Html.text p.name ]
+                                , if p.isActive then
+                                    Html.span [ Attr.class "pm-badge" ] [ Html.text "Active" ]
+
+                                  else
+                                    Html.button
+                                        [ Attr.class "pm-btn pm-btn-primary"
+                                        , Attr.disabled config.busy
+                                        , Ev.onClick (config.onSetActive p.name)
+                                        ]
+                                        [ Html.text "Use" ]
+                                , Html.button
+                                    [ Attr.class "pm-btn"
+                                    , Attr.disabled config.busy
+                                    , Ev.onClick (config.onToggleEdit p.name)
+                                    ]
+                                    [ Html.text (if isEditing then "Done" else "Edit") ]
+                                , Html.button
+                                    [ Attr.class "pm-btn"
+                                    , Attr.disabled config.busy
+                                    , Ev.onClick (config.onRenameStart p.name)
+                                    ]
+                                    [ Html.text "Rename" ]
+                                , Html.button
+                                    [ Attr.class "pm-btn pm-btn-danger"
+                                    , Attr.disabled config.busy
+                                    , Ev.onClick (config.onDelete p.name)
+                                    ]
+                                    [ Html.text "Delete" ]
                                 ]
-                                [ Html.text "Use" ]
-                        , Html.button
-                            [ Attr.class "pm-btn"
-                            , Attr.disabled config.busy
-                            , Ev.onClick (config.onRenameStart p.name)
-                            ]
-                            [ Html.text "Rename" ]
-                        , Html.button
-                            [ Attr.class "pm-btn pm-btn-danger"
-                            , Attr.disabled config.busy
-                            , Ev.onClick (config.onDelete p.name)
-                            ]
-                            [ Html.text "Delete" ]
-                        ]
+
+                        editRow =
+                            if isEditing then
+                                [ Html.div [ Attr.class "pm-edit-row" ]
+                                    [ Html.span [ Attr.class "pm-edit-label" ]
+                                        [ Html.text ("Edit " ++ p.name ++ ":") ]
+                                    , Html.button
+                                        [ Attr.class "pm-btn pm-btn-primary"
+                                        , Attr.disabled config.busy
+                                        , Ev.onClick (config.onEditModels p.name)
+                                        ]
+                                        [ Html.text "Models" ]
+                                    , Html.button
+                                        [ Attr.class "pm-btn pm-btn-primary"
+                                        , Attr.disabled config.busy
+                                        , Ev.onClick (config.onEditMcp p.name)
+                                        ]
+                                        [ Html.text "MCP Servers" ]
+                                    , Html.button
+                                        [ Attr.class "pm-btn pm-btn-primary"
+                                        , Attr.disabled config.busy
+                                        , Ev.onClick (config.onEditSettings p.name)
+                                        ]
+                                        [ Html.text "Settings" ]
+                                    ]
+                                ]
+
+                            else
+                                []
+                    in
+                    mainRow :: editRow

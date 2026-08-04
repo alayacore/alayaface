@@ -170,18 +170,18 @@ fn read_models_from_temp(
     Ok(models)
 }
 
-/// List the default model list from the active preset's model.conf.
+/// List the model list from a preset's model.conf (`preset` empty = active).
 /// Always reads the config directly via a temporary alayacore process
 /// (never the session cache), so it reflects what new sessions will load.
 #[tauri::command]
-pub async fn list_default_models(binary_path: String) -> Result<Vec<serde_json::Value>, String> {
-    let (config_dir, _) = dirs::ensure()?;
+pub async fn list_default_models(binary_path: String, preset: String) -> Result<Vec<serde_json::Value>, String> {
+    let config_dir = dirs::resolve_config_dir(&preset)?;
     let config_path = config_dir.to_string_lossy().to_string();
     let bin = resolve_binary(&binary_path);
     read_models_from_temp(&bin, &config_path)
 }
 
-/// Replace the default model list in the active preset's model.conf.
+/// Replace the model list in a preset's model.conf (`preset` empty = active).
 /// Spawns a temporary alayacore with that config dir and sends
 /// model_sync, waiting for the CO result. Validation, key-value
 /// serialization and persistence are all performed by alayacore. The
@@ -190,9 +190,10 @@ pub async fn list_default_models(binary_path: String) -> Result<Vec<serde_json::
 pub async fn sync_default_models(
     binary_path: String,
     config: String,
+    preset: String,
     model_cache: State<'_, ModelCache>,
 ) -> Result<serde_json::Value, String> {
-    let (config_dir, _) = dirs::ensure()?;
+    let config_dir = dirs::resolve_config_dir(&preset)?;
     let config_path = config_dir.to_string_lossy().to_string();
     let bin = resolve_binary(&binary_path);
 

@@ -84,16 +84,16 @@ port sendPrompt : { sessionId : String, text : String, media : List E.Value } ->
 port cancelTask : { sessionId : String } -> Cmd msg
 port setModel : { sessionId : String, modelId : Int } -> Cmd msg
 port modelSync : { sessionId : String, config : String } -> Cmd msg
-port listDefaultModels : {} -> Cmd msg
-port syncDefaultModels : { config : String } -> Cmd msg
+port listDefaultModels : { preset : String } -> Cmd msg
+port syncDefaultModels : { preset : String, config : String } -> Cmd msg
 port onDefaultModelsList : (E.Value -> msg) -> Sub msg
 port onDefaultModelsSyncResult : (E.Value -> msg) -> Sub msg
-port listDefaultMcp : {} -> Cmd msg
-port syncDefaultMcp : { config : String } -> Cmd msg
+port listDefaultMcp : { preset : String } -> Cmd msg
+port syncDefaultMcp : { preset : String, config : String } -> Cmd msg
 port onDefaultMcpList : (E.Value -> msg) -> Sub msg
 port onDefaultMcpSyncResult : (E.Value -> msg) -> Sub msg
-port listGlobalSettings : {} -> Cmd msg
-port syncGlobalSettings : { toolConfirm : String } -> Cmd msg
+port listGlobalSettings : { preset : String } -> Cmd msg
+port syncGlobalSettings : { preset : String, toolConfirm : String } -> Cmd msg
 port onGlobalSettingsList : (E.Value -> msg) -> Sub msg
 port onGlobalSettingsSyncResult : (E.Value -> msg) -> Sub msg
 port listPresets : {} -> Cmd msg

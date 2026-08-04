@@ -17,19 +17,20 @@ pub struct GlobalSettings {
     pub tool_confirm: String,
 }
 
-fn settings_path() -> Result<std::path::PathBuf, String> {
-    let (config_dir, _) = crate::dirs::ensure()?;
-    Ok(config_dir.join("settings.conf"))
-}
-
-/// Read global settings; a missing/empty file yields defaults.
-pub fn read_global_settings() -> Result<GlobalSettings, String> {
-    let path = settings_path()?;
+/// Read settings from a specific config dir; a missing/empty file yields defaults.
+fn read_settings_from(config_dir: &std::path::Path) -> Result<GlobalSettings, String> {
+    let path = config_dir.join("settings.conf");
     match std::fs::read_to_string(&path) {
         Ok(text) if !text.trim().is_empty() => serde_json::from_str(&text)
             .map_err(|e| format!("Failed to parse settings.conf: {e}")),
         _ => Ok(GlobalSettings::default()),
     }
+}
+
+/// Read global settings (active preset); a missing/empty file yields defaults.
+pub fn read_global_settings() -> Result<GlobalSettings, String> {
+    let (config_dir, _) = crate::dirs::ensure()?;
+    read_settings_from(&config_dir)
 }
 
 /// Normalize a comma-separated tool list: trim each id, drop empties,
@@ -59,18 +60,20 @@ pub fn effective_tool_confirm() -> Result<String, String> {
     normalize_tool_confirm(&s.tool_confirm)
 }
 
-/// Read current global settings (tool-confirm normalized).
+/// Read a preset's settings (tool-confirm normalized). `preset` empty = active.
 #[tauri::command]
-pub async fn get_global_settings() -> Result<serde_json::Value, String> {
-    let s = read_global_settings()?;
+pub async fn get_global_settings(preset: String) -> Result<serde_json::Value, String> {
+    let config_dir = crate::dirs::resolve_config_dir(&preset)?;
+    let s = read_settings_from(&config_dir)?;
     let normalized = normalize_tool_confirm(&s.tool_confirm)?;
     Ok(serde_json::json!({ "tool_confirm": normalized }))
 }
 
-/// Replace global settings. Accepts `{"tool_confirm": "id1,id2"}`;
-/// writes atomically (temp file + rename) like sync_default_mcp.
+/// Replace a preset's settings (`preset` empty = active). Accepts
+/// `{"tool_confirm": "id1,id2"}`; writes atomically (temp file + rename)
+/// like sync_default_mcp.
 #[tauri::command]
-pub async fn sync_global_settings(config: String) -> Result<(), String> {
+pub async fn sync_global_settings(config: String, preset: String) -> Result<(), String> {
     let value: serde_json::Value = serde_json::from_str(&config)
         .map_err(|e| format!("Invalid settings JSON: {e}"))?;
     let raw = value.get("tool_confirm").and_then(|v| v.as_str()).unwrap_or("");
@@ -79,7 +82,7 @@ pub async fn sync_global_settings(config: String) -> Result<(), String> {
         tool_confirm: normalized,
     };
 
-    let (config_dir, _) = crate::dirs::ensure()?;
+    let config_dir = crate::dirs::resolve_config_dir(&preset)?;
     let path = config_dir.join("settings.conf");
     let tmp = config_dir.join("settings.conf.tmp");
     let text = serde_json::to_string_pretty(&settings)
@@ -125,6 +128,7 @@ mod tests {
             let rt = tokio::runtime::Runtime::new().unwrap();
             let ok = rt.block_on(sync_global_settings(
                 r#"{"tool_confirm":"execute_command, search_files "}"#.to_string(),
+                "".to_string(),
             ));
             assert!(ok.is_ok());
             let settings = read_global_settings().unwrap();
@@ -132,7 +136,7 @@ mod tests {
 
             // Invalid input must be rejected and must not clobber the file
             assert!(rt
-                .block_on(sync_global_settings(r#"{"tool_confirm":"a a"}"#.to_string()))
+                .block_on(sync_global_settings(r#"{"tool_confirm":"a a"}"#.to_string(), "".to_string()))
                 .is_err());
             let settings = read_global_settings().unwrap();
             assert_eq!(settings.tool_confirm, "execute_command,search_files");

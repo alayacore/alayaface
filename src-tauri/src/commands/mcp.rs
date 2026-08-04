@@ -306,12 +306,12 @@ fn write_mcp_conf(servers: &[serde_json::Value]) -> String {
     out
 }
 
-/// List the default (global) MCP server list from the active preset's
-/// mcp.conf. A missing mcp.conf is treated as an empty server list (first
+/// List the MCP server list from a preset's mcp.conf (`preset` empty =
+/// active). A missing mcp.conf is treated as an empty server list (first
 /// run), not an error.
 #[tauri::command]
-pub async fn list_default_mcp() -> Result<Vec<serde_json::Value>, String> {
-    let (config_dir, _) = dirs::ensure()?;
+pub async fn list_default_mcp(preset: String) -> Result<Vec<serde_json::Value>, String> {
+    let config_dir = dirs::resolve_config_dir(&preset)?;
     let path = config_dir.join("mcp.conf");
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,
@@ -326,12 +326,12 @@ pub async fn list_default_mcp() -> Result<Vec<serde_json::Value>, String> {
     Ok(servers)
 }
 
-/// Replace the default (global) MCP server list in the active preset's
-/// mcp.conf. Validates per server kind: names must be unique; http servers
+/// Replace the MCP server list in a preset's mcp.conf (`preset` empty =
+/// active). Validates per server kind: names must be unique; http servers
 /// need a url and auth fields per auth-type; stdio servers need a command
 /// and args/env as JSON. Writes atomically (temp file + rename).
 #[tauri::command]
-pub async fn sync_default_mcp(config: String) -> Result<(), String> {
+pub async fn sync_default_mcp(config: String, preset: String) -> Result<(), String> {
     let servers: Vec<serde_json::Value> = serde_json::from_str(&config)
         .map_err(|e| format!("Invalid config JSON: {e}"))?;
 
@@ -387,7 +387,7 @@ pub async fn sync_default_mcp(config: String) -> Result<(), String> {
     }
 
     let text = write_mcp_conf(&servers);
-    let (config_dir, _) = dirs::ensure()?;
+    let config_dir = dirs::resolve_config_dir(&preset)?;
     let path = config_dir.join("mcp.conf");
     let tmp = config_dir.join("mcp.conf.tmp");
     std::fs::write(&tmp, &text).map_err(|e| format!("Failed to write mcp.conf: {e}"))?;
@@ -523,13 +523,13 @@ env: {"RUST_LOG": "info"}
         crate::dirs::isolated_home(|| {
             // A missing mcp.conf must be an empty list, not an error.
             let rt = tokio::runtime::Runtime::new().unwrap();
-            assert_eq!(rt.block_on(list_default_mcp()).unwrap(), Vec::<serde_json::Value>::new());
+            assert_eq!(rt.block_on(list_default_mcp("".to_string())).unwrap(), Vec::<serde_json::Value>::new());
         });
     }
 
     /// Run sync_default_mcp inside the caller's isolated HOME.
     fn sync_isolated(config: &str) -> Result<(), String> {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(sync_default_mcp(config.to_string()))
+        rt.block_on(sync_default_mcp(config.to_string(), "".to_string()))
     }
 }

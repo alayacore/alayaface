@@ -88,6 +88,24 @@ pub fn active_config_dir() -> Result<PathBuf, String> {
     Ok(preset_dir(&read_active_preset()?))
 }
 
+/// Resolve the config dir for a preset name. Empty/whitespace means the
+/// active preset. Errors for unknown presets or invalid names.
+pub fn resolve_config_dir(preset: &str) -> Result<PathBuf, String> {
+    if preset.trim().is_empty() {
+        let (config_dir, _) = ensure()?;
+        return Ok(config_dir);
+    }
+    let name = preset.trim().to_string();
+    if !valid_preset_name(&name) {
+        return Err(format!("Invalid preset name: {name:?}"));
+    }
+    let dir = preset_dir(&name);
+    if !dir.exists() {
+        return Err(format!("Preset not found: {name}"));
+    }
+    Ok(dir)
+}
+
 /// List preset names (sorted). Missing presets root yields an empty list.
 pub fn list_preset_names() -> Result<Vec<String>, String> {
     let presets = presets_root();

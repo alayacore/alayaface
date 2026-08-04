@@ -61,8 +61,8 @@
       });
     });
 
-    on("listDefaultModels", function () {
-      invoke("list_default_models", { binaryPath: "" })
+    on("listDefaultModels", function (data) {
+      invoke("list_default_models", { binaryPath: "", preset: (data && data.preset) || "" })
         .then(function (models) {
           app.ports.onDefaultModelsList.send({ ok: true, models: models, error: "" });
         })
@@ -74,7 +74,9 @@
     });
 
     on("syncDefaultModels", function (data) {
-      invoke("sync_default_models", { binaryPath: "", config: data.config })
+      invoke("sync_default_models", {
+        binaryPath: "", config: data.config, preset: (data && data.preset) || "",
+      })
         .then(function () {
           app.ports.onDefaultModelsSyncResult.send({ ok: true, error: "" });
         })
@@ -85,8 +87,8 @@
         });
     });
 
-    on("listDefaultMcp", function () {
-      invoke("list_default_mcp")
+    on("listDefaultMcp", function (data) {
+      invoke("list_default_mcp", { preset: (data && data.preset) || "" })
         .then(function (servers) {
           app.ports.onDefaultMcpList.send({ ok: true, servers: servers, error: "" });
         })
@@ -98,7 +100,9 @@
     });
 
     on("syncDefaultMcp", function (data) {
-      invoke("sync_default_mcp", { config: data.config })
+      invoke("sync_default_mcp", {
+        config: data.config, preset: (data && data.preset) || "",
+      })
         .then(function () {
           app.ports.onDefaultMcpSyncResult.send({ ok: true, error: "" });
         })
@@ -109,8 +113,8 @@
         });
     });
 
-    on("listGlobalSettings", function () {
-      invoke("get_global_settings")
+    on("listGlobalSettings", function (data) {
+      invoke("get_global_settings", { preset: (data && data.preset) || "" })
         .then(function (res) {
           app.ports.onGlobalSettingsList.send({
             ok: true, tool_confirm: (res && res.tool_confirm) || "", error: "",
@@ -126,6 +130,7 @@
     on("syncGlobalSettings", function (data) {
       invoke("sync_global_settings", {
         config: JSON.stringify({ tool_confirm: data.toolConfirm || "" }),
+        preset: (data && data.preset) || "",
       })
         .then(function () {
           app.ports.onGlobalSettingsSyncResult.send({ ok: true, error: "" });

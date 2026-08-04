@@ -2150,6 +2150,32 @@ body {
 
 .pm-row-renaming .me-field-input { flex: 1; }
 
+.pm-edit-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px 8px 10px;
+  margin-top: -2px;
+  border: 1px solid #333;
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+  background: rgba(255,255,255,0.02);
+}
+
+.pm-edit-label {
+  flex: 1;
+  font-size: 0.75rem;
+  color: #888;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-color-scheme: light) {
+  .pm-edit-row { border-color: #d8d8e0; background: rgba(0,0,0,0.02); }
+  .pm-edit-label { color: #666; }
+}
+
 .pm-confirm-text {
   font-size: 0.75rem;
   color: #f87171;
