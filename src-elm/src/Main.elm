@@ -1974,7 +1974,6 @@ update msg model =
                         , page = ModelSelLoading
                         , preset = preset
                     }
-                , presetManager = emptyPresetManager
                 , showGlobalMenu = False
               }
             , Ports.listDefaultModels { preset = preset }
@@ -2333,7 +2332,6 @@ update msg model =
                         , page = ModelSelLoading
                         , preset = preset
                     }
-                , presetManager = emptyPresetManager
                 , showGlobalMenu = False
               }
             , Ports.listDefaultMcp { preset = preset }
@@ -2697,7 +2695,6 @@ update msg model =
                         , loading = True
                         , preset = preset
                     }
-                , presetManager = emptyPresetManager
                 , showGlobalMenu = False
               }
             , Ports.listGlobalSettings { preset = preset }
@@ -4100,10 +4097,10 @@ view model =
         , viewGlobalMenu model
         , viewContextMenu model
         , viewSessionManagerOverlay model
+        , viewPresetManagerOverlay model
         , viewDefaultModelsEditorOverlay model
         , viewMcpEditorOverlay model
         , viewSettingsEditorOverlay model
-        , viewPresetManagerOverlay model
         ]
 
 
