@@ -4,8 +4,8 @@
 //! starts a local callback server, fills the auth URL with redirect URI and state,
 //! opens the browser (or copies URL), and processes the callback.
 //!
-//! Also manages the default (global) MCP server list in
-//! `~/.alayaface/config/mcp.conf` (key-value blocks separated by `---`),
+//! Also manages the active preset's MCP server list in
+//! `~/.alayaface/presets/<name>/mcp.conf` (key-value blocks separated by `---`),
 //! mirroring the model editor pattern. No alayacore RPC exists for MCP
 //! config, so the file is read/written directly.
 
@@ -174,10 +174,11 @@ fn send_mcp_result(
 
 // ─── Default (global) MCP server list ────────────────────────────────
 //
-// The global config at ~/.alayaface/config/mcp.conf lists MCP servers in
-// key-value block format (blocks separated by `---`). These commands
-// read/replace that file directly. Comments (`#`) and disabled blocks are
-// dropped when the file is rewritten, mirroring the model editor behavior.
+// The active preset's config (~/.alayaface/presets/<name>/mcp.conf) lists
+// MCP servers in key-value block format (blocks separated by `---`). These
+// commands read/replace that file directly. Comments (`#`) and disabled
+// blocks are dropped when the file is rewritten, mirroring the model editor
+// behavior.
 
 /// Split a `key: value` line. Skips blank lines and `#` comments.
 fn split_kv_line(line: &str) -> Option<(String, String)> {
@@ -305,8 +306,9 @@ fn write_mcp_conf(servers: &[serde_json::Value]) -> String {
     out
 }
 
-/// List the default (global) MCP server list from ~/.alayaface/config/mcp.conf.
-/// A missing mcp.conf is treated as an empty server list (first run), not an error.
+/// List the default (global) MCP server list from the active preset's
+/// mcp.conf. A missing mcp.conf is treated as an empty server list (first
+/// run), not an error.
 #[tauri::command]
 pub async fn list_default_mcp() -> Result<Vec<serde_json::Value>, String> {
     let (config_dir, _) = dirs::ensure()?;
@@ -324,10 +326,10 @@ pub async fn list_default_mcp() -> Result<Vec<serde_json::Value>, String> {
     Ok(servers)
 }
 
-/// Replace the default (global) MCP server list in ~/.alayaface/config/mcp.conf.
-/// Validates per server kind: names must be unique; http servers need a url and
-/// auth fields per auth-type; stdio servers need a command and args/env as JSON.
-/// Writes atomically (temp file + rename).
+/// Replace the default (global) MCP server list in the active preset's
+/// mcp.conf. Validates per server kind: names must be unique; http servers
+/// need a url and auth fields per auth-type; stdio servers need a command
+/// and args/env as JSON. Writes atomically (temp file + rename).
 #[tauri::command]
 pub async fn sync_default_mcp(config: String) -> Result<(), String> {
     let servers: Vec<serde_json::Value> = serde_json::from_str(&config)
@@ -482,80 +484,52 @@ env: {"RUST_LOG": "info"}
 
     #[test]
     fn sync_validates() {
-        let _guard = HOME_LOCK.lock().unwrap();
-        // Invalid args JSON must be rejected (stdio server)
-        let bad = r#"[{"server":"x","command":"bin","args":"not json"}]"#;
-        assert!(sync_isolated(bad).is_err());
-        // Duplicate names must be rejected
-        let dup = r#"[{"server":"x"},{"server":"x"}]"#;
-        assert!(sync_isolated(dup).is_err());
-        // stdio server without a command must be rejected
-        let no_cmd = r#"[{"server":"x","command":""}]"#;
-        assert!(sync_isolated(no_cmd).is_err());
-        // http server with authorization_code but no client id/secret must be rejected
-        let http_no_oauth = r#"[{"server":"x","url":"https://example.com/mcp","auth_type":"authorization_code"}]"#;
-        assert!(sync_isolated(http_no_oauth).is_err());
-        // http server with static auth but no token must be rejected
-        let http_no_token = r#"[{"server":"x","url":"https://example.com/mcp","auth_type":"static"}]"#;
-        assert!(sync_isolated(http_no_token).is_err());
+        crate::dirs::isolated_home(|| {
+            // Invalid args JSON must be rejected (stdio server)
+            let bad = r#"[{"server":"x","command":"bin","args":"not json"}]"#;
+            assert!(sync_isolated(bad).is_err());
+            // Duplicate names must be rejected
+            let dup = r#"[{"server":"x"},{"server":"x"}]"#;
+            assert!(sync_isolated(dup).is_err());
+            // stdio server without a command must be rejected
+            let no_cmd = r#"[{"server":"x","command":""}]"#;
+            assert!(sync_isolated(no_cmd).is_err());
+            // http server with authorization_code but no client id/secret must be rejected
+            let http_no_oauth = r#"[{"server":"x","url":"https://example.com/mcp","auth_type":"authorization_code"}]"#;
+            assert!(sync_isolated(http_no_oauth).is_err());
+            // http server with static auth but no token must be rejected
+            let http_no_token = r#"[{"server":"x","url":"https://example.com/mcp","auth_type":"static"}]"#;
+            assert!(sync_isolated(http_no_token).is_err());
+        });
     }
 
     #[test]
     fn sync_accepts_empty_args_env() {
-        let _guard = HOME_LOCK.lock().unwrap();
-        // HTTP server: empty args/env strings must not be validated (not applicable)
-        let http = r#"[{"server":"exa","url":"https://mcp.exa.ai/mcp","args":"","env":""}]"#;
-        assert!(sync_isolated(http).is_ok());
-        // STDIO server: empty args/env are treated as unset and accepted
-        let stdio = r#"[{"server":"blah","command":"my-mcp","args":"","env":""}]"#;
-        assert!(sync_isolated(stdio).is_ok());
-        // STDIO server with valid JSON args/env accepted
-        let stdio_ok = r#"[{"server":"blah","command":"my-mcp","args":"[\"--foo\"]","env":"{\"RUST_LOG\":\"info\"}"}]"#;
-        assert!(sync_isolated(stdio_ok).is_ok());
+        crate::dirs::isolated_home(|| {
+            // HTTP server: empty args/env strings must not be validated (not applicable)
+            let http = r#"[{"server":"exa","url":"https://mcp.exa.ai/mcp","args":"","env":""}]"#;
+            assert!(sync_isolated(http).is_ok());
+            // STDIO server: empty args/env are treated as unset and accepted
+            let stdio = r#"[{"server":"blah","command":"my-mcp","args":"","env":""}]"#;
+            assert!(sync_isolated(stdio).is_ok());
+            // STDIO server with valid JSON args/env accepted
+            let stdio_ok = r#"[{"server":"blah","command":"my-mcp","args":"[\"--foo\"]","env":"{\"RUST_LOG\":\"info\"}"}]"#;
+            assert!(sync_isolated(stdio_ok).is_ok());
+        });
     }
 
-    #[tokio::test]
-    async fn list_default_mcp_missing_file_returns_empty() {
-        let _guard = HOME_LOCK.lock().unwrap();
-        // Isolate HOME so ~/.alayaface/config/mcp.conf does not exist yet.
-        let old_home = std::env::var_os("HOME");
-        let tmp = std::env::temp_dir().join(format!("alayaface-mcp-list-test-{}", std::process::id()));
-        std::env::set_var("HOME", &tmp);
-        let result = list_default_mcp().await;
-        match old_home {
-            Some(h) => std::env::set_var("HOME", h),
-            None => std::env::remove_var("HOME"),
-        }
-        let _ = std::fs::remove_dir_all(&tmp);
-        // A missing mcp.conf must be an empty list, not an error.
-        assert_eq!(result.unwrap(), Vec::<serde_json::Value>::new());
+    #[test]
+    fn list_default_mcp_missing_file_returns_empty() {
+        crate::dirs::isolated_home(|| {
+            // A missing mcp.conf must be an empty list, not an error.
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            assert_eq!(rt.block_on(list_default_mcp()).unwrap(), Vec::<serde_json::Value>::new());
+        });
     }
 
-    // ─── Helpers ────────────────────────────────────────────────────
-
-    /// Serializes tests that mutate the HOME env var so they don't
-    /// interfere with each other or the real ~/.alayaface config.
-    static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    /// Run sync_default_mcp with HOME pointed at an isolated temp dir,
-    /// so successful writes never touch the developer's real mcp.conf.
+    /// Run sync_default_mcp inside the caller's isolated HOME.
     fn sync_isolated(config: &str) -> Result<(), String> {
-        let old_home = std::env::var_os("HOME");
-        let tmp = std::env::temp_dir().join(format!(
-            "alayaface-mcp-sync-test-{}-{}",
-            std::process::id(),
-            SYNC_TEST_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-        ));
-        std::env::set_var("HOME", &tmp);
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let res = rt.block_on(sync_default_mcp(config.to_string()));
-        match old_home {
-            Some(h) => std::env::set_var("HOME", h),
-            None => std::env::remove_var("HOME"),
-        }
-        let _ = std::fs::remove_dir_all(&tmp);
-        res
+        rt.block_on(sync_default_mcp(config.to_string()))
     }
-
-    static SYNC_TEST_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 }

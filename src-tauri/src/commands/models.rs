@@ -106,11 +106,11 @@ pub async fn list_models(
 
 // ─── Default (global) model list ─────────────────────────────────────
 //
-// The global config at ~/.alayaface/config/model.conf is the template new
-// sessions are created from (each session gets its own copy). These commands
-// read/replace that file directly through a temporary alayacore process, so
-// validation and persistence behave exactly like session model_sync, but
-// without touching any running session.
+// The active preset's config (~/.alayaface/presets/<name>/model.conf) is the
+// template new sessions are created from (each session gets its own copy).
+// These commands read/replace that file directly through a temporary
+// alayacore process, so validation and persistence behave exactly like
+// session model_sync, but without touching any running session.
 
 /// Spawn a temporary alayacore process and collect its model list from the
 /// SM model_list message.
@@ -170,8 +170,8 @@ fn read_models_from_temp(
     Ok(models)
 }
 
-/// List the default (global) model list from ~/.alayaface/config/model.conf.
-/// Always reads the global config directly via a temporary alayacore process
+/// List the default model list from the active preset's model.conf.
+/// Always reads the config directly via a temporary alayacore process
 /// (never the session cache), so it reflects what new sessions will load.
 #[tauri::command]
 pub async fn list_default_models(binary_path: String) -> Result<Vec<serde_json::Value>, String> {
@@ -181,8 +181,8 @@ pub async fn list_default_models(binary_path: String) -> Result<Vec<serde_json::
     read_models_from_temp(&bin, &config_path)
 }
 
-/// Replace the default (global) model list in ~/.alayaface/config/model.conf.
-/// Spawns a temporary alayacore with the global config dir and sends
+/// Replace the default model list in the active preset's model.conf.
+/// Spawns a temporary alayacore with that config dir and sends
 /// model_sync, waiting for the CO result. Validation, key-value
 /// serialization and persistence are all performed by alayacore. The
 /// refreshed model list is cached for later list_models calls.

@@ -1,8 +1,9 @@
 //! Global AlayaFace settings.
 //!
-//! Stored as JSON at `~/.alayaface/config/settings.conf`. This file is
-//! AlayaFace-owned — alayacore does not read it (unlike model.conf /
-//! runtime.conf which are copied into each session dir).
+//! Stored as JSON at `~/.alayaface/presets/<name>/settings.conf` (the active
+//! preset's config dir). This file is AlayaFace-owned — alayacore does not
+//! read it (unlike model.conf / runtime.conf which are copied into each
+//! session dir), and it is not copied into sessions.
 
 use std::collections::HashSet;
 
@@ -112,56 +113,29 @@ mod tests {
 
     #[test]
     fn missing_file_yields_defaults() {
-        let _guard = HOME_LOCK.lock().unwrap();
-        let old_home = std::env::var_os("HOME");
-        let tmp = std::env::temp_dir().join(format!(
-            "alayaface-settings-test-{}-{}",
-            std::process::id(),
-            COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-        ));
-        std::env::set_var("HOME", &tmp);
-        let settings = read_global_settings().unwrap();
-        match old_home {
-            Some(h) => std::env::set_var("HOME", h),
-            None => std::env::remove_var("HOME"),
-        }
-        let _ = std::fs::remove_dir_all(&tmp);
-        assert_eq!(settings.tool_confirm, "");
+        crate::dirs::isolated_home(|| {
+            let settings = read_global_settings().unwrap();
+            assert_eq!(settings.tool_confirm, "");
+        });
     }
 
     #[test]
     fn sync_roundtrips() {
-        let _guard = HOME_LOCK.lock().unwrap();
-        let old_home = std::env::var_os("HOME");
-        let tmp = std::env::temp_dir().join(format!(
-            "alayaface-settings-test-{}-{}",
-            std::process::id(),
-            COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-        ));
-        std::env::set_var("HOME", &tmp);
+        crate::dirs::isolated_home(|| {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let ok = rt.block_on(sync_global_settings(
+                r#"{"tool_confirm":"execute_command, search_files "}"#.to_string(),
+            ));
+            assert!(ok.is_ok());
+            let settings = read_global_settings().unwrap();
+            assert_eq!(settings.tool_confirm, "execute_command,search_files");
 
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let ok = rt.block_on(sync_global_settings(
-            r#"{"tool_confirm":"execute_command, search_files "}"#.to_string(),
-        ));
-        assert!(ok.is_ok());
-        let settings = read_global_settings().unwrap();
-        assert_eq!(settings.tool_confirm, "execute_command,search_files");
-
-        // Invalid input must be rejected and must not clobber the file
-        assert!(rt
-            .block_on(sync_global_settings(r#"{"tool_confirm":"a a"}"#.to_string()))
-            .is_err());
-        let settings = read_global_settings().unwrap();
-        assert_eq!(settings.tool_confirm, "execute_command,search_files");
-
-        match old_home {
-            Some(h) => std::env::set_var("HOME", h),
-            None => std::env::remove_var("HOME"),
-        }
-        let _ = std::fs::remove_dir_all(&tmp);
+            // Invalid input must be rejected and must not clobber the file
+            assert!(rt
+                .block_on(sync_global_settings(r#"{"tool_confirm":"a a"}"#.to_string()))
+                .is_err());
+            let settings = read_global_settings().unwrap();
+            assert_eq!(settings.tool_confirm, "execute_command,search_files");
+        });
     }
-
-    static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 }

@@ -2098,6 +2098,107 @@ body {
   .me-cancel-btn:hover { border-color: #6366f1; color: #6366f1; }
 }
 
+/* ─── Presets ──────────────────────────────────────────────────────── */
+
+.pm-badge {
+  font-size: 0.72rem;
+  color: #a5b4fc;
+  padding: 3px 10px;
+  margin-bottom: 6px;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  border-radius: 4px;
+  background: rgba(99, 102, 241, 0.08);
+  align-self: flex-start;
+}
+
+.pm-new-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.pm-new-row .me-field-input { flex: 1; }
+
+.pm-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pm-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  border: 1px solid #333;
+  background: rgba(255,255,255,0.02);
+}
+.pm-row-active { border-color: rgba(74, 222, 128, 0.4); background: rgba(74, 222, 128, 0.06); }
+.pm-row-renaming, .pm-row-confirm { border-color: #6366f1; }
+.pm-row-confirm { border-color: rgba(248, 113, 113, 0.5); }
+
+.pm-name {
+  flex: 1;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #eee;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pm-row-renaming .me-field-input { flex: 1; }
+
+.pm-badge-active {
+  font-size: 0.68rem;
+  color: #4ade80;
+  border: 1px solid rgba(74, 222, 128, 0.4);
+  border-radius: 4px;
+  padding: 1px 8px;
+}
+
+.pm-confirm-text {
+  font-size: 0.75rem;
+  color: #f87171;
+}
+
+.pm-btn {
+  padding: 3px 10px;
+  border-radius: 4px;
+  border: 1px solid #555;
+  background: transparent;
+  color: #aaa;
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+.pm-btn:hover:not(:disabled) { border-color: #818cf8; color: #a5b4fc; }
+.pm-btn-primary {
+  border-color: #6366f1;
+  background: rgba(99, 102, 241, 0.15);
+  color: #a5b4fc;
+}
+.pm-btn-primary:hover:not(:disabled) { background: #6366f1; color: white; }
+.pm-btn-danger { border-color: rgba(248, 113, 113, 0.5); color: #f87171; }
+.pm-btn-danger:hover:not(:disabled) { background: rgba(248, 113, 113, 0.15); border-color: #f87171; color: #fca5a5; }
+.pm-btn:disabled { opacity: 0.5; cursor: default; }
+
+@media (prefers-color-scheme: light) {
+  .pm-badge { color: #4f46e5; border-color: rgba(99, 102, 241, 0.35); background: rgba(99, 102, 241, 0.06); }
+  .pm-row { border-color: #d8d8e0; background: rgba(0,0,0,0.02); }
+  .pm-row-active { border-color: rgba(22, 163, 74, 0.4); background: rgba(34, 197, 94, 0.07); }
+  .pm-name { color: #1a1a2e; }
+  .pm-badge-active { color: #16a34a; border-color: rgba(34, 197, 94, 0.5); }
+  .pm-btn { border-color: #c0c0cc; color: #555; }
+  .pm-btn:hover:not(:disabled) { border-color: #6366f1; color: #4f46e5; }
+  .pm-btn-primary { border-color: #6366f1; background: rgba(99, 102, 241, 0.08); color: #4f46e5; }
+  .pm-btn-primary:hover:not(:disabled) { background: #6366f1; color: white; }
+  .pm-btn-danger { border-color: rgba(239, 68, 68, 0.5); color: #dc2626; }
+  .pm-btn-danger:hover:not(:disabled) { background: rgba(239, 68, 68, 0.08); border-color: #dc2626; color: #dc2626; }
+}
+
 /* ─── Help Page ────────────────────────────────────────────────────── */
 
 .help-page {

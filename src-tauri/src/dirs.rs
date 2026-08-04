@@ -2,13 +2,17 @@
 //!
 //! Manages `~/.alayaface/` structure:
 //!   ~/.alayaface/
-//!     config/
-//!       model.conf
-//!       runtime.conf
-//!       themes/
+//!     active-preset        — name of the currently active preset
+//!     presets/
+//!       <name>/            — one config directory per preset
+//!         model.conf
+//!         runtime.conf
+//!         mcp.conf
+//!         settings.conf    — AlayaFace-owned (tool_confirm etc.); NOT copied into sessions
+//!         themes/
 //!     sessions/
 //!       <uuid>/
-//!         config/   (copy of template)
+//!         config/          — copy of the active preset's config (minus settings.conf)
 //!         session.alaya
 
 use std::path::PathBuf;
@@ -31,57 +35,174 @@ pub fn alayaface_dir() -> PathBuf {
     PathBuf::from(home).join(".alayaface")
 }
 
-/// Ensure `~/.alayaface/` exists with default configs.
-/// Returns `(config_dir, sessions_dir)`.
+/// Directory holding all presets (~/.alayaface/presets).
+pub fn presets_root() -> PathBuf {
+    alayaface_dir().join("presets")
+}
+
+/// File recording the active preset name (~/.alayaface/active-preset).
+pub fn active_preset_file() -> PathBuf {
+    alayaface_dir().join("active-preset")
+}
+
+/// A preset name is a short, filesystem-safe identifier.
+pub fn valid_preset_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// Absolute path of a preset's config directory.
+pub fn preset_dir(name: &str) -> PathBuf {
+    presets_root().join(name)
+}
+
+/// Read the active preset name. Errors if the marker is missing/invalid.
+pub fn read_active_preset() -> Result<String, String> {
+    let path = active_preset_file();
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read active preset: {e}"))?;
+    let name = text.trim().to_string();
+    if !valid_preset_name(&name) {
+        return Err(format!("Invalid active preset name: {name:?}"));
+    }
+    Ok(name)
+}
+
+/// Persist the active preset name (atomic: temp file + rename).
+pub fn write_active_preset(name: &str) -> Result<(), String> {
+    if !valid_preset_name(name) {
+        return Err(format!("Invalid preset name: {name:?}"));
+    }
+    let path = active_preset_file();
+    let tmp = alayaface_dir().join("active-preset.tmp");
+    std::fs::write(&tmp, name)
+        .map_err(|e| format!("Failed to write active preset: {e}"))?;
+    std::fs::rename(&tmp, &path)
+        .map_err(|e| format!("Failed to replace active preset: {e}"))?;
+    Ok(())
+}
+
+/// Config directory of the active preset.
+pub fn active_config_dir() -> Result<PathBuf, String> {
+    Ok(preset_dir(&read_active_preset()?))
+}
+
+/// List preset names (sorted). Missing presets root yields an empty list.
+pub fn list_preset_names() -> Result<Vec<String>, String> {
+    let presets = presets_root();
+    if !presets.exists() {
+        return Ok(Vec::new());
+    }
+    let mut names = Vec::new();
+    for entry in std::fs::read_dir(&presets)
+        .map_err(|e| format!("Cannot read presets dir: {e}"))?
+    {
+        let entry = entry.map_err(|e| format!("Read error: {e}"))?;
+        if entry.path().is_dir() {
+            if let Some(name) = entry.file_name().to_str() {
+                if valid_preset_name(name) {
+                    names.push(name.to_string());
+                }
+            }
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+/// Ensure `~/.alayaface/` exists with the preset structure.
+/// On first run, migrates the legacy `~/.alayaface/config` directory into
+/// the `Default` preset, or seeds defaults from `~/.alayacore`.
+/// Returns `(active_config_dir, sessions_dir)`.
 pub fn ensure() -> Result<(PathBuf, PathBuf), String> {
     let base = alayaface_dir();
-    let config = base.join("config");
+    let presets = presets_root();
     let sessions = base.join("sessions");
 
-    std::fs::create_dir_all(&config)
-        .map_err(|e| format!("Cannot create {:?}: {}", config, e))?;
+    let first_run = !presets.exists();
+
+    std::fs::create_dir_all(&presets)
+        .map_err(|e| format!("Cannot create {:?}: {}", presets, e))?;
     std::fs::create_dir_all(&sessions)
         .map_err(|e| format!("Cannot create {:?}: {}", sessions, e))?;
 
-    // First run: copy from ~/.alayacore/ or write defaults
-    let model_conf = config.join("model.conf");
-    if !model_conf.exists() {
-        let alayacore_dir = {
-            let home = std::env::var("HOME")
-                .or_else(|_| std::env::var("USERPROFILE"))
-                .unwrap_or_else(|_| ".".to_string());
-            PathBuf::from(home).join(".alayacore")
-        };
-
-        if alayacore_dir.exists() {
-            copy_from_alayacore(&alayacore_dir, &config)?;
+    if first_run {
+        // Migrate the single-config layout into a Default preset.
+        let default_dir = presets.join("Default");
+        let legacy = base.join("config");
+        if legacy.exists() {
+            std::fs::rename(&legacy, &default_dir)
+                .map_err(|e| format!("Cannot migrate legacy config: {e}"))?;
+            log::info!("[dirs] Migrated ~/.alayaface/config → presets/Default");
         } else {
-            write_defaults(&config)?;
+            create_preset_defaults(&default_dir)?;
         }
+        write_active_preset("Default")?;
+    } else if !active_preset_file().exists() {
+        // Presets exist but the active marker is missing: pick "Default"
+        // if present, otherwise the first preset (or seed a Default).
+        let mut names = list_preset_names()?;
+        let chosen = if names.contains(&"Default".to_string()) {
+            "Default".to_string()
+        } else if names.is_empty() {
+            create_preset_defaults(&presets.join("Default"))?;
+            names.push("Default".to_string());
+            "Default".to_string()
+        } else {
+            names[0].clone()
+        };
+        write_active_preset(&chosen)?;
     }
 
+    let active = read_active_preset()?;
+    let config = preset_dir(&active);
     Ok((config, sessions))
 }
 
-/// Create a session directory with config copy. The session.alaya file
-/// itself is created by alayacore when the session starts.
+/// Create a session directory with a copy of the active preset's config.
+/// The session.alaya file itself is created by alayacore when the session starts.
+/// settings.conf is AlayaFace-owned and intentionally NOT copied into sessions.
 pub fn create_session_dir(sessions_dir: &PathBuf, uuid: &str) -> Result<PathBuf, String> {
+    ensure()?; // guarantee presets exist + active marker set
     let session_dir = sessions_dir.join(uuid);
     let dst_config = session_dir.join("config");
+    let template = active_config_dir()?;
 
-    let template = sessions_dir
-        .parent()
-        .map(|p| p.join("config"))
-        .unwrap_or_else(|| alayaface_dir().join("config"));
-
-    copy_dir(&template, &dst_config)?;
+    copy_dir_excluding(&template, &dst_config, &["settings.conf"])?;
 
     Ok(session_dir)
 }
 
 // ─── Internal Helpers ────────────────────────────────────────────────
 
+/// Recursively copy a whole preset directory (including settings.conf) —
+/// used when cloning the active preset to create a new one.
+pub fn clone_preset_dir(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String> {
+    copy_dir(src, dst)
+}
+
+/// Seed a new preset's config from ~/.alayacore when available, else defaults.
+pub fn create_preset_defaults(dir: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(dir)
+        .map_err(|e| format!("Cannot create {:?}: {}", dir, e))?;
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+    let alayacore_dir = PathBuf::from(home).join(".alayacore");
+
+    if alayacore_dir.exists() {
+        copy_from_alayacore(&alayacore_dir, &dir.to_path_buf())?;
+    } else {
+        write_defaults(&dir.to_path_buf())?;
+    }
+    Ok(())
+}
+
 fn copy_from_alayacore(src: &PathBuf, dst: &PathBuf) -> Result<(), String> {
+    std::fs::create_dir_all(dst)
+        .map_err(|e| format!("Cannot create {:?}: {}", dst, e))?;
+
     let src_model = src.join("model.conf");
     if src_model.exists() {
         std::fs::copy(&src_model, dst.join("model.conf"))
@@ -121,19 +242,129 @@ fn write_defaults(config: &PathBuf) -> Result<(), String> {
     Ok(())
 }
 
-fn copy_dir(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String> {
+/// Recursively copy a directory, skipping any files whose names are in `exclude`.
+fn copy_dir_excluding(
+    src: &std::path::Path,
+    dst: &std::path::Path,
+    exclude: &[&str],
+) -> Result<(), String> {
     std::fs::create_dir_all(dst)
         .map_err(|e| format!("Cannot create {:?}: {}", dst, e))?;
     for entry in std::fs::read_dir(src).map_err(|e| format!("Cannot read {:?}: {}", src, e))? {
         let entry = entry.map_err(|e| format!("Read error: {}", e))?;
         let ty = entry.file_type().map_err(|e| format!("Stat error: {}", e))?;
         let name = entry.file_name();
+        let name_str = name.to_string_lossy().to_string();
+        if !ty.is_dir() && exclude.contains(&name_str.as_str()) {
+            continue;
+        }
         if ty.is_dir() {
-            copy_dir(&entry.path(), &dst.join(&name))?;
+            copy_dir_excluding(&entry.path(), &dst.join(&name), exclude)?;
         } else {
             std::fs::copy(&entry.path(), &dst.join(&name))
                 .map_err(|e| format!("Copy error: {}", e))?;
         }
     }
     Ok(())
+}
+
+/// Recursively copy a directory (everything).
+fn copy_dir(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String> {
+    copy_dir_excluding(src, dst, &[])
+}
+
+#[cfg(test)]
+pub(crate) static TEST_HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+static TEST_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Run a closure with HOME pointed at a fresh isolated temp dir, under a
+/// process-wide lock. All tests that mutate the HOME env var MUST go through
+/// this helper — HOME is process-global, so per-module locks are not enough.
+#[cfg(test)]
+pub(crate) fn isolated_home<F: FnOnce() -> R, R>(f: F) -> R {
+    let _guard = TEST_HOME_LOCK.lock().unwrap();
+    let old_home = std::env::var_os("HOME");
+    let tmp = std::env::temp_dir().join(format!(
+        "alayaface-test-{}-{}",
+        std::process::id(),
+        TEST_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    ));
+    std::env::set_var("HOME", &tmp);
+    let result = f();
+    match old_home {
+        Some(h) => std::env::set_var("HOME", h),
+        None => std::env::remove_var("HOME"),
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preset_name_validation() {
+        assert!(valid_preset_name("Default"));
+        assert!(valid_preset_name("work-a_b2"));
+        assert!(!valid_preset_name(""));
+        assert!(!valid_preset_name("a/b"));
+        assert!(!valid_preset_name(".."));
+        assert!(!valid_preset_name("with space"));
+        assert!(!valid_preset_name(&"x".repeat(65)));
+    }
+
+    #[test]
+    fn ensure_migrates_legacy_config() {
+        isolated_home(|| {
+            // Simulate the legacy single-config layout.
+            let legacy = alayaface_dir().join("config");
+            std::fs::create_dir_all(&legacy).unwrap();
+            std::fs::write(legacy.join("model.conf"), "legacy-model").unwrap();
+            std::fs::write(legacy.join("mcp.conf"), "legacy-mcp").unwrap();
+            std::fs::write(legacy.join("settings.conf"), "legacy-settings").unwrap();
+
+            let (config, sessions) = ensure().unwrap();
+
+            // Legacy config moved into presets/Default.
+            assert_eq!(config, presets_root().join("Default"));
+            assert!(config.join("model.conf").exists());
+            assert!(config.join("mcp.conf").exists());
+            assert!(config.join("settings.conf").exists());
+            assert!(!legacy.exists());
+            assert!(sessions.exists());
+            assert_eq!(read_active_preset().unwrap(), "Default");
+            // The legacy settings.conf is now the active preset's settings.conf.
+            assert_eq!(
+                std::fs::read_to_string(config.join("settings.conf")).unwrap(),
+                "legacy-settings"
+            );
+        });
+    }
+
+    #[test]
+    fn ensure_seeds_defaults_without_legacy() {
+        isolated_home(|| {
+            let (config, _) = ensure().unwrap();
+            assert!(config.join("model.conf").exists());
+            assert!(config.join("runtime.conf").exists());
+            assert!(config.join("themes").is_dir());
+            assert_eq!(read_active_preset().unwrap(), "Default");
+        });
+    }
+
+    #[test]
+    fn session_dir_copy_excludes_settings_conf() {
+        isolated_home(|| {
+            let (config, sessions) = ensure().unwrap();
+            // Put a settings.conf in the active preset; it must not be copied.
+            std::fs::write(config.join("settings.conf"), "{\"tool_confirm\":\"x\"}").unwrap();
+
+            let session_dir = create_session_dir(&sessions, "abc").unwrap();
+            assert!(session_dir.join("config").join("model.conf").exists());
+            assert!(!session_dir.join("config").join("settings.conf").exists());
+        });
+    }
 }

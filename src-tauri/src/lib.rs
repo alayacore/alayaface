@@ -73,6 +73,11 @@ pub fn run() {
             commands::fill_mcp_auth_url,
             commands::list_default_mcp,
             commands::sync_default_mcp,
+            commands::list_presets,
+            commands::create_preset,
+            commands::rename_preset,
+            commands::delete_preset,
+            commands::set_active_preset,
             commands::get_global_settings,
             commands::sync_global_settings,
         ])

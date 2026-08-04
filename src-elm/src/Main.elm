@@ -19,6 +19,7 @@ import Session.Protocol as P
 import Session.Handlers as H
 import Overlay.ConfirmTool
 import Overlay.Settings
+import Overlay.PresetManager
 import Overlay.McpInit
 import Overlay.FilePicker
 import Overlay.ModelSelector
@@ -154,6 +155,37 @@ emptySettingsEditor =
     }
 
 
+type alias PresetInfo =
+    { name : String
+    , isActive : Bool
+    }
+
+
+type alias PresetManager =
+    { show : Bool
+    , loading : Bool
+    , busy : Bool
+    , newName : String
+    , renaming : Maybe String
+    , renameInput : String
+    , confirmDelete : Maybe String
+    , error : Maybe String
+    }
+
+
+emptyPresetManager : PresetManager
+emptyPresetManager =
+    { show = False
+    , loading = False
+    , busy = False
+    , newName = ""
+    , renaming = Nothing
+    , renameInput = ""
+    , confirmDelete = Nothing
+    , error = Nothing
+    }
+
+
 -- Constants
 
 defaultWinW : Int
@@ -223,6 +255,9 @@ type alias Model =
     , defaultModelsEditor : DefaultModelsEditor
     , mcpEditor : McpEditor
     , settingsEditor : SettingsEditor
+    , presets : List PresetInfo
+    , activePreset : String
+    , presetManager : PresetManager
     , ctxVisible : Bool
     , ctxX : Int
     , ctxY : Int
@@ -259,6 +294,9 @@ init _ =
       , defaultModelsEditor = emptyDefaultModelsEditor
       , mcpEditor = emptyMcpEditor
       , settingsEditor = emptySettingsEditor
+      , presets = []
+      , activePreset = ""
+      , presetManager = emptyPresetManager
       , ctxVisible = False
       , ctxX = 0
       , ctxY = 0
@@ -269,6 +307,7 @@ init _ =
       }
     , Cmd.batch
         [ Ports.createSession { toolConfirm = Nothing }
+        , Ports.listPresets {}
         , Task.attempt GotContainerSize (Dom.getElement "main-content")
         ]
     )
@@ -431,6 +470,21 @@ type Msg
     | SettingsSave
     | SettingsListResult E.Value
     | SettingsSyncResult E.Value
+      -- Presets
+    | OpenPresetManager
+    | ClosePresetManager
+    | SetPresetNewName String
+    | PresetCreate
+    | PresetSetActive String
+    | PresetRenameStart String
+    | SetPresetRenameInput String
+    | PresetRenameSave String
+    | PresetRenameCancel
+    | PresetDelete String
+    | PresetConfirmDelete String
+    | PresetCancelDelete
+    | PresetsListResult E.Value
+    | PresetActionResult E.Value
       -- Help Window
     | OpenHelpWindow
     | CloseHelpWindow
@@ -2732,6 +2786,229 @@ update msg model =
                 Err _ ->
                     ( model, Cmd.none )
 
+        -- Presets
+        OpenPresetManager ->
+            ( { model
+                | presetManager =
+                    { emptyPresetManager
+                        | show = True
+                        , loading = True
+                    }
+                , showGlobalMenu = False
+              }
+            , Ports.listPresets {}
+            )
+
+        ClosePresetManager ->
+            let
+                pm =
+                    model.presetManager
+            in
+            if pm.busy then
+                -- Do not allow closing while an action is in flight
+                ( model, Cmd.none )
+
+            else
+                ( { model | presetManager = emptyPresetManager }
+                , Cmd.none
+                )
+
+        SetPresetNewName val ->
+            let
+                pm =
+                    model.presetManager
+            in
+            ( { model
+                | presetManager = { pm | newName = val, error = Nothing }
+              }
+            , Cmd.none
+            )
+
+        PresetCreate ->
+            let
+                pm =
+                    model.presetManager
+            in
+            ( { model
+                | presetManager = { pm | busy = True, error = Nothing }
+              }
+            , Ports.createPreset { name = pm.newName }
+            )
+
+        PresetSetActive name ->
+            let
+                pm =
+                    model.presetManager
+            in
+            ( { model
+                | presetManager = { pm | busy = True, error = Nothing }
+              }
+            , Ports.setActivePreset { name = name }
+            )
+
+        PresetRenameStart name ->
+            let
+                pm =
+                    model.presetManager
+            in
+            ( { model
+                | presetManager = { pm | renaming = Just name, renameInput = name }
+              }
+            , Cmd.none
+            )
+
+        SetPresetRenameInput val ->
+            let
+                pm =
+                    model.presetManager
+            in
+            ( { model
+                | presetManager = { pm | renameInput = val, error = Nothing }
+              }
+            , Cmd.none
+            )
+
+        PresetRenameSave oldName ->
+            let
+                pm =
+                    model.presetManager
+            in
+            ( { model
+                | presetManager = { pm | busy = True, error = Nothing }
+              }
+            , Ports.renamePreset { oldName = oldName, newName = pm.renameInput }
+            )
+
+        PresetRenameCancel ->
+            let
+                pm =
+                    model.presetManager
+            in
+            ( { model
+                | presetManager = { pm | renaming = Nothing, renameInput = "" }
+              }
+            , Cmd.none
+            )
+
+        PresetDelete name ->
+            let
+                pm =
+                    model.presetManager
+            in
+            ( { model
+                | presetManager = { pm | confirmDelete = Just name }
+              }
+            , Cmd.none
+            )
+
+        PresetConfirmDelete name ->
+            let
+                pm =
+                    model.presetManager
+            in
+            ( { model
+                | presetManager = { pm | busy = True, error = Nothing, confirmDelete = Nothing }
+              }
+            , Ports.deletePreset { name = name }
+            )
+
+        PresetCancelDelete ->
+            let
+                pm =
+                    model.presetManager
+            in
+            ( { model
+                | presetManager = { pm | confirmDelete = Nothing }
+              }
+            , Cmd.none
+            )
+
+        PresetsListResult raw ->
+            case D.decodeValue presetsListResultDecoder raw of
+                Ok res ->
+                    if res.ok then
+                        let
+                            pm =
+                                model.presetManager
+
+                            active =
+                                List.filterMap
+                                    (\p -> if p.isActive then Just p.name else Nothing)
+                                    res.presets
+                                    |> List.head
+                                    |> Maybe.withDefault ""
+
+                            activeChanged =
+                                active /= model.activePreset
+
+                            -- Editors target the active preset: if it changed,
+                            -- close any open editors so they can't write to the
+                            -- wrong (old) preset.
+                            closeIfChanged show editor current =
+                                if activeChanged && show then
+                                    editor
+                                else
+                                    current
+                        in
+                        ( { model
+                            | presets = res.presets
+                            , activePreset = active
+                            , presetManager = { pm | loading = False, error = Nothing }
+                            , defaultModelsEditor =
+                                closeIfChanged model.defaultModelsEditor.show emptyDefaultModelsEditor model.defaultModelsEditor
+                            , mcpEditor =
+                                closeIfChanged model.mcpEditor.show emptyMcpEditor model.mcpEditor
+                            , settingsEditor =
+                                closeIfChanged model.settingsEditor.show emptySettingsEditor model.settingsEditor
+                          }
+                        , Cmd.none
+                        )
+
+                    else
+                        let
+                            pm =
+                                model.presetManager
+                        in
+                        ( { model
+                            | presetManager = { pm | loading = False, error = Just res.error }
+                          }
+                        , Cmd.none
+                        )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        PresetActionResult raw ->
+            case D.decodeValue presetActionResultDecoder raw of
+                Ok res ->
+                    let
+                        pm =
+                            model.presetManager
+                    in
+                    if res.ok then
+                        ( { model
+                            | presetManager =
+                                { pm
+                                    | busy = False
+                                    , newName = ""
+                                    , renaming = Nothing
+                                    , renameInput = ""
+                                    , confirmDelete = Nothing
+                                }
+                          }
+                        , Ports.listPresets {}
+                        )
+
+                    else
+                        ( { model
+                            | presetManager = { pm | busy = False, error = Just res.error }
+                          }
+                        , Cmd.none
+                        )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
         -- Help Window
         OpenHelpWindow ->
             case getActiveSession model of
@@ -3698,6 +3975,30 @@ settingsSyncResultDecoder =
         (D.field "error" D.string)
 
 
+presetInfoDecoder : D.Decoder PresetInfo
+presetInfoDecoder =
+    D.map2 PresetInfo
+        (D.field "name" D.string)
+        (D.field "is_active" D.bool)
+
+
+presetsListResultDecoder : D.Decoder { ok : Bool, presets : List PresetInfo, error : String }
+presetsListResultDecoder =
+    D.map3
+        (\ok presets error -> { ok = ok, presets = presets, error = error })
+        (D.field "ok" D.bool)
+        (D.field "presets" (D.list presetInfoDecoder))
+        (D.field "error" D.string)
+
+
+presetActionResultDecoder : D.Decoder { ok : Bool, error : String }
+presetActionResultDecoder =
+    D.map2
+        (\ok error -> { ok = ok, error = error })
+        (D.field "ok" D.bool)
+        (D.field "error" D.string)
+
+
 -- ─── Help Items ──────────────────────────────────────────────────────
 
 helpItems : List HelpItem
@@ -3741,6 +4042,8 @@ subscriptions model =
         , Ports.onDefaultMcpSyncResult (\raw -> McpSyncResult raw)
         , Ports.onGlobalSettingsList (\raw -> SettingsListResult raw)
         , Ports.onGlobalSettingsSyncResult (\raw -> SettingsSyncResult raw)
+        , Ports.onPresetsList (\raw -> PresetsListResult raw)
+        , Ports.onPresetActionResult (\raw -> PresetActionResult raw)
         , Ports.onSessionCreated (\id -> SessionCreated id)
         , Ports.onSessionDirs (\dirs -> SessionDirsResult dirs)
         , Ports.onFsListDir (\entries -> FsListDirResult entries)
@@ -3781,6 +4084,7 @@ view model =
         , viewDefaultModelsEditorOverlay model
         , viewMcpEditorOverlay model
         , viewSettingsEditorOverlay model
+        , viewPresetManagerOverlay model
         ]
 
 
@@ -3908,6 +4212,20 @@ viewGlobalMenu model =
                 ]
                 [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "☰" ]
                 , Html.text " Session Manager"
+                ]
+            , Html.div
+                [ Attr.class "global-menu-item"
+                , Ev.onClick OpenPresetManager
+                ]
+                [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "◱" ]
+                , Html.text
+                    ("Presets"
+                        ++ (if model.activePreset /= "" then
+                                " (" ++ model.activePreset ++ ")"
+                            else
+                                ""
+                           )
+                    )
                 ]
             , Html.div
                 [ Attr.class "global-menu-item"
@@ -4565,28 +4883,31 @@ viewDefaultModelsEditorOverlay model =
                         ]
 
                 ModelSelList ->
-                    Overlay.ModelSelector.view
-                        { sessionId = "default"
-                        , models = ed.working
-                        , input = ed.input
-                        , selected = ed.selected
-                        , activeModelId = Nothing
-                        , activeModelName = ""
-                        , confirmDeleteId = ed.confirmDelete
-                        , canDelete = List.length ed.working > 1
-                        , dirty = ed.working /= ed.original
-                        , error = ed.loadError
-                        , noOp = NoOp
-                        , onSelect = DefaultModelsSelectItem
-                        , onConfirm = DefaultModelsConfirmItem
-                        , onClose = CloseDefaultModelsEditor
-                        , onInput = SetDefaultModelsInput
-                        , onEdit = DefaultModelsEditModel
-                        , onDelete = DefaultModelsDeleteModel
-                        , onDeleteConfirm = DefaultModelsConfirmDelete
-                        , onDeleteCancel = DefaultModelsCancelDelete
-                        , onAdd = DefaultModelsAddModel
-                        }
+                    Html.div []
+                        [ viewPresetBadge model
+                        , Overlay.ModelSelector.view
+                            { sessionId = "default"
+                            , models = ed.working
+                            , input = ed.input
+                            , selected = ed.selected
+                            , activeModelId = Nothing
+                            , activeModelName = ""
+                            , confirmDeleteId = ed.confirmDelete
+                            , canDelete = List.length ed.working > 1
+                            , dirty = ed.working /= ed.original
+                            , error = ed.loadError
+                            , noOp = NoOp
+                            , onSelect = DefaultModelsSelectItem
+                            , onConfirm = DefaultModelsConfirmItem
+                            , onClose = CloseDefaultModelsEditor
+                            , onInput = SetDefaultModelsInput
+                            , onEdit = DefaultModelsEditModel
+                            , onDelete = DefaultModelsDeleteModel
+                            , onDeleteConfirm = DefaultModelsConfirmDelete
+                            , onDeleteCancel = DefaultModelsCancelDelete
+                            , onAdd = DefaultModelsAddModel
+                            }
+                        ]
             ]
     else
         Html.text ""
@@ -4645,26 +4966,29 @@ viewMcpEditorOverlay model =
                         ]
 
                 ModelSelList ->
-                    Overlay.McpSelector.view
-                        { sessionId = "default"
-                        , servers = ed.working
-                        , input = ed.input
-                        , selected = ed.selected
-                        , confirmDeleteId = ed.confirmDelete
-                        , canDelete = List.length ed.working > 1
-                        , dirty = ed.working /= ed.original
-                        , error = ed.loadError
-                        , noOp = NoOp
-                        , onSelect = McpSelectItem
-                        , onConfirm = McpConfirmItem
-                        , onClose = CloseMcpEditor
-                        , onInput = SetMcpInput
-                        , onEdit = McpEditServer
-                        , onDelete = McpDeleteServer
-                        , onDeleteConfirm = McpConfirmDelete
-                        , onDeleteCancel = McpCancelDelete
-                        , onAdd = McpAddServer
-                        }
+                    Html.div []
+                        [ viewPresetBadge model
+                        , Overlay.McpSelector.view
+                            { sessionId = "default"
+                            , servers = ed.working
+                            , input = ed.input
+                            , selected = ed.selected
+                            , confirmDeleteId = ed.confirmDelete
+                            , canDelete = List.length ed.working > 1
+                            , dirty = ed.working /= ed.original
+                            , error = ed.loadError
+                            , noOp = NoOp
+                            , onSelect = McpSelectItem
+                            , onConfirm = McpConfirmItem
+                            , onClose = CloseMcpEditor
+                            , onInput = SetMcpInput
+                            , onEdit = McpEditServer
+                            , onDelete = McpDeleteServer
+                            , onDeleteConfirm = McpConfirmDelete
+                            , onDeleteCancel = McpCancelDelete
+                            , onAdd = McpAddServer
+                            }
+                        ]
             ]
     else
         Html.text ""
@@ -4688,13 +5012,61 @@ viewSettingsEditorOverlay model =
     if ed.show then
         viewOverlay CloseSettingsEditor
             [ Overlay.Settings.view
-                { toolConfirm = ed.toolConfirm
+                { preset = model.activePreset
+                , toolConfirm = ed.toolConfirm
                 , loading = ed.loading
                 , syncing = ed.syncing
                 , error = ed.error
                 , onInput = SetToolConfirm
                 , onSave = SettingsSave
                 , onCancel = CloseSettingsEditor
+                }
+            ]
+    else
+        Html.text ""
+
+
+viewPresetBadge : Model -> Html Msg
+viewPresetBadge model =
+    Html.div [ Attr.class "pm-badge" ]
+        [ Html.text
+            ("Preset: "
+                ++ (if model.activePreset == "" then
+                        "Default"
+                    else
+                        model.activePreset
+                   )
+            )
+        ]
+
+
+viewPresetManagerOverlay : Model -> Html Msg
+viewPresetManagerOverlay model =
+    let
+        pm =
+            model.presetManager
+    in
+    if pm.show then
+        viewOverlay ClosePresetManager
+            [ Overlay.PresetManager.view
+                { presets = model.presets
+                , loading = pm.loading
+                , busy = pm.busy
+                , newName = pm.newName
+                , renaming = pm.renaming
+                , renameInput = pm.renameInput
+                , confirmDelete = pm.confirmDelete
+                , error = pm.error
+                , onInput = SetPresetNewName
+                , onCreate = PresetCreate
+                , onSetActive = PresetSetActive
+                , onRenameStart = PresetRenameStart
+                , onRenameInput = SetPresetRenameInput
+                , onRenameSave = PresetRenameSave
+                , onRenameCancel = PresetRenameCancel
+                , onDelete = PresetDelete
+                , onDeleteConfirm = PresetConfirmDelete
+                , onDeleteCancel = PresetCancelDelete
                 }
             ]
     else

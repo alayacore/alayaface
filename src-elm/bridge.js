@@ -137,6 +137,60 @@
         });
     });
 
+    on("listPresets", function () {
+      invoke("list_presets")
+        .then(function (presets) {
+          app.ports.onPresetsList.send({ ok: true, presets: presets, error: "" });
+        })
+        .catch(function (err) {
+          app.ports.onPresetsList.send({
+            ok: false, presets: [], error: String((err && err.message) || err),
+          });
+        });
+    });
+
+    on("createPreset", function (data) {
+      invoke("create_preset", { name: data.name || "" })
+        .then(function () { app.ports.onPresetActionResult.send({ ok: true, error: "" }); })
+        .catch(function (err) {
+          app.ports.onPresetActionResult.send({
+            ok: false, error: String((err && err.message) || err),
+          });
+        });
+    });
+
+    on("renamePreset", function (data) {
+      invoke("rename_preset", {
+        oldName: data.oldName || "", newName: data.newName || "",
+      })
+        .then(function () { app.ports.onPresetActionResult.send({ ok: true, error: "" }); })
+        .catch(function (err) {
+          app.ports.onPresetActionResult.send({
+            ok: false, error: String((err && err.message) || err),
+          });
+        });
+    });
+
+    on("deletePreset", function (data) {
+      invoke("delete_preset", { name: data.name || "" })
+        .then(function () { app.ports.onPresetActionResult.send({ ok: true, error: "" }); })
+        .catch(function (err) {
+          app.ports.onPresetActionResult.send({
+            ok: false, error: String((err && err.message) || err),
+          });
+        });
+    });
+
+    on("setActivePreset", function (data) {
+      invoke("set_active_preset", { name: data.name || "" })
+        .then(function () { app.ports.onPresetActionResult.send({ ok: true, error: "" }); })
+        .catch(function (err) {
+          app.ports.onPresetActionResult.send({
+            ok: false, error: String((err && err.message) || err),
+          });
+        });
+    });
+
     on("confirmTool", function (data) {
       invoke("alayacore_confirm", {
         sessionId: data.sessionId, id: data.id, allowed: data.allowed,

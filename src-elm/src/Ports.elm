@@ -25,6 +25,14 @@ port module Ports exposing
     , syncGlobalSettings
     , onGlobalSettingsList
     , onGlobalSettingsSyncResult
+      -- Presets
+    , listPresets
+    , createPreset
+    , renamePreset
+    , deletePreset
+    , setActivePreset
+    , onPresetsList
+    , onPresetActionResult
     , confirmTool
     , sendMcpDecline
     , sendMcpCancel
@@ -88,6 +96,13 @@ port listGlobalSettings : {} -> Cmd msg
 port syncGlobalSettings : { toolConfirm : String } -> Cmd msg
 port onGlobalSettingsList : (E.Value -> msg) -> Sub msg
 port onGlobalSettingsSyncResult : (E.Value -> msg) -> Sub msg
+port listPresets : {} -> Cmd msg
+port createPreset : { name : String } -> Cmd msg
+port renamePreset : { oldName : String, newName : String } -> Cmd msg
+port deletePreset : { name : String } -> Cmd msg
+port setActivePreset : { name : String } -> Cmd msg
+port onPresetsList : (E.Value -> msg) -> Sub msg
+port onPresetActionResult : (E.Value -> msg) -> Sub msg
 port confirmTool : { sessionId : String, id : String, allowed : Bool } -> Cmd msg
 port sendMcpDecline : { sessionId : String, server : String } -> Cmd msg
 port sendMcpCancel : { sessionId : String } -> Cmd msg
