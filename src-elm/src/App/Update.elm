@@ -2382,6 +2382,16 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
+        OpenMediaPreview item ->
+            ( updateActiveSession model (\sess -> { sess | mediaPreview = Just item })
+            , Cmd.none
+            )
+
+        CloseMediaPreview ->
+            ( updateActiveSession model (\sess -> { sess | mediaPreview = Nothing })
+            , Cmd.none
+            )
+
         ScrollPosition scrollTop scrollHeight clientHeight ->
             let
                 atBottom =
@@ -2394,14 +2404,17 @@ update msg model =
             if defaultPrevented then
                 ( model, Cmd.none )
 
-            -- Escape or Ctrl+[ dismisses the context menu.
-            -- Overlays are closed via their close buttons only (no Escape).
+            -- Escape or Ctrl+[ dismisses the context menu and the media
+            -- preview. Other overlays are closed via their close buttons
+            -- only (no Escape).
             else if key == "Escape" || (key == "[" && ctrl) then
                 if model.ctxVisible then
                     ( { model | ctxVisible = False }, Cmd.none )
 
                 else
-                    ( model, Cmd.none )
+                    ( updateActiveSession model (\sess -> { sess | mediaPreview = Nothing })
+                    , Cmd.none
+                    )
 
             -- Ctrl+W closes the active session window
             else if key == "w" && ctrl then

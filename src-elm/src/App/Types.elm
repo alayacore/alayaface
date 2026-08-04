@@ -212,6 +212,9 @@ type Msg
     | HelpSelectItem Int
     | HelpCmdMsg String
     | FillMcpAuthUrl String String
+      -- Media preview (click a multimodal chip)
+    | OpenMediaPreview T.MediaItem
+    | CloseMediaPreview
       -- Session wrapper
     | ForSession String Msg
       -- Window dragging

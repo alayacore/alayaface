@@ -28,6 +28,7 @@ import Overlay.FilePicker
 import Overlay.Selector
 import Overlay.ModelEditor
 import Overlay.McpEditor
+import Overlay.MediaPreview
 import Overlay.HelpWindow exposing (HelpItem, filterHelpItems, view)
 
 
@@ -313,6 +314,7 @@ viewChatArea model session =
         , viewFilePickerOverlay session.id session
         , viewModelSelectorOverlay session.id session
         , viewHelpWindowOverlay session.id session
+        , viewMediaPreviewOverlay session.id session
         ]
 
 
@@ -373,7 +375,7 @@ viewMessage cursorMsgId session msg =
             Html.text ""
 
           else
-            viewMsgBody msg
+            viewMsgBody session.id msg
         ]
 
 
@@ -446,8 +448,8 @@ previewText msg =
         first
 
 
-viewMsgBody : T.Message -> Html Msg
-viewMsgBody msg =
+viewMsgBody : String -> T.Message -> Html Msg
+viewMsgBody sid msg =
     case msg.role of
         T.Assistant ->
             Html.div [ Attr.class "msg-body" ]
@@ -478,7 +480,7 @@ viewMsgBody msg =
                 [ case msg.media of
                     Just items ->
                         Html.div [ Attr.class "hs-staged-row" ]
-                            (List.map viewMessageMedia items)
+                            (List.map (viewMessageMedia sid) items)
 
                     Nothing ->
                         Html.text ""
@@ -587,14 +589,18 @@ viewInputBar model session =
 
 viewStagedChip : String -> T.StagedMedia -> Html Msg
 viewStagedChip sid item =
-    Html.div [ Attr.class "hs-staged-chip" ]
+    Html.div
+        [ Attr.class "hs-staged-chip"
+        , Ev.onClick (ForSession sid (OpenMediaPreview { mediaType = item.mediaType, uri = item.uri, name = item.name }))
+        , Attr.title "Click to preview"
+        ]
         [ Html.span [ Attr.class "hs-staged-icon" ]
             [ Html.text (mediaTypeIcon item.mediaType) ]
         , Html.span [ Attr.class "hs-staged-name" ]
             [ Html.text (Maybe.withDefault (String.left 40 item.uri) item.name) ]
         , Html.button
             [ Attr.class "hs-staged-remove"
-            , Ev.onClick (ForSession sid (RemoveStaged item.id))
+            , Ev.stopPropagationOn "click" (D.succeed ( ForSession sid (RemoveStaged item.id), True ))
             , Attr.title "Remove"
             ]
             [ Html.text "✕" ]
@@ -603,9 +609,13 @@ viewStagedChip sid item =
 
 -- ─── Message Media Previews ─────────────────────────────────────────
 
-viewMessageMedia : T.MediaItem -> Html Msg
-viewMessageMedia item =
-    Html.div [ Attr.class "hs-staged-chip message-media-chip" ]
+viewMessageMedia : String -> T.MediaItem -> Html Msg
+viewMessageMedia sid item =
+    Html.div
+        [ Attr.class "hs-staged-chip message-media-chip"
+        , Ev.onClick (ForSession sid (OpenMediaPreview item))
+        , Attr.title "Click to preview"
+        ]
         [ Html.span [ Attr.class "hs-staged-icon" ]
             [ Html.text (mediaTypeIcon item.mediaType) ]
         , Html.span [ Attr.class "hs-staged-name" ]
@@ -1088,6 +1098,22 @@ viewHelpWindowOverlay sid session =
             ]
     else
         Html.text ""
+
+
+-- ─── Media Preview Overlay ──────────────────────────────────────────
+
+viewMediaPreviewOverlay : String -> T.SessionState -> Html Msg
+viewMediaPreviewOverlay sid session =
+    case session.mediaPreview of
+        Just item ->
+            Overlay.MediaPreview.view
+                { item = item
+                , onClose = ForSession sid CloseMediaPreview
+                , noOp = NoOp
+                }
+
+        Nothing ->
+            Html.text ""
 
 
 -- SVG icons

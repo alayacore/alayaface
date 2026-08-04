@@ -250,6 +250,7 @@ type alias SessionState =
     , filePickerSavedLocalPath : String
     , filePickerSavedUrlPath : String
     , pendingFileName : String
+    , mediaPreview : Maybe MediaItem
     , mcpStatus : Maybe String
     , mcpServers : List String
     , messageVersion : Maybe Int
@@ -410,6 +411,7 @@ emptySession id =
     , filePickerSavedLocalPath = ""
     , filePickerSavedUrlPath = ""
     , pendingFileName = ""
+    , mediaPreview = Nothing
     , mcpStatus = Nothing
     , mcpServers = []
     , messageVersion = Nothing
