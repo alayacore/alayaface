@@ -14,17 +14,17 @@ import Html.Keyed as Keyed
 import Json.Decode as D
 import Json.Encode as E
 import Time
-import Session.Types as T exposing (ModelSelPage(..))
+import Session.Types as T
 import Session.Protocol as P
 import Session.Handlers as H
+import Session.Selector as Sel exposing (Page(..))
 import Overlay.ConfirmTool
 import Overlay.Settings
 import Overlay.PresetManager
 import Overlay.McpInit
 import Overlay.FilePicker
-import Overlay.ModelSelector
+import Overlay.Selector
 import Overlay.ModelEditor
-import Overlay.McpSelector
 import Overlay.McpEditor
 import Overlay.HelpWindow exposing (HelpItem, filterHelpItems, view)
 import Markdown
@@ -80,63 +80,31 @@ type alias ResizeInfo =
 
 type alias DefaultModelsEditor =
     { show : Bool
-    , page : ModelSelPage
-    , input : String
-    , selected : Int
-    , original : List T.ModelInfo
-    , working : List T.ModelInfo
-    , draft : Maybe T.ModelDraft
-    , syncError : Maybe String
-    , loadError : Maybe String
-    , confirmDelete : Maybe Int
     , preset : String
+    , state : Sel.State T.ModelInfo T.ModelDraft
     }
 
 
 emptyDefaultModelsEditor : DefaultModelsEditor
 emptyDefaultModelsEditor =
     { show = False
-    , page = ModelSelList
-    , input = ""
-    , selected = 0
-    , original = []
-    , working = []
-    , draft = Nothing
-    , syncError = Nothing
-    , loadError = Nothing
-    , confirmDelete = Nothing
     , preset = ""
+    , state = Sel.empty
     }
 
 
 type alias McpEditor =
     { show : Bool
-    , page : ModelSelPage
-    , input : String
-    , selected : Int
-    , original : List T.McpInfo
-    , working : List T.McpInfo
-    , draft : Maybe T.McpDraft
-    , syncError : Maybe String
-    , loadError : Maybe String
-    , confirmDelete : Maybe Int
     , preset : String
+    , state : Sel.State T.McpInfo T.McpDraft
     }
 
 
 emptyMcpEditor : McpEditor
 emptyMcpEditor =
     { show = False
-    , page = ModelSelList
-    , input = ""
-    , selected = 0
-    , original = []
-    , working = []
-    , draft = Nothing
-    , syncError = Nothing
-    , loadError = Nothing
-    , confirmDelete = Nothing
     , preset = ""
+    , state = Sel.empty
     }
 
 
@@ -706,7 +674,7 @@ update msg model =
                             -- success closes the overlay, failure keeps it open
                             case decodeSyncOutcome raw of
                                 Just ( isError, message ) ->
-                                    if newSession.modelSelectorPage == ModelSelSyncing then
+                                    if newSession.modelSelector.page == ModelSelSyncing then
                                         update (ForSession ev.sessionId (ModelSelectorSyncResult isError message)) updatedModel
 
                                     else
@@ -733,15 +701,14 @@ update msg model =
                                         , statusMsg = ev.message
                                     }
                             in
-                            if not ev.connected && session.modelSelectorPage == ModelSelSyncing then
+                            if not ev.connected && session.modelSelector.page == ModelSelSyncing then
                                 -- A disconnect means the model_sync CO will
                                 -- never arrive — fail the sync instead of
                                 -- leaving the overlay stuck.
                                 ( { model
                                     | sessions = Dict.insert ev.sessionId
                                         { updated
-                                            | modelSelectorPage = ModelSelSyncFailed
-                                            , modelSelectorSyncError = Just "Session disconnected during sync"
+                                            | modelSelector = Sel.syncFailed "Session disconnected during sync" updated.modelSelector
                                         }
                                         model.sessions
                                   }
@@ -1617,23 +1584,11 @@ update msg model =
         RequerySize ->
             ( model, Task.attempt GotContainerSize (Dom.getElement "main-content") )
 
-        -- Model Selector
+        -- Model Selector (per-session)
         OpenModelSelector ->
             case getActiveSession model of
                 Just s ->
-                    ( updateActiveSession model (\sess ->
-                        { sess
-                            | showModelSelector = True
-                            , modelSelectorInput = ""
-                            , modelSelectorSelected = 0
-                            , modelSelectorScroll = 0
-                            , modelSelectorPage = ModelSelList
-                            , modelSelectorWorking = sess.models
-                            , modelSelectorDraft = Nothing
-                            , modelSelectorSyncError = Nothing
-                            , modelSelectorConfirmDelete = Nothing
-                        }
-                      )
+                    ( updateActiveSession model (\sess -> { sess | showModelSelector = True, modelSelector = Sel.open sess.models sess.modelSelector })
                     , Cmd.batch
                         [ focusAfterDelay ("model-selector-input-" ++ s.id)
                         , Ports.setCursorPos ("model-selector-input-" ++ s.id)
@@ -1646,50 +1601,27 @@ update msg model =
         CloseModelSelector ->
             case getActiveSession model of
                 Just s ->
-                    if s.modelSelectorPage == ModelSelSyncing then
-                        -- Do not allow closing while a sync is in flight
-                        ( model, Cmd.none )
+                    case Sel.closeRequest s.modelSelector of
+                        Nothing ->
+                            -- Sync in flight: do not allow closing
+                            ( model, Cmd.none )
 
-                    else if s.modelSelectorWorking /= s.models then
-                        -- Unsaved edits: ask before closing
-                        ( updateActiveSession model (\sess -> { sess | modelSelectorPage = ModelSelConfirmSync })
-                        , Cmd.none )
+                        Just True ->
+                            -- Unsaved edits: ask before closing
+                            ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.askSync sess.modelSelector })
+                            , Cmd.none
+                            )
 
-                    else
-                        ( updateActiveSession model (\sess ->
-                            { sess
-                                | showModelSelector = False
-                                , modelSelectorPage = ModelSelList
-                                , modelSelectorWorking = []
-                                , modelSelectorDraft = Nothing
-                                , modelSelectorSyncError = Nothing
-                                , modelSelectorConfirmDelete = Nothing
-                            }
-                          )
-                        , focusInput model
-                        )
+                        Just False ->
+                            ( updateActiveSession model (\sess -> { sess | showModelSelector = False, modelSelector = Sel.close sess.modelSelector })
+                            , focusInput model
+                            )
 
                 Nothing ->
                     ( model, Cmd.none )
 
         SetModelSelectorInput val ->
-            ( updateActiveSession model (\s ->
-                let
-                    filtered =
-                        filterModels s.modelSelectorWorking val
-
-                    -- Clamp selected index if filter reduces list
-                    clampedSelected =
-                        if List.length filtered <= s.modelSelectorSelected then
-                            max 0 (List.length filtered - 1)
-                        else
-                            s.modelSelectorSelected
-                in
-                { s
-                    | modelSelectorInput = val
-                    , modelSelectorSelected = clampedSelected
-                }
-              )
+            ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.setInput modelName val sess.modelSelector })
             , Cmd.none
             )
 
@@ -1698,11 +1630,7 @@ update msg model =
                 scrollCmd =
                     case getActiveSession model of
                         Just s ->
-                            let
-                                filtered =
-                                    filterModels s.modelSelectorWorking s.modelSelectorInput
-                            in
-                            case List.head (List.drop idx filtered) of
+                            case List.head (List.drop idx (Sel.filterItems modelName s.modelSelector.working s.modelSelector.input)) of
                                 Just m ->
                                     Ports.scrollIntoView ("model-selector-item-" ++ s.id ++ "-" ++ String.fromInt m.id)
 
@@ -1712,29 +1640,22 @@ update msg model =
                         Nothing ->
                             Cmd.none
             in
-            ( updateActiveSession model (\s -> { s | modelSelectorSelected = idx })
+            ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.selectItem idx sess.modelSelector })
             , scrollCmd
             )
 
         ModelSelectorConfirmItem ->
             case getActiveSession model of
                 Just s ->
-                    let
-                        filtered =
-                            filterModels s.modelSelectorWorking s.modelSelectorInput
-
-                        selectedModel =
-                            List.head (List.drop s.modelSelectorSelected filtered)
-                    in
-                    case selectedModel of
+                    case Sel.selectedItem modelName s.modelSelector of
                         Just m ->
-                            if s.modelSelectorWorking /= s.models then
+                            if Sel.isDirty s.modelSelector then
                                 -- Unsaved edits: ask to sync before leaving
-                                ( updateActiveSession model (\sess -> { sess | modelSelectorPage = ModelSelConfirmSync })
+                                ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.askSync sess.modelSelector })
                                 , Cmd.none )
 
                             else
-                                ( updateActiveSession model (\sess -> { sess | showModelSelector = False, modelSelectorInput = "" })
+                                ( updateActiveSession model (\sess -> { sess | showModelSelector = False, modelSelector = Sel.close sess.modelSelector })
                                 , Cmd.batch
                                     [ Ports.setModel { sessionId = s.id, modelId = m.id }
                                     , focusInput model
@@ -1750,15 +1671,9 @@ update msg model =
         ModelSelectorEditModel id ->
             case getActiveSession model of
                 Just s ->
-                    case List.filter (\m -> m.id == id) s.modelSelectorWorking |> List.head of
+                    case List.filter (\m -> m.id == id) s.modelSelector.working |> List.head of
                         Just m ->
-                            ( updateActiveSession model (\sess ->
-                                { sess
-                                    | modelSelectorPage = ModelSelEdit
-                                    , modelSelectorDraft = Just (draftFromModel m)
-                                    , modelSelectorConfirmDelete = Nothing
-                                }
-                              )
+                            ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.openEdit (draftFromModel m) sess.modelSelector })
                             , Cmd.batch
                                 [ focusAfterDelay ("model-editor-name-" ++ s.id)
                                 , Ports.setCursorPos ("model-editor-name-" ++ s.id)
@@ -1774,13 +1689,7 @@ update msg model =
         ModelSelectorAddModel ->
             case getActiveSession model of
                 Just s ->
-                    ( updateActiveSession model (\sess ->
-                        { sess
-                            | modelSelectorPage = ModelSelEdit
-                            , modelSelectorDraft = Just T.emptyDraft
-                            , modelSelectorConfirmDelete = Nothing
-                        }
-                      )
+                    ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.openEdit T.emptyDraft sess.modelSelector })
                     , Cmd.batch
                         [ focusAfterDelay ("model-editor-name-" ++ s.id)
                         , Ports.setCursorPos ("model-editor-name-" ++ s.id)
@@ -1793,12 +1702,7 @@ update msg model =
         ModelSelectorEditBack ->
             case getActiveSession model of
                 Just s ->
-                    ( updateActiveSession model (\sess ->
-                        { sess
-                            | modelSelectorPage = ModelSelList
-                            , modelSelectorDraft = Nothing
-                        }
-                      )
+                    ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.backFromEdit sess.modelSelector })
                     , Cmd.batch
                         [ focusAfterDelay ("model-selector-input-" ++ s.id)
                         , Ports.setCursorPos ("model-selector-input-" ++ s.id)
@@ -1811,83 +1715,43 @@ update msg model =
         ModelSelectorEditSave ->
             case getActiveSession model of
                 Just s ->
-                    case s.modelSelectorDraft of
-                        Just draft ->
-                            let
-                                newModel =
-                                    modelFromDraft draft
-
-                                working =
-                                    if draft.id == 0 then
-                                        -- Assign a unique temporary id (backend
-                                        -- reassigns ids on sync anyway)
-                                        let
-                                            nextId =
-                                                List.foldl (\m acc -> max acc m.id) 0 s.modelSelectorWorking + 1
-                                        in
-                                        s.modelSelectorWorking ++ [ { newModel | id = nextId } ]
-
-                                    else
-                                        List.map
-                                            (\m -> if m.id == draft.id then newModel else m)
-                                            s.modelSelectorWorking
-                            in
-                            ( updateActiveSession model (\sess ->
-                                { sess
-                                    | modelSelectorPage = ModelSelList
-                                    , modelSelectorDraft = Nothing
-                                    , modelSelectorWorking = working
-                                }
-                              )
-                            , Cmd.batch
-                                [ focusAfterDelay ("model-selector-input-" ++ s.id)
-                                , Ports.setCursorPos ("model-selector-input-" ++ s.id)
-                                ]
-                            )
-
-                        Nothing ->
-                            ( model, Cmd.none )
+                    ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.saveItem (\d -> d.id) modelFromDraft (\m -> m.id) sess.modelSelector })
+                    , Cmd.batch
+                        [ focusAfterDelay ("model-selector-input-" ++ s.id)
+                        , Ports.setCursorPos ("model-selector-input-" ++ s.id)
+                        ]
+                    )
 
                 Nothing ->
                     ( model, Cmd.none )
 
         ModelSelectorEditField field value ->
-            ( updateActiveSession model (\sess ->
-                { sess
-                    | modelSelectorDraft =
-                        Maybe.map (updateDraftField field value) sess.modelSelectorDraft
-                }
-              )
+            ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.updateDraft (updateDraftField field value) sess.modelSelector })
             , Cmd.none
             )
 
         ModelSelectorDeleteModel id ->
-            ( updateActiveSession model (\sess -> { sess | modelSelectorConfirmDelete = Just id })
+            ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.requestDelete id sess.modelSelector })
             , Cmd.none
             )
 
         ModelSelectorConfirmDelete id ->
-            ( updateActiveSession model (\sess ->
-                { sess
-                    | modelSelectorWorking = List.filter (\m -> m.id /= id) sess.modelSelectorWorking
-                    , modelSelectorConfirmDelete = Nothing
-                }
-              )
+            ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.confirmDeleteItem (\m -> m.id) id sess.modelSelector })
             , Cmd.none
             )
 
         ModelSelectorCancelDelete ->
-            ( updateActiveSession model (\sess -> { sess | modelSelectorConfirmDelete = Nothing })
+            ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.cancelDelete sess.modelSelector })
             , Cmd.none
             )
 
         ModelSelectorConfirmSync ->
             case getActiveSession model of
                 Just s ->
-                    ( updateActiveSession model (\sess -> { sess | modelSelectorPage = ModelSelSyncing })
+                    ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.startSync sess.modelSelector })
                     , Ports.modelSync
                         { sessionId = s.id
-                        , config = encodeModels s.modelSelectorWorking
+                        , config = encodeModels s.modelSelector.working
                         }
                     )
 
@@ -1895,23 +1759,14 @@ update msg model =
                     ( model, Cmd.none )
 
         ModelSelectorDiscardClose ->
-            ( updateActiveSession model (\sess ->
-                { sess
-                    | showModelSelector = False
-                    , modelSelectorPage = ModelSelList
-                    , modelSelectorWorking = []
-                    , modelSelectorDraft = Nothing
-                    , modelSelectorSyncError = Nothing
-                    , modelSelectorConfirmDelete = Nothing
-                }
-              )
+            ( updateActiveSession model (\sess -> { sess | showModelSelector = False, modelSelector = Sel.close sess.modelSelector })
             , focusInput model
             )
 
         ModelSelectorCancelSyncPrompt ->
             case getActiveSession model of
                 Just s ->
-                    ( updateActiveSession model (\sess -> { sess | modelSelectorPage = ModelSelList })
+                    ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.backToList sess.modelSelector })
                     , Cmd.batch
                         [ focusAfterDelay ("model-selector-input-" ++ s.id)
                         , Ports.setCursorPos ("model-selector-input-" ++ s.id)
@@ -1924,33 +1779,18 @@ update msg model =
         ModelSelectorSyncResult isError message ->
             case getActiveSession model of
                 Just s ->
-                    if s.modelSelectorPage == ModelSelSyncing then
-                        if isError then
-                            ( updateActiveSession model (\sess ->
-                                { sess
-                                    | modelSelectorPage = ModelSelSyncFailed
-                                    , modelSelectorSyncError = Just message
-                                }
-                              )
-                            , Cmd.none
-                            )
+                    if s.modelSelector.page /= ModelSelSyncing then
+                        ( model, Cmd.none )
 
-                        else
-                            ( updateActiveSession model (\sess ->
-                                { sess
-                                    | showModelSelector = False
-                                    , modelSelectorPage = ModelSelList
-                                    , modelSelectorWorking = []
-                                    , modelSelectorDraft = Nothing
-                                    , modelSelectorSyncError = Nothing
-                                    , modelSelectorConfirmDelete = Nothing
-                                }
-                              )
-                            , focusInput model
-                            )
+                    else if isError then
+                        ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.syncFailed message sess.modelSelector })
+                        , Cmd.none
+                        )
 
                     else
-                        ( model, Cmd.none )
+                        ( updateActiveSession model (\sess -> { sess | showModelSelector = False, modelSelector = Sel.close sess.modelSelector })
+                        , focusInput model
+                        )
 
                 Nothing ->
                     ( model, Cmd.none )
@@ -1961,8 +1801,8 @@ update msg model =
                 | defaultModelsEditor =
                     { emptyDefaultModelsEditor
                         | show = True
-                        , page = ModelSelLoading
                         , preset = preset
+                        , state = Sel.setLoading Sel.empty
                     }
                 , showGlobalMenu = False
               }
@@ -1974,20 +1814,21 @@ update msg model =
                 ed =
                     model.defaultModelsEditor
             in
-            if ed.page == ModelSelSyncing then
-                -- Do not allow closing while a sync is in flight
-                ( model, Cmd.none )
+            case Sel.closeRequest ed.state of
+                Nothing ->
+                    -- Sync in flight: do not allow closing
+                    ( model, Cmd.none )
 
-            else if ed.working /= ed.original then
-                -- Unsaved edits: ask before closing
-                ( { model | defaultModelsEditor = { ed | page = ModelSelConfirmSync } }
-                , Cmd.none
-                )
+                Just True ->
+                    -- Unsaved edits: ask before closing
+                    ( { model | defaultModelsEditor = { ed | state = Sel.askSync ed.state } }
+                    , Cmd.none
+                    )
 
-            else
-                ( { model | defaultModelsEditor = emptyDefaultModelsEditor }
-                , Cmd.none
-                )
+                Just False ->
+                    ( { model | defaultModelsEditor = emptyDefaultModelsEditor }
+                    , Cmd.none
+                    )
 
         DefaultModelsListResult raw ->
             case D.decodeValue defaultModelsListResultDecoder raw of
@@ -1999,12 +1840,7 @@ update msg model =
                     if res.ok then
                         ( { model
                             | defaultModelsEditor =
-                                { ed
-                                    | page = ModelSelList
-                                    , original = res.models
-                                    , working = res.models
-                                    , loadError = Nothing
-                                }
+                                { ed | state = Sel.setList res.models ed.state }
                           }
                         , Cmd.batch
                             [ focusAfterDelay "model-selector-input-default"
@@ -2015,10 +1851,7 @@ update msg model =
                     else
                         ( { model
                             | defaultModelsEditor =
-                                { ed
-                                    | page = ModelSelList
-                                    , loadError = Just res.error
-                                }
+                                { ed | state = Sel.setLoadError (Just res.error) ed.state }
                           }
                         , Cmd.none
                         )
@@ -2030,23 +1863,8 @@ update msg model =
             let
                 ed =
                     model.defaultModelsEditor
-
-                filtered =
-                    filterModels ed.working val
-
-                clampedSelected =
-                    if List.length filtered <= ed.selected then
-                        max 0 (List.length filtered - 1)
-                    else
-                        ed.selected
             in
-            ( { model
-                | defaultModelsEditor =
-                    { ed
-                        | input = val
-                        , selected = clampedSelected
-                    }
-              }
+            ( { model | defaultModelsEditor = { ed | state = Sel.setInput modelName val ed.state } }
             , Cmd.none
             )
 
@@ -2055,18 +1873,15 @@ update msg model =
                 ed =
                     model.defaultModelsEditor
 
-                filtered =
-                    filterModels ed.working ed.input
-
                 scrollCmd =
-                    case List.head (List.drop idx filtered) of
+                    case List.head (List.drop idx (Sel.filterItems modelName ed.state.working ed.state.input)) of
                         Just m ->
                             Ports.scrollIntoView ("model-selector-item-default-" ++ String.fromInt m.id)
 
                         Nothing ->
                             Cmd.none
             in
-            ( { model | defaultModelsEditor = { ed | selected = idx } }
+            ( { model | defaultModelsEditor = { ed | state = Sel.selectItem idx ed.state } }
             , scrollCmd
             )
 
@@ -2074,22 +1889,12 @@ update msg model =
             let
                 ed =
                     model.defaultModelsEditor
-
-                filtered =
-                    filterModels ed.working ed.input
-
-                selectedModel =
-                    List.head (List.drop ed.selected filtered)
             in
-            case selectedModel of
+            case Sel.selectedItem modelName ed.state of
                 Just m ->
                     ( { model
                         | defaultModelsEditor =
-                            { ed
-                                | page = ModelSelEdit
-                                , draft = Just (draftFromModel m)
-                                , confirmDelete = Nothing
-                            }
+                            { ed | state = Sel.openEdit (draftFromModel m) ed.state }
                       }
                     , Cmd.batch
                         [ focusAfterDelay "model-editor-name-default"
@@ -2105,15 +1910,11 @@ update msg model =
                 ed =
                     model.defaultModelsEditor
             in
-            case List.filter (\m -> m.id == id) ed.working |> List.head of
+            case List.filter (\m -> m.id == id) ed.state.working |> List.head of
                 Just m ->
                     ( { model
                         | defaultModelsEditor =
-                            { ed
-                                | page = ModelSelEdit
-                                , draft = Just (draftFromModel m)
-                                , confirmDelete = Nothing
-                            }
+                            { ed | state = Sel.openEdit (draftFromModel m) ed.state }
                       }
                     , Cmd.batch
                         [ focusAfterDelay "model-editor-name-default"
@@ -2131,11 +1932,7 @@ update msg model =
             in
             ( { model
                 | defaultModelsEditor =
-                    { ed
-                        | page = ModelSelEdit
-                        , draft = Just T.emptyDraft
-                        , confirmDelete = Nothing
-                    }
+                    { ed | state = Sel.openEdit T.emptyDraft ed.state }
               }
             , Cmd.batch
                 [ focusAfterDelay "model-editor-name-default"
@@ -2150,10 +1947,7 @@ update msg model =
             in
             ( { model
                 | defaultModelsEditor =
-                    { ed
-                        | page = ModelSelList
-                        , draft = Nothing
-                    }
+                    { ed | state = Sel.backFromEdit ed.state }
               }
             , Cmd.batch
                 [ focusAfterDelay "model-selector-input-default"
@@ -2162,44 +1956,19 @@ update msg model =
             )
 
         DefaultModelsEditSave ->
-            case model.defaultModelsEditor.draft of
-                Just draft ->
-                    let
-                        ed =
-                            model.defaultModelsEditor
-
-                        newModel =
-                            modelFromDraft draft
-
-                        working =
-                            if draft.id == 0 then
-                                let
-                                    nextId =
-                                        List.foldl (\m acc -> max acc m.id) 0 ed.working + 1
-                                in
-                                ed.working ++ [ { newModel | id = nextId } ]
-
-                            else
-                                List.map
-                                    (\m -> if m.id == draft.id then newModel else m)
-                                    ed.working
-                    in
-                    ( { model
-                        | defaultModelsEditor =
-                            { ed
-                                | page = ModelSelList
-                                , working = working
-                                , draft = Nothing
-                            }
-                      }
-                    , Cmd.batch
-                        [ focusAfterDelay "model-selector-input-default"
-                        , Ports.setCursorPos "model-selector-input-default"
-                        ]
-                    )
-
-                Nothing ->
-                    ( model, Cmd.none )
+            let
+                ed =
+                    model.defaultModelsEditor
+            in
+            ( { model
+                | defaultModelsEditor =
+                    { ed | state = Sel.saveItem (\d -> d.id) modelFromDraft (\m -> m.id) ed.state }
+              }
+            , Cmd.batch
+                [ focusAfterDelay "model-selector-input-default"
+                , Ports.setCursorPos "model-selector-input-default"
+                ]
+            )
 
         DefaultModelsEditField field value ->
             let
@@ -2208,9 +1977,7 @@ update msg model =
             in
             ( { model
                 | defaultModelsEditor =
-                    { ed
-                        | draft = Maybe.map (updateDraftField field value) ed.draft
-                    }
+                    { ed | state = Sel.updateDraft (updateDraftField field value) ed.state }
               }
             , Cmd.none
             )
@@ -2221,7 +1988,7 @@ update msg model =
                     model.defaultModelsEditor
             in
             ( { model
-                | defaultModelsEditor = { ed | confirmDelete = Just id }
+                | defaultModelsEditor = { ed | state = Sel.requestDelete id ed.state }
               }
             , Cmd.none
             )
@@ -2232,11 +1999,7 @@ update msg model =
                     model.defaultModelsEditor
             in
             ( { model
-                | defaultModelsEditor =
-                    { ed
-                        | working = List.filter (\m -> m.id /= id) ed.working
-                        , confirmDelete = Nothing
-                    }
+                | defaultModelsEditor = { ed | state = Sel.confirmDeleteItem (\m -> m.id) id ed.state }
               }
             , Cmd.none
             )
@@ -2247,7 +2010,7 @@ update msg model =
                     model.defaultModelsEditor
             in
             ( { model
-                | defaultModelsEditor = { ed | confirmDelete = Nothing }
+                | defaultModelsEditor = { ed | state = Sel.cancelDelete ed.state }
               }
             , Cmd.none
             )
@@ -2258,11 +2021,11 @@ update msg model =
                     model.defaultModelsEditor
             in
             ( { model
-                | defaultModelsEditor = { ed | page = ModelSelSyncing }
+                | defaultModelsEditor = { ed | state = Sel.startSync ed.state }
               }
             , Ports.syncDefaultModels
                 { preset = ed.preset
-                , config = encodeModels ed.working
+                , config = encodeModels ed.state.working
                 }
             )
 
@@ -2277,7 +2040,7 @@ update msg model =
                     model.defaultModelsEditor
             in
             ( { model
-                | defaultModelsEditor = { ed | page = ModelSelList }
+                | defaultModelsEditor = { ed | state = Sel.backToList ed.state }
               }
             , Cmd.batch
                 [ focusAfterDelay "model-selector-input-default"
@@ -2292,7 +2055,7 @@ update msg model =
                         ed =
                             model.defaultModelsEditor
                     in
-                    if ed.page /= ModelSelSyncing then
+                    if ed.state.page /= ModelSelSyncing then
                         ( model, Cmd.none )
 
                     else if res.ok then
@@ -2303,10 +2066,7 @@ update msg model =
                     else
                         ( { model
                             | defaultModelsEditor =
-                                { ed
-                                    | page = ModelSelSyncFailed
-                                    , syncError = Just res.error
-                                }
+                                { ed | state = Sel.syncFailed res.error ed.state }
                           }
                         , Cmd.none
                         )
@@ -2319,8 +2079,8 @@ update msg model =
                 | mcpEditor =
                     { emptyMcpEditor
                         | show = True
-                        , page = ModelSelLoading
                         , preset = preset
+                        , state = Sel.setLoading Sel.empty
                     }
                 , showGlobalMenu = False
               }
@@ -2332,20 +2092,21 @@ update msg model =
                 ed =
                     model.mcpEditor
             in
-            if ed.page == ModelSelSyncing then
-                -- Do not allow closing while a sync is in flight
-                ( model, Cmd.none )
+            case Sel.closeRequest ed.state of
+                Nothing ->
+                    -- Sync in flight: do not allow closing
+                    ( model, Cmd.none )
 
-            else if ed.working /= ed.original then
-                -- Unsaved edits: ask before closing
-                ( { model | mcpEditor = { ed | page = ModelSelConfirmSync } }
-                , Cmd.none
-                )
+                Just True ->
+                    -- Unsaved edits: ask before closing
+                    ( { model | mcpEditor = { ed | state = Sel.askSync ed.state } }
+                    , Cmd.none
+                    )
 
-            else
-                ( { model | mcpEditor = emptyMcpEditor }
-                , Cmd.none
-                )
+                Just False ->
+                    ( { model | mcpEditor = emptyMcpEditor }
+                    , Cmd.none
+                    )
 
         McpListResult raw ->
             case D.decodeValue mcpListResultDecoder raw of
@@ -2361,12 +2122,7 @@ update msg model =
                     if res.ok then
                         ( { model
                             | mcpEditor =
-                                { ed
-                                    | page = ModelSelList
-                                    , original = servers
-                                    , working = servers
-                                    , loadError = Nothing
-                                }
+                                { ed | state = Sel.setList servers ed.state }
                           }
                         , Cmd.batch
                             [ focusAfterDelay "mcp-selector-input-default"
@@ -2377,10 +2133,7 @@ update msg model =
                     else
                         ( { model
                             | mcpEditor =
-                                { ed
-                                    | page = ModelSelList
-                                    , loadError = Just res.error
-                                }
+                                { ed | state = Sel.setLoadError (Just res.error) ed.state }
                           }
                         , Cmd.none
                         )
@@ -2392,23 +2145,8 @@ update msg model =
             let
                 ed =
                     model.mcpEditor
-
-                filtered =
-                    filterMcpServers ed.working val
-
-                clampedSelected =
-                    if List.length filtered <= ed.selected then
-                        max 0 (List.length filtered - 1)
-                    else
-                        ed.selected
             in
-            ( { model
-                | mcpEditor =
-                    { ed
-                        | input = val
-                        , selected = clampedSelected
-                    }
-              }
+            ( { model | mcpEditor = { ed | state = Sel.setInput mcpServerName val ed.state } }
             , Cmd.none
             )
 
@@ -2417,18 +2155,15 @@ update msg model =
                 ed =
                     model.mcpEditor
 
-                filtered =
-                    filterMcpServers ed.working ed.input
-
                 scrollCmd =
-                    case List.head (List.drop idx filtered) of
+                    case List.head (List.drop idx (Sel.filterItems mcpServerName ed.state.working ed.state.input)) of
                         Just s ->
                             Ports.scrollIntoView ("mcp-selector-item-default-" ++ String.fromInt s.id)
 
                         Nothing ->
                             Cmd.none
             in
-            ( { model | mcpEditor = { ed | selected = idx } }
+            ( { model | mcpEditor = { ed | state = Sel.selectItem idx ed.state } }
             , scrollCmd
             )
 
@@ -2436,22 +2171,12 @@ update msg model =
             let
                 ed =
                     model.mcpEditor
-
-                filtered =
-                    filterMcpServers ed.working ed.input
-
-                selectedServer =
-                    List.head (List.drop ed.selected filtered)
             in
-            case selectedServer of
+            case Sel.selectedItem mcpServerName ed.state of
                 Just s ->
                     ( { model
                         | mcpEditor =
-                            { ed
-                                | page = ModelSelEdit
-                                , draft = Just (draftFromMcp s)
-                                , confirmDelete = Nothing
-                            }
+                            { ed | state = Sel.openEdit (draftFromMcp s) ed.state }
                       }
                     , Cmd.batch
                         [ focusAfterDelay "mcp-editor-server-default"
@@ -2467,15 +2192,11 @@ update msg model =
                 ed =
                     model.mcpEditor
             in
-            case List.filter (\s -> s.id == id) ed.working |> List.head of
+            case List.filter (\s -> s.id == id) ed.state.working |> List.head of
                 Just s ->
                     ( { model
                         | mcpEditor =
-                            { ed
-                                | page = ModelSelEdit
-                                , draft = Just (draftFromMcp s)
-                                , confirmDelete = Nothing
-                            }
+                            { ed | state = Sel.openEdit (draftFromMcp s) ed.state }
                       }
                     , Cmd.batch
                         [ focusAfterDelay "mcp-editor-server-default"
@@ -2493,11 +2214,7 @@ update msg model =
             in
             ( { model
                 | mcpEditor =
-                    { ed
-                        | page = ModelSelEdit
-                        , draft = Just T.emptyMcpDraft
-                        , confirmDelete = Nothing
-                    }
+                    { ed | state = Sel.openEdit T.emptyMcpDraft ed.state }
               }
             , Cmd.batch
                 [ focusAfterDelay "mcp-editor-server-default"
@@ -2512,10 +2229,7 @@ update msg model =
             in
             ( { model
                 | mcpEditor =
-                    { ed
-                        | page = ModelSelList
-                        , draft = Nothing
-                    }
+                    { ed | state = Sel.backFromEdit ed.state }
               }
             , Cmd.batch
                 [ focusAfterDelay "mcp-selector-input-default"
@@ -2524,44 +2238,19 @@ update msg model =
             )
 
         McpEditSave ->
-            case model.mcpEditor.draft of
-                Just draft ->
-                    let
-                        ed =
-                            model.mcpEditor
-
-                        newServer =
-                            mcpFromDraft draft
-
-                        working =
-                            if draft.id == 0 then
-                                let
-                                    nextId =
-                                        List.foldl (\s acc -> max acc s.id) 0 ed.working + 1
-                                in
-                                ed.working ++ [ { newServer | id = nextId } ]
-
-                            else
-                                List.map
-                                    (\s -> if s.id == draft.id then newServer else s)
-                                    ed.working
-                    in
-                    ( { model
-                        | mcpEditor =
-                            { ed
-                                | page = ModelSelList
-                                , working = working
-                                , draft = Nothing
-                            }
-                      }
-                    , Cmd.batch
-                        [ focusAfterDelay "mcp-selector-input-default"
-                        , Ports.setCursorPos "mcp-selector-input-default"
-                        ]
-                    )
-
-                Nothing ->
-                    ( model, Cmd.none )
+            let
+                ed =
+                    model.mcpEditor
+            in
+            ( { model
+                | mcpEditor =
+                    { ed | state = Sel.saveItem (\d -> d.id) mcpFromDraft (\s -> s.id) ed.state }
+              }
+            , Cmd.batch
+                [ focusAfterDelay "mcp-selector-input-default"
+                , Ports.setCursorPos "mcp-selector-input-default"
+                ]
+            )
 
         McpEditField field value ->
             let
@@ -2570,9 +2259,7 @@ update msg model =
             in
             ( { model
                 | mcpEditor =
-                    { ed
-                        | draft = Maybe.map (updateMcpDraftField field value) ed.draft
-                    }
+                    { ed | state = Sel.updateDraft (updateMcpDraftField field value) ed.state }
               }
             , Cmd.none
             )
@@ -2583,7 +2270,7 @@ update msg model =
                     model.mcpEditor
             in
             ( { model
-                | mcpEditor = { ed | confirmDelete = Just id }
+                | mcpEditor = { ed | state = Sel.requestDelete id ed.state }
               }
             , Cmd.none
             )
@@ -2594,11 +2281,7 @@ update msg model =
                     model.mcpEditor
             in
             ( { model
-                | mcpEditor =
-                    { ed
-                        | working = List.filter (\s -> s.id /= id) ed.working
-                        , confirmDelete = Nothing
-                    }
+                | mcpEditor = { ed | state = Sel.confirmDeleteItem (\s -> s.id) id ed.state }
               }
             , Cmd.none
             )
@@ -2609,7 +2292,7 @@ update msg model =
                     model.mcpEditor
             in
             ( { model
-                | mcpEditor = { ed | confirmDelete = Nothing }
+                | mcpEditor = { ed | state = Sel.cancelDelete ed.state }
               }
             , Cmd.none
             )
@@ -2620,11 +2303,11 @@ update msg model =
                     model.mcpEditor
             in
             ( { model
-                | mcpEditor = { ed | page = ModelSelSyncing }
+                | mcpEditor = { ed | state = Sel.startSync ed.state }
               }
             , Ports.syncDefaultMcp
                 { preset = ed.preset
-                , config = encodeMcpServers ed.working
+                , config = encodeMcpServers ed.state.working
                 }
             )
 
@@ -2639,7 +2322,7 @@ update msg model =
                     model.mcpEditor
             in
             ( { model
-                | mcpEditor = { ed | page = ModelSelList }
+                | mcpEditor = { ed | state = Sel.backToList ed.state }
               }
             , Cmd.batch
                 [ focusAfterDelay "mcp-selector-input-default"
@@ -2654,7 +2337,7 @@ update msg model =
                         ed =
                             model.mcpEditor
                     in
-                    if ed.page /= ModelSelSyncing then
+                    if ed.state.page /= ModelSelSyncing then
                         ( model, Cmd.none )
 
                     else if res.ok then
@@ -2665,10 +2348,7 @@ update msg model =
                     else
                         ( { model
                             | mcpEditor =
-                                { ed
-                                    | page = ModelSelSyncFailed
-                                    , syncError = Just res.error
-                                }
+                                { ed | state = Sel.syncFailed res.error ed.state }
                           }
                         , Cmd.none
                         )
@@ -3644,32 +3324,18 @@ lastIndexOfHelp char str idx found =
                 found
 
 
--- ─── Model Selector Helpers ──────────────────────────────────────────
+-- ─── Selector Search Keys ────────────────────────────────────────────
+-- Passed to Session.Selector.filterItems (and the overlay list view)
+-- to fuzzy-match the selector's search input.
 
-filterModels : List T.ModelInfo -> String -> List T.ModelInfo
-filterModels models term =
-    let
-        trimmed =
-            String.trim term
-    in
-    if String.isEmpty trimmed then
-        models
-
-    else
-        List.filter (\m -> Fuzzy.fuzzyMatch (String.toLower trimmed) (String.toLower m.name)) models
+modelName : T.ModelInfo -> String
+modelName m =
+    m.name
 
 
-filterMcpServers : List T.McpInfo -> String -> List T.McpInfo
-filterMcpServers servers term =
-    let
-        trimmed =
-            String.trim term
-    in
-    if String.isEmpty trimmed then
-        servers
-
-    else
-        List.filter (\s -> Fuzzy.fuzzyMatch (String.toLower trimmed) (String.toLower s.server)) servers
+mcpServerName : T.McpInfo -> String
+mcpServerName s =
+    s.server
 
 
 draftFromMcp : T.McpInfo -> T.McpDraft
@@ -4739,9 +4405,15 @@ viewModelSelectorOverlay : String -> T.SessionState -> Html Msg
 viewModelSelectorOverlay sid session =
     if session.showModelSelector then
         viewOverlay (ForSession sid CloseModelSelector)
-            [ case session.modelSelectorPage of
-                ModelSelEdit ->
-                    case session.modelSelectorDraft of
+            [ Overlay.Selector.viewPage
+                { title = "Model Selector"
+                , page = session.modelSelector.page
+                , dirty = Sel.isDirty session.modelSelector
+                , syncError = session.modelSelector.syncError
+                , listView =
+                    viewModelSelectorList sid session
+                , editorView =
+                    case session.modelSelector.draft of
                         Just draft ->
                             Overlay.ModelEditor.view
                                 { sessionId = sid
@@ -4754,61 +4426,70 @@ viewModelSelectorOverlay sid session =
 
                         Nothing ->
                             Html.text ""
-
-                ModelSelConfirmSync ->
-                    viewSyncPrompt (session.modelSelectorWorking /= session.models)
-                        { onConfirm = ForSession sid ModelSelectorConfirmSync
-                        , onDiscard = ForSession sid ModelSelectorDiscardClose
-                        , onCancel = ForSession sid ModelSelectorCancelSyncPrompt
-                        }
-
-                ModelSelSyncing ->
-                    Html.div [ Attr.class "sel-page" ]
-                        [ viewSelTitle (session.modelSelectorWorking /= session.models)
-                        , Html.div [ Attr.class "sel-page-status" ] [ Html.text "Syncing…" ]
-                        ]
-
-                ModelSelSyncFailed ->
-                    viewSyncFailed
-                        (session.modelSelectorWorking /= session.models)
-                        (Maybe.withDefault "Unknown error" session.modelSelectorSyncError)
-                        { onRetry = ForSession sid ModelSelectorConfirmSync
-                        , onBack = ForSession sid ModelSelectorCancelSyncPrompt
-                        , onDiscard = ForSession sid ModelSelectorDiscardClose
-                        }
-
-                ModelSelLoading ->
-                    Html.div [ Attr.class "sel-page" ]
-                        [ viewSelTitle False
-                        , Html.div [ Attr.class "sel-page-status" ] [ Html.text "Loading…" ]
-                        ]
-
-                ModelSelList ->
-                    Overlay.ModelSelector.view
-                        { sessionId = sid
-                        , models = session.modelSelectorWorking
-                        , input = session.modelSelectorInput
-                        , selected = session.modelSelectorSelected
-                        , activeModelId = session.activeModelId
-                        , activeModelName = session.activeModelName
-                        , confirmDeleteId = session.modelSelectorConfirmDelete
-                        , canDelete = List.length session.modelSelectorWorking > 1
-                        , dirty = session.modelSelectorWorking /= session.models
-                        , error = Nothing
-                        , noOp = NoOp
-                        , onSelect = \i -> ForSession sid (ModelSelectorSelectItem i)
-                        , onConfirm = ForSession sid ModelSelectorConfirmItem
-                        , onClose = ForSession sid CloseModelSelector
-                        , onInput = \v -> ForSession sid (SetModelSelectorInput v)
-                        , onEdit = \id -> ForSession sid (ModelSelectorEditModel id)
-                        , onDelete = \id -> ForSession sid (ModelSelectorDeleteModel id)
-                        , onDeleteConfirm = \id -> ForSession sid (ModelSelectorConfirmDelete id)
-                        , onDeleteCancel = ForSession sid ModelSelectorCancelDelete
-                        , onAdd = ForSession sid ModelSelectorAddModel
-                        }
+                , onSync = ForSession sid ModelSelectorConfirmSync
+                , onDiscard = ForSession sid ModelSelectorDiscardClose
+                , onCancelSync = ForSession sid ModelSelectorCancelSyncPrompt
+                }
             ]
     else
         Html.text ""
+
+
+viewModelSelectorList : String -> T.SessionState -> Html Msg
+viewModelSelectorList sid session =
+    let
+        st =
+            session.modelSelector
+    in
+    Overlay.Selector.viewList
+        { title = "Model Selector"
+        , inputId = "model-selector-input-" ++ sid
+        , itemIdPrefix = "model-selector-item-" ++ sid
+        , placeholder = "Search models…"
+        , emptyText = "No models configured."
+        , noMatchText = "No models match your search."
+        , items = st.working
+        , input = st.input
+        , selected = st.selected
+        , confirmDeleteId = st.confirmDelete
+        , canDelete = List.length st.working > 1
+        , currentLabel = "Current: "
+        , currentValue =
+            if session.activeModelName == "" then
+                "none"
+
+            else
+                session.activeModelName
+        , addTitle = "Add model"
+        , itemId = \m -> m.id
+        , itemTitle = \m -> m.name
+        , itemSubtitle = \_ -> ""
+        , isActive = \m -> session.activeModelId == Just m.id
+        , editTitle = \m ->
+            if session.activeModelId == Just m.id then
+                "Active model cannot be edited"
+
+            else
+                "Edit model"
+        , deleteTitle = \m ->
+            if session.activeModelId == Just m.id then
+                "Active model cannot be deleted"
+
+            else if List.length st.working <= 1 then
+                "At least one model must remain"
+
+            else
+                "Delete model"
+        , onSelect = \i -> ForSession sid (ModelSelectorSelectItem i)
+        , onConfirm = ForSession sid ModelSelectorConfirmItem
+        , noOp = NoOp
+        , onInput = \v -> ForSession sid (SetModelSelectorInput v)
+        , onEdit = \id -> ForSession sid (ModelSelectorEditModel id)
+        , onDelete = \id -> ForSession sid (ModelSelectorDeleteModel id)
+        , onDeleteConfirm = \id -> ForSession sid (ModelSelectorConfirmDelete id)
+        , onDeleteCancel = ForSession sid ModelSelectorCancelDelete
+        , onAdd = ForSession sid ModelSelectorAddModel
+        }
 
 
 viewDefaultModelsEditorOverlay : Model -> Html Msg
@@ -4819,9 +4500,15 @@ viewDefaultModelsEditorOverlay model =
     in
     if ed.show then
         viewOverlay CloseDefaultModelsEditor
-            [ case ed.page of
-                ModelSelEdit ->
-                    case ed.draft of
+            [ Overlay.Selector.viewPage
+                { title = "Model Selector"
+                , page = ed.state.page
+                , dirty = Sel.isDirty ed.state
+                , syncError = ed.state.syncError
+                , listView =
+                    viewDefaultModelsList ed
+                , editorView =
+                    case ed.state.draft of
                         Just draft ->
                             Overlay.ModelEditor.view
                                 { sessionId = "default"
@@ -4834,61 +4521,53 @@ viewDefaultModelsEditorOverlay model =
 
                         Nothing ->
                             Html.text ""
-
-                ModelSelConfirmSync ->
-                    viewSyncPrompt (ed.working /= ed.original)
-                        { onConfirm = DefaultModelsConfirmSync
-                        , onDiscard = DefaultModelsDiscardClose
-                        , onCancel = DefaultModelsCancelSyncPrompt
-                        }
-
-                ModelSelSyncing ->
-                    Html.div [ Attr.class "sel-page" ]
-                        [ viewSelTitle (ed.working /= ed.original)
-                        , Html.div [ Attr.class "sel-page-status" ] [ Html.text "Syncing…" ]
-                        ]
-
-                ModelSelSyncFailed ->
-                    viewSyncFailed
-                        (ed.working /= ed.original)
-                        (Maybe.withDefault "Unknown error" ed.syncError)
-                        { onRetry = DefaultModelsConfirmSync
-                        , onBack = DefaultModelsCancelSyncPrompt
-                        , onDiscard = DefaultModelsDiscardClose
-                        }
-
-                ModelSelLoading ->
-                    Html.div [ Attr.class "sel-page" ]
-                        [ viewSelTitle False
-                        , Html.div [ Attr.class "sel-page-status" ] [ Html.text "Loading…" ]
-                        ]
-
-                ModelSelList ->
-                    Overlay.ModelSelector.view
-                        { sessionId = "default"
-                        , models = ed.working
-                        , input = ed.input
-                        , selected = ed.selected
-                        , activeModelId = Nothing
-                        , activeModelName = ""
-                        , confirmDeleteId = ed.confirmDelete
-                        , canDelete = List.length ed.working > 1
-                        , dirty = ed.working /= ed.original
-                        , error = ed.loadError
-                        , noOp = NoOp
-                        , onSelect = DefaultModelsSelectItem
-                        , onConfirm = DefaultModelsConfirmItem
-                        , onClose = CloseDefaultModelsEditor
-                        , onInput = SetDefaultModelsInput
-                        , onEdit = DefaultModelsEditModel
-                        , onDelete = DefaultModelsDeleteModel
-                        , onDeleteConfirm = DefaultModelsConfirmDelete
-                        , onDeleteCancel = DefaultModelsCancelDelete
-                        , onAdd = DefaultModelsAddModel
-                        }
+                , onSync = DefaultModelsConfirmSync
+                , onDiscard = DefaultModelsDiscardClose
+                , onCancelSync = DefaultModelsCancelSyncPrompt
+                }
             ]
     else
         Html.text ""
+
+
+viewDefaultModelsList : DefaultModelsEditor -> Html Msg
+viewDefaultModelsList ed =
+    Overlay.Selector.viewList
+        { title = "Model Selector"
+        , inputId = "model-selector-input-default"
+        , itemIdPrefix = "model-selector-item-default"
+        , placeholder = "Search models…"
+        , emptyText = "No models configured."
+        , noMatchText = "No models match your search."
+        , items = ed.state.working
+        , input = ed.state.input
+        , selected = ed.state.selected
+        , confirmDeleteId = ed.state.confirmDelete
+        , canDelete = List.length ed.state.working > 1
+        , currentLabel = "Preset: "
+        , currentValue = ed.preset
+        , addTitle = "Add model"
+        , itemId = \m -> m.id
+        , itemTitle = \m -> m.name
+        , itemSubtitle = \_ -> ""
+        , isActive = \_ -> False
+        , editTitle = \_ -> "Edit model"
+        , deleteTitle = \_ ->
+            if List.length ed.state.working <= 1 then
+                "At least one model must remain"
+
+            else
+                "Delete model"
+        , onSelect = DefaultModelsSelectItem
+        , onConfirm = DefaultModelsConfirmItem
+        , noOp = NoOp
+        , onInput = SetDefaultModelsInput
+        , onEdit = DefaultModelsEditModel
+        , onDelete = DefaultModelsDeleteModel
+        , onDeleteConfirm = DefaultModelsConfirmDelete
+        , onDeleteCancel = DefaultModelsCancelDelete
+        , onAdd = DefaultModelsAddModel
+        }
 
 
 viewMcpEditorOverlay : Model -> Html Msg
@@ -4899,9 +4578,15 @@ viewMcpEditorOverlay model =
     in
     if ed.show then
         viewOverlay CloseMcpEditor
-            [ case ed.page of
-                ModelSelEdit ->
-                    case ed.draft of
+            [ Overlay.Selector.viewPage
+                { title = "MCP Servers"
+                , page = ed.state.page
+                , dirty = Sel.isDirty ed.state
+                , syncError = ed.state.syncError
+                , listView =
+                    viewMcpList ed
+                , editorView =
+                    case ed.state.draft of
                         Just draft ->
                             Overlay.McpEditor.view
                                 { sessionId = "default"
@@ -4914,68 +4599,71 @@ viewMcpEditorOverlay model =
 
                         Nothing ->
                             Html.text ""
-
-                ModelSelConfirmSync ->
-                    viewMcpSyncPrompt (ed.working /= ed.original)
-                        { onConfirm = McpConfirmSync
-                        , onDiscard = McpDiscardClose
-                        , onCancel = McpCancelSyncPrompt
-                        }
-
-                ModelSelSyncing ->
-                    Html.div [ Attr.class "sel-page" ]
-                        [ viewMcpSelTitle (ed.working /= ed.original)
-                        , Html.div [ Attr.class "sel-page-status" ] [ Html.text "Syncing…" ]
-                        ]
-
-                ModelSelSyncFailed ->
-                    viewMcpSyncFailed
-                        (ed.working /= ed.original)
-                        (Maybe.withDefault "Unknown error" ed.syncError)
-                        { onRetry = McpConfirmSync
-                        , onBack = McpCancelSyncPrompt
-                        , onDiscard = McpDiscardClose
-                        }
-
-                ModelSelLoading ->
-                    Html.div [ Attr.class "sel-page" ]
-                        [ viewMcpSelTitle False
-                        , Html.div [ Attr.class "sel-page-status" ] [ Html.text "Loading…" ]
-                        ]
-
-                ModelSelList ->
-                    Overlay.McpSelector.view
-                        { sessionId = "default"
-                        , servers = ed.working
-                        , input = ed.input
-                        , selected = ed.selected
-                        , confirmDeleteId = ed.confirmDelete
-                        , canDelete = List.length ed.working > 1
-                        , dirty = ed.working /= ed.original
-                        , error = ed.loadError
-                        , noOp = NoOp
-                        , onSelect = McpSelectItem
-                        , onConfirm = McpConfirmItem
-                        , onClose = CloseMcpEditor
-                        , onInput = SetMcpInput
-                        , onEdit = McpEditServer
-                        , onDelete = McpDeleteServer
-                        , onDeleteConfirm = McpConfirmDelete
-                        , onDeleteCancel = McpCancelDelete
-                        , onAdd = McpAddServer
-                        }
+                , onSync = McpConfirmSync
+                , onDiscard = McpDiscardClose
+                , onCancelSync = McpCancelSyncPrompt
+                }
             ]
     else
         Html.text ""
 
 
-viewMcpSelTitle : Bool -> Html msg
-viewMcpSelTitle dirty =
-    Html.div
-        [ Attr.class "sel-page-title"
-        , Attr.title (if dirty then "Unsaved changes" else "")
-        ]
-        [ Html.text ("MCP Servers" ++ (if dirty then " *" else "")) ]
+viewMcpList : McpEditor -> Html Msg
+viewMcpList ed =
+    let
+        subtitle s =
+            (if s.type_ == "stdio" then
+                "STDIO"
+
+             else
+                "HTTP"
+            )
+                ++ (if s.url /= "" then
+                        " · " ++ s.url
+
+                    else if s.command /= "" then
+                        " · " ++ s.command
+
+                    else
+                        ""
+                   )
+    in
+    Overlay.Selector.viewList
+        { title = "MCP Servers"
+        , inputId = "mcp-selector-input-default"
+        , itemIdPrefix = "mcp-selector-item-default"
+        , placeholder = "Search servers…"
+        , emptyText = "No MCP servers configured."
+        , noMatchText = "No servers match your search."
+        , items = ed.state.working
+        , input = ed.state.input
+        , selected = ed.state.selected
+        , confirmDeleteId = ed.state.confirmDelete
+        , canDelete = List.length ed.state.working > 1
+        , currentLabel = "Preset: "
+        , currentValue = ed.preset
+        , addTitle = "Add MCP server"
+        , itemId = \s -> s.id
+        , itemTitle = \s -> s.server
+        , itemSubtitle = subtitle
+        , isActive = \_ -> False
+        , editTitle = \_ -> "Edit server"
+        , deleteTitle = \_ ->
+            if List.length ed.state.working <= 1 then
+                "At least one server must remain"
+
+            else
+                "Delete server"
+        , onSelect = McpSelectItem
+        , onConfirm = McpConfirmItem
+        , noOp = NoOp
+        , onInput = SetMcpInput
+        , onEdit = McpEditServer
+        , onDelete = McpDeleteServer
+        , onDeleteConfirm = McpConfirmDelete
+        , onDeleteCancel = McpCancelDelete
+        , onAdd = McpAddServer
+        }
 
 
 viewSettingsEditorOverlay : Model -> Html Msg
@@ -5064,119 +4752,6 @@ viewPresetManagerOverlay model =
             ]
     else
         Html.text ""
-
-
-viewMcpSyncPrompt : Bool -> { onConfirm : msg, onDiscard : msg, onCancel : msg } -> Html msg
-viewMcpSyncPrompt dirty callbacks =
-    Html.div [ Attr.class "sel-page" ]
-        [ viewMcpSelTitle dirty
-        , Html.div [ Attr.class "sel-page-status" ]
-            [ Html.text "You have unsaved changes. Sync them now?" ]
-        , Html.div [ Attr.class "sel-page-actions" ]
-            [ Html.button
-                [ Attr.class "me-save-btn"
-                , Ev.onClick callbacks.onConfirm
-                ]
-                [ Html.text "Sync & Close" ]
-            , Html.button
-                [ Attr.class "me-cancel-btn"
-                , Ev.onClick callbacks.onDiscard
-                ]
-                [ Html.text "Discard & Close" ]
-            , Html.button
-                [ Attr.class "me-cancel-btn"
-                , Ev.onClick callbacks.onCancel
-                ]
-                [ Html.text "Cancel" ]
-            ]
-        ]
-
-
-viewMcpSyncFailed : Bool -> String -> { onRetry : msg, onBack : msg, onDiscard : msg } -> Html msg
-viewMcpSyncFailed dirty error callbacks =
-    Html.div [ Attr.class "sel-page" ]
-        [ viewMcpSelTitle dirty
-        , Html.div [ Attr.class "sel-page-status sel-page-status-error" ]
-            [ Html.text ("Sync failed: " ++ error) ]
-        , Html.div [ Attr.class "sel-page-actions" ]
-            [ Html.button
-                [ Attr.class "me-save-btn"
-                , Ev.onClick callbacks.onRetry
-                ]
-                [ Html.text "Retry" ]
-            , Html.button
-                [ Attr.class "me-cancel-btn"
-                , Ev.onClick callbacks.onBack
-                ]
-                [ Html.text "Back" ]
-            , Html.button
-                [ Attr.class "me-cancel-btn"
-                , Ev.onClick callbacks.onDiscard
-                ]
-                [ Html.text "Discard & Close" ]
-            ]
-        ]
-
-
-viewSelTitle : Bool -> Html msg
-viewSelTitle dirty =
-    Html.div
-        [ Attr.class "sel-page-title"
-        , Attr.title (if dirty then "Unsaved changes" else "")
-        ]
-        [ Html.text ("Model Selector" ++ (if dirty then " *" else "")) ]
-
-
-viewSyncPrompt : Bool -> { onConfirm : msg, onDiscard : msg, onCancel : msg } -> Html msg
-viewSyncPrompt dirty callbacks =
-    Html.div [ Attr.class "sel-page" ]
-        [ viewSelTitle dirty
-        , Html.div [ Attr.class "sel-page-status" ]
-            [ Html.text "You have unsaved changes. Sync them now?" ]
-        , Html.div [ Attr.class "sel-page-actions" ]
-            [ Html.button
-                [ Attr.class "me-save-btn"
-                , Ev.onClick callbacks.onConfirm
-                ]
-                [ Html.text "Sync & Close" ]
-            , Html.button
-                [ Attr.class "me-cancel-btn"
-                , Ev.onClick callbacks.onDiscard
-                ]
-                [ Html.text "Discard & Close" ]
-            , Html.button
-                [ Attr.class "me-cancel-btn"
-                , Ev.onClick callbacks.onCancel
-                ]
-                [ Html.text "Cancel" ]
-            ]
-        ]
-
-
-viewSyncFailed : Bool -> String -> { onRetry : msg, onBack : msg, onDiscard : msg } -> Html msg
-viewSyncFailed dirty error callbacks =
-    Html.div [ Attr.class "sel-page" ]
-        [ viewSelTitle dirty
-        , Html.div [ Attr.class "sel-page-status sel-page-status-error" ]
-            [ Html.text ("Sync failed: " ++ error) ]
-        , Html.div [ Attr.class "sel-page-actions" ]
-            [ Html.button
-                [ Attr.class "me-save-btn"
-                , Ev.onClick callbacks.onRetry
-                ]
-                [ Html.text "Retry" ]
-            , Html.button
-                [ Attr.class "me-cancel-btn"
-                , Ev.onClick callbacks.onBack
-                ]
-                [ Html.text "Back to List" ]
-            , Html.button
-                [ Attr.class "me-cancel-btn"
-                , Ev.onClick callbacks.onDiscard
-                ]
-                [ Html.text "Discard & Close" ]
-            ]
-        ]
 
 
 -- ─── Help Window Overlay ─────────────────────────────────────────────

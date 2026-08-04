@@ -16,7 +16,6 @@ module Session.Types exposing
     , McpDraft
     , emptyMcpDraft
     , latestMcpProtoVersion
-    , ModelSelPage(..)
     , ThemeInfo
     , emptySession
     , emptyDraft
@@ -29,6 +28,7 @@ import Dict exposing (Dict)
 import Set exposing (Set)
 import Json.Decode as D
 import Json.Encode as E
+import Session.Selector
 
 
 -- Media Types
@@ -212,14 +212,7 @@ type alias SessionState =
     , videoRes : Maybe Int
       -- Overlay state (per-session)
     , showModelSelector : Bool
-    , modelSelectorInput : String
-    , modelSelectorSelected : Int
-    , modelSelectorScroll : Int
-    , modelSelectorPage : ModelSelPage
-    , modelSelectorWorking : List ModelInfo
-    , modelSelectorDraft : Maybe ModelDraft
-    , modelSelectorSyncError : Maybe String
-    , modelSelectorConfirmDelete : Maybe Int
+    , modelSelector : Session.Selector.State ModelInfo ModelDraft
     , showHelpWindow : Bool
     , helpFilter : String
     , helpSelected : Int
@@ -310,15 +303,6 @@ latestMcpProtoVersion =
     "2026-07-28"
 
 
-type ModelSelPage
-    = ModelSelList
-    | ModelSelEdit
-    | ModelSelConfirmSync
-    | ModelSelSyncing
-    | ModelSelSyncFailed
-    | ModelSelLoading
-
-
 emptyDraft : ModelDraft
 emptyDraft =
     { id = 0
@@ -387,14 +371,7 @@ emptySession id =
     , videoFps = Nothing
     , videoRes = Nothing
     , showModelSelector = False
-    , modelSelectorInput = ""
-    , modelSelectorSelected = 0
-    , modelSelectorScroll = 0
-    , modelSelectorPage = ModelSelList
-    , modelSelectorWorking = []
-    , modelSelectorDraft = Nothing
-    , modelSelectorSyncError = Nothing
-    , modelSelectorConfirmDelete = Nothing
+    , modelSelector = Session.Selector.empty
     , showHelpWindow = False
     , helpFilter = ""
     , helpSelected = 0
