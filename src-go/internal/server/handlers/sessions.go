@@ -173,14 +173,18 @@ func ListSessionDirs(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		}
 		_, err = os.Stat(filepath.Join(path, "session.alaya"))
 		hasSessionFile := err == nil
-		created := fi.ModTime()
+		// Sort key: modification time (matches Rust's sort by
+		// metadata.modified()). created_at mirrors Rust's
+		// metadata.created() (birth time) where available.
+		mod := fi.ModTime()
+		created := dirs.FileBirthTime(fi)
 		items = append(items, item{
 			info: SessionDirInfo{
 				ID:             e.Name(),
 				HasSessionFile: hasSessionFile,
 				CreatedAt:      fmt.Sprintf("%d", created.Unix()),
 			},
-			mod: created,
+			mod: mod,
 		})
 	}
 	// Newest first (Rust sorts by modified, reversed).
