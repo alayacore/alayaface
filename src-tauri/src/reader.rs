@@ -1,7 +1,8 @@
 //! Background readers for alayacore subprocess pipes.
 //!
 //! `spawn_stdout_reader` reads TLV frames from stdout and emits them as
-//! Tauri events. `spawn_stderr_collector` captures stderr into a log.
+//! Tauri events. (alayacore's stderr is inherited by the parent process
+//! — see alayacore::spawn — so no stderr collector is needed.)
 
 use crate::event::{DeltaEvent, FrameEvent, StatusEvent};
 use crate::tlv;
@@ -98,20 +99,26 @@ fn dispatch_frame(
         // ─── Streaming deltas (At, Ar) ───────────────────────────
         "At" | "Ar" => handle_delta_frame(app, sid, tag, raw_value),
         // ─── Complete/authoritative (AT, AR) ──────────────────────
-        "AT" | "AR" => handle_complete_frame(app, sid, tag, raw_value),
-        // ─── Tool argument delta (Af) ────────────────────────────
-        // Af shares the JSON frame path with AF/UF/Uf (identical
-        // \x00<id>\x00<JSON> wire format); only the tag differs.
-        "Af" => handle_json_frame(app, sid, "Af", raw_value),
+        // Delta mode: content is empty (terminator). Replay/--no-delta: full text.
+        "AT" | "AR" => emit_frame(app, sid, tag, raw_value, None, None, true),
+        // ─── JSON frames (Af, AF, UF, Uf) ────────────────────────
+        // All share the same wire format: raw JSON or a NUL-delimited
+        // history ID prefix followed by JSON. The parsed JSON (when
+        // present) is forwarded so the frontend can decode it by tag.
+        "Af" | "AF" | "UF" | "Uf" => handle_json_frame(app, sid, tag, raw_value),
         // ─── Command output (CO) ─────────────────────────────────
         "CO" => handle_cmd_output_frame(app, sid, raw_value, pending_commands),
-        // ─── JSON frames (AF, UF, Uf) ───────────────────────────
-        // Uf is a tool result preview snapshot: same \x00<id>\x00<JSON>
-        // wire format, so handle_json_frame parses it identically.
-        "AF" | "UF" | "Uf" => handle_json_frame(app, sid, tag, raw_value),
+        // ─── System message (SM) ─────────────────────────────────
         "SM" => handle_sm_frame(app, sid, raw_value),
         // ─── Everything else (user echoes, unknown) ─────────────
-        _ => handle_other_frame(app, sid, tag, raw_value),
+        _ => {
+            let user_content_type = if is_user_echo_tag(tag) {
+                Some(tag.clone())
+            } else {
+                None
+            };
+            emit_frame(app, sid, tag, raw_value, None, user_content_type, false);
+        }
     }
 }
 
@@ -132,59 +139,21 @@ fn handle_delta_frame(app: &AppHandle, sid: &str, tag: &str, raw_value: &str) {
         // new sessions array → unnecessary re-render).
     } else {
         // Malformed delta (no NUL prefix) — unlikely, but send raw
-        let _ = app.emit("tlv-frame", FrameEvent {
-            session_id: sid.to_string(),
-            tag: tag.to_string(),
-            raw_value: raw_value.to_string(),
-            history_id: None,
-            content: Some(raw_value.to_string()),
-            json: None,
-            user_content_type: None,
-        });
+        emit_frame(app, sid, tag, raw_value, None, None, false);
     }
 }
 
-/// Handle AT/AR complete/authoritative frames.
-/// Delta mode: content is empty (terminator). Replay/--no-delta: full text.
-fn handle_complete_frame(app: &AppHandle, sid: &str, tag: &str, raw_value: &str) {
-    let parts = tlv::unwrap_delta(raw_value);
-    let hid = if parts.has_delta { Some(parts.history_id) } else { None };
-    let ct = parts.content;
-
-    let _ = app.emit("tlv-frame", FrameEvent {
-        session_id: sid.to_string(),
-        tag: tag.to_string(),
-        raw_value: raw_value.to_string(),
-        history_id: hid,
-        content: if ct.is_empty() { None } else { Some(ct) },
-        json: None,
-        user_content_type: None,
-    });
-}
-
-/// Handle AF/UF/Uf/Af JSON frames.
-///
-/// All of these share the same wire format: either raw JSON or a
-/// NUL-delimited history ID prefix followed by JSON. The parsed JSON
-/// (when present) is forwarded so the frontend can decode it by tag.
+/// Handle AF/UF/Uf/Af JSON frames. See dispatch_frame for the shared
+/// wire format; the parsed JSON (when present) is forwarded to the
+/// frontend, which decodes it by tag.
 fn handle_json_frame(app: &AppHandle, sid: &str, tag: &str, raw_value: &str) {
     let parts = tlv::unwrap_delta(raw_value);
-    let (history_id, content, json_val) = if parts.has_delta {
-        let json = serde_json::from_str::<serde_json::Value>(&parts.content).ok();
-        (Some(parts.history_id), Some(parts.content), json)
+    let json = if parts.has_delta {
+        serde_json::from_str::<serde_json::Value>(&parts.content).ok()
     } else {
-        let json = serde_json::from_str::<serde_json::Value>(raw_value).ok();
-        (None, Some(raw_value.to_string()), json)
+        serde_json::from_str::<serde_json::Value>(raw_value).ok()
     };
-    let _ = app.emit("tlv-frame", FrameEvent {
-        session_id: sid.to_string(),
-        tag: tag.to_string(),
-        raw_value: raw_value.to_string(),
-        history_id,
-        content,
-        json: json_val,
-        user_content_type: None,
-    });
+    emit_frame(app, sid, tag, raw_value, json, None, false);
 }
 
 /// Handle CO command output frames.
@@ -207,15 +176,7 @@ fn handle_cmd_output_frame(
             obj.insert("name".to_string(), serde_json::Value::String(name));
         }
     }
-    let _ = app.emit("tlv-frame", FrameEvent {
-        session_id: sid.to_string(),
-        tag: "CO".to_string(),
-        raw_value: raw_value.to_string(),
-        history_id: None,
-        content: Some(raw_value.to_string()),
-        json: Some(json_val),
-        user_content_type: None,
-    });
+    emit_frame(app, sid, "CO", raw_value, Some(json_val), None, false);
 }
 
 /// Handle SM system message frames.
@@ -223,37 +184,42 @@ fn handle_sm_frame(app: &AppHandle, sid: &str, raw_value: &str) {
     let json_val = serde_json::from_str::<tlv::SystemMsgEnvelope>(raw_value).ok().map(|env| {
         serde_json::json!({ "type": env.msg_type, "data": env.data })
     });
-    let _ = app.emit("tlv-frame", FrameEvent {
-        session_id: sid.to_string(),
-        tag: "SM".to_string(),
-        raw_value: raw_value.to_string(),
-        history_id: None,
-        content: Some(raw_value.to_string()),
-        json: json_val,
-        user_content_type: None,
-    });
+    emit_frame(app, sid, "SM", raw_value, json_val, None, false);
 }
 
-/// Handle all other frames (user echoes, unknown tags).
-fn handle_other_frame(app: &AppHandle, sid: &str, tag: &str, raw_value: &str) {
+/// Build and emit a `tlv-frame` event from a raw frame value.
+///
+/// Unwraps the optional NUL-delimited history-ID prefix; `json` and
+/// `user_content_type` are attached verbatim. `empty_to_none` maps an
+/// empty payload to `content: None` (used by AT/AR terminators, where an
+/// empty value means "deltas already carried the text").
+fn emit_frame(
+    app: &AppHandle,
+    sid: &str,
+    tag: &str,
+    raw_value: &str,
+    json: Option<serde_json::Value>,
+    user_content_type: Option<String>,
+    empty_to_none: bool,
+) {
     let parts = tlv::unwrap_delta(raw_value);
-    let (history_id, content) = if parts.has_delta {
-        (Some(parts.history_id), Some(parts.content))
+    let content = if parts.has_delta {
+        Some(parts.content)
     } else {
-        (None, Some(raw_value.to_string()))
+        Some(raw_value.to_string())
     };
-    let user_content_type = if is_user_echo_tag(tag) {
-        Some(tag.to_string())
+    let content = if empty_to_none {
+        content.filter(|c| !c.is_empty())
     } else {
-        None
+        content
     };
     let _ = app.emit("tlv-frame", FrameEvent {
         session_id: sid.to_string(),
         tag: tag.to_string(),
         raw_value: raw_value.to_string(),
-        history_id,
+        history_id: if parts.has_delta { Some(parts.history_id) } else { None },
         content,
-        json: None,
+        json,
         user_content_type,
     });
 }
