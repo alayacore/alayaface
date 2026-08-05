@@ -2541,10 +2541,10 @@ update msg model =
                             Dict.get info.sessionId model.windowPositions
 
                         winW =
-                            Maybe.map .w winSize |> Maybe.withDefault 560
+                            Maybe.map .w winSize |> Maybe.withDefault defaultWinW
 
                         winH =
-                            Maybe.map .h winSize |> Maybe.withDefault 640
+                            Maybe.map .h winSize |> Maybe.withDefault defaultWinH
 
                         maxX =
                             max 0 (model.appWidth - winW)
