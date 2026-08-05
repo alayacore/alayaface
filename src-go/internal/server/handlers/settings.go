@@ -1,0 +1,147 @@
+package handlers
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"unicode"
+
+	"alayaface/src-go/internal/dirs"
+)
+
+// GlobalSettings mirrors ~/.alayaface/presets/<name>/settings.conf.
+// This file is AlayaFace-owned — alayacore does not read it.
+type GlobalSettings struct {
+	// ToolConfirm is a comma-separated (no spaces) list of tool IDs
+	// pre-approved at session start, passed to alayacore as
+	// --tool-confirm=id1,id2,...
+	ToolConfirm string `json:"tool_confirm"`
+}
+
+// readSettingsFrom reads settings from a config dir; a missing/empty
+// file yields defaults.
+func readSettingsFrom(configDir string) (GlobalSettings, error) {
+	path := filepath.Join(configDir, "settings.conf")
+	text, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return GlobalSettings{}, nil
+		}
+		return GlobalSettings{}, err
+	}
+	if strings.TrimSpace(string(text)) == "" {
+		return GlobalSettings{}, nil
+	}
+	var s GlobalSettings
+	if err := json.Unmarshal(text, &s); err != nil {
+		return GlobalSettings{}, fmt.Errorf("failed to parse settings.conf: %w", err)
+	}
+	return s, nil
+}
+
+// NormalizeToolConfirm normalizes a comma-separated tool list: trim each
+// id, drop empties, reject duplicates and ids containing whitespace.
+func NormalizeToolConfirm(raw string) (string, error) {
+	seen := map[string]bool{}
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		id := strings.TrimSpace(part)
+		if id == "" {
+			continue
+		}
+		if strings.IndexFunc(id, unicode.IsSpace) >= 0 {
+			return "", fmt.Errorf("tool id must not contain spaces: %s", id)
+		}
+		if seen[id] {
+			return "", fmt.Errorf("duplicate tool id: %s", id)
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return strings.Join(out, ","), nil
+}
+
+// readGlobalSettings reads the active preset's settings; a missing or
+// empty file yields defaults.
+func readGlobalSettings() (GlobalSettings, error) {
+	configDir, _, err := dirs.Ensure()
+	if err != nil {
+		return GlobalSettings{}, err
+	}
+	return readSettingsFrom(configDir)
+}
+
+// effectiveToolConfirm returns the normalized global tool-confirm list.
+func effectiveToolConfirm() (string, error) {
+	s, err := readGlobalSettings()
+	if err != nil {
+		return "", err
+	}
+	return NormalizeToolConfirm(s.ToolConfirm)
+}
+
+// GetGlobalSettings reads a preset's settings (`preset` empty = active).
+func GetGlobalSettings(h *Handler, w http.ResponseWriter, r *http.Request) error {
+	var args struct {
+		Preset string `json:"preset"`
+	}
+	if err := decodeArgs(r, &args); err != nil {
+		return err
+	}
+	configDir, err := dirs.ResolveConfigDir(args.Preset)
+	if err != nil {
+		return err
+	}
+	s, err := readSettingsFrom(configDir)
+	if err != nil {
+		return err
+	}
+	normalized, err := NormalizeToolConfirm(s.ToolConfirm)
+	if err != nil {
+		return err
+	}
+	return writeJSON(w, map[string]string{"tool_confirm": normalized})
+}
+
+// SyncGlobalSettings replaces a preset's settings (`preset` empty =
+// active). Accepts {"tool_confirm": "id1,id2"}; writes atomically.
+func SyncGlobalSettings(h *Handler, w http.ResponseWriter, r *http.Request) error {
+	var args struct {
+		Config string `json:"config"`
+		Preset string `json:"preset"`
+	}
+	if err := decodeArgs(r, &args); err != nil {
+		return err
+	}
+	var value map[string]any
+	if err := json.Unmarshal([]byte(args.Config), &value); err != nil {
+		return fmt.Errorf("invalid settings JSON: %w", err)
+	}
+	raw, _ := value["tool_confirm"].(string)
+	normalized, err := NormalizeToolConfirm(raw)
+	if err != nil {
+		return err
+	}
+	settings := GlobalSettings{ToolConfirm: normalized}
+
+	configDir, err := dirs.ResolveConfigDir(args.Preset)
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(configDir, "settings.conf")
+	tmp := filepath.Join(configDir, "settings.conf.tmp")
+	text, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(tmp, text, 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	return writeResult(w, nil)
+}

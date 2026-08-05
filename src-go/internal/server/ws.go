@@ -1,0 +1,57 @@
+package server
+
+import (
+	"log"
+	"net/http"
+
+	"github.com/gorilla/websocket"
+)
+
+// handleWS upgrades GET /ws and pumps hub events to the client.
+//
+// Server → client: {type, payload} text messages (tlv-delta,
+// tlv-frame, core-status). Client → server: only control frames
+// (ping/pong/close); the read loop exists to detect disconnects.
+func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
+	if s.Token != "" && r.URL.Query().Get("token") != s.Token {
+		writeRPCError(w, &rpcError{status: http.StatusUnauthorized, msg: "unauthorized"})
+		return
+	}
+
+	conn, err := s.upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("[ws] upgrade failed: %v", err)
+		return
+	}
+
+	c := s.Hub.NewClient()
+	s.Hub.Register(c)
+	log.Printf("[ws] client connected")
+
+	// Write pump: drain the client's send channel.
+	writeDone := make(chan struct{})
+	go func() {
+		defer close(writeDone)
+		for msg := range c.Chan() {
+			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+				return
+			}
+		}
+	}()
+
+	// Read pump: detect client close; also answer pings.
+	conn.SetReadLimit(4096)
+	conn.SetPongHandler(func(string) error { return nil })
+	for {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			break
+		}
+	}
+
+	// Cleanup: unregister (closes send chan → write pump exits),
+	// then close the connection.
+	s.Hub.Unregister(c)
+	_ = conn.Close()
+	<-writeDone
+	log.Printf("[ws] client disconnected")
+}

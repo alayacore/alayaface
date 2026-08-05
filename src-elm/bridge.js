@@ -1,15 +1,114 @@
-// ─── Elm-Tauri Bridge ────────────────────────────────────────────────
+// ─── Elm Backend Bridge ──────────────────────────────────────────────
 //
-// Plain JS bridge (no npm, no modules). Uses window.__TAURI__ global
-// API (enabled by app.withGlobalTauri in tauri.conf.json).
+// Plain JS bridge (no npm, no modules). Two backends, one bridge:
 //
-// To port to web/VS Code: replace __TAURI__ calls accordingly.
+//   Tauri (Rust)   → window.__TAURI__ present → tauriTransport()
+//                    invoke = __TAURI__.core.invoke
+//                    onEvent = __TAURI__.event.listen
+//   Go (HTTP/WS)   → no __TAURI__ → httpTransport()
+//                    invoke = fetch POST /rpc/{cmd}
+//                    onEvent = WebSocket /ws ({type, payload} messages)
+//
+// The Elm port wiring below is identical for both backends.
 
 (function () {
   "use strict";
 
-  const invoke = window.__TAURI__.core.invoke;
-  const listen = window.__TAURI__.event.listen;
+  // ─── Transport ────────────────────────────────────────────────────
+  // interface:
+  //   invoke(cmd, args) → Promise<result>          (Tauri invoke parity)
+  //   onEvent(name, cb) → unlisten | Promise<unlisten>
+  //   isMaximized()     → Promise<boolean>
+  //   onWindowEvent(cb) → void
+
+  function tauriTransport() {
+    var invoke = window.__TAURI__.core.invoke;
+    var listen = window.__TAURI__.event.listen;
+    return {
+      invoke: function (cmd, args) {
+        return invoke(cmd, args);
+      },
+      onEvent: function (name, cb) {
+        return listen(name, function (ev) { cb(ev.payload); });
+      },
+      isMaximized: function () {
+        return window.__TAURI__.window.getCurrentWindow().isMaximized();
+      },
+      onWindowEvent: function (cb) {
+        window.__TAURI__.window.getCurrentWindow().onResized(function () {
+          window.__TAURI__.window.getCurrentWindow().isMaximized().then(cb);
+        });
+      },
+    };
+  }
+
+  function httpTransport() {
+    var ws = null;
+    var listeners = {}; // event name → [cb]
+    var stopped = false;
+
+    function connect() {
+      var proto = location.protocol === "https:" ? "wss" : "ws";
+      try {
+        ws = new WebSocket(proto + "://" + location.host + "/ws");
+      } catch (e) {
+        setTimeout(connect, 1000);
+        return;
+      }
+      ws.onmessage = function (ev) {
+        var msg;
+        try { msg = JSON.parse(ev.data); } catch (e) { return; }
+        var cbs = listeners[msg.type] || [];
+        for (var i = 0; i < cbs.length; i++) { cbs[i](msg.payload); }
+      };
+      ws.onclose = function () {
+        if (stopped) return;
+        setTimeout(connect, 1000); // simple reconnect
+      };
+    }
+    connect();
+
+    return {
+      invoke: function (cmd, args) {
+        return fetch("/rpc/" + cmd, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(args || {}),
+        }).then(function (res) {
+          return res.text().then(function (text) {
+            var body = null;
+            if (text) {
+              try { body = JSON.parse(text); } catch (e) { body = null; }
+            }
+            if (!res.ok) {
+              var err = new Error((body && body.error) || ("HTTP " + res.status));
+              err.message = (body && body.error) || ("HTTP " + res.status);
+              throw err;
+            }
+            return body;
+          });
+        });
+      },
+      onEvent: function (name, cb) {
+        (listeners[name] = listeners[name] || []).push(cb);
+        return function () {
+          listeners[name] = (listeners[name] || []).filter(function (f) { return f !== cb; });
+        };
+      },
+      isMaximized: function () {
+        return Promise.resolve(window.innerHeight >= screen.availHeight);
+      },
+      onWindowEvent: function (cb) {
+        window.addEventListener("resize", function () {
+          cb(window.innerHeight >= screen.availHeight);
+        });
+      },
+    };
+  }
+
+  var transport = null;
+
+  // ─── App init ─────────────────────────────────────────────────────
 
   function init() {
     var root = document.getElementById("root");
@@ -29,40 +128,41 @@
     // 2. Subscribe to all Elm ports SYNCHRONOUSLY
 
     on("createSession", function (data) {
-      invoke("create_session", {
+      transport.invoke("create_session", {
         binaryPath: "", configPath: "",
         toolConfirm: data.toolConfirm || null,
-      }).then(function (id) { app.ports.onSessionCreated.send(id); });
+      }).then(function (id) { app.ports.onSessionCreated.send(id); })
+        .catch(function (err) { console.error("create_session failed:", err); });
     });
 
     on("closeSession", function (data) {
-      invoke("close_session", { sessionId: data.sessionId });
+      transport.invoke("close_session", { sessionId: data.sessionId });
     });
 
     on("sendPrompt", function (data) {
-      invoke("alayacore_send_prompt", {
+      transport.invoke("alayacore_send_prompt", {
         sessionId: data.sessionId, text: data.text, media: data.media,
       });
     });
 
     on("cancelTask", function (data) {
-      invoke("alayacore_cancel", { sessionId: data.sessionId });
+      transport.invoke("alayacore_cancel", { sessionId: data.sessionId });
     });
 
     on("setModel", function (data) {
-      invoke("alayacore_model_set", {
+      transport.invoke("alayacore_model_set", {
         sessionId: data.sessionId, modelId: data.modelId,
       });
     });
 
     on("modelSync", function (data) {
-      invoke("alayacore_model_sync", {
+      transport.invoke("alayacore_model_sync", {
         sessionId: data.sessionId, config: data.config,
       });
     });
 
     on("listDefaultModels", function (data) {
-      invoke("list_default_models", { binaryPath: "", preset: (data && data.preset) || "" })
+      transport.invoke("list_default_models", { binaryPath: "", preset: (data && data.preset) || "" })
         .then(function (models) {
           app.ports.onDefaultModelsList.send({ ok: true, models: models, error: "" });
         })
@@ -74,7 +174,7 @@
     });
 
     on("syncDefaultModels", function (data) {
-      invoke("sync_default_models", {
+      transport.invoke("sync_default_models", {
         binaryPath: "", config: data.config, preset: (data && data.preset) || "",
       })
         .then(function () {
@@ -88,7 +188,7 @@
     });
 
     on("listDefaultMcp", function (data) {
-      invoke("list_default_mcp", { preset: (data && data.preset) || "" })
+      transport.invoke("list_default_mcp", { preset: (data && data.preset) || "" })
         .then(function (servers) {
           app.ports.onDefaultMcpList.send({ ok: true, servers: servers, error: "" });
         })
@@ -100,7 +200,7 @@
     });
 
     on("syncDefaultMcp", function (data) {
-      invoke("sync_default_mcp", {
+      transport.invoke("sync_default_mcp", {
         config: data.config, preset: (data && data.preset) || "",
       })
         .then(function () {
@@ -114,7 +214,7 @@
     });
 
     on("listGlobalSettings", function (data) {
-      invoke("get_global_settings", { preset: (data && data.preset) || "" })
+      transport.invoke("get_global_settings", { preset: (data && data.preset) || "" })
         .then(function (res) {
           app.ports.onGlobalSettingsList.send({
             ok: true, tool_confirm: (res && res.tool_confirm) || "", error: "",
@@ -128,7 +228,7 @@
     });
 
     on("syncGlobalSettings", function (data) {
-      invoke("sync_global_settings", {
+      transport.invoke("sync_global_settings", {
         config: JSON.stringify({ tool_confirm: data.toolConfirm || "" }),
         preset: (data && data.preset) || "",
       })
@@ -143,7 +243,7 @@
     });
 
     on("listPresets", function () {
-      invoke("list_presets")
+      transport.invoke("list_presets")
         .then(function (presets) {
           app.ports.onPresetsList.send({ ok: true, presets: presets, error: "" });
         })
@@ -155,7 +255,7 @@
     });
 
     on("copyPreset", function (data) {
-      invoke("copy_preset", {
+      transport.invoke("copy_preset", {
         source: (data && data.source) || "", name: (data && data.name) || "",
       })
         .then(function () { app.ports.onPresetActionResult.send({ ok: true, error: "" }); })
@@ -167,7 +267,7 @@
     });
 
     on("renamePreset", function (data) {
-      invoke("rename_preset", {
+      transport.invoke("rename_preset", {
         oldName: data.oldName || "", newName: data.newName || "",
       })
         .then(function () { app.ports.onPresetActionResult.send({ ok: true, error: "" }); })
@@ -179,7 +279,7 @@
     });
 
     on("deletePreset", function (data) {
-      invoke("delete_preset", { name: data.name || "" })
+      transport.invoke("delete_preset", { name: data.name || "" })
         .then(function () { app.ports.onPresetActionResult.send({ ok: true, error: "" }); })
         .catch(function (err) {
           app.ports.onPresetActionResult.send({
@@ -189,7 +289,7 @@
     });
 
     on("setActivePreset", function (data) {
-      invoke("set_active_preset", { name: data.name || "" })
+      transport.invoke("set_active_preset", { name: data.name || "" })
         .then(function () { app.ports.onPresetActionResult.send({ ok: true, error: "" }); })
         .catch(function (err) {
           app.ports.onPresetActionResult.send({
@@ -199,31 +299,32 @@
     });
 
     on("confirmTool", function (data) {
-      invoke("alayacore_confirm", {
+      transport.invoke("alayacore_confirm", {
         sessionId: data.sessionId, id: data.id, allowed: data.allowed,
       });
     });
 
     on("sendMcpDecline", function (data) {
-      invoke("alayacore_mcp_decline", {
+      transport.invoke("alayacore_mcp_decline", {
         sessionId: data.sessionId, server: data.server,
       });
     });
 
     on("sendMcpCancel", function (data) {
-      invoke("alayacore_mcp_cancel", { sessionId: data.sessionId });
+      transport.invoke("alayacore_mcp_cancel", { sessionId: data.sessionId });
     });
 
     on("forkSession", function (data) {
-      invoke("fork_session", {
+      transport.invoke("fork_session", {
         sourceSessionId: data.sourceSessionId,
         historyId: data.historyId,
         binaryPath: "",
-      }).then(function (id) { app.ports.onSessionCreated.send(id); });
+      }).then(function (id) { app.ports.onSessionCreated.send(id); })
+        .catch(function (err) { console.error("fork_session failed:", err); });
     });
 
     on("resumeSession", function (data) {
-      invoke("resume_session", {
+      transport.invoke("resume_session", {
         sessionId: data.sessionId, binaryPath: "",
       }).then(function (id) {
         app.ports.onSessionCreated.send(id);
@@ -233,23 +334,23 @@
         app.ports.onSessionActionResult.send({
           ok: false, error: String((err && err.message) || err), kind: "resume",
         });
-        invoke("list_session_dirs").then(function (dirs) {
+        transport.invoke("list_session_dirs").then(function (dirs) {
           app.ports.onSessionDirs.send(dirs);
         });
       });
     });
 
     on("listSessionDirs", function () {
-      invoke("list_session_dirs").then(function (dirs) {
+      transport.invoke("list_session_dirs").then(function (dirs) {
         app.ports.onSessionDirs.send(dirs);
       });
     });
 
     on("deleteSessionDir", function (data) {
-      invoke("delete_session_dir", { sessionId: data.sessionId })
+      transport.invoke("delete_session_dir", { sessionId: data.sessionId })
         .then(function () {
           // Reflect the deletion immediately
-          invoke("list_session_dirs").then(function (dirs) {
+          transport.invoke("list_session_dirs").then(function (dirs) {
             app.ports.onSessionDirs.send(dirs);
           });
           app.ports.onSessionActionResult.send({ ok: true, error: "", kind: "delete" });
@@ -263,30 +364,30 @@
     });
 
     on("fsListDir", function (data) {
-      invoke("fs_list_dir", { path: data.path }).then(function (entries) {
+      transport.invoke("fs_list_dir", { path: data.path }).then(function (entries) {
         app.ports.onFsListDir.send(entries);
       });
     });
 
     on("fsHomeDir", function () {
-      invoke("fs_home_dir").then(function (home) {
+      transport.invoke("fs_home_dir").then(function (home) {
         app.ports.onFsHomeDir.send(home);
       });
     });
 
     on("fsResolvePath", function (data) {
-      invoke("fs_resolve_path", { path: data.path }).then(function (res) {
+      transport.invoke("fs_resolve_path", { path: data.path }).then(function (res) {
         app.ports.onFsResolvePath.send(res);
       });
     });
 
     on("fsReadFileDataUri", function (data) {
-      invoke("fs_read_file_data_uri", { path: data.path }).then(function (uri) {
+      transport.invoke("fs_read_file_data_uri", { path: data.path }).then(function (uri) {
         app.ports.onFsReadFileDataUri.send(uri);
       });
     });
 
-        on("scrollToBottom", function (data) {
+    on("scrollToBottom", function (data) {
       var el = document.querySelector("#msg-input-" + data.sessionId);
       if (el) {
         var panel = el.closest(".session-panel") || el.closest(".chat-area");
@@ -297,8 +398,8 @@
       }
     });
 
-        on("startMcpAuthFlow", function (data) {
-      invoke("start_mcp_auth_flow", {
+    on("startMcpAuthFlow", function (data) {
+      transport.invoke("start_mcp_auth_flow", {
         sessionId: data.sessionId,
         serverName: data.serverName,
         authUrl: data.authUrl,
@@ -306,7 +407,7 @@
     });
 
     on("fillMcpAuthUrl", function (data) {
-      invoke("fill_mcp_auth_url", {
+      transport.invoke("fill_mcp_auth_url", {
         sessionId: data.sessionId,
         serverName: data.serverName,
         authUrl: data.authUrl,
@@ -329,13 +430,13 @@
       if (el) { el.scrollIntoView({ block: "nearest" }); }
     });
 
-        // 3. Register Tauri event listeners
+    // 3. Register backend event listeners (Tauri events / WS messages)
     Promise.all([
-      listen("tlv-delta", function (ev) { app.ports.onDelta.send(ev.payload); }),
-      listen("tlv-frame", function (ev) { app.ports.onFrame.send(ev.payload); }),
-      listen("core-status", function (ev) { app.ports.onStatus.send(ev.payload); }),
+      transport.onEvent("tlv-delta", function (payload) { app.ports.onDelta.send(payload); }),
+      transport.onEvent("tlv-frame", function (payload) { app.ports.onFrame.send(payload); }),
+      transport.onEvent("core-status", function (payload) { app.ports.onStatus.send(payload); }),
     ]).then(function () {
-      console.log("[bridge] Tauri event listeners ready");
+      console.log("[bridge] event listeners ready");
     }).catch(function (e) {
       console.error("[bridge] listen() failed:", e);
     });
@@ -371,34 +472,39 @@
     scrollObserver.observe(root, { childList: true, subtree: true });
 
     // 5. Window maximize state
-    window.__TAURI__.window.getCurrentWindow().isMaximized().then(function (v) {
+    transport.isMaximized().then(function (v) {
       app.ports.onWindowMaximized.send(v);
     });
-    window.__TAURI__.window.getCurrentWindow().onResized(function () {
-      window.__TAURI__.window.getCurrentWindow().isMaximized().then(function (v) {
-        app.ports.onWindowMaximized.send(v);
-      });
+    transport.onWindowEvent(function (v) {
+      app.ports.onWindowMaximized.send(v);
     });
   }
 
-  // Wait for DOM + __TAURI__ to be ready
-  function waitForTauri(cb) {
+  // Wait for DOM + backend to be ready. __TAURI__ may be injected after
+  // this script runs (Tauri webview), but in a plain browser it never
+  // appears — so bound the wait, then fall back to the HTTP transport.
+  function waitForBackend(cb, attempts) {
     if (window.__TAURI__ && window.__TAURI__.core) {
-      console.log("[bridge] __TAURI__ available, keys:",
-        Object.keys(window.__TAURI__).join(", "));
-      if (window.__TAURI__.event) {
-        console.log("[bridge] event API available");
-      } else {
-        console.warn("[bridge] event API NOT available");
-      }
+      transport = tauriTransport();
       cb();
+      return;
+    }
+    if (attempts <= 0) {
+      transport = httpTransport();
+      cb();
+      return;
+    }
+    setTimeout(function () { waitForBackend(cb, attempts - 1); }, 50);
+  }
+
+  function ready(cb) {
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", function () {
+        waitForBackend(cb, 5); // up to ~250ms for __TAURI__ to appear
+      });
     } else {
-      setTimeout(function () { waitForTauri(cb); }, 10);
+      waitForBackend(cb, 5);
     }
   }
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", function () { waitForTauri(init); });
-  } else {
-    waitForTauri(init);
-  }
+  ready(init);
 })();

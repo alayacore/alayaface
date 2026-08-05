@@ -23,6 +23,12 @@ dist-ssr
 *.sln
 *.sw?
 
+TODO.md
+REFACTOR.md
+
 # Elm
 src-elm/elm-stuff/
 src-elm/elm.js
+
+# Go backend
+src-go/bin/

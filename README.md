@@ -38,6 +38,18 @@ src-tauri/            ← Rust Tauri backend
 │   ├── dirs.rs         — Directory structure (~/.alayaface/)
 │   └── event.rs        — Tauri event payload types
 └── tauri.conf.json
+
+src-go/          ← Go backend (HTTP + WebSocket, same Elm client)
+├── cmd/alayaface-server/main.go — entry: flags, graceful shutdown
+└── internal/
+    ├── tlv/           — TLV wire protocol (port of tlv.rs)
+    ├── core/          — Subprocess spawn & binary discovery (alayacore.rs)
+    ├── dirs/          — Directory structure (dirs.rs)
+    ├── session/       — Session lifecycle + stdout reader (session.rs/reader.rs)
+    ├── probe/         — Throwaway alayacore probes for model queries (models.rs)
+    ├── mcp/           — MCP OAuth callback flow (mcp.rs)
+    ├── hub/           — WebSocket event bus (Tauri event system equivalent)
+    └── server/        — HTTP server, RPC dispatcher, WS, static hosting, handlers
 ```
 
 ### Data Flow
@@ -68,24 +80,28 @@ Main.elm → view → HTML
 - [Rust](https://www.rust-lang.org/) with Cargo
 - [AlayaCore](https://github.com/alayacore/alayacore) binary (`alayacore` in PATH or `ALAYACORE_BIN` env var)
 - Linux: `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, etc. (see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/))
+- [Go](https://go.dev/) 1.22+ (Go backend only)
 
 ## Quick Start
 
 ```bash
-make run
+make run     # Tauri desktop app
+make run-go  # Go backend (browser: http://127.0.0.1:8765, binds 0.0.0.0)
 ```
-
-This compiles Elm and launches the Tauri desktop app.
 
 ### Individual commands
 
 ```bash
-make elm    # Compile Elm frontend only (src-elm/ → elm.js)
-make run    # Compile Elm + launch Tauri
-make dev    # Alias for run
-make build  # Release build
-make test   # Run Rust unit tests + Elm tests
-make clean  # Remove build artifacts
+make elm      # Compile Elm frontend only (src-elm/ → elm.js)
+make run      # Compile Elm + launch Tauri
+make dev      # Alias for run
+make build    # Release build
+make test     # Run Rust unit tests + Elm tests
+make clean    # Remove build artifacts
+make run-go   # Go backend: serves the Elm client + RPC/WS API
+make build-go # Build Go backend binary
+make test-go  # Run Go unit tests
+make clean-go # Remove Go build artifacts
 ```
 
 ### Manual build
@@ -94,6 +110,38 @@ make clean  # Remove build artifacts
 cd src-elm && elm make src/Main.elm --output=elm.js
 cd ../src-tauri && cargo run
 ```
+
+## Go Backend (browser / HTTP)
+
+The same Elm client also runs against a Go backend (`src-go/`) that
+hosts the frontend and implements the equivalent of the Tauri commands as
+an HTTP API. `bridge.js` auto-detects the runtime: with `window.__TAURI__`
+present it uses Tauri IPC, otherwise it uses `fetch` + WebSocket.
+
+```bash
+make run-go
+# open http://127.0.0.1:8765/ (local) or http://<host>:8765/ (LAN)
+```
+
+The server binds `0.0.0.0:8765` (all interfaces), so it can be reached
+over SSH port forwarding (`ssh -L 8765:localhost:8765 <host>` then open
+`http://127.0.0.1:8765/`) or directly on the LAN — handy for dev/debug.
+
+Options:
+
+```
+alayaface-server --addr 0.0.0.0:8765 --static ../src-elm [--token <token>]
+```
+
+> ⚠️ With `0.0.0.0` and no `--token`, anyone who can reach the port can
+> create sessions and read files via the API. Add `--token <t>` when the
+> port is exposed beyond localhost/SSH.
+
+- Commands: `POST /rpc/{command}` with JSON args (mirrors Tauri `invoke`).
+- Events: WebSocket `GET /ws` pushes `{type, payload}` messages
+  (`tlv-delta`, `tlv-frame`, `core-status`).
+- See `docs/go-backend.md` for the full API mapping and design; `TODO.md`
+  tracks implementation status.
 
 ## TLV Protocol
 
@@ -136,8 +184,12 @@ These appear in the terminal when running `cargo run`.
 ## Porting to Web / VS Code
 
 The Elm core is platform-agnostic (`Session/` modules have no Tauri
-dependencies). To port:
+dependencies), and `bridge.js` already abstracts the backend transport:
 
-1. Replace `bridge.js` with a WebSocket / VS Code postMessage bridge
-2. Update `index.html` to load the alternative bridge
-3. The `session/` modules remain unchanged
+- With `window.__TAURI__` → Tauri IPC (`tauriTransport`)
+- Without it → `fetch POST /rpc/{command}` + WebSocket `/ws`
+  (`httpTransport`, used by the Go backend)
+
+To port to another target (e.g. VS Code postMessage), add another
+transport implementation at the top of `bridge.js`; the Elm ports and
+`Session/` modules remain unchanged.
