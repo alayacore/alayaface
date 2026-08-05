@@ -9,6 +9,7 @@ use crate::tlv;
 use crate::ModelCache;
 
 use std::io::Write;
+use std::process::{Child, Command, Stdio};
 use tauri::State;
 
 #[tauri::command]
@@ -43,32 +44,129 @@ pub async fn list_models(
         }
     }
 
-    // Fallback: spawn temp process
+    // Fallback: probe with a temporary process
     let bin = resolve_binary(&binary_path);
-    let mut cmd = std::process::Command::new(&bin);
-    cmd.arg("--rawio");
-    if !config_path.is_empty() {
-        cmd.arg("--config-path").arg(&config_path);
+    let probe = run_temp_probe(&bin, &config_path, None, Some(&model_cache))?;
+    Ok(probe.models.unwrap_or_default())
+}
+
+// ─── Temporary alayacore probes ─────────────────────────────────────
+//
+// list_models' fallback, list_default_models, and sync_default_models all
+// used to duplicate the same dance: spawn a throwaway `alayacore --rawio`,
+// optionally send one CI command, then read TLV frames until the SM
+// model_list (and/or the matching CO) arrives or a timeout elapses. This
+// section captures that protocol once.
+
+/// A throwaway alayacore process with its pipes.
+struct TempCore {
+    child: Child,
+    stdin: Option<std::process::ChildStdin>,
+    stdout: std::io::BufReader<std::process::ChildStdout>,
+}
+
+impl TempCore {
+    fn spawn(bin: &str, config_path: &str) -> Result<Self, String> {
+        let mut cmd = Command::new(bin);
+        cmd.arg("--rawio");
+        if !config_path.is_empty() {
+            cmd.arg("--config-path").arg(config_path);
+        }
+        let mut child = cmd
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| format!("Failed to start alayacore: {e}"))?;
+
+        let stdin = child.stdin.take();
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "Failed to capture stdout".to_string())?;
+
+        Ok(TempCore {
+            child,
+            stdin,
+            stdout: std::io::BufReader::new(stdout),
+        })
     }
-    let mut child = cmd
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| format!("Failed to start alayacore: {e}"))?;
 
-    drop(child.stdin.take());
+    fn kill(mut self) {
+        drop(self.stdout);
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
 
-    let mut stdout = child.stdout.take().ok_or_else(|| "Failed to capture stdout".to_string())?;
-    let mut models = Vec::new();
+/// Why a probe stopped reading.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ProbeEnd {
+    /// The target frame(s) arrived.
+    Complete,
+    /// Nothing arrived within the timeout.
+    Timeout,
+    /// alayacore closed stdout (exited).
+    Eof,
+    /// Reading stdout failed.
+    ReadError,
+}
+
+/// What a probe collected.
+struct ProbeResult {
+    /// First SM model_list payload, if seen.
+    models: Option<Vec<serde_json::Value>>,
+    /// CO frame JSON matching the probe's call ID, if any.
+    cmd_output: Option<serde_json::Value>,
+    /// Why the read loop stopped.
+    end: ProbeEnd,
+}
+
+/// Run a temporary alayacore probe.
+///
+/// `cmd` optionally sends one CI command first (`(call_id, name, input)`);
+/// the matching CO is captured in `ProbeResult::cmd_output`. `model_cache`,
+/// when given, is refreshed from any SM model_list seen (mirrors how live
+/// sessions populate it).
+fn run_temp_probe(
+    bin: &str,
+    config_path: &str,
+    cmd: Option<(&str, &str, &str)>,
+    model_cache: Option<&ModelCache>,
+) -> Result<ProbeResult, String> {
+    let mut core = TempCore::spawn(bin, config_path)?;
+
+    // Optionally send one command, then close stdin.
+    if let Some((call_id, name, input)) = cmd {
+        let payload = serde_json::json!({
+            "id": call_id,
+            "name": name,
+            "input": input,
+        });
+        let payload_str = payload.to_string();
+        let preview: String = payload_str.chars().take(200).collect();
+        log::info!("[tlv] >> temp {} {}b {}", tlv::TAG_CMD_INPUT, payload_str.len(), preview);
+        if let Some(stdin) = core.stdin.as_mut() {
+            let _ = tlv::write_frame(stdin, tlv::TAG_CMD_INPUT, &payload_str);
+            let _ = stdin.flush();
+        }
+    }
+    drop(core.stdin.take());
+
     let start = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs(5);
+    let mut result = ProbeResult {
+        models: None,
+        cmd_output: None,
+        end: ProbeEnd::Timeout,
+    };
 
     loop {
         if start.elapsed() > timeout {
+            result.end = ProbeEnd::Timeout;
             break;
         }
-        match tlv::read_frame(&mut stdout) {
+        match tlv::read_frame(&mut core.stdout) {
             Ok(Some(frame)) => {
                 let preview: String = frame.value.chars().take(200).collect();
                 log::info!("[tlv] << temp {} {}b {}", frame.tag, frame.value.len(), preview);
@@ -76,24 +174,50 @@ pub async fn list_models(
                     if let Ok(env) = serde_json::from_str::<tlv::SystemMsgEnvelope>(&frame.value) {
                         if env.msg_type == "model_list" {
                             if let Some(arr) = env.data.get("models").and_then(|v| v.as_array()) {
-                                models = arr.clone();
-                                let mut cache = model_cache.0.lock().unwrap();
-                                *cache = models.clone();
+                                result.models = Some(arr.clone());
+                                if let Some(cache) = &model_cache {
+                                    let mut cache = cache.0.lock().unwrap();
+                                    *cache = arr.clone();
+                                }
                             }
+                        }
+                    }
+                    // Without a pending command the model list is all we
+                    // need; with a pending command we must keep reading
+                    // for the CO.
+                    if cmd.is_none() && result.models.is_some() {
+                        result.end = ProbeEnd::Complete;
+                        break;
+                    }
+                } else if frame.tag == "CO" {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&frame.value) {
+                        let is_ours = match cmd {
+                            Some((call_id, _, _)) => {
+                                v.get("id").and_then(|x| x.as_str()) == Some(call_id)
+                            }
+                            None => true,
+                        };
+                        if is_ours {
+                            result.cmd_output = Some(v);
+                            result.end = ProbeEnd::Complete;
                             break;
                         }
                     }
                 }
             }
-            Ok(None) => break,
-            Err(_) => break,
+            Ok(None) => {
+                result.end = ProbeEnd::Eof;
+                break;
+            }
+            Err(_) => {
+                result.end = ProbeEnd::ReadError;
+                break;
+            }
         }
     }
 
-    drop(stdout);
-    let _ = child.kill();
-    let _ = child.wait();
-    Ok(models)
+    core.kill();
+    Ok(result)
 }
 
 // ─── Default (global) model list ─────────────────────────────────────
@@ -104,64 +228,6 @@ pub async fn list_models(
 // alayacore process, so validation and persistence behave exactly like
 // session model_sync, but without touching any running session.
 
-/// Spawn a temporary alayacore process and collect its model list from the
-/// SM model_list message.
-fn read_models_from_temp(
-    bin: &str,
-    config_path: &str,
-) -> Result<Vec<serde_json::Value>, String> {
-    let mut cmd = std::process::Command::new(bin);
-    cmd.arg("--rawio");
-    if !config_path.is_empty() {
-        cmd.arg("--config-path").arg(config_path);
-    }
-    let mut child = cmd
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| format!("Failed to start alayacore: {e}"))?;
-
-    drop(child.stdin.take());
-
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "Failed to capture stdout".to_string())?;
-    let mut models = Vec::new();
-    let start = std::time::Instant::now();
-    let timeout = std::time::Duration::from_secs(5);
-
-    loop {
-        if start.elapsed() > timeout {
-            break;
-        }
-        match tlv::read_frame(&mut stdout) {
-            Ok(Some(frame)) => {
-                let preview: String = frame.value.chars().take(200).collect();
-                log::info!("[tlv] << temp {} {}b {}", frame.tag, frame.value.len(), preview);
-                if frame.tag == "SM" {
-                    if let Ok(env) = serde_json::from_str::<tlv::SystemMsgEnvelope>(&frame.value) {
-                        if env.msg_type == "model_list" {
-                            if let Some(arr) = env.data.get("models").and_then(|v| v.as_array()) {
-                                models = arr.clone();
-                            }
-                            break;
-                        }
-                    }
-                }
-            }
-            Ok(None) => break,
-            Err(_) => break,
-        }
-    }
-
-    drop(stdout);
-    let _ = child.kill();
-    let _ = child.wait();
-    Ok(models)
-}
-
 /// List the model list from a preset's model.conf (`preset` empty = active).
 /// Always reads the config directly via a temporary alayacore process
 /// (never the session cache), so it reflects what new sessions will load.
@@ -170,7 +236,8 @@ pub async fn list_default_models(binary_path: String, preset: String) -> Result<
     let config_dir = dirs::resolve_config_dir(&preset)?;
     let config_path = config_dir.to_string_lossy().to_string();
     let bin = resolve_binary(&binary_path);
-    read_models_from_temp(&bin, &config_path)
+    let probe = run_temp_probe(&bin, &config_path, None, None)?;
+    Ok(probe.models.unwrap_or_default())
 }
 
 /// Replace the model list in a preset's model.conf (`preset` empty = active).
@@ -189,82 +256,26 @@ pub async fn sync_default_models(
     let config_path = config_dir.to_string_lossy().to_string();
     let bin = resolve_binary(&binary_path);
 
-    let mut cmd = std::process::Command::new(&bin);
-    cmd.arg("--rawio");
-    cmd.arg("--config-path").arg(&config_path);
-    let mut child = cmd
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| format!("Failed to start alayacore: {e}"))?;
-
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "Failed to capture stdin".to_string())?;
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "Failed to capture stdout".to_string())?;
-
     let call_id = uuid::Uuid::new_v4().to_string();
-    let payload = serde_json::json!({
-        "id": call_id,
-        "name": "model_sync",
-        "input": config,
-    });
-    let payload_str = payload.to_string();
-    let preview: String = payload_str.chars().take(200).collect();
-    log::info!("[tlv] >> temp {} {}b {}", tlv::TAG_CMD_INPUT, payload_str.len(), preview);
-    let _ = tlv::write_frame(&mut stdin, tlv::TAG_CMD_INPUT, &payload_str);
-    let _ = stdin.flush();
+    let probe = run_temp_probe(&bin, &config_path, Some((&call_id, "model_sync", &config)), Some(&model_cache))?;
 
-    let start = std::time::Instant::now();
-    let timeout = std::time::Duration::from_secs(5);
-    let result = loop {
-        if start.elapsed() > timeout {
-            break Err("model_sync timed out".to_string());
-        }
-        match tlv::read_frame(&mut stdout) {
-            Ok(Some(frame)) => {
-                let preview: String = frame.value.chars().take(200).collect();
-                log::info!("[tlv] << temp {} {}b {}", frame.tag, frame.value.len(), preview);
-                if frame.tag == "SM" {
-                    // Refresh the shared cache with the synced list
-                    if let Ok(env) = serde_json::from_str::<tlv::SystemMsgEnvelope>(&frame.value) {
-                        if env.msg_type == "model_list" {
-                            if let Some(arr) = env.data.get("models").and_then(|v| v.as_array()) {
-                                let mut cache = model_cache.0.lock().unwrap();
-                                *cache = arr.clone();
-                            }
-                        }
-                    }
-                } else if frame.tag == "CO" {
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&frame.value) {
-                        let is_ours = v.get("id").and_then(|x| x.as_str()) == Some(call_id.as_str());
-                        if is_ours {
-                            let is_err = v.get("is_error").and_then(|x| x.as_bool()).unwrap_or(false);
-                            if is_err {
-                                let msg = v
-                                    .pointer("/output/message")
-                                    .and_then(|x| x.as_str())
-                                    .unwrap_or("model_sync failed");
-                                break Err(msg.to_string());
-                            }
-                            break Ok(v.get("output").cloned().unwrap_or(serde_json::Value::Null));
-                        }
-                    }
-                }
+    match probe.cmd_output {
+        Some(v) => {
+            let is_err = v.get("is_error").and_then(|x| x.as_bool()).unwrap_or(false);
+            if is_err {
+                let msg = v
+                    .pointer("/output/message")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("model_sync failed");
+                Err(msg.to_string())
+            } else {
+                Ok(v.get("output").cloned().unwrap_or(serde_json::Value::Null))
             }
-            Ok(None) => break Err("alayacore exited before model_sync completed".to_string()),
-            Err(_) => break Err("Failed to read from alayacore".to_string()),
         }
-    };
-
-    drop(stdin);
-    drop(stdout);
-    let _ = child.kill();
-    let _ = child.wait();
-    result
+        None => match probe.end {
+            ProbeEnd::Timeout => Err("model_sync timed out".to_string()),
+            ProbeEnd::Eof => Err("alayacore exited before model_sync completed".to_string()),
+            _ => Err("Failed to read from alayacore".to_string()),
+        },
+    }
 }
