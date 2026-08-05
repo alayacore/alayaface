@@ -175,61 +175,45 @@ handleUserEchoFrame s tag historyId content =
                 in
                 case lastMsg of
                     Just msg ->
-                            if msg.role == User then
-                                appendToLastUserMessage s tag textContent mediaType content historyId newEchoIds
+                        if msg.role == User then
+                            appendToLastUserMessage s tag textContent mediaType content historyId newEchoIds
 
-                            else
-                                let
-                                    newMsg =
-                                        { id = "user-" ++ hid
-                                            , role = User
-                                            , content = textContent
-                                            , toolId = Nothing
-                                            , toolName = Nothing
-                                            , isError = False
-                                            , historyId = Just hid
-                                            , media =
-                                                case ( mediaType, content ) of
-                                                    ( Just mt, Just c ) -> Just [ { mediaType = mt, uri = c, name = Nothing } ]
-                                                    _ -> Nothing
-                                            }
-
-                                    newMsgs =
-                                        s.messages ++ [ newMsg ]
-                                in
-                                { s
-                                    | messages = newMsgs
-                                    , processedEchoIds = newEchoIds
-                                    , sendPending = False
-                                }
+                        else
+                            { s
+                                | messages = s.messages ++ [ userEchoMessage hid textContent mediaType content ]
+                                , processedEchoIds = newEchoIds
+                                , sendPending = False
+                            }
 
                     Nothing ->
-                        let
-                            newMsg =
-                                    { id = "user-" ++ hid
-                                        , role = User
-                                        , content = textContent
-                                        , toolId = Nothing
-                                        , toolName = Nothing
-                                        , isError = False
-                                        , historyId = Just hid
-                                        , media =
-                                            case ( mediaType, content ) of
-                                                ( Just mt, Just c ) -> Just [ { mediaType = mt, uri = c, name = Nothing } ]
-                                                _ -> Nothing
-                                        }
-
-                            newMsgs =
-                                s.messages ++ [ newMsg ]
-                        in
                         { s
-                            | messages = newMsgs
+                            | messages = s.messages ++ [ userEchoMessage hid textContent mediaType content ]
                             , processedEchoIds = newEchoIds
                             , sendPending = False
                         }
 
         Nothing ->
             s
+
+
+-- Build a new user message from a user-echo frame.
+userEchoMessage : String -> String -> Maybe MediaType -> Maybe String -> Message
+userEchoMessage hid textContent mediaType content =
+    { id = "user-" ++ hid
+    , role = User
+    , content = textContent
+    , toolId = Nothing
+    , toolName = Nothing
+    , isError = False
+    , historyId = Just hid
+    , media =
+        case ( mediaType, content ) of
+            ( Just mt, Just c ) ->
+                Just [ { mediaType = mt, uri = c, name = Nothing } ]
+
+            _ ->
+                Nothing
+    }
 
 
 appendToLastUserMessage : SessionState -> String -> String -> Maybe MediaType -> Maybe String -> Maybe String -> Set.Set String -> SessionState
@@ -243,7 +227,7 @@ appendToLastUserMessage s tag textContent mediaType content historyId newEchoIds
                             sep =
                                 if String.isEmpty last.content then "" else "\n\n"
                         in
-                        List.reverse ({ last | content = last.content ++ sep ++ textContent, historyId = Maybe.map (\h -> h) historyId } :: rest)
+                        List.reverse ({ last | content = last.content ++ sep ++ textContent, historyId = historyId } :: rest)
 
                     else
                         case ( mediaType, content ) of
@@ -255,7 +239,7 @@ appendToLastUserMessage s tag textContent mediaType content historyId newEchoIds
                                     newMedia =
                                         existingMedia ++ [ { mediaType = mt, uri = c, name = Nothing } ]
                                 in
-                                List.reverse ({ last | media = Just newMedia, historyId = Maybe.map (\h -> h) historyId } :: rest)
+                                List.reverse ({ last | media = Just newMedia, historyId = historyId } :: rest)
 
                             _ ->
                                 s.messages
@@ -848,7 +832,7 @@ handleToolResultFrame s json historyId =
                         { m
                             | content = outStr
                             , isError = isError
-                            , historyId = Maybe.map (\h -> h) historyId
+                            , historyId = historyId
                         }
                     else
                         m
