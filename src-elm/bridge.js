@@ -317,11 +317,6 @@
       });
     });
 
-                on("focusElement", function (id) {
-      // Deprecated: focusing is now done via Elm's Dom.focus (FocusElement msg).
-      // This port is kept for backward compatibility but does nothing.
-    });
-
     on("setCursorPos", function (id) {
       var el = document.getElementById(id);
       if (!el || !el.setSelectionRange) return;

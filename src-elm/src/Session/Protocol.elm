@@ -7,8 +7,6 @@ module Session.Protocol exposing
     , deltaEventDecoder
     , frameEventDecoder
     , statusEventDecoder
-    , parseDelta
-    , wrapDelta
     , SystemMsgEnvelope
     , systemMsgDecoder
     )
@@ -90,37 +88,9 @@ statusEventDecoder =
         (D.field "message" D.string)
 
 
--- Delta parsing
-
-parseDelta : String -> Maybe ( String, String )
-parseDelta value =
-    if String.length value == 0 || Char.toCode (String.left 1 value |> String.uncons |> Maybe.map Tuple.first |> Maybe.withDefault '\u{0000}') /= 0 then
-        Nothing
-
-    else
-        case String.indexes "\u{0000}" value of
-            first :: second :: _ ->
-                let
-                    id =
-                        String.slice first (second + 1) value |> String.dropLeft 1 |> String.dropRight 1
-
-                    content =
-                        String.dropLeft (second + 1) value
-                in
-                if String.isEmpty id then
-                    Nothing
-
-                else
-                    Just ( id, content )
-
-            _ ->
-                Nothing
-
-
-wrapDelta : String -> String -> String
-wrapDelta id content =
-    "\u{0000}" ++ id ++ "\u{0000}" ++ content
-
+-- Delta parsing (Rust side unwraps the NUL-delimited history-ID prefix
+-- and forwards `history_id` + `content` separately in DeltaEvent and
+-- FrameEvent; no client-side delta parsing is needed.)
 
 -- System message
 

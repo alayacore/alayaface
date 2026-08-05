@@ -19,7 +19,6 @@ module Session.Types exposing
     , McpDraft
     , emptyMcpDraft
     , latestMcpProtoVersion
-    , ThemeInfo
     , emptySession
     , emptyDraft
     , PendingConfirm
@@ -226,9 +225,7 @@ type alias SessionState =
     , contextTokens : Int
     , contextLimit : Int
     , historyContents : Dict String String
-    , historyRoles : Dict String String
     , toolCalls : Dict String ToolCall
-    , stderrLines : List String
     , input : String
     , sendPending : Bool
     , processedEchoIds : Set.Set String
@@ -253,12 +250,6 @@ type alias SessionState =
     , mediaPreview : Maybe MediaItem
     , mcpStatus : Maybe String
     , mcpServers : List String
-    , messageVersion : Maybe Int
-    , reasoningLevel : Maybe Int
-    , activeTheme : Maybe String
-    , themes : Maybe (List ThemeInfo)
-    , videoFps : Maybe Int
-    , videoRes : Maybe Int
       -- Overlay state (per-session)
     , showModelSelector : Bool
     , modelSelector : Session.Selector.State ModelInfo ModelDraft
@@ -365,12 +356,6 @@ emptyDraft =
     }
 
 
-type alias ThemeInfo =
-    { name : String
-    , theme : Maybe (Dict String String)
-    }
-
-
 emptySession : String -> SessionState
 emptySession id =
     { id = id
@@ -387,9 +372,7 @@ emptySession id =
     , contextTokens = 0
     , contextLimit = 0
     , historyContents = Dict.empty
-    , historyRoles = Dict.empty
     , toolCalls = Dict.empty
-    , stderrLines = []
     , input = ""
     , sendPending = False
     , processedEchoIds = Set.empty
@@ -414,12 +397,6 @@ emptySession id =
     , mediaPreview = Nothing
     , mcpStatus = Nothing
     , mcpServers = []
-    , messageVersion = Nothing
-    , reasoningLevel = Nothing
-    , activeTheme = Nothing
-    , themes = Nothing
-    , videoFps = Nothing
-    , videoRes = Nothing
     , showModelSelector = False
     , modelSelector = Session.Selector.empty
     , showHelpWindow = False

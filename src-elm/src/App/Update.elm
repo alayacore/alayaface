@@ -670,9 +670,6 @@ update msg model =
             , focusInput model
             )
 
-        FocusElement id ->
-            ( model, Task.attempt (\_ -> NoOp) (Dom.focus id) )
-
         SetFilePickerInput val ->
             case getActiveSession model of
                 Just s ->

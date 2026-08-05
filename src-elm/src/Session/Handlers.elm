@@ -349,32 +349,15 @@ handleCompleteFrame s tag historyId content =
 handleSystemMsg : SessionState -> SystemMsgEnvelope -> SessionState
 handleSystemMsg s env =
     case env.msgType of
-        "version" -> handleSystemVersion s env.data
         "task" -> handleSystemTask s env.data
         "error" -> handleSystemError s env.data
         "notify" -> handleSystemNotify s env.data
         "model_list" -> handleSystemModelList s env.data
         "model" -> handleSystemModel s env.data
-        "theme" -> handleSystemTheme s env.data
-        "theme_list" -> handleSystemThemeList s env.data
-        "reasoning" -> handleSystemReasoning s env.data
-        "video_config" -> handleSystemVideoConfig s env.data
         "tool_confirm" -> handleSystemToolConfirm s env.data
         "mcp" -> handleSystemMcp s env.data
         _ -> s
 
-
-handleSystemVersion : SessionState -> D.Value -> SessionState
-handleSystemVersion s data =
-    case D.decodeValue (D.field "message_version" D.int) data of
-        Ok v -> { s | messageVersion = Just v }
-        Err _ -> s
-
-
--- Note: Elm doesn't have optional fields on records like TS.
--- We'll handle this with Maybe values in SessionState extensions.
--- For now, these handlers focus on the required fields.
--- We'll add the optional fields (reasoningLevel, activeTheme, etc.) later.
 
 handleSystemTask : SessionState -> D.Value -> SessionState
 handleSystemTask s data =
@@ -518,26 +501,6 @@ handleSystemModel s data =
 
         _ ->
             s
-
-
-handleSystemTheme : SessionState -> D.Value -> SessionState
-handleSystemTheme s data =
-    s
-
-
-handleSystemThemeList : SessionState -> D.Value -> SessionState
-handleSystemThemeList s data =
-    s
-
-
-handleSystemReasoning : SessionState -> D.Value -> SessionState
-handleSystemReasoning s data =
-    s
-
-
-handleSystemVideoConfig : SessionState -> D.Value -> SessionState
-handleSystemVideoConfig s data =
-    s
 
 
 handleSystemToolConfirm : SessionState -> D.Value -> SessionState

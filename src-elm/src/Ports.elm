@@ -33,6 +33,7 @@ port module Ports exposing
     , setActivePreset
     , onPresetsList
     , onPresetActionResult
+      -- Session
     , confirmTool
     , sendMcpDecline
     , sendMcpCancel
@@ -40,29 +41,27 @@ port module Ports exposing
     , resumeSession
     , listSessionDirs
     , deleteSessionDir
+    , onSessionCreated
+    , onSessionDirs
+    , onSessionActionResult
+      -- File system
     , fsListDir
     , fsReadFileDataUri
     , fsResolvePath
     , fsHomeDir
-      -- Window operations
-      -- Existence
-    , -- MCP Auth Flow
-      startMcpAuthFlow
-    , fillMcpAuthUrl
-      -- Display navigation
-      -- Inbound subscriptions (Tauri → Elm responses)
-    , onSessionCreated
-    , onSessionDirs
-    , onSessionActionResult
     , onFsListDir
     , onFsHomeDir
-    , onFsReadFileDataUri
     , onFsResolvePath
+    , onFsReadFileDataUri
+      -- MCP Auth Flow
+    , startMcpAuthFlow
+    , fillMcpAuthUrl
+      -- Focus / Scroll
     , scrollToBottom
-    , focusElement
     , setCursorPos
     , scrollIntoView
     , onScroll
+      -- Window state
     , onWindowMaximized
     )
 
@@ -129,16 +128,14 @@ port onFsHomeDir : (String -> msg) -> Sub msg
 port onFsResolvePath : (E.Value -> msg) -> Sub msg
 port onFsReadFileDataUri : (String -> msg) -> Sub msg
 
--- Debug / Logging
-
 
 -- Focus / Scroll
 
 port scrollToBottom : { sessionId : String } -> Cmd msg
-port focusElement : String -> Cmd msg
 port setCursorPos : String -> Cmd msg
 port scrollIntoView : String -> Cmd msg
 port onScroll : ({ scrollTop : Float, scrollHeight : Float, clientHeight : Float } -> msg) -> Sub msg
+
 
 -- Window state
 

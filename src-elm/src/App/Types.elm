@@ -106,7 +106,6 @@ type Msg
       -- File picker
     | OpenFilePicker
     | CloseFilePicker
-    | FocusElement String
     | SetFilePickerInput String
     | FilePickerNavigateDir String
     | FilePickerSelectItem Int
