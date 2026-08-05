@@ -22,6 +22,8 @@ module Session.Types exposing
     , mcpProtoVersions
     , emptySession
     , emptyDraft
+    , FilePickerState
+    , emptyFilePicker
     , PendingConfirm
     , McpAuth
     , FileMode(..)
@@ -236,20 +238,7 @@ type alias SessionState =
     , pendingConfirm : List PendingConfirm
     , pendingMcpAuths : List McpAuth
     , mcpAuthRunning : Maybe String
-    , showFilePicker : Bool
-    , filePickerType : MediaType
-    , filePickerMode : FileMode
-    , filePickerInput : String
-    , filePickerFilter : String
-    , filePickerEntries : List DirEntry
-    , filePickerDir : String
-    , filePickerBaseDir : String
-    , filePickerSelected : Int
-    , filePickerLoading : Bool
-    , filePickerError : Maybe String
-    , filePickerSavedLocalPath : String
-    , filePickerSavedUrlPath : String
-    , pendingFileName : String
+    , filePicker : FilePickerState
     , mediaPreview : Maybe MediaItem
     , mcpStatus : Maybe String
     , mcpServers : List String
@@ -260,6 +249,47 @@ type alias SessionState =
     , helpFilter : String
     , helpSelected : Int
     , helpScroll : Int
+    }
+
+
+-- File Picker State
+--
+-- All picker UI state grouped in one record (previously 14 flat
+-- filePicker* fields on SessionState). Pure logic lives in
+-- Session/FilePicker.elm.
+
+type alias FilePickerState =
+    { show : Bool
+    , mode : FileMode
+    , input : String
+    , filter : String
+    , entries : List DirEntry
+    , dir : String
+    , baseDir : String
+    , selected : Int
+    , loading : Bool
+    , error : Maybe String
+    , savedLocalPath : String
+    , savedUrlPath : String
+    , pendingFileName : String
+    }
+
+
+emptyFilePicker : FilePickerState
+emptyFilePicker =
+    { show = False
+    , mode = Local
+    , input = ""
+    , filter = ""
+    , entries = []
+    , dir = ""
+    , baseDir = ""
+    , selected = 0
+    , loading = False
+    , error = Nothing
+    , savedLocalPath = ""
+    , savedUrlPath = ""
+    , pendingFileName = ""
     }
 
 
@@ -391,20 +421,7 @@ emptySession id =
     , pendingConfirm = []
     , pendingMcpAuths = []
     , mcpAuthRunning = Nothing
-    , showFilePicker = False
-    , filePickerType = Image
-    , filePickerMode = Local
-    , filePickerInput = ""
-    , filePickerFilter = ""
-    , filePickerEntries = []
-    , filePickerDir = ""
-    , filePickerBaseDir = ""
-    , filePickerSelected = 0
-    , filePickerLoading = False
-    , filePickerError = Nothing
-    , filePickerSavedLocalPath = ""
-    , filePickerSavedUrlPath = ""
-    , pendingFileName = ""
+    , filePicker = emptyFilePicker
     , mediaPreview = Nothing
     , mcpStatus = Nothing
     , mcpServers = []

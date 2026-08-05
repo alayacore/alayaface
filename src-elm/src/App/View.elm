@@ -17,9 +17,10 @@ import Dict exposing (Dict)
 import Set exposing (Set)
 import Markdown
 import App.Types exposing (..)
-import App.Update exposing (SessionDir, decodeSessionDir, filterEntries, helpItems, nextCopyName)
+import App.Update exposing (SessionDir, decodeSessionDir, helpItems, nextCopyName)
 import Session.Types as T
 import Session.Selector as Sel exposing (Page(..))
+import Session.FilePicker as FP
 import Overlay.ConfirmTool
 import Overlay.Settings
 import Overlay.PresetManager
@@ -739,16 +740,16 @@ viewMcpInitOverlay sid session =
 
 viewFilePickerOverlay : String -> T.SessionState -> Html Msg
 viewFilePickerOverlay sid session =
-    if session.showFilePicker then
+    if session.filePicker.show then
         viewOverlay (ForSession sid CloseFilePicker)
             [ Overlay.FilePicker.view
                 { sessionId = sid
-                , entries = filterEntries session
-                , input = session.filePickerInput
-                , filter = session.filePickerFilter
-                , selected = session.filePickerSelected
-                , mode = session.filePickerMode
-                , loading = session.filePickerLoading
+                , entries = FP.filterEntries session.filePicker
+                , input = session.filePicker.input
+                , filter = session.filePicker.filter
+                , selected = session.filePicker.selected
+                , mode = session.filePicker.mode
+                , loading = session.filePicker.loading
                 , noOp = NoOp
                 , onInput = \v -> ForSession sid (SetFilePickerInput v)
                 , onConfirm = ForSession sid FilePickerConfirmItem

@@ -2,7 +2,6 @@ module App.Update exposing
     ( update
     , SessionDir
     , decodeSessionDir
-    , filterEntries
     , helpItems
     , nextCopyName
     )
@@ -26,6 +25,7 @@ import Session.Types as T
 import Session.Protocol as P
 import Session.Handlers as H
 import Session.Selector as Sel exposing (Page(..))
+import Session.FilePicker as FP
 import Overlay.HelpWindow exposing (HelpItem, filterHelpItems)
 import Ports
 
@@ -567,7 +567,7 @@ update msg model =
                 Just s ->
                     let
                         url =
-                            String.trim s.filePickerInput
+                            String.trim s.filePicker.input
                     in
                     if url == "" then
                         ( model, Cmd.none )
@@ -575,7 +575,7 @@ update msg model =
                     else
                         let
                             detectedType =
-                                detectMediaType url
+                                FP.detectMediaType url
 
                             newItem =
                                 { id = "url-" ++ String.fromInt (List.length s.staged)
@@ -585,10 +585,13 @@ update msg model =
                                 }
                         in
                         ( updateActiveSession model (\sess ->
+                            let
+                                fp =
+                                    sess.filePicker
+                            in
                             { sess
                                 | staged = sess.staged ++ [ newItem ]
-                                , showFilePicker = False
-                                , filePickerInput = ""
+                                , filePicker = { fp | show = False, input = "" }
                             }
                           )
                         , focusInput model
@@ -644,13 +647,20 @@ update msg model =
             case getActiveSession model of
                 Just s ->
                     ( updateActiveSession model (\sess ->
+                        let
+                            fp =
+                                sess.filePicker
+                        in
                         { sess
-                            | showFilePicker = True
-                            , filePickerMode = T.Local
-                            , filePickerInput = ""
-                            , filePickerFilter = ""
-                            , filePickerSelected = 0
-                            , filePickerLoading = True
+                            | filePicker =
+                                { fp
+                                    | show = True
+                                    , mode = T.Local
+                                    , input = ""
+                                    , filter = ""
+                                    , selected = 0
+                                    , loading = True
+                                }
                         }
                       )
                     , Cmd.batch
@@ -664,17 +674,27 @@ update msg model =
                     ( model, Cmd.none )
 
         CloseFilePicker ->
-            ( updateActiveSession model (\s -> { s | showFilePicker = False, filePickerSavedLocalPath = "", filePickerSavedUrlPath = "" })
+            ( updateActiveSession model (\s ->
+                let
+                    fp =
+                        s.filePicker
+                in
+                { s | filePicker = { fp | show = False, savedLocalPath = "", savedUrlPath = "" } }
+              )
             , focusInput model
             )
 
         SetFilePickerInput val ->
             case getActiveSession model of
                 Just s ->
-                    if s.filePickerMode == T.Url then
+                    let
+                        fp =
+                            s.filePicker
+                    in
+                    if fp.mode == T.Url then
                         -- URL mode: just update input, no path parsing
                         ( updateActiveSession model (\sess ->
-                            { sess | filePickerInput = val }
+                            { sess | filePicker = { fp | input = val } }
                           )
                         , Cmd.none
                         )
@@ -693,7 +713,7 @@ update msg model =
                         -- navigate directory if needed
                         let
                             ( needsResolve, resolvePath, filterText ) =
-                                parsePathInput safeVal s.filePickerDir s.filePickerBaseDir
+                                FP.parsePathInput safeVal fp.dir fp.baseDir
 
                             cmd =
                                 if needsResolve then
@@ -702,23 +722,21 @@ update msg model =
                                     Cmd.none
 
                             -- Clamp selection to filtered list length
-                            previewSession =
-                                { s | filePickerInput = safeVal, filePickerFilter = filterText }
+                            previewFp =
+                                { fp | input = safeVal, filter = filterText }
 
                             filteredLen =
-                                List.length (filterEntries previewSession)
+                                List.length (FP.filterEntries previewFp)
 
                             clampedIdx =
-                                if s.filePickerSelected >= filteredLen then
+                                if fp.selected >= filteredLen then
                                     max 0 (filteredLen - 1)
                                 else
-                                    s.filePickerSelected
+                                    fp.selected
                         in
                         ( updateActiveSession model (\sess ->
                             { sess
-                                | filePickerInput = safeVal
-                                , filePickerFilter = filterText
-                                , filePickerSelected = clampedIdx
+                                | filePicker = { fp | input = safeVal, filter = filterText, selected = clampedIdx }
                             }
                           )
                         , cmd
@@ -728,42 +746,16 @@ update msg model =
                     ( model, Cmd.none )
 
         FilePickerNavigateDir name ->
-            -- User clicked a directory in the file list.
-            -- Append the directory name + "/" to the current input path.
+            -- User clicked a directory in the file list:
+            -- append the directory name + "/" to the current input path.
             case getActiveSession model of
                 Just s ->
                     let
-                        inputVal =
-                            s.filePickerInput
-
-                        -- Find the prefix up to (and including) the last "/" in input
-                        newInput =
-                            if String.endsWith "/" inputVal then
-                                -- Input already ends with "/", just append dir name
-                                inputVal ++ name ++ "/"
-                            else
-                                -- Input has filter text after last "/",
-                                -- replace filter with dir name + "/"
-                                case lastIndexOf '/' inputVal of
-                                    Just idx ->
-                                        String.left (idx + 1) inputVal ++ name ++ "/"
-
-                                    Nothing ->
-                                        -- No "/" in input, just use dir name + "/"
-                                        name ++ "/"
-
-                        newDir =
-                            if s.filePickerDir == "" then
-                                name
-                            else
-                                s.filePickerDir ++ "/" ++ name
+                        ( newFp, newDir ) =
+                            FP.appendDirToInput s.filePicker name
                     in
                     ( updateActiveSession model (\sess ->
-                        { sess
-                            | filePickerInput = newInput
-                            , filePickerFilter = ""
-                            , filePickerLoading = True
-                        }
+                        { sess | filePicker = newFp }
                       )
                     , Ports.fsResolvePath { path = newDir }
                     )
@@ -778,7 +770,7 @@ update msg model =
                         Just s ->
                             let
                                 entries =
-                                    filterEntries s
+                                    FP.filterEntries s.filePicker
                             in
                             case List.head (List.drop idx entries) of
                                 Just e ->
@@ -790,7 +782,13 @@ update msg model =
                         Nothing ->
                             Cmd.none
             in
-            ( updateActiveSession model (\s -> { s | filePickerSelected = idx })
+            ( updateActiveSession model (\s ->
+                let
+                    fp =
+                        s.filePicker
+                in
+                { s | filePicker = { fp | selected = idx } }
+              )
             , scrollCmd
             )
 
@@ -798,41 +796,22 @@ update msg model =
             case getActiveSession model of
                 Just s ->
                     let
+                        fp =
+                            s.filePicker
+
                         entries =
-                            filterEntries s
+                            FP.filterEntries fp
                     in
-                    case List.head (List.drop s.filePickerSelected entries) of
+                    case List.head (List.drop fp.selected entries) of
                         Just entry ->
                             if entry.isDir then
                                 -- Directory: autocomplete its name into the input path
                                 let
-                                    inputVal =
-                                        s.filePickerInput
-
-                                    -- Append dir name + "/" to the input
-                                    newInput =
-                                        if String.endsWith "/" inputVal then
-                                            inputVal ++ entry.name ++ "/"
-                                        else
-                                            case lastIndexOf '/' inputVal of
-                                                Just idx ->
-                                                    String.left (idx + 1) inputVal ++ entry.name ++ "/"
-
-                                                Nothing ->
-                                                    entry.name ++ "/"
-
-                                    newDir =
-                                        if s.filePickerDir == "" then
-                                            entry.name
-                                        else
-                                            s.filePickerDir ++ "/" ++ entry.name
+                                    ( newFp, newDir ) =
+                                        FP.appendDirToInput fp entry.name
                                 in
                                 ( updateActiveSession model (\sess ->
-                                    { sess
-                                        | filePickerLoading = True
-                                        , filePickerInput = newInput
-                                        , filePickerFilter = ""
-                                    }
+                                    { sess | filePicker = newFp }
                                   )
                                 , Ports.fsResolvePath { path = newDir }
                                 )
@@ -841,15 +820,14 @@ update msg model =
                                 -- File: select it
                                 let
                                     fullPath =
-                                        if s.filePickerDir == "" then
+                                        if fp.dir == "" then
                                             entry.name
                                         else
-                                            s.filePickerDir ++ "/" ++ entry.name
+                                            fp.dir ++ "/" ++ entry.name
                                 in
                                 ( updateActiveSession model (\sess ->
                                     { sess
-                                        | filePickerLoading = True
-                                        , pendingFileName = entry.name
+                                        | filePicker = { fp | loading = True, pendingFileName = entry.name }
                                     }
                                   )
                                 , Ports.fsReadFileDataUri { path = fullPath }
@@ -867,40 +845,21 @@ update msg model =
             case getActiveSession model of
                 Just s ->
                     let
+                        fp =
+                            s.filePicker
+
                         entries =
-                            filterEntries s
+                            FP.filterEntries fp
                     in
                     case List.head (List.drop idx entries) of
                         Just entry ->
                             if entry.isDir then
                                 let
-                                    inputVal =
-                                        s.filePickerInput
-
-                                    newInput =
-                                        if String.endsWith "/" inputVal then
-                                            inputVal ++ entry.name ++ "/"
-                                        else
-                                            case lastIndexOf '/' inputVal of
-                                                Just sl ->
-                                                    String.left (sl + 1) inputVal ++ entry.name ++ "/"
-
-                                                Nothing ->
-                                                    entry.name ++ "/"
-
-                                    newDir =
-                                        if s.filePickerDir == "" then
-                                            entry.name
-                                        else
-                                            s.filePickerDir ++ "/" ++ entry.name
+                                    ( newFp, newDir ) =
+                                        FP.appendDirToInput fp entry.name
                                 in
                                 ( updateActiveSession model (\sess ->
-                                    { sess
-                                        | filePickerLoading = True
-                                        , filePickerInput = newInput
-                                        , filePickerFilter = ""
-                                        , filePickerSelected = idx
-                                    }
+                                    { sess | filePicker = { newFp | selected = idx } }
                                   )
                                 , Ports.fsResolvePath { path = newDir }
                                 )
@@ -908,16 +867,14 @@ update msg model =
                             else
                                 let
                                     fullPath =
-                                        if s.filePickerDir == "" then
+                                        if fp.dir == "" then
                                             entry.name
                                         else
-                                            s.filePickerDir ++ "/" ++ entry.name
+                                            fp.dir ++ "/" ++ entry.name
                                 in
                                 ( updateActiveSession model (\sess ->
                                     { sess
-                                        | filePickerLoading = True
-                                        , pendingFileName = entry.name
-                                        , filePickerSelected = idx
+                                        | filePicker = { fp | loading = True, selected = idx, pendingFileName = entry.name }
                                     }
                                   )
                                 , Ports.fsReadFileDataUri { path = fullPath }
@@ -933,22 +890,25 @@ update msg model =
             case getActiveSession model of
                 Just s ->
                     let
+                        fp =
+                            s.filePicker
+
                         ( newMode, newInput ) =
-                            case s.filePickerMode of
+                            case fp.mode of
                                 T.Local ->
                                     -- Switching FROM local TO URL: save local path, restore saved URL
                                     ( T.Url
-                                    , s.filePickerSavedUrlPath
+                                    , fp.savedUrlPath
                                     )
 
                                 T.Url ->
                                     -- Switching FROM URL TO local: save URL, restore saved local path
                                     let
                                         restoredLocal =
-                                            if s.filePickerSavedLocalPath /= "" then
-                                                s.filePickerSavedLocalPath
-                                            else if s.filePickerDir /= "" then
-                                                s.filePickerDir ++ "/"
+                                            if fp.savedLocalPath /= "" then
+                                                fp.savedLocalPath
+                                            else if fp.dir /= "" then
+                                                fp.dir ++ "/"
                                             else
                                                 ""
                                     in
@@ -957,24 +917,27 @@ update msg model =
                                     )
 
                         ( savedLocal, savedUrl ) =
-                            case s.filePickerMode of
+                            case fp.mode of
                                 T.Local ->
-                                    ( s.filePickerInput
+                                    ( fp.input
                                     , ""
                                     )
 
                                 T.Url ->
                                     ( ""
-                                    , s.filePickerInput
+                                    , fp.input
                                     )
                     in
                     ( updateActiveSession model (\oldS ->
                         { oldS
-                            | filePickerMode = newMode
-                            , filePickerInput = newInput
-                            , filePickerFilter = ""
-                            , filePickerSavedLocalPath = savedLocal
-                            , filePickerSavedUrlPath = savedUrl
+                            | filePicker =
+                                { fp
+                                    | mode = newMode
+                                    , input = newInput
+                                    , filter = ""
+                                    , savedLocalPath = savedLocal
+                                    , savedUrlPath = savedUrl
+                                }
                         }
                       )
                     , Cmd.batch
@@ -989,13 +952,17 @@ update msg model =
         FilePickerNavigateUp ->
             case getActiveSession model of
                 Just s ->
-                    if s.filePickerDir /= "" && s.filePickerBaseDir /= "" then
+                    let
+                        fp =
+                            s.filePicker
+                    in
+                    if fp.dir /= "" && fp.baseDir /= "" then
                         let
                             cleanPath =
-                                if String.endsWith "/" s.filePickerDir then
-                                    String.dropRight 1 s.filePickerDir
+                                if String.endsWith "/" fp.dir then
+                                    String.dropRight 1 fp.dir
                                 else
-                                    s.filePickerDir
+                                    fp.dir
 
                             parts =
                                 String.split "/" cleanPath
@@ -1010,9 +977,7 @@ update msg model =
                         in
                         ( updateActiveSession model (\sess ->
                             { sess
-                                | filePickerLoading = True
-                                , filePickerInput = parentDir ++ "/"
-                                , filePickerFilter = ""
+                                | filePicker = { fp | loading = True, input = parentDir ++ "/", filter = "" }
                             }
                           )
                         , Ports.fsResolvePath { path = parentDir }
@@ -1027,17 +992,19 @@ update msg model =
         FsListDirResult entries ->
             let
                 parsed =
-                    List.filterMap decodeDirEntry entries
+                    List.filterMap FP.decodeDirEntry entries
 
                 -- Filter out ".." (parent directory entry) — not useful in UI
                 noDotDot =
                     List.filter (\e -> e.name /= "..") parsed
             in
             ( updateActiveSession model (\s ->
+                let
+                    fp =
+                        s.filePicker
+                in
                 { s
-                    | filePickerEntries = noDotDot
-                    , filePickerLoading = False
-                    , filePickerError = Nothing
+                    | filePicker = { fp | entries = noDotDot, loading = False, error = Nothing }
                 }
               )
             , Cmd.none
@@ -1045,12 +1012,19 @@ update msg model =
 
         FsHomeDirResult home ->
             ( updateActiveSession model (\s ->
+                let
+                    fp =
+                        s.filePicker
+                in
                 { s
-                    | filePickerBaseDir = home
-                    , filePickerDir = home
-                    , filePickerInput = home ++ "/"
-                    , filePickerFilter = ""
-                    , filePickerLoading = True
+                    | filePicker =
+                        { fp
+                            | baseDir = home
+                            , dir = home
+                            , input = home ++ "/"
+                            , filter = ""
+                            , loading = True
+                        }
                 }
               )
             , case model.activeId of
@@ -1068,15 +1042,18 @@ update msg model =
             case getActiveSession model of
                 Just s ->
                     let
+                        fp =
+                            s.filePicker
+
                         name =
-                            if s.pendingFileName /= "" then
-                                Just s.pendingFileName
+                            if fp.pendingFileName /= "" then
+                                Just fp.pendingFileName
                             else
                                 Nothing
 
                         detectedType =
                             case name of
-                                Just n -> detectMediaType n
+                                Just n -> FP.detectMediaType n
                                 Nothing -> T.Document
 
                         newItem =
@@ -1088,9 +1065,7 @@ update msg model =
                     in
                     ( updateActiveSession model (\sess ->
                         { sess
-                            | showFilePicker = False
-                            , filePickerInput = ""
-                            , pendingFileName = ""
+                            | filePicker = { fp | show = False, input = "", pendingFileName = "" }
                             , staged = sess.staged ++ [ newItem ]
                         }
                       )
@@ -1107,13 +1082,15 @@ update msg model =
                         Ok rp ->
                             if rp.exists && rp.isDir then
                                 let
+                                    fp =
+                                        s.filePicker
+
                                     sameDir =
-                                        rp.resolved == s.filePickerDir
+                                        rp.resolved == fp.dir
                                 in
                                 ( updateActiveSession model (\sess ->
                                     { sess
-                                        | filePickerDir = rp.resolved
-                                        , filePickerSelected = 0
+                                        | filePicker = { fp | dir = rp.resolved, selected = 0 }
                                     }
                                   )
                                 , if sameDir then
@@ -2290,13 +2267,6 @@ applyPendingEvent raw sessions =
                             sessions
 
 
-decodeDirEntry : E.Value -> Maybe T.DirEntry
-decodeDirEntry val =
-    case D.decodeValue (D.map2 T.DirEntry (D.field "name" D.string) (D.field "isDir" D.bool)) val of
-        Ok entry -> Just entry
-        Err _ -> Nothing
-
-
 type alias SessionDir =
     { id : String
     , hasSessionFile : Bool
@@ -2319,139 +2289,6 @@ decodeSessionDir val =
         Err _ -> Nothing
 
 
-filterEntries : T.SessionState -> List T.DirEntry
-filterEntries session =
-    let
-        term =
-            String.trim session.filePickerFilter
-    in
-    if String.isEmpty term then
-        session.filePickerEntries
-
-    else
-        List.filter (\e -> Fuzzy.fuzzyMatch term (String.toLower e.name)) session.filePickerEntries
-
-
--- Parse file picker input into (needsResolve, resolvePath, filterText)
--- Matches alayacore terminal adapter's navigateByPath logic.
---
--- ~             → resolve "~",          filter ""
--- ~/path        → resolve "~",          filter "path"
--- ~/dir/        → resolve "~/dir",      filter ""
--- ~/dir/sub     → resolve "~/dir",      filter "sub"
--- /abs/path     → resolve "/abs/path",  filter ""  (if ends with /)
--- /abs/foo      → resolve "/abs",       filter "foo"
--- ../rel        → resolve baseDir/..,   filter "rel"
--- foo           → no resolve,           filter "foo"  (fuzzy search)
-
-
-parsePathInput : String -> String -> String -> ( Bool, String, String )
-parsePathInput input currentDir baseDir =
-    if String.isEmpty input then
-        ( False, "", "" )
-
-    else if String.startsWith "~" input then
-        parseTildePath input
-
-    else if String.startsWith "/" input then
-        parseAbsolutePath input
-
-    else if String.contains "/" input || input == ".." then
-        parseRelativePath input baseDir
-
-    else
-        -- Plain text: no navigation, use as filter
-        ( False, "", input )
-
-
-parseTildePath : String -> ( Bool, String, String )
-parseTildePath input =
-    let
-        rest =
-            String.dropLeft 1 input
-    in
-    if rest == "" || rest == "/" then
-        -- "~" or "~/" → navigate to home
-        ( True, "~", "" )
-
-    else if String.endsWith "/" rest then
-        -- "~/dir/" → navigate to ~/dir
-        ( True, input, "" )
-
-    else
-        -- "~/dir/file" → navigate to ~/dir, filter "file"
-        let
-            dirPart =
-                "~/" ++ (String.join "/" (List.take (List.length (String.split "/" rest) - 1) (String.split "/" rest)))
-
-            filePart =
-                Maybe.withDefault "" (List.head (List.reverse (String.split "/" rest)))
-        in
-        if dirPart == "~/" then
-            -- "~/file" → navigate to ~, filter "file"
-            ( True, "~", filePart )
-        else
-            ( True, dirPart, filePart )
-
-
-parseAbsolutePath : String -> ( Bool, String, String )
-parseAbsolutePath input =
-    let
-        trimmed =
-            if String.endsWith "/" input && input /= "/" then
-                String.dropRight 1 input
-            else
-                input
-    in
-    if trimmed == "/" || String.endsWith "/" input then
-        -- "/" or "/path/" → navigate to that dir
-        ( True, trimmed, "" )
-
-    else
-        -- "/path/to/file" → navigate to /path/to, filter "file"
-        let
-            parts =
-                String.split "/" trimmed
-
-            filePart =
-                Maybe.withDefault "" (List.head (List.reverse parts))
-
-            dirPart =
-                String.join "/" (List.take (List.length parts - 1) parts)
-        in
-        if dirPart == "" then
-            -- "/file" → navigate to /, filter "file"
-            ( True, "/", filePart )
-        else
-            ( True, dirPart, filePart )
-
-
-parseRelativePath : String -> String -> ( Bool, String, String )
-parseRelativePath input baseDir =
-    if input == ".." then
-        -- Navigate to parent
-        ( True, baseDir ++ "/..", "" )
-
-    else if String.endsWith "/" input then
-        -- "dir/" → navigate to baseDir/dir
-        ( True, baseDir ++ "/" ++ (String.dropRight 1 input), "" )
-
-    else
-        -- "dir/file" → navigate to baseDir/dir, filter "file"
-        let
-            filePart =
-                Maybe.withDefault "" (List.head (List.reverse (String.split "/" input)))
-
-            dirPart =
-                String.join "/" (List.take (List.length (String.split "/" input) - 1) (String.split "/" input))
-        in
-        if dirPart == "" then
-            -- "file" (shouldn't happen since input contains "/" but just in case)
-            ( False, "", input )
-        else
-            ( True, baseDir ++ "/" ++ dirPart, filePart )
-
-
 -- File Picker Helpers
 
 type alias ResolvedPathResult =
@@ -2467,62 +2304,6 @@ resolvePathResultDecoder =
         (D.field "resolved" D.string)
         (D.field "exists" D.bool)
         (D.field "isDir" D.bool)
-
-
-detectMediaType : String -> T.MediaType
-detectMediaType name =
-    let
-        ext =
-            String.toLower (Maybe.withDefault "" (List.head (List.reverse (String.split "." name))))
-    in
-    case ext of
-        "jpg" -> T.Image
-        "jpeg" -> T.Image
-        "png" -> T.Image
-        "gif" -> T.Image
-        "webp" -> T.Image
-        "bmp" -> T.Image
-        "svg" -> T.Image
-        "mp3" -> T.Audio
-        "wav" -> T.Audio
-        "ogg" -> T.Audio
-        "flac" -> T.Audio
-        "m4a" -> T.Audio
-        "mp4" -> T.Video
-        "webm" -> T.Video
-        "avi" -> T.Video
-        "mov" -> T.Video
-        "mkv" -> T.Video
-        "pdf" -> T.Document
-        "txt" -> T.Document
-        "md" -> T.Document
-        "json" -> T.Document
-        "csv" -> T.Document
-        "html" -> T.Document
-        "htm" -> T.Document
-        _ -> T.Document
-
--- ─── String Helpers ─────────────────────────────────────────────────
-
-lastIndexOf : Char -> String -> Maybe Int
-lastIndexOf char str =
-    lastIndexOfHelp char str 0 Nothing
-
-
-lastIndexOfHelp : Char -> String -> Int -> Maybe Int -> Maybe Int
-lastIndexOfHelp char str idx found =
-    if idx >= String.length str then
-        found
-    else
-        case String.uncons (String.dropLeft idx str) of
-            Just ( c, _ ) ->
-                if c == char then
-                    lastIndexOfHelp char str (idx + 1) (Just idx)
-                else
-                    lastIndexOfHelp char str (idx + 1) found
-
-            Nothing ->
-                found
 
 
 -- ─── Selector Search Keys ────────────────────────────────────────────
