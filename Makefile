@@ -1,4 +1,4 @@
-.PHONY: all elm run dev build test clean run-go build-go test-go clean-go
+.PHONY: all elm run-tauri dev build-tauri test-tauri clean-tauri run-go build-go test-go clean-go
 
 ELM       := elm
 CARGO     := cargo
@@ -13,24 +13,26 @@ all: elm
 elm:
 	cd $(ELM_SRC) && $(ELM) make src/Main.elm --output=elm.js
 
-# Run Tauri desktop app (auto-compiles Elm first)
-run: elm
+# ─── Tauri desktop app ──────────────────────────────────────────────
+
+# Run the Tauri desktop app (auto-compiles Elm first)
+run-tauri: elm
 	cd $(TAURI) && $(CARGO) run
 
-# Alias for run
-dev: run
+# Alias for run-tauri
+dev: run-tauri
 
 # Build release binary
-build: elm
+build-tauri: elm
 	cd $(TAURI) && $(CARGO) build --release
 
-# Run all test suites (Rust unit tests + Elm tests)
-test:
+# Run Tauri test suites (Rust unit tests + Elm tests)
+test-tauri:
 	cd $(TAURI) && $(CARGO) test
 	cd $(ELM_SRC) && elm-test
 
-# Clean build artifacts
-clean:
+# Clean Tauri build artifacts
+clean-tauri:
 	rm -f $(ELM_SRC)/elm.js
 	cd $(TAURI) && $(CARGO) clean
 	rm -rf $(ELM_SRC)/elm-stuff
