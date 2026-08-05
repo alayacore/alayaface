@@ -1,5 +1,7 @@
 # AlayaFace
 
+[![CI](https://github.com/wallacegibbon/alayaface/actions/workflows/ci.yml/badge.svg)](https://github.com/wallacegibbon/alayaface/actions/workflows/ci.yml)
+
 A Tauri GUI frontend for [AlayaCore](https://github.com/alayacore/alayacore).
 Built with **Elm** for the frontend and **Rust** for the Tauri backend.
 

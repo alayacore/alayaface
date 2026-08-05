@@ -331,10 +331,11 @@ runtimes auto-switch on the presence of `window.__TAURI__`, avoiding two bridge 
 
 | Suite | Content | Reference |
 |-------|---------|-----------|
-| Go unit tests | tlv encode/decode/partial-read/EOF/NUL edges; dirs creation/exclusion of settings.conf; preset lifecycle; settings normalize; mcp.conf parse roundtrip | port the same-named Rust tests one by one |
-| Go integration (optional) | start server + fake alayacore (a `sh`/`python` script echoing TLV frames) to verify create/send/close end-to-end | — |
+| Go unit tests | tlv encode/decode/partial-read/EOF/NUL edges; dirs creation/exclusion of settings.conf; preset lifecycle; settings normalize; mcp.conf parse roundtrip; reader dispatch (delta-only, empty→null, JSON frames, CO name injection, SM wrap/cache, echoes, disconnect); core spawn/kill/find; hub broadcast/unregister/slow-client drop | port the same-named Rust tests one by one |
+| Go integration | `internal/fakecore` (scriptable TLV rawio stand-in) + `internal/server/integration_test.go`: full end-to-end over HTTP+WS against a real subprocess — conversation flow, every CI command roundtrip with CO name injection, fork, model probes (live + fallback), sync error paths, resume/delete, token auth | implemented 2026-08-05 (commit 7838e93); run with `go test ./... -race` |
 | Elm tests | unchanged — verify the shared client is not broken | `make test` |
-| Dual-backend smoke | run the same Elm frontend against both Tauri and Go, diff the event streams | manual |
+| Dual-backend smoke | run the same Elm frontend against both Tauri and Go, diff the event streams | manual (GUI env) |
+| CI | `.github/workflows/ci.yml`: Go (`go vet` + `go test -race`), Elm (0.19.2 toolchain: `elm make` + `elm-test`), Rust (Tauri system deps + `cargo test`) | — |
 
 ---
 
