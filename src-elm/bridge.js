@@ -46,15 +46,17 @@
     var ws = null;
     var listeners = {}; // event name → [cb]
     var stopped = false;
+    var retryDelay = 1000; // ms, backs off up to 10s; resets on connect
 
     function connect() {
       var proto = location.protocol === "https:" ? "wss" : "ws";
       try {
         ws = new WebSocket(proto + "://" + location.host + "/ws");
       } catch (e) {
-        setTimeout(connect, 1000);
+        scheduleReconnect();
         return;
       }
+      ws.onopen = function () { retryDelay = 1000; };
       ws.onmessage = function (ev) {
         var msg;
         try { msg = JSON.parse(ev.data); } catch (e) { return; }
@@ -63,8 +65,13 @@
       };
       ws.onclose = function () {
         if (stopped) return;
-        setTimeout(connect, 1000); // simple reconnect
+        scheduleReconnect();
       };
+      ws.onerror = function () { /* onclose follows */ };
+    }
+    function scheduleReconnect() {
+      setTimeout(connect, retryDelay);
+      retryDelay = Math.min(retryDelay * 2, 10000);
     }
     connect();
 

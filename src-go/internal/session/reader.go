@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 
-	"alayaface/src-go/internal/core"
 	"alayaface/src-go/internal/hub"
 	"alayaface/src-go/internal/tlv"
 )
@@ -43,7 +42,7 @@ func (s *Session) startReader(h *hub.Hub, cache *ModelCache) {
 // broadcasts core-status. Called from the reader goroutine only.
 func (s *Session) disconnect(h *hub.Hub, message string) {
 	s.setConnected(false)
-	core.KillChild(s.Child)
+	s.kill()
 	h.Broadcast(hub.NewEvent("core-status", StatusEvent{
 		SessionID: s.ID,
 		Connected: false,

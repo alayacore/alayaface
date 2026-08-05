@@ -94,6 +94,11 @@ func WriteFrame(w io.Writer, tag, value string) error {
 	return err
 }
 
+// MaxFrameSize caps a single TLV frame's value length. alayacore's
+// frames are small (deltas, JSON payloads); the 4-byte length field
+// would otherwise allow a corrupt stream to trigger a huge allocation.
+const MaxFrameSize = 256 << 20 // 256 MiB
+
 // ReadFrame reads a single TLV frame from r.
 // Returns (nil, nil) on clean EOF; (nil, err) on protocol/IO errors.
 // Mirrors Rust read_frame: a short header read is EOF, a short value
@@ -113,6 +118,9 @@ func ReadFrame(r io.Reader) (*Frame, error) {
 	}
 
 	length := binary.BigEndian.Uint32(header[2:6])
+	if length > MaxFrameSize {
+		return nil, fmt.Errorf("frame too large: %d bytes", length)
+	}
 	value := make([]byte, length)
 	if length > 0 {
 		if _, err := io.ReadFull(r, value); err != nil {

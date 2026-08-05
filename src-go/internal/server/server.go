@@ -5,6 +5,7 @@ package server
 import (
 	"log"
 	"net/http"
+	"net/url"
 
 	"github.com/gorilla/websocket"
 
@@ -40,8 +41,23 @@ func New(staticDir, token string) *Server {
 		StaticDir: staticDir,
 		Token:     token,
 		upgrader: websocket.Upgrader{
-			// Loopback-only server; same-origin Elm page.
-			CheckOrigin: func(r *http.Request) bool { return true },
+			// Same-origin check: the page is served by this server, so
+			// its Origin host must match the request Host. This blocks
+			// malicious websites from subscribing to the event stream
+			// (WebSocket bypasses CORS; without this check any origin
+			// could eavesdrop on conversations). Requests without an
+			// Origin header (curl, local tools) are allowed.
+			CheckOrigin: func(r *http.Request) bool {
+				origin := r.Header.Get("Origin")
+				if origin == "" {
+					return true
+				}
+				u, err := url.Parse(origin)
+				if err != nil {
+					return false
+				}
+				return u.Host == r.Host
+			},
 		},
 	}
 }

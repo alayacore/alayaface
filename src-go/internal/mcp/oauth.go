@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -55,8 +56,18 @@ func StartAuthFlow(serverName, authURL string, openBrowser bool, onResult func(R
 		openBrowserURL(filledURL)
 	}
 
+	var handled atomic.Bool // first request wins; ignore anything after
+
 	var srv *http.Server
 	srv = &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		// The http.Server can receive multiple requests (favicon,
+		// browser retries, keep-alive reuse). Only the first callback
+		// is processed — otherwise onResult would fire repeatedly and
+		// send duplicate mcp_confirm/mcp_decline commands.
+		if !handled.CompareAndSwap(false, true) {
+			writeCallbackPage(w, serverName, false)
+			return
+		}
 		q := req.URL.Query()
 
 		if errDesc := q.Get("error"); errDesc != "" {

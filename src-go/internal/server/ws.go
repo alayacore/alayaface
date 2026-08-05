@@ -28,15 +28,18 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	s.Hub.Register(c)
 	log.Printf("[ws] client connected")
 
-	// Write pump: drain the client's send channel.
+	// Write pump: drain the client's send channel. When the channel is
+	// closed (Unregister, or the hub dropping a slow client), close the
+	// connection so the read pump unblocks and this handler exits.
 	writeDone := make(chan struct{})
 	go func() {
 		defer close(writeDone)
 		for msg := range c.Chan() {
 			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-				return
+				break
 			}
 		}
+		_ = conn.Close()
 	}()
 
 	// Read pump: detect client close; also answer pings.
@@ -49,9 +52,8 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Cleanup: unregister (closes send chan → write pump exits),
-	// then close the connection.
+	// then wait for the write pump.
 	s.Hub.Unregister(c)
-	_ = conn.Close()
 	<-writeDone
 	log.Printf("[ws] client disconnected")
 }

@@ -157,6 +157,15 @@ func TestWrapDeltaRoundtrips(t *testing.T) {
 	}
 }
 
+func TestReadFrameTooLargeIsError(t *testing.T) {
+	// Header claims MaxFrameSize+1 bytes; must be rejected without
+	// allocating the frame.
+	raw := []byte{'U', 'T', 0x10, 0x00, 0x00, 0x01} // 268435457 > 256 MiB
+	if _, err := ReadFrame(bytes.NewReader(raw)); err == nil {
+		t.Error("expected error for oversized frame")
+	}
+}
+
 func TestJSONPayloadsRoundtrip(t *testing.T) {
 	out := ToolOutputData{
 		ID:     "t5",

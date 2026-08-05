@@ -5,10 +5,8 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
-	"path/filepath"
 
 	"alayaface/src-go/internal/core"
-	"alayaface/src-go/internal/dirs"
 	"alayaface/src-go/internal/hub"
 	"alayaface/src-go/internal/session"
 )
@@ -110,9 +108,4 @@ func ResolveBinary(binaryPath string) string {
 		return binaryPath
 	}
 	return core.FindBinary()
-}
-
-// sessionDirFor builds the on-disk session directory path for an id.
-func sessionDirFor(id string) string {
-	return filepath.Join(dirs.AlayafaceDir(), "sessions", id)
 }

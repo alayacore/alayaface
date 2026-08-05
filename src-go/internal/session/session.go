@@ -34,10 +34,18 @@ type Session struct {
 
 	stdinMu   sync.Mutex
 	connected atomic.Bool
+	// killOnce guarantees the child is killed/reaped exactly once even
+	// when Close and the reader goroutine's EOF path race.
+	killOnce sync.Once
 	// PendingCmds maps call ID → command name (CI sent, CO not yet
 	// received). The reader attaches the command name to CO frames,
 	// since CO carries only the call ID.
 	PendingCmds sync.Map
+}
+
+// kill reaps the child process exactly once (idempotent).
+func (s *Session) kill() {
+	s.killOnce.Do(func() { core.KillChild(s.Child) })
 }
 
 // Connected reports whether the session's stdout pipe is still open.
@@ -119,7 +127,7 @@ func (m *Manager) CloseAll() {
 	m.sessions = make(map[string]*Session)
 	m.mu.Unlock()
 	for _, s := range items {
-		core.KillChild(s.Child)
+		s.kill()
 	}
 }
 
@@ -170,7 +178,7 @@ func (m *Manager) Close(id string) error {
 	if !ok {
 		return ErrNotFound
 	}
-	core.KillChild(s.Child)
+	s.kill()
 	log.Printf("[session] closed %s", id)
 	return nil
 }

@@ -44,10 +44,13 @@ func Spawn(binaryPath, configPath, sessionPath, toolConfirm string) (*CoreProces
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		_ = stdin.Close()
 		return nil, err
 	}
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
+		_ = stdout.Close()
 		return nil, err
 	}
 	return &CoreProcess{Cmd: cmd, Stdin: stdin, Stdout: stdout}, nil

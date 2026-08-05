@@ -15,6 +15,10 @@ type rpcError struct {
 
 func (e *rpcError) Error() string { return e.msg }
 
+// rpcHandlers is built once; handlers.Registry() allocates a fresh map
+// on every call, so cache it.
+var rpcHandlers = handlers.Registry()
+
 // handleRPC dispatches POST /rpc/{command} to the registered handler.
 // Success: 200 + raw result JSON (mirrors Tauri invoke resolve).
 // Failure: 4xx/5xx + {"error": msg} (mirrors Tauri rejection).
@@ -26,7 +30,7 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cmd := r.PathValue("command")
-	fn, ok := handlers.Registry()[cmd]
+	fn, ok := rpcHandlers[cmd]
 	if !ok {
 		writeRPCError(w, &rpcError{status: http.StatusNotFound, msg: "unknown command: " + cmd})
 		return
