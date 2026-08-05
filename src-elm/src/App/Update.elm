@@ -19,9 +19,9 @@ import Set exposing (Set)
 import Json.Decode as D
 import Json.Encode as E
 import Task
-import Process
 import Fuzzy
 import App.Types exposing (..)
+import App.SelectorKit as Kit
 import Session.Types as T
 import Session.Protocol as P
 import Session.Handlers as H
@@ -68,12 +68,13 @@ updateActiveSession model fn =
 
 
 focusInput : Model -> Cmd Msg
-focusInput model =
-    case model.activeId of
-        Just sid ->
-            Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ sid))
-        Nothing ->
-            Cmd.none
+focusInput =
+    Kit.focusPrompt
+
+
+focusAfterDelay : String -> Cmd Msg
+focusAfterDelay =
+    Kit.focusAfterDelay
 
 
 getActiveSession : Model -> Maybe T.SessionState
@@ -1256,160 +1257,46 @@ update msg model =
                     ( model, Cmd.none )
 
         SetModelSelectorInput val ->
-            ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.setInput modelName val sess.modelSelector })
-            , Cmd.none
-            )
+            Kit.setInput sessionModelKit val model
 
         ModelSelectorSelectItem idx ->
-            let
-                scrollCmd =
-                    case getActiveSession model of
-                        Just s ->
-                            case List.head (List.drop idx (Sel.filterItems modelName s.modelSelector.working s.modelSelector.input)) of
-                                Just m ->
-                                    Ports.scrollIntoView ("model-selector-item-" ++ s.id ++ "-" ++ String.fromInt m.id)
-
-                                Nothing ->
-                                    Cmd.none
-
-                        Nothing ->
-                            Cmd.none
-            in
-            ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.selectItem idx sess.modelSelector })
-            , scrollCmd
-            )
+            Kit.selectItem sessionModelKit idx model
 
         ModelSelectorConfirmItem ->
-            case getActiveSession model of
-                Just s ->
-                    case Sel.selectedItem modelName s.modelSelector of
-                        Just m ->
-                            if Sel.isDirty s.modelSelector then
-                                -- Unsaved edits: ask to sync before leaving
-                                ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.askSync sess.modelSelector })
-                                , Cmd.none )
-
-                            else
-                                ( updateActiveSession model (\sess -> { sess | showModelSelector = False, modelSelector = Sel.close sess.modelSelector })
-                                , Cmd.batch
-                                    [ Ports.setModel { sessionId = s.id, modelId = m.id }
-                                    , focusInput model
-                                    ]
-                                )
-
-                        Nothing ->
-                            ( model, Cmd.none )
-
-                Nothing ->
-                    ( model, Cmd.none )
+            Kit.confirmItem sessionModelKit model
 
         ModelSelectorEditModel id ->
-            case getActiveSession model of
-                Just s ->
-                    case List.filter (\m -> m.id == id) s.modelSelector.working |> List.head of
-                        Just m ->
-                            ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.openEdit (draftFromModel m) sess.modelSelector })
-                            , Cmd.batch
-                                [ focusAfterDelay ("model-editor-name-" ++ s.id)
-                                , Ports.setCursorPos ("model-editor-name-" ++ s.id)
-                                ]
-                            )
-
-                        Nothing ->
-                            ( model, Cmd.none )
-
-                Nothing ->
-                    ( model, Cmd.none )
+            Kit.editItem sessionModelKit id model
 
         ModelSelectorAddModel ->
-            case getActiveSession model of
-                Just s ->
-                    ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.openEdit T.emptyDraft sess.modelSelector })
-                    , Cmd.batch
-                        [ focusAfterDelay ("model-editor-name-" ++ s.id)
-                        , Ports.setCursorPos ("model-editor-name-" ++ s.id)
-                        ]
-                    )
-
-                Nothing ->
-                    ( model, Cmd.none )
+            Kit.addItem sessionModelKit model
 
         ModelSelectorEditBack ->
-            case getActiveSession model of
-                Just s ->
-                    ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.backFromEdit sess.modelSelector })
-                    , Cmd.batch
-                        [ focusAfterDelay ("model-selector-input-" ++ s.id)
-                        , Ports.setCursorPos ("model-selector-input-" ++ s.id)
-                        ]
-                    )
-
-                Nothing ->
-                    ( model, Cmd.none )
+            Kit.editBack sessionModelKit model
 
         ModelSelectorEditSave ->
-            case getActiveSession model of
-                Just s ->
-                    ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.saveItem (\d -> d.id) modelFromDraft (\m -> m.id) (\id m -> { m | id = id }) sess.modelSelector })
-                    , Cmd.batch
-                        [ focusAfterDelay ("model-selector-input-" ++ s.id)
-                        , Ports.setCursorPos ("model-selector-input-" ++ s.id)
-                        ]
-                    )
-
-                Nothing ->
-                    ( model, Cmd.none )
+            Kit.editSave sessionModelKit model
 
         ModelSelectorEditField field value ->
-            ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.updateDraft (updateDraftField field value) sess.modelSelector })
-            , Cmd.none
-            )
+            Kit.editField sessionModelKit field value model
 
         ModelSelectorDeleteModel id ->
-            ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.requestDelete id sess.modelSelector })
-            , Cmd.none
-            )
+            Kit.deleteItem sessionModelKit id model
 
         ModelSelectorConfirmDelete id ->
-            ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.confirmDeleteItem (\m -> m.id) id sess.modelSelector })
-            , Cmd.none
-            )
+            Kit.confirmDelete sessionModelKit id model
 
         ModelSelectorCancelDelete ->
-            ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.cancelDelete sess.modelSelector })
-            , Cmd.none
-            )
+            Kit.cancelDelete sessionModelKit model
 
         ModelSelectorConfirmSync ->
-            case getActiveSession model of
-                Just s ->
-                    ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.startSync sess.modelSelector })
-                    , Ports.modelSync
-                        { sessionId = s.id
-                        , config = encodeModels s.modelSelector.working
-                        }
-                    )
-
-                Nothing ->
-                    ( model, Cmd.none )
+            Kit.confirmSync sessionModelKit model
 
         ModelSelectorDiscardClose ->
-            ( updateActiveSession model (\sess -> { sess | showModelSelector = False, modelSelector = Sel.close sess.modelSelector })
-            , focusInput model
-            )
+            Kit.discardClose sessionModelKit model
 
         ModelSelectorCancelSyncPrompt ->
-            case getActiveSession model of
-                Just s ->
-                    ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.backToList sess.modelSelector })
-                    , Cmd.batch
-                        [ focusAfterDelay ("model-selector-input-" ++ s.id)
-                        , Ports.setCursorPos ("model-selector-input-" ++ s.id)
-                        ]
-                    )
-
-                Nothing ->
-                    ( model, Cmd.none )
+            Kit.cancelSyncPrompt sessionModelKit model
 
         ModelSelectorSyncResult isError message ->
             case getActiveSession model of
@@ -1418,14 +1305,10 @@ update msg model =
                         ( model, Cmd.none )
 
                     else if isError then
-                        ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.syncFailed message sess.modelSelector })
-                        , Cmd.none
-                        )
+                        Kit.syncFailed sessionModelKit message model
 
                     else
-                        ( updateActiveSession model (\sess -> { sess | showModelSelector = False, modelSelector = Sel.close sess.modelSelector })
-                        , focusInput model
-                        )
+                        Kit.syncSuccess sessionModelKit model
 
                 Nothing ->
                     ( model, Cmd.none )
@@ -1495,216 +1378,58 @@ update msg model =
                     ( model, Cmd.none )
 
         SetDefaultModelsInput val ->
-            let
-                ed =
-                    model.defaultModelsEditor
-            in
-            ( { model | defaultModelsEditor = { ed | state = Sel.setInput modelName val ed.state } }
-            , Cmd.none
-            )
+            Kit.setInput defaultModelsKit val model
 
         DefaultModelsSelectItem idx ->
-            let
-                ed =
-                    model.defaultModelsEditor
-
-                scrollCmd =
-                    case List.head (List.drop idx (Sel.filterItems modelName ed.state.working ed.state.input)) of
-                        Just m ->
-                            Ports.scrollIntoView ("model-selector-item-default-" ++ String.fromInt m.id)
-
-                        Nothing ->
-                            Cmd.none
-            in
-            ( { model | defaultModelsEditor = { ed | state = Sel.selectItem idx ed.state } }
-            , scrollCmd
-            )
+            Kit.selectItem defaultModelsKit idx model
 
         DefaultModelsConfirmItem ->
-            let
-                ed =
-                    model.defaultModelsEditor
-            in
-            case Sel.selectedItem modelName ed.state of
-                Just m ->
-                    ( { model
-                        | defaultModelsEditor =
-                            { ed | state = Sel.openEdit (draftFromModel m) ed.state }
-                      }
-                    , Cmd.batch
-                        [ focusAfterDelay "model-editor-name-default"
-                        , Ports.setCursorPos "model-editor-name-default"
-                        ]
-                    )
-
-                Nothing ->
-                    ( model, Cmd.none )
+            Kit.confirmItem defaultModelsKit model
 
         DefaultModelsEditModel id ->
-            let
-                ed =
-                    model.defaultModelsEditor
-            in
-            case List.filter (\m -> m.id == id) ed.state.working |> List.head of
-                Just m ->
-                    ( { model
-                        | defaultModelsEditor =
-                            { ed | state = Sel.openEdit (draftFromModel m) ed.state }
-                      }
-                    , Cmd.batch
-                        [ focusAfterDelay "model-editor-name-default"
-                        , Ports.setCursorPos "model-editor-name-default"
-                        ]
-                    )
-
-                Nothing ->
-                    ( model, Cmd.none )
+            Kit.editItem defaultModelsKit id model
 
         DefaultModelsAddModel ->
-            let
-                ed =
-                    model.defaultModelsEditor
-            in
-            ( { model
-                | defaultModelsEditor =
-                    { ed | state = Sel.openEdit T.emptyDraft ed.state }
-              }
-            , Cmd.batch
-                [ focusAfterDelay "model-editor-name-default"
-                , Ports.setCursorPos "model-editor-name-default"
-                ]
-            )
+            Kit.addItem defaultModelsKit model
 
         DefaultModelsEditBack ->
-            let
-                ed =
-                    model.defaultModelsEditor
-            in
-            ( { model
-                | defaultModelsEditor =
-                    { ed | state = Sel.backFromEdit ed.state }
-              }
-            , Cmd.batch
-                [ focusAfterDelay "model-selector-input-default"
-                , Ports.setCursorPos "model-selector-input-default"
-                ]
-            )
+            Kit.editBack defaultModelsKit model
 
         DefaultModelsEditSave ->
-            let
-                ed =
-                    model.defaultModelsEditor
-            in
-            ( { model
-                | defaultModelsEditor =
-                    { ed | state = Sel.saveItem (\d -> d.id) modelFromDraft (\m -> m.id) (\id m -> { m | id = id }) ed.state }
-              }
-            , Cmd.batch
-                [ focusAfterDelay "model-selector-input-default"
-                , Ports.setCursorPos "model-selector-input-default"
-                ]
-            )
+            Kit.editSave defaultModelsKit model
 
         DefaultModelsEditField field value ->
-            let
-                ed =
-                    model.defaultModelsEditor
-            in
-            ( { model
-                | defaultModelsEditor =
-                    { ed | state = Sel.updateDraft (updateDraftField field value) ed.state }
-              }
-            , Cmd.none
-            )
+            Kit.editField defaultModelsKit field value model
 
         DefaultModelsDeleteModel id ->
-            let
-                ed =
-                    model.defaultModelsEditor
-            in
-            ( { model
-                | defaultModelsEditor = { ed | state = Sel.requestDelete id ed.state }
-              }
-            , Cmd.none
-            )
+            Kit.deleteItem defaultModelsKit id model
 
         DefaultModelsConfirmDelete id ->
-            let
-                ed =
-                    model.defaultModelsEditor
-            in
-            ( { model
-                | defaultModelsEditor = { ed | state = Sel.confirmDeleteItem (\m -> m.id) id ed.state }
-              }
-            , Cmd.none
-            )
+            Kit.confirmDelete defaultModelsKit id model
 
         DefaultModelsCancelDelete ->
-            let
-                ed =
-                    model.defaultModelsEditor
-            in
-            ( { model
-                | defaultModelsEditor = { ed | state = Sel.cancelDelete ed.state }
-              }
-            , Cmd.none
-            )
+            Kit.cancelDelete defaultModelsKit model
 
         DefaultModelsConfirmSync ->
-            let
-                ed =
-                    model.defaultModelsEditor
-            in
-            ( { model
-                | defaultModelsEditor = { ed | state = Sel.startSync ed.state }
-              }
-            , Ports.syncDefaultModels
-                { preset = ed.preset
-                , config = encodeModels ed.state.working
-                }
-            )
+            Kit.confirmSync defaultModelsKit model
 
         DefaultModelsDiscardClose ->
-            ( { model | defaultModelsEditor = emptyDefaultModelsEditor }
-            , Cmd.none
-            )
+            Kit.discardClose defaultModelsKit model
 
         DefaultModelsCancelSyncPrompt ->
-            let
-                ed =
-                    model.defaultModelsEditor
-            in
-            ( { model
-                | defaultModelsEditor = { ed | state = Sel.backToList ed.state }
-              }
-            , Cmd.batch
-                [ focusAfterDelay "model-selector-input-default"
-                , Ports.setCursorPos "model-selector-input-default"
-                ]
-            )
+            Kit.cancelSyncPrompt defaultModelsKit model
 
         DefaultModelsSyncResult raw ->
             case D.decodeValue defaultModelsSyncResultDecoder raw of
                 Ok res ->
-                    let
-                        ed =
-                            model.defaultModelsEditor
-                    in
-                    if ed.state.page /= ModelSelSyncing then
+                    if model.defaultModelsEditor.state.page /= ModelSelSyncing then
                         ( model, Cmd.none )
 
                     else if res.ok then
-                        ( { model | defaultModelsEditor = emptyDefaultModelsEditor }
-                        , Cmd.none
-                        )
+                        Kit.syncSuccess defaultModelsKit model
 
                     else
-                        ( { model
-                            | defaultModelsEditor =
-                                { ed | state = Sel.syncFailed res.error ed.state }
-                          }
-                        , Cmd.none
-                        )
+                        Kit.syncFailed defaultModelsKit res.error model
 
                 Err _ ->
                     ( model, Cmd.none )
@@ -1777,216 +1502,58 @@ update msg model =
                     ( model, Cmd.none )
 
         SetMcpInput val ->
-            let
-                ed =
-                    model.mcpEditor
-            in
-            ( { model | mcpEditor = { ed | state = Sel.setInput mcpServerName val ed.state } }
-            , Cmd.none
-            )
+            Kit.setInput mcpKit val model
 
         McpSelectItem idx ->
-            let
-                ed =
-                    model.mcpEditor
-
-                scrollCmd =
-                    case List.head (List.drop idx (Sel.filterItems mcpServerName ed.state.working ed.state.input)) of
-                        Just s ->
-                            Ports.scrollIntoView ("mcp-selector-item-default-" ++ String.fromInt s.id)
-
-                        Nothing ->
-                            Cmd.none
-            in
-            ( { model | mcpEditor = { ed | state = Sel.selectItem idx ed.state } }
-            , scrollCmd
-            )
+            Kit.selectItem mcpKit idx model
 
         McpConfirmItem ->
-            let
-                ed =
-                    model.mcpEditor
-            in
-            case Sel.selectedItem mcpServerName ed.state of
-                Just s ->
-                    ( { model
-                        | mcpEditor =
-                            { ed | state = Sel.openEdit (draftFromMcp s) ed.state }
-                      }
-                    , Cmd.batch
-                        [ focusAfterDelay "mcp-editor-server-default"
-                        , Ports.setCursorPos "mcp-editor-server-default"
-                        ]
-                    )
-
-                Nothing ->
-                    ( model, Cmd.none )
+            Kit.confirmItem mcpKit model
 
         McpEditServer id ->
-            let
-                ed =
-                    model.mcpEditor
-            in
-            case List.filter (\s -> s.id == id) ed.state.working |> List.head of
-                Just s ->
-                    ( { model
-                        | mcpEditor =
-                            { ed | state = Sel.openEdit (draftFromMcp s) ed.state }
-                      }
-                    , Cmd.batch
-                        [ focusAfterDelay "mcp-editor-server-default"
-                        , Ports.setCursorPos "mcp-editor-server-default"
-                        ]
-                    )
-
-                Nothing ->
-                    ( model, Cmd.none )
+            Kit.editItem mcpKit id model
 
         McpAddServer ->
-            let
-                ed =
-                    model.mcpEditor
-            in
-            ( { model
-                | mcpEditor =
-                    { ed | state = Sel.openEdit T.emptyMcpDraft ed.state }
-              }
-            , Cmd.batch
-                [ focusAfterDelay "mcp-editor-server-default"
-                , Ports.setCursorPos "mcp-editor-server-default"
-                ]
-            )
+            Kit.addItem mcpKit model
 
         McpEditBack ->
-            let
-                ed =
-                    model.mcpEditor
-            in
-            ( { model
-                | mcpEditor =
-                    { ed | state = Sel.backFromEdit ed.state }
-              }
-            , Cmd.batch
-                [ focusAfterDelay "mcp-selector-input-default"
-                , Ports.setCursorPos "mcp-selector-input-default"
-                ]
-            )
+            Kit.editBack mcpKit model
 
         McpEditSave ->
-            let
-                ed =
-                    model.mcpEditor
-            in
-            ( { model
-                | mcpEditor =
-                    { ed | state = Sel.saveItem (\d -> d.id) mcpFromDraft (\s -> s.id) (\id s -> { s | id = id }) ed.state }
-              }
-            , Cmd.batch
-                [ focusAfterDelay "mcp-selector-input-default"
-                , Ports.setCursorPos "mcp-selector-input-default"
-                ]
-            )
+            Kit.editSave mcpKit model
 
         McpEditField field value ->
-            let
-                ed =
-                    model.mcpEditor
-            in
-            ( { model
-                | mcpEditor =
-                    { ed | state = Sel.updateDraft (updateMcpDraftField field value) ed.state }
-              }
-            , Cmd.none
-            )
+            Kit.editField mcpKit field value model
 
         McpDeleteServer id ->
-            let
-                ed =
-                    model.mcpEditor
-            in
-            ( { model
-                | mcpEditor = { ed | state = Sel.requestDelete id ed.state }
-              }
-            , Cmd.none
-            )
+            Kit.deleteItem mcpKit id model
 
         McpConfirmDelete id ->
-            let
-                ed =
-                    model.mcpEditor
-            in
-            ( { model
-                | mcpEditor = { ed | state = Sel.confirmDeleteItem (\s -> s.id) id ed.state }
-              }
-            , Cmd.none
-            )
+            Kit.confirmDelete mcpKit id model
 
         McpCancelDelete ->
-            let
-                ed =
-                    model.mcpEditor
-            in
-            ( { model
-                | mcpEditor = { ed | state = Sel.cancelDelete ed.state }
-              }
-            , Cmd.none
-            )
+            Kit.cancelDelete mcpKit model
 
         McpConfirmSync ->
-            let
-                ed =
-                    model.mcpEditor
-            in
-            ( { model
-                | mcpEditor = { ed | state = Sel.startSync ed.state }
-              }
-            , Ports.syncDefaultMcp
-                { preset = ed.preset
-                , config = encodeMcpServers ed.state.working
-                }
-            )
+            Kit.confirmSync mcpKit model
 
         McpDiscardClose ->
-            ( { model | mcpEditor = emptyMcpEditor }
-            , Cmd.none
-            )
+            Kit.discardClose mcpKit model
 
         McpCancelSyncPrompt ->
-            let
-                ed =
-                    model.mcpEditor
-            in
-            ( { model
-                | mcpEditor = { ed | state = Sel.backToList ed.state }
-              }
-            , Cmd.batch
-                [ focusAfterDelay "mcp-selector-input-default"
-                , Ports.setCursorPos "mcp-selector-input-default"
-                ]
-            )
+            Kit.cancelSyncPrompt mcpKit model
 
         McpSyncResult raw ->
             case D.decodeValue mcpSyncResultDecoder raw of
                 Ok res ->
-                    let
-                        ed =
-                            model.mcpEditor
-                    in
-                    if ed.state.page /= ModelSelSyncing then
+                    if model.mcpEditor.state.page /= ModelSelSyncing then
                         ( model, Cmd.none )
 
                     else if res.ok then
-                        ( { model | mcpEditor = emptyMcpEditor }
-                        , Cmd.none
-                        )
+                        Kit.syncSuccess mcpKit model
 
                     else
-                        ( { model
-                            | mcpEditor =
-                                { ed | state = Sel.syncFailed res.error ed.state }
-                          }
-                        , Cmd.none
-                        )
+                        Kit.syncFailed mcpKit res.error model
 
                 Err _ ->
                     ( model, Cmd.none )
@@ -2676,15 +2243,6 @@ handleResizeMove model mouseX mouseY =
 
         Nothing ->
             ( model, Cmd.none )
-
-
--- Focus an element by ID after a brief delay to ensure the DOM is fully rendered
-focusAfterDelay : String -> Cmd Msg
-focusAfterDelay id =
-    Task.attempt (\_ -> NoOp)
-        (Process.sleep 0
-            |> Task.andThen (\_ -> Dom.focus id)
-        )
 
 
 -- Apply a buffered transport event to the sessions dict.
@@ -3413,3 +2971,198 @@ nextCopyName source presets =
 
     else
         base
+
+
+-- ─── Selector kits ──────────────────────────────────────────────────
+--
+-- Parameterized update glue for the three list-based selectors. The
+-- state machine (Session.Selector) and the view (Overlay.Selector) are
+-- shared; these kits supply the per-feature accessors and behaviors so
+-- the App.Update handlers can delegate to App.SelectorKit.
+
+sessionModelKit : Kit.Kit T.ModelInfo T.ModelDraft
+sessionModelKit =
+    { get = \model ->
+        case getActiveSession model of
+            Just s ->
+                s.modelSelector
+
+            Nothing ->
+                Sel.empty
+    , set = \st model ->
+        updateActiveSession model (\s -> { s | modelSelector = st })
+    , setShow = \v model ->
+        updateActiveSession model (\s -> { s | showModelSelector = v })
+    , nameOf = modelName
+    , idOf = \m -> m.id
+    , setIdOf = \newId m -> { m | id = newId }
+    , draftOf = draftFromModel
+    , emptyDraft = T.emptyDraft
+    , draftIdOf = \d -> d.id
+    , itemOfDraft = modelFromDraft
+    , updateDraftField = updateDraftField
+    , inputId = \model ->
+        case model.activeId of
+            Just sid ->
+                "model-selector-input-" ++ sid
+
+            Nothing ->
+                ""
+    , editorId = \model ->
+        case model.activeId of
+            Just sid ->
+                "model-editor-name-" ++ sid
+
+            Nothing ->
+                ""
+    , scrollItemId = \model id ->
+        case model.activeId of
+            Just sid ->
+                "model-selector-item-" ++ sid ++ "-" ++ String.fromInt id
+
+            Nothing ->
+                ""
+    , confirm = \model ->
+        case getActiveSession model of
+            Just s ->
+                case Sel.selectedItem modelName s.modelSelector of
+                    Just m ->
+                        if Sel.isDirty s.modelSelector then
+                            -- Unsaved edits: ask to sync before leaving
+                            ( updateActiveSession model (\sess -> { sess | modelSelector = Sel.askSync sess.modelSelector })
+                            , Cmd.none
+                            )
+
+                        else
+                            ( updateActiveSession model (\sess -> { sess | showModelSelector = False, modelSelector = Sel.close sess.modelSelector })
+                            , Cmd.batch
+                                [ Ports.setModel { sessionId = s.id, modelId = m.id }
+                                , focusInput model
+                                ]
+                            )
+
+                    Nothing ->
+                        ( model, Cmd.none )
+
+            Nothing ->
+                ( model, Cmd.none )
+    , syncCmd = \model ->
+        case getActiveSession model of
+            Just s ->
+                Ports.modelSync
+                    { sessionId = s.id
+                    , config = encodeModels s.modelSelector.working
+                    }
+
+            Nothing ->
+                Cmd.none
+    , syncSuccess = \model ->
+        ( updateActiveSession model (\sess -> { sess | showModelSelector = False, modelSelector = Sel.close sess.modelSelector })
+        , focusInput model
+        )
+    , afterClose = \model -> focusInput model
+    }
+
+
+defaultModelsKit : Kit.Kit T.ModelInfo T.ModelDraft
+defaultModelsKit =
+    { get = \model -> model.defaultModelsEditor.state
+    , set = \st model ->
+        let
+            ed =
+                model.defaultModelsEditor
+        in
+        { model | defaultModelsEditor = { ed | state = st } }
+    , setShow = \v model ->
+        let
+            ed =
+                model.defaultModelsEditor
+        in
+        { model | defaultModelsEditor = { ed | show = v } }
+    , nameOf = modelName
+    , idOf = \m -> m.id
+    , setIdOf = \newId m -> { m | id = newId }
+    , draftOf = draftFromModel
+    , emptyDraft = T.emptyDraft
+    , draftIdOf = \d -> d.id
+    , itemOfDraft = modelFromDraft
+    , updateDraftField = updateDraftField
+    , inputId = \_ -> "model-selector-input-default"
+    , editorId = \_ -> "model-editor-name-default"
+    , scrollItemId = \_ id -> "model-selector-item-default-" ++ String.fromInt id
+    , confirm = \model ->
+        let
+            ed =
+                model.defaultModelsEditor
+        in
+        case Sel.selectedItem modelName ed.state of
+            Just m ->
+                ( { model | defaultModelsEditor = { ed | state = Sel.openEdit (draftFromModel m) ed.state } }
+                , Kit.focusAndCursor "model-editor-name-default"
+                )
+
+            Nothing ->
+                ( model, Cmd.none )
+    , syncCmd = \model ->
+        Ports.syncDefaultModels
+            { preset = model.defaultModelsEditor.preset
+            , config = encodeModels model.defaultModelsEditor.state.working
+            }
+    , syncSuccess = \model ->
+        ( { model | defaultModelsEditor = emptyDefaultModelsEditor }
+        , Cmd.none
+        )
+    , afterClose = \_ -> Cmd.none
+    }
+
+
+mcpKit : Kit.Kit T.McpInfo T.McpDraft
+mcpKit =
+    { get = \model -> model.mcpEditor.state
+    , set = \st model ->
+        let
+            ed =
+                model.mcpEditor
+        in
+        { model | mcpEditor = { ed | state = st } }
+    , setShow = \v model ->
+        let
+            ed =
+                model.mcpEditor
+        in
+        { model | mcpEditor = { ed | show = v } }
+    , nameOf = mcpServerName
+    , idOf = \s -> s.id
+    , setIdOf = \newId s -> { s | id = newId }
+    , draftOf = draftFromMcp
+    , emptyDraft = T.emptyMcpDraft
+    , draftIdOf = \d -> d.id
+    , itemOfDraft = mcpFromDraft
+    , updateDraftField = updateMcpDraftField
+    , inputId = \_ -> "mcp-selector-input-default"
+    , editorId = \_ -> "mcp-editor-server-default"
+    , scrollItemId = \_ id -> "mcp-selector-item-default-" ++ String.fromInt id
+    , confirm = \model ->
+        let
+            ed =
+                model.mcpEditor
+        in
+        case Sel.selectedItem mcpServerName ed.state of
+            Just s ->
+                ( { model | mcpEditor = { ed | state = Sel.openEdit (draftFromMcp s) ed.state } }
+                , Kit.focusAndCursor "mcp-editor-server-default"
+                )
+
+            Nothing ->
+                ( model, Cmd.none )
+    , syncCmd = \model ->
+        Ports.syncDefaultMcp
+            { preset = model.mcpEditor.preset
+            , config = encodeMcpServers model.mcpEditor.state.working
+            }
+    , syncSuccess = \model ->
+        ( { model | mcpEditor = emptyMcpEditor }
+        , Cmd.none
+        )
+    , afterClose = \_ -> Cmd.none
+    }
