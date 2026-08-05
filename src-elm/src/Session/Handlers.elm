@@ -857,10 +857,14 @@ handleToolResultFrame s json historyId =
 
         -- Authoritative UF overwrites any live Uf preview (snapshot) and
         -- ends input streaming (Af), so the header status flips to done.
+        -- inputReceived is reset too, otherwise the ⏳ "running" state in
+        -- toolStatus would stick after completion for tools that had input.
         newToolCalls =
             case Dict.get toolId s.toolCalls of
                 Just existingTc ->
-                    Dict.insert toolId { existingTc | output = Nothing, accumulatedDelta = Nothing } s.toolCalls
+                    Dict.insert toolId
+                        { existingTc | output = Nothing, accumulatedDelta = Nothing, inputReceived = False }
+                        s.toolCalls
 
                 Nothing ->
                     s.toolCalls
