@@ -128,7 +128,7 @@ protoVersionOptions : String -> List String
 protoVersionOptions current =
     let
         known =
-            [ "2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25", T.latestMcpProtoVersion ]
+            T.mcpProtoVersions
     in
     if current == "" || List.member current known then
         known

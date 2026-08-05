@@ -19,6 +19,7 @@ module Session.Types exposing
     , McpDraft
     , emptyMcpDraft
     , latestMcpProtoVersion
+    , mcpProtoVersions
     , emptySession
     , emptyDraft
     , PendingConfirm
@@ -337,10 +338,16 @@ emptyMcpDraft =
 
 
 -- Latest MCP protocol version used as the default for new servers.
--- Keep in sync with the `known` list in Overlay/McpEditor.protoVersionOptions.
 latestMcpProtoVersion : String
 latestMcpProtoVersion =
     "2026-07-28"
+
+
+-- Canonical list of known MCP protocol versions. Overlay/McpEditor
+-- derives its dropdown options from this so the two cannot drift.
+mcpProtoVersions : List String
+mcpProtoVersions =
+    [ "2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25", latestMcpProtoVersion ]
 
 
 emptyDraft : ModelDraft
