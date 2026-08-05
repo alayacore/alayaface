@@ -18,7 +18,6 @@ import Set exposing (Set)
 import Json.Decode as D
 import Json.Encode as E
 import Task
-import Fuzzy
 import App.Types exposing (..)
 import App.SelectorKit as Kit
 import Session.Types as T
