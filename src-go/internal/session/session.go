@@ -22,7 +22,8 @@ import (
 )
 
 // ErrNotFound is returned when a session id is not in the manager.
-var ErrNotFound = errors.New("session not found")
+// Message matches the Rust backend exactly ("Session not found").
+var ErrNotFound = errors.New("Session not found")
 
 // Session is a running alayacore session handle.
 type Session struct {
@@ -148,7 +149,7 @@ type CreateConfig struct {
 func (m *Manager) Create(cfg CreateConfig, h *hub.Hub, cache *ModelCache) (*Session, error) {
 	proc, err := core.Spawn(cfg.Binary, cfg.ConfigPath, cfg.SessionFile, cfg.ToolConfirm)
 	if err != nil {
-		return nil, fmt.Errorf("failed to start alayacore: %w", err)
+		return nil, fmt.Errorf("Failed to start alayacore: %w", err)
 	}
 
 	s := &Session{
@@ -194,7 +195,7 @@ func (s *Session) WriteFrame(tag, value string) error {
 // Rust send_prompt which holds the stdin lock for the whole sequence.
 func (s *Session) WriteFrames(frames []tlv.Frame) error {
 	if !s.Connected() {
-		return errors.New("session is disconnected")
+		return errors.New("Session is disconnected")
 	}
 	s.stdinMu.Lock()
 	defer s.stdinMu.Unlock()

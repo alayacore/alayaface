@@ -51,7 +51,7 @@ func SyncDefaultMcp(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	}
 	var servers []map[string]any
 	if err := json.Unmarshal([]byte(args.Config), &servers); err != nil {
-		return fmt.Errorf("invalid config JSON: %w", err)
+		return fmt.Errorf("Invalid config JSON: %w", err)
 	}
 
 	names := map[string]bool{}
@@ -59,10 +59,10 @@ func SyncDefaultMcp(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		name, _ := s["server"].(string)
 		name = strings.TrimSpace(name)
 		if name == "" {
-			return fmt.Errorf("every server needs a non-empty `server` name")
+			return fmt.Errorf("Every server needs a non-empty `server` name")
 		}
 		if names[name] {
-			return fmt.Errorf("duplicate server name: %s", name)
+			return fmt.Errorf("Duplicate server name: %s", name)
 		}
 		names[name] = true
 
@@ -78,21 +78,21 @@ func SyncDefaultMcp(h *Handler, w http.ResponseWriter, r *http.Request) error {
 				cid, _ := s["auth_client_id"].(string)
 				secret, _ := s["auth_client_secret"].(string)
 				if strings.TrimSpace(cid) == "" {
-					return fmt.Errorf("server %s: auth-client-id is required for authorization_code auth", name)
+					return fmt.Errorf("Server %s: auth-client-id is required for authorization_code auth", name)
 				}
 				if strings.TrimSpace(secret) == "" {
-					return fmt.Errorf("server %s: auth-client-secret is required for authorization_code auth", name)
+					return fmt.Errorf("Server %s: auth-client-secret is required for authorization_code auth", name)
 				}
 			case "static":
 				token, _ := s["auth_token"].(string)
 				if strings.TrimSpace(token) == "" {
-					return fmt.Errorf("server %s: auth-token is required for static auth", name)
+					return fmt.Errorf("Server %s: auth-token is required for static auth", name)
 				}
 			}
 		} else {
 			command, _ := s["command"].(string)
 			if strings.TrimSpace(command) == "" {
-				return fmt.Errorf("server %s: command is required for stdio servers", name)
+				return fmt.Errorf("Server %s: command is required for stdio servers", name)
 			}
 			if err := validateJSONField(s, name, "args", true); err != nil {
 				return err
@@ -138,25 +138,25 @@ func validateJSONField(obj map[string]any, name, key string, wantArray bool) err
 		}
 		var parsed any
 		if err := json.Unmarshal([]byte(val), &parsed); err != nil {
-			return fmt.Errorf("server %s: %s is not valid JSON: %w", name, key, err)
+			return fmt.Errorf("Server %s: %s is not valid JSON: %w", name, key, err)
 		}
 		if wantArray {
 			if _, isArr := parsed.([]any); !isArr {
-				return fmt.Errorf("server %s: %s must be a JSON %s", name, key, kind)
+				return fmt.Errorf("Server %s: %s must be a JSON %s", name, key, kind)
 			}
 		} else {
 			if _, isObj := parsed.(map[string]any); !isObj {
-				return fmt.Errorf("server %s: %s must be a JSON %s", name, key, kind)
+				return fmt.Errorf("Server %s: %s must be a JSON %s", name, key, kind)
 			}
 		}
 	default:
 		if wantArray {
 			if _, isArr := val.([]any); !isArr {
-				return fmt.Errorf("server %s: %s must be a JSON %s", name, key, kind)
+				return fmt.Errorf("Server %s: %s must be a JSON %s", name, key, kind)
 			}
 		} else {
 			if _, isObj := val.(map[string]any); !isObj {
-				return fmt.Errorf("server %s: %s must be a JSON %s", name, key, kind)
+				return fmt.Errorf("Server %s: %s must be a JSON %s", name, key, kind)
 			}
 		}
 	}

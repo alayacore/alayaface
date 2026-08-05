@@ -30,7 +30,7 @@ func SendPrompt(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	if !s.Connected() {
-		return fmt.Errorf("session is disconnected")
+		return fmt.Errorf("Session is disconnected")
 	}
 
 	// Build the whole message (media + text + UE) and write it under a
@@ -48,7 +48,7 @@ func SendPrompt(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		case "document":
 			tag = tlv.TagUserDoc
 		default:
-			return fmt.Errorf("unknown media type: %s", item.MediaType)
+			return fmt.Errorf("Unknown media type: %s", item.MediaType)
 		}
 		frames = append(frames, tlv.Frame{Tag: tag, Value: item.URI})
 	}

@@ -67,7 +67,7 @@ func RunTempProbe(bin, configPath string, cmd *ProbeCmd, modelCache *session.Mod
 	}
 	c.Stderr = nil // discard (unlike live sessions, which inherit stderr)
 	if err := c.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start alayacore: %w", err)
+		return nil, fmt.Errorf("Failed to start alayacore: %w", err)
 	}
 	defer core.KillChild(c)
 

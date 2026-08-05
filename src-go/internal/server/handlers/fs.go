@@ -28,17 +28,17 @@ func FsListDir(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	fi, err := os.Stat(args.Path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("path does not exist: %s", args.Path)
+			return fmt.Errorf("Path does not exist: %s", args.Path)
 		}
 		return err
 	}
 	if !fi.IsDir() {
-		return fmt.Errorf("not a directory: %s", args.Path)
+		return fmt.Errorf("Not a directory: %s", args.Path)
 	}
 
 	entries, err := os.ReadDir(args.Path)
 	if err != nil {
-		return err
+		return fmt.Errorf("Cannot read directory: %w", err)
 	}
 
 	result := make([]DirEntry, 0, len(entries)+1)
@@ -73,7 +73,7 @@ func FsHomeDir(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		home = os.Getenv("USERPROFILE")
 	}
 	if home == "" {
-		return fmt.Errorf("cannot determine home directory")
+		return fmt.Errorf("Cannot determine home directory")
 	}
 	return writeResult(w, home)
 }
@@ -216,7 +216,7 @@ func FsReadFileDataUri(h *Handler, w http.ResponseWriter, r *http.Request) error
 	}
 	data, err := os.ReadFile(args.Path)
 	if err != nil {
-		return err
+		return fmt.Errorf("Cannot read file: %w", err)
 	}
 	mime := guessMime(args.Path)
 	uri := fmt.Sprintf("data:%s;base64,%s", mime, base64.StdEncoding.EncodeToString(data))

@@ -138,6 +138,6 @@ func SyncDefaultModels(h *Handler, w http.ResponseWriter, r *http.Request) error
 	case probe.EndEOF:
 		return fmt.Errorf("alayacore exited before model_sync completed")
 	default:
-		return fmt.Errorf("failed to read from alayacore")
+		return fmt.Errorf("Failed to read from alayacore")
 	}
 }

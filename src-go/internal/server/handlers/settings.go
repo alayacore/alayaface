@@ -37,7 +37,7 @@ func readSettingsFrom(configDir string) (GlobalSettings, error) {
 	}
 	var s GlobalSettings
 	if err := json.Unmarshal(text, &s); err != nil {
-		return GlobalSettings{}, fmt.Errorf("failed to parse settings.conf: %w", err)
+		return GlobalSettings{}, fmt.Errorf("Failed to parse settings.conf: %w", err)
 	}
 	return s, nil
 }
@@ -53,10 +53,10 @@ func NormalizeToolConfirm(raw string) (string, error) {
 			continue
 		}
 		if strings.IndexFunc(id, unicode.IsSpace) >= 0 {
-			return "", fmt.Errorf("tool id must not contain spaces: %s", id)
+			return "", fmt.Errorf("Tool id must not contain spaces: %s", id)
 		}
 		if seen[id] {
-			return "", fmt.Errorf("duplicate tool id: %s", id)
+			return "", fmt.Errorf("Duplicate tool id: %s", id)
 		}
 		seen[id] = true
 		out = append(out, id)
@@ -118,7 +118,7 @@ func SyncGlobalSettings(h *Handler, w http.ResponseWriter, r *http.Request) erro
 	}
 	var value map[string]any
 	if err := json.Unmarshal([]byte(args.Config), &value); err != nil {
-		return fmt.Errorf("invalid settings JSON: %w", err)
+		return fmt.Errorf("Invalid settings JSON: %w", err)
 	}
 	raw, _ := value["tool_confirm"].(string)
 	normalized, err := NormalizeToolConfirm(raw)

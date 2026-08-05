@@ -93,10 +93,15 @@ func ResumeSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	sessionFile := filepath.Join(sessionsDir, "session.alaya")
 	configDir := filepath.Join(sessionsDir, "config")
 
-	for _, p := range []string{sessionsDir, sessionFile, configDir} {
-		if _, err := os.Stat(p); err != nil {
-			return fmt.Errorf("session path not found: %s", p)
-		}
+	// Message texts match Rust resume_session.
+	if _, err := os.Stat(sessionsDir); err != nil {
+		return fmt.Errorf("Session directory not found: %s", sessionsDir)
+	}
+	if _, err := os.Stat(sessionFile); err != nil {
+		return fmt.Errorf("Session file not found: %s", sessionFile)
+	}
+	if _, err := os.Stat(configDir); err != nil {
+		return fmt.Errorf("Config directory not found: %s", configDir)
 	}
 
 	// Check not already running: resumed sessions are keyed by a fresh
@@ -111,7 +116,7 @@ func ResumeSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		return false
 	})
 	if alreadyActive {
-		return fmt.Errorf("session is already active")
+		return fmt.Errorf("Session is already active")
 	}
 
 	bin := ResolveBinary(args.BinaryPath)
@@ -205,7 +210,7 @@ func DeleteSessionDir(h *Handler, w http.ResponseWriter, r *http.Request) error 
 	sessionDir := filepath.Join(dirs.AlayafaceDir(), "sessions", args.SessionID)
 	if _, err := os.Stat(sessionDir); err == nil {
 		if err := os.RemoveAll(sessionDir); err != nil {
-			return err
+			return fmt.Errorf("Cannot delete %s: %w", sessionDir, err)
 		}
 	}
 	return writeResult(w, nil)
@@ -285,7 +290,7 @@ func waitForFile(path string) error {
 			if seenSize > 0 {
 				return nil
 			}
-			return fmt.Errorf("timeout waiting for fork to complete")
+			return fmt.Errorf("Timeout waiting for fork to complete")
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
