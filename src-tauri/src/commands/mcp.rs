@@ -61,6 +61,9 @@ async fn start_mcp_auth_inner(
     // Start callback server
     let listener = std::net::TcpListener::bind("127.0.0.1:0")
         .map_err(|e| format!("Failed to bind callback server: {e}"))?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|e| format!("Failed to set callback server nonblocking: {e}"))?;
     let port = listener.local_addr().map_err(|e| format!("Failed to get port: {e}"))?.port();
     let redirect_uri = format!("http://127.0.0.1:{}/callback", port);
 
@@ -80,61 +83,77 @@ async fn start_mcp_auth_inner(
         }
     }
 
-    // Accept callback in a background thread
+    // Accept callback in a background thread. The listener is
+    // non-blocking with a timeout so an abandoned flow (user never
+    // completes the browser dance) cannot leak the thread/socket.
     let sid = sid_owned;
     let sname = sname_owned;
     let ruri = redirect_uri.clone();
     std::thread::spawn(move || {
-        match listener.accept() {
-            Ok((mut stream, addr)) => {
-                log::info!("[mcp_auth] Callback received from {}", addr);
-                let mut reader = std::io::BufReader::new(&stream);
-                let mut request_line = String::new();
-                if reader.read_line(&mut request_line).is_err() {
-                    log::error!("[mcp_auth] Failed to read request line");
-                    let _ = send_mcp_result(&sessions_arc, &sid, &sname, &ruri, None);
-                    return;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+        let stream = loop {
+            match listener.accept() {
+                Ok((stream, addr)) => {
+                    log::info!("[mcp_auth] Callback received from {}", addr);
+                    break stream;
                 }
-                let parts: Vec<&str> = request_line.split_whitespace().collect();
-                let path = if parts.len() >= 2 { parts[1] } else { "/" };
-                let query_str = path.split('?').nth(1).unwrap_or("");
-                let params: std::collections::HashMap<String, String> =
-                    url::form_urlencoded::parse(query_str.as_bytes())
-                        .into_owned()
-                        .collect();
-                let http_body = auth_callback_page(&sname, params.contains_key("code"));
-                let http_response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
-                    http_body.len(), http_body
-                );
-                let _ = stream.write_all(http_response.as_bytes());
-                if let Some(err) = params.get("error") {
-                    let desc = params.get("error_description").map(|s| s.as_str()).unwrap_or("");
-                    log::error!("[mcp_auth] Auth error: {}: {}", err, desc);
-                    let _ = send_mcp_result(&sessions_arc, &sid, &sname, &ruri, None);
-                    return;
-                }
-                match params.get("state") {
-                    Some(returned_state) if returned_state == &state => {}
-                    _ => {
-                        log::warn!("[mcp_auth] State mismatch");
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    if std::time::Instant::now() > deadline {
+                        log::warn!("[mcp_auth] Timed out waiting for callback, declining");
                         let _ = send_mcp_result(&sessions_arc, &sid, &sname, &ruri, None);
                         return;
                     }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
                 }
-                match params.get("code") {
-                    Some(code) => {
-                        log::info!("[mcp_auth] Authorization code received");
-                        let _ = send_mcp_result(&sessions_arc, &sid, &sname, &ruri, Some(code));
-                    }
-                    None => {
-                        log::warn!("[mcp_auth] No authorization code in callback");
-                        let _ = send_mcp_result(&sessions_arc, &sid, &sname, &ruri, None);
-                    }
+                Err(e) => {
+                    log::error!("[mcp_auth] Accept error: {}", e);
+                    let _ = send_mcp_result(&sessions_arc, &sid, &sname, &ruri, None);
+                    return;
                 }
             }
-            Err(e) => {
-                log::error!("[mcp_auth] Accept error: {}", e);
+        };
+        let mut stream = stream;
+        let mut reader = std::io::BufReader::new(&stream);
+        let mut request_line = String::new();
+        if reader.read_line(&mut request_line).is_err() {
+            log::error!("[mcp_auth] Failed to read request line");
+            let _ = send_mcp_result(&sessions_arc, &sid, &sname, &ruri, None);
+            return;
+        }
+        let parts: Vec<&str> = request_line.split_whitespace().collect();
+        let path = if parts.len() >= 2 { parts[1] } else { "/" };
+        let query_str = path.split('?').nth(1).unwrap_or("");
+        let params: std::collections::HashMap<String, String> =
+            url::form_urlencoded::parse(query_str.as_bytes())
+                .into_owned()
+                .collect();
+        let http_body = auth_callback_page(&sname, params.contains_key("code"));
+        let http_response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
+            http_body.len(), http_body
+        );
+        let _ = stream.write_all(http_response.as_bytes());
+        if let Some(err) = params.get("error") {
+            let desc = params.get("error_description").map(|s| s.as_str()).unwrap_or("");
+            log::error!("[mcp_auth] Auth error: {}: {}", err, desc);
+            let _ = send_mcp_result(&sessions_arc, &sid, &sname, &ruri, None);
+            return;
+        }
+        match params.get("state") {
+            Some(returned_state) if returned_state == &state => {}
+            _ => {
+                log::warn!("[mcp_auth] State mismatch");
+                let _ = send_mcp_result(&sessions_arc, &sid, &sname, &ruri, None);
+                return;
+            }
+        }
+        match params.get("code") {
+            Some(code) => {
+                log::info!("[mcp_auth] Authorization code received");
+                let _ = send_mcp_result(&sessions_arc, &sid, &sname, &ruri, Some(code));
+            }
+            None => {
+                log::warn!("[mcp_auth] No authorization code in callback");
                 let _ = send_mcp_result(&sessions_arc, &sid, &sname, &ruri, None);
             }
         }
@@ -143,6 +162,8 @@ async fn start_mcp_auth_inner(
     Ok(filled_url)
 }
 
+/// Send the OAuth result to the session as an mcp_confirm/mcp_decline
+/// command. Runs on Tauri's async runtime (never creates its own).
 fn send_mcp_result(
     sessions_arc: &std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<String, session::SessionHandle>>>,
     session_id: &str,
@@ -150,8 +171,7 @@ fn send_mcp_result(
     redirect_uri: &str,
     code: Option<&str>,
 ) -> Result<(), String> {
-    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("Runtime error: {e}"))?;
-    rt.block_on(async {
+    tauri::async_runtime::handle().block_on(async {
         let map = sessions_arc.lock().await;
 
         match code {
