@@ -167,12 +167,6 @@ pub fn unwrap_delta(value: &str) -> DeltaParts {
     }
 }
 
-/// Wrap content with a NUL-delimited history ID prefix: \x00<id>\x00<content>
-#[allow(dead_code)]
-pub fn wrap_delta(id: &str, content: &str) -> String {
-    format!("\x00{}\x00{}", id, content)
-}
-
 // ─── JSON Payload Types ──────────────────────────────────────────────
 
 /// Tool input data (AF frame payload).
@@ -305,7 +299,8 @@ mod tests {
 
     #[test]
     fn wrap_delta_roundtrips() {
-        let wrapped = wrap_delta("h1", "payload");
+        // Construct the wire format by hand: \x00<id>\x00<payload>
+        let wrapped = format!("\u{0000}{}\u{0000}{}", "h1", "payload");
         let parts = unwrap_delta(&wrapped);
         assert!(parts.has_delta);
         assert_eq!(parts.history_id, "h1");

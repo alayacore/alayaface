@@ -6,11 +6,9 @@
 use crate::event::{DeltaEvent, FrameEvent, StatusEvent};
 use crate::tlv;
 
-use std::io::BufRead;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::Mutex;
 
 /// User-role content tags that appear on stdout (echoes).
 fn is_user_echo_tag(tag: &str) -> bool {
@@ -257,24 +255,5 @@ fn handle_other_frame(app: &AppHandle, sid: &str, tag: &str, raw_value: &str) {
         content,
         json: None,
         user_content_type,
-    });
-}
-
-/// Spawn a background thread that collects stderr lines into a log.
-pub fn spawn_stderr_collector(
-    stderr: std::process::ChildStderr,
-    log: Arc<Mutex<Vec<String>>>,
-) {
-    std::thread::spawn(move || {
-        let reader = std::io::BufReader::new(stderr);
-        for line in reader.lines() {
-            match line {
-                Ok(l) => {
-                    let mut guard = log.blocking_lock();
-                    guard.push(l);
-                }
-                Err(_) => break,
-            }
-        }
     });
 }

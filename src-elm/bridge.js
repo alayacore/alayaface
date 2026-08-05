@@ -225,6 +225,17 @@
     on("resumeSession", function (data) {
       invoke("resume_session", {
         sessionId: data.sessionId, binaryPath: "",
+      }).then(function (id) {
+        app.ports.onSessionCreated.send(id);
+        app.ports.onSessionActionResult.send({ ok: true, error: "", kind: "resume" });
+      }).catch(function (err) {
+        console.error("resume_session failed:", err);
+        app.ports.onSessionActionResult.send({
+          ok: false, error: String((err && err.message) || err), kind: "resume",
+        });
+        invoke("list_session_dirs").then(function (dirs) {
+          app.ports.onSessionDirs.send(dirs);
+        });
       });
     });
 
@@ -235,7 +246,20 @@
     });
 
     on("deleteSessionDir", function (data) {
-      invoke("delete_session_dir", { sessionId: data.sessionId });
+      invoke("delete_session_dir", { sessionId: data.sessionId })
+        .then(function () {
+          // Reflect the deletion immediately
+          invoke("list_session_dirs").then(function (dirs) {
+            app.ports.onSessionDirs.send(dirs);
+          });
+          app.ports.onSessionActionResult.send({ ok: true, error: "", kind: "delete" });
+        })
+        .catch(function (err) {
+          console.error("delete_session_dir failed:", err);
+          app.ports.onSessionActionResult.send({
+            ok: false, error: String((err && err.message) || err), kind: "delete",
+          });
+        });
     });
 
     on("fsListDir", function (data) {

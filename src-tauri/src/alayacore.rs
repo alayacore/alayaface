@@ -11,13 +11,13 @@ pub struct CoreProcess {
     pub child: Child,
     pub stdin: std::process::ChildStdin,
     pub stdout: std::process::ChildStdout,
-    pub stderr: std::process::ChildStderr,
 }
 
 /// Start alayacore with `--rawio` and return the process + pipes.
 /// If `config_path` is non-empty, passes `--config-path <config_path>`.
 /// If `session_path` is non-empty, passes `--session <session_path>`.
 /// If `tool_confirm` is non-empty, passes `--tool-confirm=<tool_confirm>`.
+/// stderr is inherited so alayacore's own logs reach the terminal.
 pub fn spawn(binary_path: &str, config_path: &str, session_path: &str, tool_confirm: &str) -> io::Result<CoreProcess> {
     let mut cmd = Command::new(binary_path);
     cmd.arg("--rawio");
@@ -35,18 +35,16 @@ pub fn spawn(binary_path: &str, config_path: &str, session_path: &str, tool_conf
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::inherit())
         .spawn()?;
 
     let stdin = child.stdin.take().expect("failed to capture stdin");
     let stdout = child.stdout.take().expect("failed to capture stdout");
-    let stderr = child.stderr.take().expect("failed to capture stderr");
 
     Ok(CoreProcess {
         child,
         stdin,
         stdout,
-        stderr,
     })
 }
 

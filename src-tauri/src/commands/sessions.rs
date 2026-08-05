@@ -80,8 +80,10 @@ pub async fn resume_session(
         return Err(format!("Config directory not found: {:?}", config_dir));
     }
 
-    // Check not already running
-    if sessions.0.lock().await.contains_key(&session_id) {
+    // Check not already running. Resumed sessions are keyed by a fresh
+    // UUID each time (session::create), so compare by directory rather
+    // than by the on-disk id to catch double-resumes of the same dir.
+    if sessions.0.lock().await.iter().any(|(_, h)| h.session_dir == sessions_dir) {
         return Err("Session is already active".to_string());
     }
 
@@ -107,24 +109,6 @@ pub async fn close_session(
     sessions: State<'_, SessionMap>,
 ) -> Result<(), String> {
     session::close(&session_id, &sessions).await
-}
-
-#[tauri::command]
-pub async fn list_sessions(
-    sessions: State<'_, SessionMap>,
-) -> Result<Vec<String>, String> {
-    let map = sessions.0.lock().await;
-    Ok(map.keys().cloned().collect())
-}
-
-#[tauri::command]
-pub async fn session_connected(
-    session_id: String,
-    sessions: State<'_, SessionMap>,
-) -> Result<bool, String> {
-    let map = sessions.0.lock().await;
-    let handle = session::get(&map, &session_id)?;
-    Ok(handle.connected.load(std::sync::atomic::Ordering::SeqCst))
 }
 
 #[tauri::command]

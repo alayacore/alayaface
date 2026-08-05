@@ -257,6 +257,12 @@ viewSessionManagerOverlay model =
         viewOverlay CloseSessionManager
             [ Html.div [ Attr.class "sel-page" ]
                 [ Html.div [ Attr.class "sel-page-title" ] [ Html.text "Session Manager" ]
+                , case model.sessionManagerError of
+                    Just err ->
+                        Html.div [ Attr.class "sel-page-status sel-page-status-error" ] [ Html.text err ]
+
+                    Nothing ->
+                        Html.text ""
                 , if List.isEmpty dirs then
                     Html.div [ Attr.class "sel-page-status" ] [ Html.text "No saved sessions." ]
 

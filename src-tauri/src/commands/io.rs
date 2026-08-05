@@ -1,24 +1,13 @@
 //! Session I/O Tauri commands.
 //!
-//! Commands for sending messages, prompts, and raw frames to sessions.
+//! Commands for sending prompts to sessions.
 
-use crate::commands::{send_raw, MediaItem};
+use crate::commands::MediaItem;
 use crate::session::{self, SessionMap};
 use crate::tlv;
 
 use std::io::Write;
 use tauri::State;
-
-#[tauri::command]
-pub async fn alayacore_send_message(
-    session_id: String,
-    text: String,
-    sessions: State<'_, SessionMap>,
-) -> Result<(), String> {
-    let map = sessions.0.lock().await;
-    send_raw(&map, &session_id, tlv::TAG_USER_TEXT, &text).await?;
-    send_raw(&map, &session_id, tlv::TAG_USER_END, "").await
-}
 
 #[tauri::command]
 pub async fn alayacore_send_prompt(
@@ -55,26 +44,4 @@ pub async fn alayacore_send_prompt(
     tlv::write_frame(&mut *stdin, tlv::TAG_USER_END, "").map_err(|e| format!("Write error: {e}"))?;
     stdin.flush().map_err(|e| format!("Flush error: {e}"))?;
     Ok(())
-}
-
-#[tauri::command]
-pub async fn alayacore_send_raw_frame(
-    session_id: String,
-    tag: String,
-    value: String,
-    sessions: State<'_, SessionMap>,
-) -> Result<(), String> {
-    let map = sessions.0.lock().await;
-    send_raw(&map, &session_id, &tag, &value).await
-}
-
-#[tauri::command]
-pub async fn get_stderr_log(
-    session_id: String,
-    sessions: State<'_, SessionMap>,
-) -> Result<Vec<String>, String> {
-    let map = sessions.0.lock().await;
-    let handle = session::get(&map, &session_id)?;
-    let log = handle.stderr_log.lock().await.clone();
-    Ok(log)
 }

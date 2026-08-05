@@ -53,6 +53,7 @@ port module Ports exposing
       -- Inbound subscriptions (Tauri → Elm responses)
     , onSessionCreated
     , onSessionDirs
+    , onSessionActionResult
     , onFsListDir
     , onFsHomeDir
     , onFsReadFileDataUri
@@ -122,6 +123,7 @@ port fillMcpAuthUrl : { sessionId : String, serverName : String, authUrl : Strin
 
 port onSessionCreated : (String -> msg) -> Sub msg
 port onSessionDirs : (List E.Value -> msg) -> Sub msg
+port onSessionActionResult : (E.Value -> msg) -> Sub msg
 port onFsListDir : (List E.Value -> msg) -> Sub msg
 port onFsHomeDir : (String -> msg) -> Sub msg
 port onFsResolvePath : (E.Value -> msg) -> Sub msg

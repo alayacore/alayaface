@@ -1138,7 +1138,9 @@ update msg model =
 
         -- Session Manager
         OpenSessionManager ->
-            ( { model | showSessionManager = True, showGlobalMenu = False }, Ports.listSessionDirs {} )
+            ( { model | showSessionManager = True, showGlobalMenu = False, sessionManagerError = Nothing }
+            , Ports.listSessionDirs {}
+            )
 
         CloseSessionManager ->
             ( { model | showSessionManager = False }
@@ -1154,11 +1156,54 @@ update msg model =
         SessionDirsResult dirs ->
             ( { model | sessionDirs = dirs }, Cmd.none )
 
+        SessionActionResult raw ->
+            case D.decodeValue sessionActionResultDecoder raw of
+                Ok res ->
+                    if res.ok && res.kind == "resume" then
+                        -- Resume succeeded: reveal the resumed session
+                        ( { model | showSessionManager = False, sessionManagerError = Nothing }
+                        , Cmd.none
+                        )
+
+                    else if res.ok then
+                        ( { model | sessionManagerError = Nothing }, Cmd.none )
+
+                    else
+                        ( { model | sessionManagerError = Just res.error }, Cmd.none )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
         ResumeSession id ->
-            ( model, Ports.resumeSession { sessionId = id } )
+            -- pendingSwitchOnCreate makes SessionCreated switch to the
+            -- resumed session once it appears (mirrors the original UX).
+            ( { model | pendingSwitchOnCreate = True, sessionManagerError = Nothing }
+            , Ports.resumeSession { sessionId = id }
+            )
 
         DeleteSession id ->
-            ( model, Ports.deleteSessionDir { sessionId = id } )
+            let
+                -- If the deleted dir belongs to a running session, drop
+                -- its window too (delete_session_dir closes the process).
+                cleaned =
+                    if Dict.member id model.sessions then
+                        { model
+                            | sessions = Dict.remove id model.sessions
+                            , sessionOrder = List.filter (\k -> k /= id) model.sessionOrder
+                            , sessionNums = Dict.remove id model.sessionNums
+                            , windowPositions = Dict.remove id model.windowPositions
+                            , activeId =
+                                if model.activeId == Just id then
+                                    List.head (List.reverse (List.filter (\k -> k /= id) model.sessionOrder))
+                                else
+                                    model.activeId
+                        }
+                    else
+                        model
+            in
+            ( { cleaned | sessionManagerError = Nothing }
+            , Ports.deleteSessionDir { sessionId = id }
+            )
 
         -- Window
         WindowMaximized v ->
@@ -3262,6 +3307,15 @@ presetActionResultDecoder =
         (\ok error -> { ok = ok, error = error })
         (D.field "ok" D.bool)
         (D.field "error" D.string)
+
+
+sessionActionResultDecoder : D.Decoder { ok : Bool, error : String, kind : String }
+sessionActionResultDecoder =
+    D.map3
+        (\ok error kind -> { ok = ok, error = error, kind = kind })
+        (D.field "ok" D.bool)
+        (D.field "error" D.string)
+        (D.field "kind" D.string)
 
 
 type alias ResizeResult =

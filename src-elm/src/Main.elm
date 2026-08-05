@@ -38,6 +38,7 @@ init _ =
       , initError = Nothing
       , showSessionManager = False
       , sessionDirs = []
+      , sessionManagerError = Nothing
       , isMaximized = False
       , atBottom = True
       , prevMsgCount = 0
@@ -104,6 +105,7 @@ subscriptions model =
         , Ports.onPresetActionResult (\raw -> PresetActionResult raw)
         , Ports.onSessionCreated (\id -> SessionCreated id)
         , Ports.onSessionDirs (\dirs -> SessionDirsResult dirs)
+        , Ports.onSessionActionResult (\raw -> SessionActionResult raw)
         , Ports.onFsListDir (\entries -> FsListDirResult entries)
         , Ports.onFsHomeDir (\home -> FsHomeDirResult home)
         , Ports.onFsReadFileDataUri (\uri -> FsReadFileResult uri)

@@ -44,6 +44,7 @@ type alias Model =
     , initError : Maybe String
     , showSessionManager : Bool
     , sessionDirs : List E.Value
+    , sessionManagerError : Maybe String
     , isMaximized : Bool
     , atBottom : Bool
     , prevMsgCount : Int
@@ -121,6 +122,7 @@ type Msg
     | OpenSessionManager
     | CloseSessionManager
     | SessionDirsResult (List E.Value)
+    | SessionActionResult E.Value
     | ResumeSession String
     | DeleteSession String
       -- Window
