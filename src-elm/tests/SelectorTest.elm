@@ -42,13 +42,22 @@ tests =
                         , input = ""
                         , selected = 0
                         , working = [ Item 1 "a", Item 2 "b" ]
-                        , original = []
+                        , original = [ Item 1 "a", Item 2 "b" ]
                         , draft = Nothing
                         , confirmDelete = Nothing
                         , loadError = Nothing
                         , syncError = Nothing
                         }
                         st
+            , test "a freshly opened selector is never dirty (double-click switch works)" <|
+                \_ ->
+                    -- Regression: `open` used to leave `original` unset, so
+                    -- working /= original was always true and confirming a
+                    -- model (double-click / Enter) always hit the sync prompt.
+                    Sel.empty
+                        |> Sel.open [ Item 1 "a", Item 2 "b" ]
+                        |> Sel.isDirty
+                        |> Expect.equal False
             , test "is dirty when working differs from original" <|
                 \_ ->
                     Sel.empty

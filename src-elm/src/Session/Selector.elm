@@ -92,6 +92,9 @@ isDirty st =
 -- Transitions
 
 {-| Open the selector: reset to a fresh list page seeded from `source`.
+Both `working` and `original` are seeded so a freshly opened selector
+is never dirty (e.g. double-clicking a model must switch immediately,
+not ask to sync).
 -}
 open : List item -> State item draft -> State item draft
 open source st =
@@ -100,6 +103,7 @@ open source st =
         , input = ""
         , selected = 0
         , working = source
+        , original = source
         , draft = Nothing
         , confirmDelete = Nothing
         , syncError = Nothing
