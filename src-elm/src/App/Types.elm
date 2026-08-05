@@ -46,8 +46,6 @@ type alias Model =
     , sessionDirs : List E.Value
     , sessionManagerError : Maybe String
     , isMaximized : Bool
-    , atBottom : Bool
-    , prevMsgCount : Int
     , sessionOrder : List String
     , pendingSwitchOnCreate : Bool
     , inputRows : Int
@@ -238,7 +236,7 @@ type Msg
       -- Internal
     | NoOp
     | KeyDown String Bool Bool Bool
-    | ScrollPosition Float Float Float
+    | ScrollPosition String Float Float Float
 
 
 -- WINDOW / DRAG STATE

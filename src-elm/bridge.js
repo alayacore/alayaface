@@ -340,11 +340,15 @@
       console.error("[bridge] listen() failed:", e);
     });
 
-    // 4. Scroll tracking: send scroll data from each messages container
+    // 4. Scroll tracking: send scroll data from each messages container,
+    //    tagged with its session id so Elm keeps per-session scroll state
     function sendScroll(el) {
       if (!el) el = document.querySelector(".messages");
       if (el) {
+        var sid = el.getAttribute("data-session");
+        if (!sid) return;
         app.ports.onScroll.send({
+          sessionId: sid,
           scrollTop: el.scrollTop,
           scrollHeight: el.scrollHeight,
           clientHeight: el.clientHeight,

@@ -229,6 +229,8 @@ type alias SessionState =
     , toolCalls : Dict String ToolCall
     , input : String
     , sendPending : Bool
+    , atBottom : Bool
+    , prevMsgCount : Int
     , processedEchoIds : Set.Set String
     , msgCollapsed : Dict.Dict String Bool
     , pendingConfirm : List PendingConfirm
@@ -382,6 +384,8 @@ emptySession id =
     , toolCalls = Dict.empty
     , input = ""
     , sendPending = False
+    , atBottom = True
+    , prevMsgCount = 0
     , processedEchoIds = Set.empty
     , msgCollapsed = Dict.empty
     , pendingConfirm = []

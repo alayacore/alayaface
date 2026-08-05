@@ -40,8 +40,6 @@ init _ =
       , sessionDirs = []
       , sessionManagerError = Nothing
       , isMaximized = False
-      , atBottom = True
-      , prevMsgCount = 0
       , sessionOrder = []
       , pendingSwitchOnCreate = False
       , inputRows = 1
@@ -89,8 +87,8 @@ view =
 subscriptions : Model -> Sub Msg
 subscriptions model =
     Sub.batch
-        [ Ports.onScroll (\{ scrollTop, scrollHeight, clientHeight } ->
-            ScrollPosition scrollTop scrollHeight clientHeight
+        [ Ports.onScroll (\{ sessionId, scrollTop, scrollHeight, clientHeight } ->
+            ScrollPosition sessionId scrollTop scrollHeight clientHeight
           )
         , Ports.onDelta (\raw -> DeltaEvent raw)
         , Ports.onFrame (\raw -> FrameEvent raw)

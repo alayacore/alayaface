@@ -134,7 +134,7 @@ port onFsReadFileDataUri : (String -> msg) -> Sub msg
 port scrollToBottom : { sessionId : String } -> Cmd msg
 port setCursorPos : String -> Cmd msg
 port scrollIntoView : String -> Cmd msg
-port onScroll : ({ scrollTop : Float, scrollHeight : Float, clientHeight : Float } -> msg) -> Sub msg
+port onScroll : ({ sessionId : String, scrollTop : Float, scrollHeight : Float, clientHeight : Float } -> msg) -> Sub msg
 
 
 -- Window state

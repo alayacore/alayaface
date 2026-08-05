@@ -306,7 +306,10 @@ viewChatArea model session =
     Html.div
         [ Attr.class "chat-area" ]
         [ if hasMessages then
-            Html.div [ Attr.class "messages" ]
+            Html.div
+                [ Attr.class "messages"
+                , Attr.attribute "data-session" session.id
+                ]
                 (List.map (viewMessage model.cursorMsgId session) session.messages
 
                     ++ [ Html.div [] [] ]

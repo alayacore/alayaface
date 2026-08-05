@@ -144,7 +144,6 @@ update msg model =
                 | sessions = sessionsAfterBuffer
                 , activeId = newActiveId
                 , initializing = False
-                , atBottom = True
                 , sessionOrder = model.sessionOrder ++ [ id ]
                 , sessionNums = Dict.insert id model.nextSessionNum model.sessionNums
                 , nextSessionNum = model.nextSessionNum + 1
@@ -206,7 +205,7 @@ update msg model =
                                     H.handleDeltaEvent session ev
 
                                 cmds =
-                                    if model.atBottom then
+                                    if session.atBottom then
                                         Cmd.batch
                                             [ Ports.scrollToBottom { sessionId = ev.sessionId }
                                             , if model.activeId == Just ev.sessionId then
@@ -219,7 +218,6 @@ update msg model =
                             in
                             ( { model
                                 | sessions = Dict.insert ev.sessionId newSession model.sessions
-                                , prevMsgCount = List.length newSession.messages
                               }
                             , cmds
                             )
@@ -240,7 +238,7 @@ update msg model =
                                     H.handleFrameEvent session ev
 
                                 msgCountChanged =
-                                    List.length newSession.messages /= model.prevMsgCount
+                                    List.length newSession.messages /= session.prevMsgCount
 
                                 mcpJustCompleted =
                                     session.mcpStatus /= Nothing && newSession.mcpStatus == Nothing
@@ -248,12 +246,12 @@ update msg model =
                                 cmds =
                                     Cmd.batch
                                         (List.filterMap identity
-                                            [ if msgCountChanged && model.atBottom then
+                                            [ if msgCountChanged && session.atBottom then
                                                 Just (Ports.scrollToBottom { sessionId = ev.sessionId })
 
                                               else
                                                 Nothing
-                                            , if (msgCountChanged && model.atBottom || mcpJustCompleted) && model.activeId == Just ev.sessionId then
+                                            , if (msgCountChanged && session.atBottom || mcpJustCompleted) && model.activeId == Just ev.sessionId then
                                                 Just (Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ ev.sessionId)))
 
                                               else
@@ -263,8 +261,7 @@ update msg model =
 
                                 updatedModel =
                                     { model
-                                        | sessions = Dict.insert ev.sessionId newSession model.sessions
-                                        , prevMsgCount = List.length newSession.messages
+                                        | sessions = Dict.insert ev.sessionId { newSession | prevMsgCount = List.length newSession.messages } model.sessions
                                     }
                             in
                             -- model_sync completes asynchronously via CO:
@@ -2434,12 +2431,14 @@ update msg model =
             , Cmd.none
             )
 
-        ScrollPosition scrollTop scrollHeight clientHeight ->
+        ScrollPosition sid scrollTop scrollHeight clientHeight ->
             let
                 atBottom =
                     scrollTop + clientHeight >= scrollHeight - 5
             in
-            ( { model | atBottom = atBottom }, Cmd.none )
+            ( updateSession model sid (\s -> { s | atBottom = atBottom })
+            , Cmd.none
+            )
 
         KeyDown key ctrl alt defaultPrevented ->
             -- If another handler already processed this key (e.g. textarea), skip
