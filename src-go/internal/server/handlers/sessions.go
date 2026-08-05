@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -183,13 +184,7 @@ func ListSessionDirs(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		})
 	}
 	// Newest first (Rust sorts by modified, reversed).
-	for i := 0; i < len(items); i++ {
-		for j := i + 1; j < len(items); j++ {
-			if items[j].mod.After(items[i].mod) {
-				items[i], items[j] = items[j], items[i]
-			}
-		}
-	}
+	sort.Slice(items, func(i, j int) bool { return items[i].mod.After(items[j].mod) })
 	result := make([]SessionDirInfo, 0, len(items))
 	for _, it := range items {
 		result = append(result, it.info)

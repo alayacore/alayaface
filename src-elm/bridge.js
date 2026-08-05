@@ -48,6 +48,9 @@
     var stopped = false;
     var retryDelay = 1000; // ms, backs off up to 10s; resets on connect
 
+    // Stop reconnecting when the page goes away.
+    window.addEventListener("beforeunload", function () { stopped = true; });
+
     function connect() {
       var proto = location.protocol === "https:" ? "wss" : "ws";
       try {
@@ -77,10 +80,15 @@
 
     return {
       invoke: function (cmd, args) {
+        // Abort long-hanging requests (60s) so the UI never waits
+        // forever on a stalled backend.
+        var controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
+        var timer = controller ? setTimeout(function () { controller.abort(); }, 60000) : null;
         return fetch("/rpc/" + cmd, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(args || {}),
+          signal: controller ? controller.signal : undefined,
         }).then(function (res) {
           return res.text().then(function (text) {
             var body = null;
@@ -94,6 +102,8 @@
             }
             return body;
           });
+        }).finally(function () {
+          if (timer) clearTimeout(timer);
         });
       },
       onEvent: function (name, cb) {
