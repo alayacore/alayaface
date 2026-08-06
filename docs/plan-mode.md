@@ -271,8 +271,15 @@ type Effect
     会话曾被 runner 关闭）→ **同样自动 `resume_session` 恢复**——失败/停止
     节点的会话不再丢失，历史可随时回看；
   - 两者都无 → 右侧节点详情面板（prompt 全文、依赖、失败历史、Retry）；
-  - resume 成功后节点自动**重新绑定**到新会话 id（resume_session 每次发
-    新 UUID），后续点击直接聚焦，不会重复拉起；
+  - **resume 的 id 语义（P18 修复）**：`resume_session` 每次发**新 UUID**
+    但**沿用原 on-disk 目录**；节点**始终绑定原始 id（目录名）**，
+    `planResumedFrom`（live id → 原 id）记录本次运行内的映射：
+    - 会话存活时点击节点 → `findResumedLive` 找到 live 窗口直接聚焦；
+    - 关闭窗口后再点击 → 重新 `resume_session` 原始 id（目录仍在磁盘），
+      可反复开关，不会出现 "Session directory not found"；
+    - run.json 持久化的始终是原始 id → 应用重启后同样可恢复；
+    - `CloseSession` / `findPlanIdBySession` 通过 `planResumedFrom` 把
+      关闭的 live 窗口归属回对应 plan 节点（断连 → 节点失败重试不变）；
 - **打开 plan 窗口自动恢复绑定**：打开/导入 plan 文件时静默读取
   `<plan>.run.json`（best-effort），恢复各节点状态与 sessionId —— 之后
   点击任意已运行节点即可重新打开其会话；**Load run** 则在恢复后继续执行

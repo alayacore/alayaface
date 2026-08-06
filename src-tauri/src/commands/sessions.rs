@@ -86,6 +86,7 @@ pub async fn create_session(
     }
 
     session::create(session::SessionConfig {
+        id: &session_id,
         app: &app,
         binary: &bin,
         config_path: &effective_config,
@@ -144,7 +145,13 @@ pub async fn resume_session(
         _ => None,
     };
 
+    // Resumed sessions get a FRESH id (matching Go) while keeping the
+    // original on-disk directory. The client must keep the node bound to
+    // the ORIGINAL id (the dir name); the fresh id only identifies the
+    // live process.
+    let new_id = Uuid::new_v4().to_string();
     session::create(session::SessionConfig {
+        id: &new_id,
         app: &app,
         binary: &bin,
         config_path: &config_path,
@@ -247,6 +254,7 @@ pub async fn fork_session(
 
     let bin = resolve_binary(&binary_path);
     session::create(session::SessionConfig {
+        id: &new_id,
         app: &app,
         binary: &bin,
         config_path: &config_path,

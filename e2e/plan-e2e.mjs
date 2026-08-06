@@ -249,7 +249,54 @@ try {
   await shot(page, '05-t1-session.png');
   console.log('PASS: t1 node opened its session (activated, reply visible)');
 
-  // ── 8. Plans manager: Saved fuzzy filter + Browse-tab file import ──
+  // ── 8. Close/reopen node session (resume regression) ───────────────
+  // The node stays bound to the ON-DISK dir id; resume_session hands out
+  // a FRESH id that must NOT become the persistent binding (its dir does
+  // not exist → "Session directory not found" on the next click). Close
+  // the t1 session, click the node again → a NEW session window with the
+  // /t1 badge appears and the plan window shows NO error. Do it twice.
+  const planErrorCount = async () => {
+    const errs = await page.$$eval('.plan-page .sel-page-status-error', els => els.map(e => e.textContent));
+    return errs.filter(t => t && t.length > 0).length;
+  };
+  const closeT1Session = async () => {
+    await page.evaluate(() => {
+      const panels = [...document.querySelectorAll('.session-panel')];
+      for (const p of panels) {
+        const t = p.querySelector('.session-bar-title')?.textContent || '';
+        if (t.includes('/t1')) {
+          const btn = p.querySelector('.session-bar-close');
+          if (btn) btn.click();
+          break;
+        }
+      }
+    });
+  };
+  const waitT1Active = async (label) => {
+    await page.waitForFunction(() => {
+      const t = document.querySelector('.session-panel.session-panel-active .session-bar-title')?.textContent || '';
+      return t.includes('/t1');
+    }, { timeout: 30000 });
+    await sleep(400);
+    const activeTitle = await page.$eval('.session-panel.session-panel-active .session-bar-title', e => e.textContent);
+    const errCount = await planErrorCount();
+    assert(errCount === 0, label + ': plan window has no resume error, got: ' + errCount);
+    console.log('PASS: ' + label + ' — session reopened (' + activeTitle + '), no error');
+  };
+
+  await closeT1Session();
+  await sleep(500);
+  await clickNode(page, 't1');
+  await waitT1Active('close→click #1 (resume from disk)');
+  await shot(page, '05b-t1-resumed-1.png');
+
+  await closeT1Session();
+  await sleep(500);
+  await clickNode(page, 't1');
+  await waitT1Active('close→click #2 (resume again)');
+  await shot(page, '05c-t1-resumed-2.png');
+
+  // ── 9. Plans manager: Saved fuzzy filter + Browse-tab file import ──
   // Write a plan JSON at the fake home root (the Browse tab starts there).
   const importedName = 'imported-via-browse';
   const importedPlan = {

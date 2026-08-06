@@ -572,6 +572,40 @@ reusing the multimodal picker machinery (file list + fuzzy matching).
 
 ---
 
+## P18 — Node-session resume: keep the on-disk dir id as the binding
+
+Bug report: click node → open session → close session window → click node
+again → "Session directory not found".
+
+Root cause (two bugs):
+1. **Rust parity**: `session::create` generated its OWN uuid, ignoring the
+   caller — create_session returned an id whose dir (`sessions/<other>`)
+   never existed, so the FIRST close→click resume failed on Rust. Go used
+   `cfg.ID` (id == dir name).
+2. **Frontend rebind**: `resume_session` hands out a FRESH id (Y) while
+   keeping the ORIGINAL dir (X). The frontend rebound the node to Y → after
+   closing Y, resume Y looked up `sessions/Y` (doesn't exist). run.json also
+   persisted Y → broken across restarts.
+
+Fix:
+- [x] Rust `SessionConfig` gains `id`; `create()` uses it (matches Go);
+      create_session/resume_session/fork_session pass id == dir name
+      (resume keeps the fresh-UUID semantics: new id, old dir)
+- [x] Elm: remove `planResumeNode` + `rebindNodeSession`; add
+      `planResumeFrom` (in-flight resume origin) + `planResumedFrom`
+      (live id → original dir id)
+- [x] Node click: live sid → focus; live resumed-from-sid → focus
+      (`findResumedLive`); else resume the ORIGINAL id (dir exists)
+- [x] `SessionCreated` records `planResumedFrom` + preserves the
+      `[Plan · planId/nodeId]` badge on resumed windows; no rebind
+- [x] `CloseSession`/`DeleteSession` drop the mapping; `findPlanIdBySession`
+      resolves resumed ids back to the node (disconnect → fail/retry intact)
+- [x] run.json keeps the original id → works after app restart
+- [x] E2E step 8: close t1 session → click t1 → reopens (no error) ×2
+- [x] Tests: elm-test 145 / cargo test 40 / go test -race / make e2e ALL PASS
+
+---
+
 ## Known pitfalls
 
 - Never edit `../alayacore` — tool set = spawn params only.

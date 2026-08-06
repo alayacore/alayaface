@@ -13,7 +13,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
-use uuid::Uuid;
 
 /// Internal handle to a running alayacore session.
 pub struct SessionHandle {
@@ -54,6 +53,9 @@ pub struct SessionMap(pub Arc<Mutex<HashMap<String, SessionHandle>>>);
 
 /// Configuration for creating a new session.
 pub struct SessionConfig<'a> {
+    /// Session id — also names the on-disk directory
+    /// (~/.alayaface/sessions/<id>/), matching the Go backend.
+    pub id: &'a str,
     pub app: &'a AppHandle,
     pub binary: &'a str,
     pub config_path: &'a str,
@@ -72,8 +74,11 @@ pub struct SessionConfig<'a> {
 // ─── Factory ──────────────────────────────────────────────────────────
 
 /// Create a new session: spawn alayacore and start background readers.
+/// The session id comes from the caller (cfg.id) so the returned id
+/// always equals the on-disk directory name — resume_session depends on
+/// this (it looks up the dir by the id it is handed).
 pub async fn create(cfg: SessionConfig<'_>) -> Result<String, String> {
-    let session_id = Uuid::new_v4().to_string();
+    let session_id = cfg.id.to_string();
 
     let proc = alayacore::spawn(
         cfg.binary,

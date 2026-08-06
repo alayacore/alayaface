@@ -310,27 +310,29 @@ updateActivePlanWin model fn =
             model
 
 
-{-| Rebind a plan node to a (resumed) session id: resume_session hands
-out a fresh id, so after a node-session resume the node must point at
-the new id for future clicks to focus the live window.
+{-| Find a LIVE session that was resumed from the given on-disk dir id.
+resume_session hands out a fresh id each time; this maps it back so a
+node click can focus the already-open resumed window instead of either
+resuming a second time ("Session is already active") or losing the
+window. Returns Nothing when no live session was resumed from `origId`.
 -}
-rebindNodeSession : String -> String -> PlanWindow -> PlanWindow
-rebindNodeSession nodeId sid win =
-    case win.run of
-        Just run ->
-            { win
-                | run =
-                    Just
-                        { run
-                            | nodes =
-                                Dict.update nodeId
-                                    (Maybe.map (\n -> { n | sessionId = Just sid, lastSessionId = Just sid }))
-                                    run.nodes
-                        }
-            }
+findResumedLive : String -> Model -> Maybe String
+findResumedLive origId model =
+    Dict.foldl
+        (\liveId mapped acc ->
+            case acc of
+                Just _ ->
+                    acc
 
-        Nothing ->
-            win
+                Nothing ->
+                    if mapped == origId && Dict.member liveId model.sessions then
+                        Just liveId
+
+                    else
+                        Nothing
+        )
+        Nothing
+        model.planResumedFrom
 
 
 {-| Insert (or update) a plan window, activate it, assign a default
@@ -400,10 +402,17 @@ planWinKeyForPath path =
         "import-" ++ PT.slugify baseNoJson
 
 
-{-| Find the plan window whose run owns the given session id.
+{-| Find the plan window whose run owns the given session id. A resumed
+session id (fresh UUID) is resolved back to its original on-disk dir id
+via planResumedFrom, so closing a resumed node session still attributes
+the window to its plan node (runner disconnect handling).
 -}
 findPlanIdBySession : Model -> String -> Maybe String
 findPlanIdBySession model sid =
+    let
+        origId =
+            Dict.get sid model.planResumedFrom |> Maybe.withDefault sid
+    in
     Dict.foldl
         (\pid win acc ->
             case acc of
@@ -413,7 +422,7 @@ findPlanIdBySession model sid =
                 Nothing ->
                     case win.run of
                         Just run ->
-                            if R.nodeBySessionId sid run == Nothing then
+                            if R.nodeBySessionId origId run == Nothing then
                                 Nothing
 
                             else
@@ -911,22 +920,32 @@ update msg model =
                         , pendingEvents = Dict.remove id model.pendingEvents
                     }
 
-                -- A session resumed for a plan node (PlanOpenNodeSession)
-                -- gets a fresh id from resume_session: rebind the node to
-                -- the new id so clicking the node keeps working and the
-                -- binding stays in sync. Never consumed by a runner-created
+                -- A session resumed for a plan node gets a FRESH id from
+                -- resume_session while keeping the ORIGINAL on-disk dir.
+                -- The node stays bound to the original id (the dir name)
+                -- so it can be resumed again after this window closes;
+                -- record the live→orig mapping so node clicks can find
+                -- this live window and CloseSession can attribute it back
+                -- to the plan node. Never consumed by a runner-created
                 -- session.
                 resumedModel =
-                    case ( model.planResumeNode, isRunnerCreate ) of
-                        ( Just ( planId, nodeId ), False ) ->
+                    case ( model.planResumeFrom, isRunnerCreate ) of
+                        ( Just origId, False ) ->
+                            let
+                                label =
+                                    Dict.get origId baseModel.planNodeSessions
+                            in
                             { baseModel
-                                | planResumeNode = Nothing
+                                | planResumeFrom = Nothing
+                                , planResumeOwner = Nothing
+                                , planResumedFrom = Dict.insert id origId baseModel.planResumedFrom
                                 , planNodeSessions =
-                                    Dict.insert id (planId ++ "/" ++ nodeId) baseModel.planNodeSessions
-                                , planWindows =
-                                    Dict.update planId
-                                        (Maybe.map (rebindNodeSession nodeId id))
-                                        baseModel.planWindows
+                                    case label of
+                                        Just l ->
+                                            Dict.insert id l baseModel.planNodeSessions
+
+                                        Nothing ->
+                                            baseModel.planNodeSessions
                             }
 
                         _ ->
@@ -1021,6 +1040,7 @@ update msg model =
                 , sessionNums = Dict.remove id model.sessionNums
                 , windowPositions = Dict.remove id model.windowPositions
                 , planNodeSessions = Dict.remove id model.planNodeSessions
+                , planResumedFrom = Dict.remove id model.planResumedFrom
                 , activeId =
                     if model.activeId == Just id then
                         List.head (List.reverse (List.filter (\k -> k /= id) model.sessionOrder))
@@ -2996,8 +3016,8 @@ update msg model =
 
         PlanOpenNodeSession planId nodeId ->
             -- Node → session binding: click a node to open its session.
-            -- Priority: live sessionId (focus it) → lastSessionId (a
-            -- closed session — resume it from disk) → detail panel.
+            -- Priority: live sessionId (focus it) → live session resumed
+            -- from the same dir (focus it) → resume from disk → detail.
             case Dict.get planId model.planWindows of
                 Just win ->
                     case win.run of
@@ -3010,17 +3030,29 @@ update msg model =
                                                 update (ActivateSession sid) model
 
                                             else
-                                                -- dead live-binding (e.g.
-                                                -- restart): resume from disk
-                                                ( { model
-                                                    | pendingSwitchOnCreate = True
-                                                    , planResumeOwner = Just planId
-                                                    , planResumeNode = Just ( planId, nodeId )
-                                                    , planNodeSessions =
-                                                        Dict.insert sid (planId ++ "/" ++ nodeId) model.planNodeSessions
-                                                  }
-                                                , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model }
-                                                )
+                                                case findResumedLive sid model of
+                                                    Just liveId ->
+                                                        update (ActivateSession liveId) model
+
+                                                    Nothing ->
+                                                        -- dead live-binding
+                                                        -- (e.g. restart):
+                                                        -- resume from disk.
+                                                        -- The node STAYS
+                                                        -- bound to sid (the
+                                                        -- dir name); the
+                                                        -- resumed window gets
+                                                        -- a fresh id tracked
+                                                        -- via planResumedFrom.
+                                                        ( { model
+                                                            | pendingSwitchOnCreate = True
+                                                            , planResumeOwner = Just planId
+                                                            , planResumeFrom = Just sid
+                                                            , planNodeSessions =
+                                                                Dict.insert sid (planId ++ "/" ++ nodeId) model.planNodeSessions
+                                                          }
+                                                        , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model }
+                                                        )
 
                                         Nothing ->
                                             case n.lastSessionId of
@@ -3028,15 +3060,24 @@ update msg model =
                                                     -- failed/canceled node:
                                                     -- its session was closed,
                                                     -- reopen it from disk
-                                                    ( { model
-                                                        | pendingSwitchOnCreate = True
-                                                        , planResumeOwner = Just planId
-                                                        , planResumeNode = Just ( planId, nodeId )
-                                                        , planNodeSessions =
-                                                            Dict.insert sid (planId ++ "/" ++ nodeId) model.planNodeSessions
-                                                      }
-                                                    , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model }
-                                                    )
+                                                    if Dict.member sid model.sessions then
+                                                        update (ActivateSession sid) model
+
+                                                    else
+                                                        case findResumedLive sid model of
+                                                            Just liveId ->
+                                                                update (ActivateSession liveId) model
+
+                                                            Nothing ->
+                                                                ( { model
+                                                                    | pendingSwitchOnCreate = True
+                                                                    , planResumeOwner = Just planId
+                                                                    , planResumeFrom = Just sid
+                                                                    , planNodeSessions =
+                                                                        Dict.insert sid (planId ++ "/" ++ nodeId) model.planNodeSessions
+                                                                  }
+                                                                , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model }
+                                                                )
 
                                                 Nothing ->
                                                     ( updateActivePlanWin model (\w -> { w | selectedNode = Just nodeId })
@@ -3059,21 +3100,26 @@ update msg model =
         PlanOpenAttemptSession planId nodeId sid ->
             -- Open a HISTORICAL attempt session (from the node's
             -- attemptSessions list): focus it if alive, otherwise resume
-            -- it from disk. Unlike PlanOpenNodeSession this never rebinds
-            -- the node — the current live binding (if any) stays untouched.
+            -- it from disk. Never rebinds the node — the current live
+            -- binding (if any) stays untouched.
             if Dict.member sid model.sessions then
                 update (ActivateSession sid) model
 
             else
-                ( { model
-                    | pendingSwitchOnCreate = True
-                    , planResumeOwner = Just planId
-                    , planResumeNode = Nothing
-                    , planNodeSessions =
-                        Dict.insert sid (planId ++ "/" ++ nodeId) model.planNodeSessions
-                  }
-                , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model }
-                )
+                case findResumedLive sid model of
+                    Just liveId ->
+                        update (ActivateSession liveId) model
+
+                    Nothing ->
+                        ( { model
+                            | pendingSwitchOnCreate = True
+                            , planResumeOwner = Just planId
+                            , planResumeFrom = Just sid
+                            , planNodeSessions =
+                                Dict.insert sid (planId ++ "/" ++ nodeId) model.planNodeSessions
+                          }
+                        , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model }
+                        )
 
         PlanSetConcurrency text ->
             ( updateActivePlanWin model
@@ -3153,7 +3199,7 @@ update msg model =
                             | showSessionManager = False
                             , sessionManagerError = Nothing
                             , planResumeOwner = Nothing
-                            , planResumeNode = Nothing
+                            , planResumeFrom = Nothing
                           }
                         , Cmd.none
                         )
@@ -3165,8 +3211,8 @@ update msg model =
                         -- A plan-node session resume failed: surface the
                         -- error in the owning plan window instead of the
                         -- (possibly closed) session manager. Also clear
-                        -- planResumeNode so a later SessionCreated does
-                        -- not rebind some unrelated session to the node.
+                        -- planResumeFrom so a later SessionCreated does
+                        -- not treat some unrelated session as the resume.
                         case model.planResumeOwner of
                             Just pid ->
                                 ( setPlanWin pid
@@ -3177,7 +3223,7 @@ update msg model =
                                         in
                                         { w | view = { wv | errors = [ res.error ] } }
                                     )
-                                    { model | planResumeOwner = Nothing, planResumeNode = Nothing }
+                                    { model | planResumeOwner = Nothing, planResumeFrom = Nothing }
                                 , Cmd.none
                                 )
 
@@ -3206,6 +3252,7 @@ update msg model =
                             , sessionNums = Dict.remove id model.sessionNums
                             , windowPositions = Dict.remove id model.windowPositions
                             , planNodeSessions = Dict.remove id model.planNodeSessions
+                            , planResumedFrom = Dict.remove id model.planResumedFrom
                             , activeId =
                                 if model.activeId == Just id then
                                     List.head (List.reverse (List.filter (\k -> k /= id) model.sessionOrder))

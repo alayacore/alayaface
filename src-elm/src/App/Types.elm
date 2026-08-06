@@ -94,8 +94,17 @@ type alias Model =
     , planCreateQueue : List CreateTask
     , planReadTarget : Maybe PlanReadTarget
     , planNodeSessions : Dict String String
+    -- Plan window owning the in-flight resume (for error surfacing).
     , planResumeOwner : Maybe String
-    , planResumeNode : Maybe ( String, String )
+    -- Original (on-disk dir) session id of an in-flight plan-node resume.
+    -- The resumed session gets a FRESH id from resume_session; the node
+    -- stays bound to the original id (the dir name) so it can always be
+    -- resumed again.
+    , planResumeFrom : Maybe String
+    -- Live (fresh) session id → original dir id, for every resume done in
+    -- this app run. Lets a node click find the live resumed session and
+    -- lets CloseSession attribute the window back to its plan node.
+    , planResumedFrom : Dict String String
     , planSessionIds : Set String
     , planSessionPending : Bool
     , homeDir : String
