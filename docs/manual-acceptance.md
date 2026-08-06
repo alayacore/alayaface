@@ -1,9 +1,12 @@
 # AlayaFace Plan Mode — 手工验收清单（GUI 环境）
 
-> 用途：无 GUI 环境下无法执行的人工验收步骤。有桌面环境时按本清单逐项
-> 冒烟，勾选后回写 TODO.md。后端已由 fakecore E2E 覆盖、runner 已由
-> 128 个 Elm 单测覆盖；本清单验证的是**真实 alayacore + 浏览器/Tauri 的
-> 集成表现**。
+> **核心流程已自动化**：`make e2e`（无头 Chrome + fakecore 假模型）已覆盖
+> Plan Session → Create Plan → Run → 节点成功/失败重试 → 节点打开会话的
+> 全链路（见 TODO.md P15）。本清单剩余项是**自动化覆盖不到**的部分：
+> 真实 alayacore + 真实模型的对话质量、Tauri 原生窗口、MCP。
+>
+> 用途：有桌面环境 + 模型 API key（或本地 .gguf）时按本清单逐项冒烟，
+> 勾选后回写 TODO.md。
 >
 > 前置：`alayacore` 可执行（`which alayacore` 或 `ALAYACORE_BIN`），
 > 模型 API key 已配置（Default preset 的 model.conf），MCP 当前为

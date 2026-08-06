@@ -70,12 +70,19 @@ pub fn read_active_preset() -> Result<String, String> {
 }
 
 /// Persist the active preset name (atomic: temp file + rename).
+/// The temp name is unique per call (pid + nanosecond timestamp) so
+/// concurrent writers (e.g. init seeding racing create_session's ensure)
+/// never clobber each other's temp file before its rename.
 pub fn write_active_preset(name: &str) -> Result<(), String> {
     if !valid_preset_name(name) {
         return Err(format!("Invalid preset name: {name:?}"));
     }
     let path = active_preset_file();
-    let tmp = alayaface_dir().join("active-preset.tmp");
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = alayaface_dir().join(format!("active-preset-{}-{}.tmp", std::process::id(), nanos));
     std::fs::write(&tmp, name)
         .map_err(|e| format!("Failed to write active preset: {e}"))?;
     std::fs::rename(&tmp, &path)

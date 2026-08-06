@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Default model config template (key-value block format).
@@ -91,12 +92,15 @@ func ReadActivePreset() (string, error) {
 }
 
 // WriteActivePreset persists the active preset name (atomic: temp + rename).
+// The temp name is unique per call (pid + nanosecond timestamp) so
+// concurrent writers (e.g. init seeding racing create_session's Ensure)
+// never clobber each other's temp file before its rename.
 func WriteActivePreset(name string) error {
 	if !ValidPresetName(name) {
 		return os.ErrInvalid
 	}
 	path := ActivePresetFile()
-	tmp := filepath.Join(AlayafaceDir(), "active-preset.tmp")
+	tmp := filepath.Join(AlayafaceDir(), fmt.Sprintf("active-preset-%d-%d.tmp", os.Getpid(), time.Now().UnixNano()))
 	if err := os.WriteFile(tmp, []byte(name), 0o644); err != nil {
 		return err
 	}

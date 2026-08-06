@@ -58,6 +58,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P12 Graceful close (save+EOF+grace) + dead-code cleanup + acceptance doc | [x] |
 | P13 Attempt-session history (attempt_session_ids + detail-panel list) | [x] |
 | P14 Concurrency selector in the plan header | [x] |
+| P15 Automated headless-browser E2E + 4 real bugs found & fixed | [x] |
 
 ## P11 — 第二轮审查：创建队列串行化 + 创建失败恢复
 
@@ -157,6 +158,45 @@ P9 遗留：重试后 `lastSessionId` 被新会话替换，失败那次尝试的
 - [x] 文档同步：TODO 进度表（P5 遗留项销项）；docs/manual-acceptance.md
       增补并发输入验收项；
 - [x] 测试：Elm 137（+6 parseConcurrency）全绿。
+
+## P15 — 无头浏览器 E2E 自动化 + 真实 bug 修复（不需要 GUI/真模型）
+
+回答「一定要人来测吗」：**不需要**。单测已全自动；manual-acceptance 的
+核心 GUI 流程也可全自动——用 **fakecore 当假模型**（我们自己的脚本化
+alayacore 替身）+ **系统 Chrome 无头** + Go 后端，跑真实 DOM。
+
+- [x] `e2e/plan-e2e.mjs`（node + puppeteer-core，零模型依赖）：
+      ⚙ → New Plan Session → prompt → fakecore 回 fenced plan JSON →
+      Create Plan offer → Plan 窗口 DAG → 并发覆盖 → Run → t1/t2/t3
+      Succeeded（t2 首次失败经 marker 自动重试）→ runLog 断言重试 →
+      点 t1 节点 → 会话激活且显示回复 → 截图 5 张 → 清理；`make e2e`；
+- [x] fakecore 扩展（协议合规 + 场景脚本）：
+      - 接受 `--system`/`--builtin-tools`（此前未知 flag 会启动失败）；
+      - `--system` 非空（= Plan Session）→ 首个 UE 回完整 AT 帧带
+        fenced plan JSON；
+      - `streamReply` 补发 `SM task in_progress=false` 结束帧（此前
+        runner 永远收不到 TaskDone —— 单测外的缺口）；
+      - `fail-once` 场景：prompt 含 "fail-once" → 按 prompt 哈希的共享
+        marker（tmp）首进程回 task_error、重试进程成功 —— 跨进程
+        模拟「失败一次后自动重试成功」；
+      - Ar/At 用不同 history_id（此前共用 "hist-1"，违反真实协议）；
+- [x] **E2E 抓到的 4 个真实 bug（单测覆盖不到）**：
+  1. **fs_home_dir 从未在 init 获取**：首次 Create Plan 时 homeDir="" →
+     保存到 `/.alayaface/...` 500 → 修复：`Main.elm` init 加
+     `Ports.fsHomeDir {}`（Tauri 同样受益）；
+  2. **WriteActivePreset 固定 tmp 名**：init 播种与 create_session 的
+     Ensure 并发 → rename 竞态 500 → 修复：tmp 名唯一（pid+nanos），
+     Rust+Go 对称；
+  3. **Elm `historyContents` 按 history_id 共享、不区分 At/Ar**：同 id
+     跨 role 时 At delta 丢失 → assistant 消息为空（fakecore 共用
+     "hist-1" 暴露；真实 alayacore id 唯一所以单测构造不出）→ 修复：
+     key 加 tag 前缀（防御）+ fakecore 协议合规；
+  4. fakecore 缺 SM task 结束帧（见上）；
+- [x] 文档：README「Automated E2E」段、TODO、Makefile `make e2e`；
+- [x] 测试：Elm 137 / Rust 39 / Go 8 包（-race）全绿；`make e2e` 全过
+      （6 个 PASS + 5 张截图）。
+- [ ] 可选：真实模型 E2E（OpenAI 兼容 API key 或本地 .gguf）—— 需要
+      用户提供其一；不做也不阻塞（fakecore 已覆盖协议+UI 全链路）。
 
 ## P10 — 全面审查修复（评审轮）
 

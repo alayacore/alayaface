@@ -1,0 +1,257 @@
+#!/usr/bin/env node
+// Plan Mode E2E — headless Chrome + Go backend + fakecore (no real model).
+//
+// Flow:
+//   1. build fakecore + Go server (fresh HOME), start both
+//   2. Chrome headless → ⚙ → New Plan Session → send a prompt
+//   3. fakecore answers with a fenced plan JSON → Create Plan offer
+//   4. Create Plan → Plan window DAG → set concurrency → Run
+//   5. t1 ok → t2 fails once (marker) → auto-retry → ok → t3 ok → Completed
+//   6. Node detail: t2 shows failure history + ≥2 attempt sessions
+//   7. Click t1 node → its session window activates and shows the reply
+//
+// Screenshots land in the artifact dir; ALL PASS printed on success.
+
+import puppeteer from 'puppeteer-core';
+import { execSync, spawn } from 'node:child_process';
+import { mkdtempSync, writeFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import net from 'node:net';
+
+const ROOT = path.resolve(import.meta.dirname, '..');
+const CHROME = '/usr/bin/google-chrome';
+const E2E_TIMEOUT = 120000;
+
+function assert(cond, msg) {
+  if (!cond) throw new Error('ASSERT FAILED: ' + msg);
+}
+
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.listen(0, '127.0.0.1', () => {
+      const port = srv.address().port;
+      srv.close(() => resolve(port));
+    });
+    srv.on('error', reject);
+  });
+}
+
+function waitPort(port, ms) {
+  const deadline = Date.now() + ms;
+  return new Promise((resolve, reject) => {
+    const tick = () => {
+      const sock = net.connect(port, '127.0.0.1');
+      sock.on('connect', () => { sock.destroy(); resolve(); });
+      sock.on('error', () => {
+        sock.destroy();
+        if (Date.now() > deadline) reject(new Error('server port timeout'));
+        else setTimeout(tick, 250);
+      });
+    };
+    tick();
+  });
+}
+
+const tmp = mkdtempSync(path.join(tmpdir(), 'alayaface-e2e-'));
+const home = path.join(tmp, 'home');
+const artifacts = path.join(tmp, 'shots');
+const serverLog = path.join(tmp, 'server.log');
+const SRCGO = path.join(ROOT, 'src-go');
+execSync(`mkdir -p "${artifacts}" "${home}"`);
+// fail-once markers are shared under os.TempDir (keyed by prompt hash);
+// clean them so a fresh run exercises the failure path again.
+execSync('rm -f /tmp/alayaface-fakecore-fail-once-*.marker');
+console.log('artifacts:', tmp);
+
+// ── 1. build binaries ───────────────────────────────────────────────
+const fakecore = path.join(tmp, 'fakecore');
+const serverBin = path.join(tmp, 'alayaface-server');
+execSync('go build -o "' + fakecore + '" ./internal/fakecore', { cwd: SRCGO, stdio: 'inherit' });
+execSync('go build -o "' + serverBin + '" ./cmd/alayaface-server', { cwd: SRCGO, stdio: 'inherit' });
+
+const port = await freePort();
+const base = `http://127.0.0.1:${port}`;
+
+// ── 2. start Go backend (fresh HOME → presets seed; ALAYACORE_BIN=fakecore)
+const server = spawn(serverBin, ['--addr', `127.0.0.1:${port}`, '--static', '../src-elm', '--alayacore-bin', fakecore], {
+  cwd: SRCGO,
+  env: { ...process.env, HOME: home },
+  stdio: ['ignore', 'pipe', 'pipe'],
+});
+server.stdout.on('data', d => process.stdout.write('[srv] ' + d));
+server.stderr.on('data', d => process.stdout.write('[srv!] ' + d));
+
+let browser;
+const shots = [];
+async function shot(page, name) {
+  const p = path.join(artifacts, name);
+  await page.screenshot({ path: p });
+  shots.push(p);
+}
+
+try {
+  await waitPort(port, 30000);
+
+  // ── 3. Chrome headless ────────────────────────────────────────────
+  browser = await puppeteer.launch({
+    executablePath: CHROME,
+    headless: true,
+    args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--window-size=1440,920'],
+  });
+  const page = await browser.newPage();
+  await page.setViewport({ width: 1440, height: 920 });
+  page.on('pageerror', e => console.log('[pageerror]', e.message));
+  page.on('console', m => console.log('[console.' + m.type() + ']', m.text()));
+  page.on('response', async r => {
+    if (r.status() >= 400) {
+      const body = await r.text().catch(() => '');
+      console.log('[http ' + r.status() + ']', r.url(), body.slice(0, 300));
+    }
+  });
+
+  const waitFor = (sel, ms = 30000) => page.waitForSelector(sel, { timeout: ms, visible: true });
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const clickByText = async (sel, text) => {
+    const handles = await page.$$(sel);
+    for (const h of handles) {
+      const t = await h.evaluate(el => el.textContent || '');
+      if (t.includes(text)) { await h.click(); return true; }
+    }
+    return false;
+  };
+
+  // ── 4. Plan Session → offer ───────────────────────────────────────
+  await page.goto(base + '/', { waitUntil: 'networkidle0', timeout: 30000 });
+  await waitFor('.global-menu-btn');
+  await page.click('.global-menu-btn');
+  await waitFor('.global-menu-panel');
+  assert(await clickByText('.global-menu-item', 'New Plan Session'), 'New Plan Session menu item');
+
+  // Session window with [Plan] title appears.
+  await waitFor('.session-panel');
+  await sleep(600);
+  const planTitles = await page.$$eval('.session-bar-title', els => els.map(e => e.textContent));
+  assert(planTitles.some(t => t.includes('[Plan]')), 'plan session title prefix, got: ' + JSON.stringify(planTitles));
+
+  // Send the user prompt INTO the [Plan] session window (the app also
+  // auto-creates a plain session at startup, so there are two windows).
+  const planPanel = await page.$$eval('.session-panel', panels => {
+    for (const p of panels) {
+      const t = p.querySelector('.session-bar-title')?.textContent || '';
+      if (t.includes('[Plan]')) {
+        const ta = p.querySelector('textarea.input-text');
+        const btn = p.querySelector('.send-btn');
+        return { has: true, title: t, ta: !!ta, btn: !!btn };
+      }
+    }
+    return { has: false };
+  });
+  console.log('plan panel:', JSON.stringify(planPanel));
+  assert(planPanel.has, 'plan session window not found');
+
+  await page.evaluate(() => {
+    const panels = [...document.querySelectorAll('.session-panel')];
+    for (const p of panels) {
+      const t = p.querySelector('.session-bar-title')?.textContent || '';
+      if (!t.includes('[Plan]')) continue;
+      const ta = p.querySelector('textarea.input-text');
+      if (ta) {
+        ta.value = 'Create a demo plan for e2e';
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      const btn = p.querySelector('.send-btn');
+      if (btn) btn.click();
+    }
+  });
+  await sleep(800);
+  await shot(page, '00-after-send.png');
+
+  // fakecore answers with the fenced plan JSON → Create Plan offer.
+  await waitFor('.plan-offer-btn', 30000);
+  await shot(page, '01-create-plan-offer.png');
+  console.log('PASS: Create Plan offer appeared');
+
+  // ── 5. Create Plan → Plan window → Run ────────────────────────────
+  await page.click('.plan-offer-btn');
+  await waitFor('.plan-page', 30000);
+  await sleep(800);
+  await shot(page, '02-plan-window.png');
+  const nodeIds = await page.$$eval('.plan-node-id', els => els.map(e => e.textContent));
+  assert(nodeIds.includes('t1') && nodeIds.includes('t2') && nodeIds.includes('t3'),
+    'DAG nodes t1/t2/t3, got: ' + JSON.stringify(nodeIds));
+  console.log('PASS: Plan window with DAG nodes', JSON.stringify(nodeIds));
+
+  // Concurrency override (exercises parseConcurrency path).
+  await page.type('.plan-header-concurrency', '1', { delay: 5 });
+  assert(await clickByText('button.plan-header-btn', 'Run'), 'Run button');
+
+  // Wait for the run to complete: t2 fails once → auto-retry → all ok.
+  await waitFor('.plan-run-badge-completed', E2E_TIMEOUT);
+  await shot(page, '03-completed.png');
+  const succ = await page.$$eval('.plan-node-succeeded', els => els.map(e => e.querySelector('.plan-node-id')?.textContent));
+  assert(succ.length === 3, 'all 3 nodes Succeeded, got: ' + JSON.stringify(succ));
+  console.log('PASS: run completed, nodes succeeded:', JSON.stringify(succ));
+
+  // ── 6. Retry evidence: t2 failed once and auto-retried ─────────────
+  // (Succeeded nodes open their session on click — the detail panel with
+  // failure history is for nodes without a live/restorable session — so
+  // the retry trace is asserted via the run log instead.)
+  await page.click('.plan-bar');
+  await sleep(300);
+  const logText = await page.$eval('.plan-run-log', el => el.textContent).catch(() => '');
+  console.log('RUN LOG FULL:\n' + logText);
+  assert(logText.includes('t2'), 'run log mentions t2, got: ' + logText.slice(0, 300));
+  assert(logText.includes('waiting'), 'run log shows the backoff (waiting) after the t2 failure, got: ' + logText.slice(0, 400));
+  // attempts counts FAILURES: t2 shows [1] (failed once, then retried ok).
+  assert(logText.includes('t2 [1'), 'run log shows attempt 1 for t2 (auto-retry), got: ' + logText.slice(0, 400));
+  await shot(page, '04-run-log.png');
+  console.log('PASS: t2 failed once → auto-retry (run log):', logText.split('\n').filter(Boolean).join(' | '));
+
+  // ── 7. Click t1 node → its session window activates with the reply ─
+  // DOM click (not pixel-coordinate click): overlapping session windows
+  // would otherwise intercept the mouse at the node's screen position.
+  await clickNode(page, 't1');
+  await sleep(800);
+  const active = await page.evaluate(() => {
+    const p = document.querySelector('.session-panel.session-panel-active .session-bar-title');
+    return p ? p.textContent : '';
+  });
+  assert(active.includes('/t1'), 't1 session activated, got: ' + active);
+  const texts = await page.evaluate(() => {
+    const p = document.querySelector('.session-panel.session-panel-active');
+    return p ? [...p.querySelectorAll('.message-content')].map(e => e.textContent) : [];
+  });
+  if (!texts.some(t => t.includes('Hello'))) {
+    // Debug dump: what does the active session window actually contain?
+    const html = await page.evaluate(() => {
+      const p = document.querySelector('.session-panel.session-panel-active');
+      return p ? p.innerHTML.slice(0, 2500) : '(no active panel)';
+    });
+    console.log('ACTIVE PANEL HTML:\n' + html);
+  }
+  assert(texts.some(t => t.includes('Hello')), 't1 session shows the assistant reply, got: ' + JSON.stringify(texts));
+  await shot(page, '05-t1-session.png');
+  console.log('PASS: t1 node opened its session (activated, reply visible)');
+
+  console.log('\nALL PASS ✅');
+  console.log('artifacts:', tmp);
+  console.log('screenshots:');
+  for (const s of shots) console.log('  ' + s);
+} finally {
+  if (browser) await browser.close().catch(() => {});
+  server.kill('SIGTERM');
+}
+
+// ── helpers ─────────────────────────────────────────────────────────
+
+async function clickNode(page, nodeId) {
+  // DOM click (not pixel-coordinate): overlapping session windows would
+  // intercept the mouse at the node's screen position.
+  await page.evaluate((id) => {
+    const nodes = [...document.querySelectorAll('.plan-node')];
+    const n = nodes.find(el => el.querySelector('.plan-node-id')?.textContent === id);
+    if (n) n.click();
+  }, nodeId);
+}

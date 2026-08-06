@@ -192,6 +192,25 @@ grace period — so closing a session window no longer loses the in-progress
 turn. (AlayaCore itself is untouched; rawio's only graceful exit signal is
 stdin EOF.)
 
+## Automated E2E (headless browser, no real model)
+
+`make e2e` runs a full Plan Mode browser test — no GUI, no real model:
+
+- builds `fakecore` (scriptable alayacore stand-in) + the Go backend,
+  launches system Chrome headless via `puppeteer-core` (install once:
+  `cd e2e && npm install`)
+- walks the real UI: ⚙ → New Plan Session → prompt → fakecore answers
+  with a fenced plan JSON → **Create Plan** offer → Plan window DAG →
+  concurrency override → **Run** → nodes succeed (t2 fails once via a
+  marker, then auto-retries) → run log shows the retry → clicking a node
+  activates its session with the assistant reply
+- asserts via DOM selectors, saves screenshots to a temp artifact dir,
+  and cleans up the server/Chrome
+
+This already caught real bugs that unit tests missed (see TODO.md P15).
+It does **not** cover real-model behavior — that still needs an OpenAI
+compatible API key (or a local `.gguf`) for `manual-acceptance.md`.
+
 ## TLV Protocol
 
 AlayaFace communicates with AlayaCore via TLV (Tag-Length-Value) frames

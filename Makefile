@@ -1,4 +1,4 @@
-.PHONY: all elm run-tauri dev build-tauri test-tauri clean-tauri run-go build-go test-go clean-go
+.PHONY: all elm run-tauri dev build-tauri test-tauri clean-tauri run-go build-go test-go e2e clean-go
 
 ELM       := elm
 CARGO     := cargo
@@ -6,6 +6,7 @@ GO        := go
 ELM_SRC   := src-elm
 TAURI     := src-tauri
 SRC_GO := src-go
+NPM       := npm
 
 all: elm
 
@@ -53,6 +54,12 @@ build-go: elm
 # Run Go backend test suites
 test-go:
 	cd $(SRC_GO) && $(GO) test ./...
+
+# Headless-browser E2E for Plan Mode (Go backend + fakecore + system
+# Chrome). Requires node + puppeteer-core (npm install once in e2e/) and
+# google-chrome on PATH. No real model needed.
+e2e: elm
+	cd e2e && $(NPM) install && node plan-e2e.mjs
 
 # Clean Go build artifacts
 clean-go:

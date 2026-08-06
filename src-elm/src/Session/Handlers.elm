@@ -37,15 +37,22 @@ handleDeltaEvent s ev =
                 Assistant
             else
                 Reasoning
+
+        -- Accumulation is keyed by (tag, historyId): the wire protocol
+        -- gives every content block a unique history id, but a defensive
+        -- split by tag keeps At and Ar from sharing an accumulator slot
+        -- even if an adapter reuses an id across roles.
+        historyKey =
+            ev.tag ++ ":" ++ ev.historyId
     in
-    case Dict.get ev.historyId s.historyContents of
+    case Dict.get historyKey s.historyContents of
         Just existing ->
             let
                 newContent =
                     existing ++ ev.content
 
                 newHistoryContents =
-                    Dict.insert ev.historyId newContent s.historyContents
+                    Dict.insert historyKey newContent s.historyContents
 
                 newMsgs =
                     List.map
@@ -66,7 +73,7 @@ handleDeltaEvent s ev =
         Nothing ->
             let
                 newHistoryContents =
-                    Dict.insert ev.historyId ev.content s.historyContents
+                    Dict.insert historyKey ev.content s.historyContents
 
                 newMsg =
                     { id = "hist-" ++ ev.historyId
@@ -272,7 +279,7 @@ handleCompleteFrame s tag historyId content =
                     Just hid ->
                         let
                             newHistoryContents =
-                                Dict.insert hid c s.historyContents
+                                Dict.insert (tag ++ ":" ++ hid) c s.historyContents
 
                             idx =
                                 List.filter (\m -> m.historyId == Just hid && m.role == role) s.messages

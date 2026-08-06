@@ -32,8 +32,10 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,6 +46,10 @@ import (
 // sessionFile is the --session flag value; `save` writes to it (empty
 // filename semantics, like real alayacore).
 var sessionFile string
+
+// stagedText accumulates user text frames of the current message; the
+// fail-once simulation keys its marker off it.
+var stagedText string
 
 const historyID = "hist-1"
 
@@ -57,19 +63,28 @@ func writeFrame(tag, value string) {
 	_ = tlv.WriteFrame(os.Stdout, tag, value)
 }
 
-// echo replies with the NUL-delimited history-ID prefix, like alayacore.
+// echo replies with a NUL-delimited history-ID prefix, like alayacore.
 func echo(tag, content string) {
 	writeFrame(tag, "\x00"+historyID+"\x00"+content)
 }
 
+// echoID is echo with an explicit history id. Real alayacore gives every
+// content block a unique id (Ar/At/AF never share one); the fake mirrors
+// that so the client's per-(role,id) delta accumulation is exercised.
+func echoID(tag, id, content string) {
+	writeFrame(tag, "\x00"+id+"\x00"+content)
+}
+
 // streamReply emits a canned assistant reply: reasoning + text deltas
-// followed by empty AT/AR terminators (delta mode).
+// followed by empty AT/AR terminators (delta mode) and the task-done SM
+// frame (in_progress=false → the runner marks the node Succeeded).
 func streamReply() {
-	echo("Ar", "Thinking about it...")
-	echo("At", "Hello")
-	echo("At", " world")
-	echo("AT", "")
-	echo("AR", "")
+	echoID("Ar", "r1", "Thinking about it...")
+	echoID("At", "t1", "Hello")
+	echoID("At", "t1", " world")
+	echoID("AT", "t1", "")
+	echoID("AR", "r1", "")
+	writeFrame("SM", `{"type":"task","data":{"in_progress":false,"task_error":false}}`)
 }
 
 func coOk(id string, output map[string]any) {
@@ -159,11 +174,19 @@ func main() {
 	flag.StringVar(&sessionFile, "session", "", "session file to create on startup")
 	_ = flag.String("config-path", "", "config dir (accepted, unused)")
 	_ = flag.String("tool-confirm", "", "pre-approved tool list (accepted, unused)")
+	systemFlag := flag.String("system", "", "system prompt (accepted; non-empty switches to plan mode)")
+	_ = flag.String("builtin-tools", "", "builtin tools (accepted, unused)")
 	flag.Parse()
 
 	if !*rawio {
 		os.Exit(2) // not rawio mode: refuse like the real binary would
 	}
+
+	// Plan mode: Plan Sessions spawn with --system (the planner prompt);
+	// plain sessions and runner node sessions do not. In plan mode the
+	// first user message is answered with a fenced plan JSON so the UI's
+	// Create Plan offer appears.
+	planMode := *systemFlag != ""
 
 	// Real alayacore creates session.alaya when started with --session
 	// (the session dir already exists). No MkdirAll: the fake must not
@@ -177,6 +200,7 @@ func main() {
 
 	reader := bufio.NewReader(os.Stdin)
 	staged := 0
+	firstPrompt := true
 	for {
 		frame, err := tlv.ReadFrame(reader)
 		if err != nil || frame == nil {
@@ -186,10 +210,25 @@ func main() {
 		case "UT", "UI", "UV", "UA", "UD":
 			echo(frame.Tag, frame.Value)
 			staged++
+			if frame.Tag == "UT" {
+				stagedText += frame.Value
+			}
 		case "UE":
 			if staged > 0 {
-				streamReply()
+				switch {
+				case planMode && firstPrompt:
+					// Plan Session: answer with a fenced plan JSON (full
+					// AT frame — the UI detects the offer from the final
+					// assistant text), then a normal reply.
+					planReply()
+					firstPrompt = false
+				case strings.Contains(stagedText, "fail-once"):
+					failOnceReply()
+				default:
+					streamReply()
+				}
 				staged = 0
+				stagedText = ""
 			}
 		case "CI":
 			handleCmd(frame.Value)
@@ -198,4 +237,44 @@ func main() {
 
 	// stdin closed (probe pattern): report the model list, then exit.
 	smModelList()
+}
+
+// planReply emits a complete assistant text frame carrying a fenced plan
+// JSON (the Create Plan offer detector scans the final AT content), then
+// a normal reply and the task-done frame.
+func planReply() {
+	const planJSON = `{
+  "schema_version": 1,
+  "name": "E2E Demo",
+  "goal": "Automated end-to-end verification of Plan Mode",
+  "concurrency": 2,
+  "default_max_attempts": 3,
+  "tasks": [
+    { "id": "t1", "title": "Research", "prompt": "research the topic and summarize findings", "depends_on": [], "max_attempts": 3 },
+    { "id": "t2", "title": "Draft", "prompt": "draft the report from the research (fail-once marker)", "depends_on": ["t1"], "max_attempts": 3 },
+    { "id": "t3", "title": "Review", "prompt": "review the draft and fix any issues", "depends_on": ["t2"], "max_attempts": 3 }
+  ]
+}`
+	echoID("AT", "t1", "Here is the plan:\n```json\n"+planJSON+"\n```\nI'll wait for you to create it.")
+	echoID("AR", "r1", "")
+	streamReply()
+}
+
+// failOnceReply simulates a task that fails on its first attempt and
+// succeeds afterwards. The marker is keyed by the prompt text hash and
+// lives in the shared temp dir, so it survives across processes: the
+// runner's retry spawns a fresh fakecore in a NEW session directory,
+// which sees the same marker and succeeds (a per-session marker would
+// never be found again).
+func failOnceReply() {
+	h := sha256.Sum256([]byte(stagedText))
+	marker := filepath.Join(os.TempDir(), fmt.Sprintf("alayaface-fakecore-fail-once-%x.marker", h[:8]))
+	if _, err := os.Stat(marker); os.IsNotExist(err) {
+		_ = os.WriteFile(marker, []byte("failed-once"), 0o644)
+		// Task failure: SM task frame with in_progress=false,
+		// task_error=true (the runner maps this to a node failure).
+		writeFrame("SM", `{"type":"task","data":{"in_progress":false,"task_error":true}}`)
+		return
+	}
+	streamReply()
 }

@@ -84,6 +84,7 @@ init _ =
     , Cmd.batch
         [ Ports.createSession { toolConfirm = Nothing, preset = Nothing, builtinTools = Nothing, systemPrompt = Nothing }
         , Ports.listPresets {}
+        , Ports.fsHomeDir {}
         , Task.attempt GotContainerSize (Dom.getElement "main-content")
         ]
     )
