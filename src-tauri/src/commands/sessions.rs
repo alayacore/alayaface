@@ -20,6 +20,7 @@ pub async fn create_session(
     preset: Option<String>,
     builtin_tools: Option<String>,
     system_prompt: Option<String>,
+    work_dir: Option<String>,
     sessions: State<'_, SessionMap>,
     model_cache: State<'_, ModelCache>,
 ) -> Result<String, String> {
@@ -70,6 +71,19 @@ pub async fn create_session(
     if !preset_name.is_empty() {
         log::info!("  preset={}", &preset_name);
     }
+    // Optional per-plan working directory (Plan Mode node sessions):
+    // created if needed, and the child is spawned with it as cwd.
+    let wd = match &work_dir {
+        Some(d) if !d.trim().is_empty() => {
+            std::fs::create_dir_all(d)
+                .map_err(|e| format!("Cannot create work dir {}: {}", d, e))?;
+            Some(d.clone())
+        }
+        _ => None,
+    };
+    if wd.is_some() {
+        log::info!("  work_dir={}", wd.as_deref().unwrap());
+    }
 
     session::create(session::SessionConfig {
         app: &app,
@@ -82,6 +96,7 @@ pub async fn create_session(
         tool_confirm: &tc,
         builtin_tools: &bt,
         system_prompt: &sp,
+        work_dir: wd,
     }).await
 }
 
@@ -90,6 +105,7 @@ pub async fn resume_session(
     app: AppHandle,
     session_id: String,
     binary_path: String,
+    work_dir: Option<String>,
     sessions: State<'_, SessionMap>,
     model_cache: State<'_, ModelCache>,
 ) -> Result<String, String> {
@@ -118,6 +134,16 @@ pub async fn resume_session(
     let config_path = config_dir.to_string_lossy().to_string();
     let session_path = session_file.to_string_lossy().to_string();
 
+    // Resumed plan-node sessions keep the plan's working directory.
+    let wd = match &work_dir {
+        Some(d) if !d.trim().is_empty() => {
+            std::fs::create_dir_all(d)
+                .map_err(|e| format!("Cannot create work dir {}: {}", d, e))?;
+            Some(d.clone())
+        }
+        _ => None,
+    };
+
     session::create(session::SessionConfig {
         app: &app,
         binary: &bin,
@@ -129,6 +155,7 @@ pub async fn resume_session(
         tool_confirm: "",
         builtin_tools: "",
         system_prompt: "",
+        work_dir: wd,
     }).await
 }
 
@@ -230,5 +257,6 @@ pub async fn fork_session(
         tool_confirm: "",
         builtin_tools: "",
         system_prompt: "",
+        work_dir: None,
     }).await
 }

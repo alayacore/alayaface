@@ -39,6 +39,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"alayaface/src-go/internal/tlv"
 )
@@ -195,8 +196,15 @@ func main() {
 		_ = os.WriteFile(sessionFile, []byte(`{"version":1}`), 0o644)
 	}
 
-	// Startup system message, like alayacore announcing its task.
-	writeFrame("SM", `{"type":"task","data":{"id":"boot","title":"fake core ready"}}`)
+	// Startup system message, like alayacore announcing its task. The
+	// cwd field lets tests assert per-plan working-directory isolation
+	// (the spawn cwd reaches the child; the client ignores the field).
+	cwd, _ := os.Getwd()
+	boot, _ := json.Marshal(map[string]any{
+		"type": "task",
+		"data": map[string]any{"id": "boot", "title": "fake core ready", "cwd": cwd},
+	})
+	writeFrame("SM", string(boot))
 
 	reader := bufio.NewReader(os.Stdin)
 	staged := 0
@@ -222,7 +230,9 @@ func main() {
 					// assistant text), then a normal reply.
 					planReply()
 					firstPrompt = false
-				case strings.Contains(stagedText, "fail-once"):
+				case strings.Contains(stagedText, "hang-once"):
+					hangOnceReply()
+			case strings.Contains(stagedText, "fail-once"):
 					failOnceReply()
 				default:
 					streamReply()
@@ -249,10 +259,11 @@ func planReply() {
   "goal": "Automated end-to-end verification of Plan Mode",
   "concurrency": 2,
   "default_max_attempts": 3,
+  "default_timeout_seconds": 5,
   "tasks": [
     { "id": "t1", "title": "Research", "prompt": "research the topic and summarize findings", "depends_on": [], "max_attempts": 3 },
     { "id": "t2", "title": "Draft", "prompt": "draft the report from the research (fail-once marker)", "depends_on": ["t1"], "max_attempts": 3 },
-    { "id": "t3", "title": "Review", "prompt": "review the draft and fix any issues", "depends_on": ["t2"], "max_attempts": 3 }
+    { "id": "t3", "title": "Review", "prompt": "review the draft and fix any issues (hang-once marker)", "depends_on": ["t2"], "max_attempts": 3 }
   ]
 }`
 	echoID("AT", "t1", "Here is the plan:\n```json\n"+planJSON+"\n```\nI'll wait for you to create it.")
@@ -274,6 +285,22 @@ func failOnceReply() {
 		// Task failure: SM task frame with in_progress=false,
 		// task_error=true (the runner maps this to a node failure).
 		writeFrame("SM", `{"type":"task","data":{"in_progress":false,"task_error":true}}`)
+		return
+	}
+	streamReply()
+}
+
+// hangOnceReply simulates a task that HANGS (never replies) on its first
+// attempt — the runner's task timeout must fail the node and auto-retry.
+// The retry spawns a fresh fakecore, which sees the marker and succeeds.
+// While hung, the process ignores stdin (sleep) so the graceful close's
+// EOF drain cannot finish it — it gets SIGKILLed after the grace period.
+func hangOnceReply() {
+	h := sha256.Sum256([]byte(stagedText))
+	marker := filepath.Join(os.TempDir(), fmt.Sprintf("alayaface-fakecore-hang-once-%x.marker", h[:8]))
+	if _, err := os.Stat(marker); os.IsNotExist(err) {
+		_ = os.WriteFile(marker, []byte("hung-once"), 0o644)
+		time.Sleep(30 * time.Second)
 		return
 	}
 	streamReply()

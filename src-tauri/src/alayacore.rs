@@ -23,6 +23,9 @@ pub struct CoreProcess {
 /// (comma-separated; empty = don't pass the flag = alayacore default: all).
 /// If `system_prompt` is non-empty, passes `--system=<text>` (appended to
 /// alayacore's default system prompt; used by Plan Sessions).
+/// If `work_dir` is Some, the child's working directory is set to it
+/// (per-plan isolation for Plan Mode nodes; None = inherit the backend's
+/// cwd, the pre-isolation behavior).
 /// stderr is inherited so alayacore's own logs reach the terminal.
 pub fn spawn(
     binary_path: &str,
@@ -31,6 +34,7 @@ pub fn spawn(
     tool_confirm: &str,
     builtin_tools: &str,
     system_prompt: &str,
+    work_dir: Option<&str>,
 ) -> io::Result<CoreProcess> {
     let mut cmd = Command::new(binary_path);
     cmd.arg("--rawio");
@@ -50,6 +54,9 @@ pub fn spawn(
     }
     if !system_prompt.is_empty() {
         cmd.arg(format!("--system={}", system_prompt));
+    }
+    if let Some(wd) = work_dir {
+        cmd.current_dir(wd);
     }
     let mut child = cmd
         .stdin(Stdio::piped())
@@ -321,5 +328,23 @@ mod tests {
         // Must return quickly without panicking (disconnect path: the
         // child died on its own before kill_child runs).
         kill_child(&mut child);
+    }
+
+    #[test]
+    fn spawn_current_dir_mechanism() {
+        // spawn() forwards its work_dir to Command::current_dir — verify
+        // that mechanism actually changes the child's cwd (per-plan
+        // isolation for Plan Mode node sessions).
+        let dir = temp_path("workdir");
+        std::fs::create_dir_all(&dir).expect("create work dir");
+        let out = Command::new("pwd")
+            .current_dir(&dir)
+            .output()
+            .expect("run pwd");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            dir.to_str().unwrap()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

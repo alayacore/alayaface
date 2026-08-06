@@ -32,6 +32,7 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		Preset       *string `json:"preset"`
 		BuiltinTools *string `json:"builtinTools"`
 		SystemPrompt *string `json:"systemPrompt"`
+		WorkDir      *string `json:"workDir"`
 	}
 	if err := decodeArgs(r, &args); err != nil {
 		return err
@@ -82,6 +83,15 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	if args.SystemPrompt != nil {
 		sp = *args.SystemPrompt
 	}
+	// Optional per-plan working directory (Plan Mode node sessions):
+	// created if needed, and the child is spawned with it as cwd.
+	wd := ""
+	if args.WorkDir != nil && strings.TrimSpace(*args.WorkDir) != "" {
+		wd = *args.WorkDir
+		if err := os.MkdirAll(wd, 0o755); err != nil {
+			return fmt.Errorf("Cannot create work dir %s: %w", wd, err)
+		}
+	}
 	log.Printf("Spawning: %s --rawio --config-path %s --session %s", bin, effectiveConfig, sessionFile)
 	if tc != "" {
 		log.Printf("  with --tool-confirm=%s", tc)
@@ -95,6 +105,9 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	if presetName != "" {
 		log.Printf("  preset=%s", presetName)
 	}
+	if wd != "" {
+		log.Printf("  work_dir=%s", wd)
+	}
 
 	s, err := h.Sessions.Create(session.CreateConfig{
 		ID:           id,
@@ -105,6 +118,7 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		ToolConfirm:  tc,
 		BuiltinTools: bt,
 		SystemPrompt: sp,
+		WorkDir:      wd,
 	}, h.Hub, h.Cache)
 	if err != nil {
 		return err
@@ -115,8 +129,9 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 // ResumeSession resumes an on-disk session directory.
 func ResumeSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	var args struct {
-		SessionID  string `json:"sessionId"`
-		BinaryPath string `json:"binaryPath"`
+		SessionID  string  `json:"sessionId"`
+		BinaryPath string  `json:"binaryPath"`
+		WorkDir    *string `json:"workDir"`
 	}
 	if err := decodeArgs(r, &args); err != nil {
 		return err
@@ -153,6 +168,14 @@ func ResumeSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	}
 
 	bin := ResolveBinary(args.BinaryPath)
+	// Resumed plan-node sessions keep the plan's working directory.
+	wd := ""
+	if args.WorkDir != nil && strings.TrimSpace(*args.WorkDir) != "" {
+		wd = *args.WorkDir
+		if err := os.MkdirAll(wd, 0o755); err != nil {
+			return fmt.Errorf("Cannot create work dir %s: %w", wd, err)
+		}
+	}
 	s, err := h.Sessions.Create(session.CreateConfig{
 		ID:          uuid.NewString(),
 		Binary:      bin,
@@ -160,6 +183,7 @@ func ResumeSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		SessionFile: sessionFile,
 		SessionDir:  sessionsDir,
 		ToolConfirm: "",
+		WorkDir:     wd,
 	}, h.Hub, h.Cache)
 	if err != nil {
 		return err

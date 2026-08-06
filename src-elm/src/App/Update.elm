@@ -507,6 +507,7 @@ startNextCreateIn model =
                         , preset = Nothing
                         , builtinTools = Nothing
                         , systemPrompt = Just planSystemPrompt
+                        , workDir = Nothing
                         }
                     )
 
@@ -517,6 +518,7 @@ startNextCreateIn model =
                         , preset = Nothing
                         , builtinTools = Nothing
                         , systemPrompt = Nothing
+                        , workDir = Nothing
                         }
                     )
 
@@ -535,7 +537,7 @@ every tool auto-runs. That is exactly the runner's intent (unattended
 execution), but it means a plan task CAN auto-run risky tools — use the
 Safe preset / tools field to restrict per node.
 -}
-nodeSessionArgsIn : String -> String -> Model -> { toolConfirm : Maybe String, preset : Maybe String, builtinTools : Maybe String, systemPrompt : Maybe String }
+nodeSessionArgsIn : String -> String -> Model -> { toolConfirm : Maybe String, preset : Maybe String, builtinTools : Maybe String, systemPrompt : Maybe String, workDir : Maybe String }
 nodeSessionArgsIn planId nodeId model =
     let
         task =
@@ -551,7 +553,23 @@ nodeSessionArgsIn planId nodeId model =
     , preset = task |> Maybe.andThen .preset
     , builtinTools = task |> Maybe.andThen .tools
     , systemPrompt = Nothing
+    , workDir = planWorkDir planId model
     }
+
+
+{-| Per-plan working directory for node sessions: every node of a plan
+shares ~/.alayaface/plans/<planId>/work (created by the backend on
+spawn), so tasks can exchange files within the plan while plans stay
+isolated from each other and from the backend's cwd. Nothing while the
+home dir is unknown (falls back to the backend cwd).
+-}
+planWorkDir : String -> Model -> Maybe String
+planWorkDir planId model =
+    if model.homeDir == "" then
+        Nothing
+
+    else
+        Just (plansDir model.homeDir ++ "/" ++ planId ++ "/work")
 
 
 {-| Persist the current run state to <planId>.run.json.
@@ -660,7 +678,7 @@ update msg model =
 
                 Nothing ->
                     ( { model | pendingSwitchOnCreate = True, showGlobalMenu = False }
-                    , Ports.createSession { toolConfirm = Nothing, preset = Nothing, builtinTools = Nothing, systemPrompt = Nothing }
+                    , Ports.createSession { toolConfirm = Nothing, preset = Nothing, builtinTools = Nothing, systemPrompt = Nothing, workDir = Nothing }
                     )
 
         CreatePlanSession ->
@@ -685,6 +703,7 @@ update msg model =
                         , preset = Nothing
                         , builtinTools = Nothing
                         , systemPrompt = Just planSystemPrompt
+                        , workDir = Nothing
                         }
                     )
 
@@ -2541,6 +2560,31 @@ update msg model =
         PlanRunnerTick planId nodeId ->
             runStepIn planId 0 (R.RetryTick nodeId) model
 
+        PlanTick ts ->
+            -- Periodic heartbeat for task timeouts: feed every plan
+            -- window whose run is in progress (one subscription serves
+            -- all plans; a no-op when nothing is running).
+            List.foldl
+                (\pid ( m, c ) ->
+                    case Dict.get pid m.planWindows of
+                        Just win ->
+                            case win.run of
+                                Just run ->
+                                    if run.status == PT.InProgress then
+                                        runStepIn pid ts (R.Tick ts) m
+
+                                    else
+                                        ( m, c )
+
+                                Nothing ->
+                                    ( m, c )
+
+                        Nothing ->
+                            ( m, c )
+                )
+                ( model, Cmd.none )
+                model.planOrder
+
         PlanRunFrame ts ev ->
             case eventSessionId ev of
                 Just sid ->
@@ -2662,7 +2706,7 @@ update msg model =
                                                     , planNodeSessions =
                                                         Dict.insert sid (planId ++ "/" ++ nodeId) model.planNodeSessions
                                                   }
-                                                , Ports.resumeSession { sessionId = sid }
+                                                , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model }
                                                 )
 
                                         Nothing ->
@@ -2678,7 +2722,7 @@ update msg model =
                                                         , planNodeSessions =
                                                             Dict.insert sid (planId ++ "/" ++ nodeId) model.planNodeSessions
                                                       }
-                                                    , Ports.resumeSession { sessionId = sid }
+                                                    , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model }
                                                     )
 
                                                 Nothing ->
@@ -2715,7 +2759,7 @@ update msg model =
                     , planNodeSessions =
                         Dict.insert sid (planId ++ "/" ++ nodeId) model.planNodeSessions
                   }
-                , Ports.resumeSession { sessionId = sid }
+                , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model }
                 )
 
         PlanSetConcurrency text ->
@@ -2834,7 +2878,7 @@ update msg model =
             -- pendingSwitchOnCreate makes SessionCreated switch to the
             -- resumed session once it appears (mirrors the original UX).
             ( { model | pendingSwitchOnCreate = True, sessionManagerError = Nothing }
-            , Ports.resumeSession { sessionId = id }
+            , Ports.resumeSession { sessionId = id, workDir = Nothing }
             )
 
         DeleteSession id ->

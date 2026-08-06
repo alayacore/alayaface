@@ -28,8 +28,11 @@ type CoreProcess struct {
 // don't pass the flag = alayacore default: all tools).
 // If systemPrompt is non-empty, passes --system=<text> (appended to the
 // default system prompt; used by Plan Sessions).
+// If workDir is non-empty, the child's working directory is set to it
+// (per-plan isolation for Plan Mode nodes; empty = inherit the backend's
+// cwd, the pre-isolation behavior).
 // stderr is inherited so alayacore's own logs reach the terminal.
-func Spawn(binaryPath, configPath, sessionPath, toolConfirm, builtinTools, systemPrompt string) (*CoreProcess, error) {
+func Spawn(binaryPath, configPath, sessionPath, toolConfirm, builtinTools, systemPrompt, workDir string) (*CoreProcess, error) {
 	args := []string{"--rawio"}
 	if configPath != "" {
 		args = append(args, "--config-path", configPath)
@@ -48,6 +51,9 @@ func Spawn(binaryPath, configPath, sessionPath, toolConfirm, builtinTools, syste
 	}
 
 	cmd := exec.Command(binaryPath, args...)
+	if workDir != "" {
+		cmd.Dir = workDir
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err

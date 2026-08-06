@@ -271,6 +271,137 @@ tests =
                         ]
                         run4
             ]
+        , describe "timeouts"
+            [ test "Tick past the timeout fails the node (Waiting + retry effects)" <|
+                \_ ->
+                    let
+                        plan =
+                            planFromJson """{ "name": "x", "concurrency": 3, "default_timeout_seconds": 5, "tasks": [
+                                { "id": "a", "title": "A", "prompt": "do A" }
+                            ] }"""
+
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan plan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        -- elapsed 1000ms < 5000ms: no-op
+                        ( run3, es3 ) =
+                            R.step 3000 (R.Tick 3000) run2
+
+                        -- elapsed 5000ms >= 5000ms: timeout
+                        ( run4, es4 ) =
+                            R.step 6000 (R.Tick 6000) run3
+
+                        failures =
+                            (nodeState "a" run4).failures |> List.map .reason
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal (Just P.Waiting) (Dict.get "a" (statuses run4))
+                        , \_ -> Expect.equal 1 (nodeState "a" run4).attempts
+                        , \_ -> Expect.equal True (List.member "close:s1" (effects es4))
+                        , \_ -> Expect.equal True (List.member "retry:a" (effects es4))
+                        , \_ -> Expect.equal [ "Timeout after 5s" ] failures
+                        , \_ -> Expect.equal 0 (List.length (List.filter (\e -> String.startsWith "create:" e) (effects es3)))
+                        ]
+                        ()
+            , test "Tick before the timeout is a no-op (status unchanged)" <|
+                \_ ->
+                    let
+                        plan =
+                            planFromJson """{ "name": "x", "concurrency": 3, "default_timeout_seconds": 30, "tasks": [
+                                { "id": "a", "title": "A", "prompt": "do A" }
+                            ] }"""
+
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan plan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        ( run3, _ ) =
+                            R.step 5000 (R.Tick 5000) run2
+                    in
+                    Expect.all
+                        [ \r -> Expect.equal P.Running (nodeState "a" r).status
+                        , \r -> Expect.equal 0 (nodeState "a" r).attempts
+                        , \r -> Expect.equal (Just "s1") (nodeState "a" r).sessionId
+                        ]
+                        run3
+            , test "no default_timeout_seconds → nodes never time out" <|
+                \_ ->
+                    let
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan singlePlan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        -- 10 minutes later: still Running (v1 behavior)
+                        ( run3, _ ) =
+                            R.step 601000 (R.Tick 601000) run2
+                    in
+                    Expect.all
+                        [ \r -> Expect.equal P.Running (nodeState "a" r).status
+                        , \r -> Expect.equal 0 (nodeState "a" r).attempts
+                        ]
+                        run3
+            , test "node timeout_seconds overrides the plan default" <|
+                \_ ->
+                    let
+                        plan =
+                            planFromJson """{ "name": "x", "concurrency": 3, "default_timeout_seconds": 60, "tasks": [
+                                { "id": "a", "title": "A", "prompt": "do A", "timeout_seconds": 2 }
+                            ] }"""
+
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan plan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        -- elapsed 3000ms >= 2000ms → timeout (not 60s)
+                        ( run3, _ ) =
+                            R.step 5000 (R.Tick 5000) run2
+                    in
+                    Expect.equal (Just P.Waiting) (Dict.get "a" (statuses run3))
+            , test "timeout → auto-retry → success (full cycle)" <|
+                \_ ->
+                    let
+                        plan =
+                            planFromJson """{ "name": "x", "concurrency": 3, "default_timeout_seconds": 5, "tasks": [
+                                { "id": "a", "title": "A", "prompt": "do A" }
+                            ] }"""
+
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan plan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        -- timeout at 6000
+                        ( run3, _ ) =
+                            R.step 6000 (R.Tick 6000) run2
+
+                        -- backoff tick relaunches (new session s2)
+                        ( run4, _ ) =
+                            R.step 8000 (R.RetryTick "a") run3
+
+                        ( run5, _ ) =
+                            R.step 9000 (R.SessionCreatedFor "a" "s2") run4
+
+                        ( run6, _ ) =
+                            R.step 10000 (R.TaskDone "s2" False) run5
+                    in
+                    Expect.all
+                        [ \r -> Expect.equal P.Succeeded (nodeState "a" r).status
+                        , \r -> Expect.equal 1 (nodeState "a" r).attempts
+                        , \r -> Expect.equal [ "s1", "s2" ] (nodeState "a" r).attemptSessions
+                        , \r -> Expect.equal "Timeout after 5s" (Maybe.withDefault { attempt = 0, reason = "", at = 0 } (List.head (nodeState "a" r).failures)).reason
+                        ]
+                        run6
+            ]
         , describe "task completion"
             [ test "TaskDone ok marks node Succeeded and keeps session" <|
                 \_ ->

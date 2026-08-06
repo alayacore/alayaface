@@ -28,6 +28,7 @@ module Plan.Types exposing
     , applyRunStateOverlay
     , nodeRunStateDecoderPublic
     , parseConcurrency
+    , effectiveTimeoutSeconds
     )
 
 {-| Plan Mode data model: DAG plan schema, JSON codecs, normalization
@@ -98,6 +99,9 @@ type alias TaskNode =
     , preset : Maybe String
     , tools : Maybe String
     , maxAttempts : Int
+    -- Optional per-node timeout in seconds; Nothing = inherit the
+    -- plan's default_timeout_seconds (or no timeout at all).
+    , timeoutSeconds : Maybe Int
     }
 
 
@@ -107,8 +111,24 @@ type alias Plan =
     , goal : String
     , concurrency : Int
     , defaultMaxAttempts : Int
+    -- Optional default timeout in seconds for all nodes (nodes may
+    -- override via timeout_seconds). Nothing = no timeout (v1 behavior).
+    , defaultTimeoutSeconds : Maybe Int
     , tasks : List TaskNode
     }
+
+
+{-| Effective timeout for a node in seconds: node override, else the
+plan default, else Nothing (no timeout).
+-}
+effectiveTimeoutSeconds : TaskNode -> Plan -> Maybe Int
+effectiveTimeoutSeconds t plan =
+    case t.timeoutSeconds of
+        Just s ->
+            Just s
+
+        Nothing ->
+            plan.defaultTimeoutSeconds
 
 
 -- Runner types (defined here so Types.elm stays the single model home;
@@ -219,7 +239,7 @@ emptyRunState runId plan =
 
 taskDecoder : D.Decoder TaskNode
 taskDecoder =
-    D.map7 TaskNode
+    D.map8 TaskNode
         (D.field "id" D.string)
         (D.field "title" D.string)
         (D.field "prompt" D.string)
@@ -227,16 +247,18 @@ taskDecoder =
         (D.maybe (D.field "preset" D.string))
         (D.maybe (D.field "tools" D.string))
         (D.oneOf [ D.field "max_attempts" D.int, D.succeed defaultMaxAttempts ])
+        (D.maybe (D.field "timeout_seconds" D.int))
 
 
 planDecoder : D.Decoder Plan
 planDecoder =
-    D.map6 Plan
+    D.map7 Plan
         (D.oneOf [ D.field "schema_version" D.int, D.succeed schemaVersion ])
         (D.field "name" D.string)
         (D.oneOf [ D.field "goal" D.string, D.succeed "" ])
         (D.oneOf [ D.field "concurrency" D.int, D.succeed defaultConcurrency ])
         (D.oneOf [ D.field "default_max_attempts" D.int, D.succeed defaultMaxAttempts ])
+        (D.maybe (D.field "default_timeout_seconds" D.int))
         (D.field "tasks" (D.list taskDecoder))
 
 
@@ -317,6 +339,16 @@ validate plan =
 
           else
             []
+        , case plan.defaultTimeoutSeconds of
+            Just s ->
+                if s < 1 then
+                    [ "default_timeout_seconds must be >= 1" ]
+
+                else
+                    []
+
+            Nothing ->
+                []
         , List.concatMap (validateTask plan) plan.tasks
         , duplicateIdErrors plan.tasks
         , cycleErrors plan.tasks
@@ -346,6 +378,16 @@ validateTask plan t =
 
           else
             []
+        , case t.timeoutSeconds of
+            Just s ->
+                if s < 1 then
+                    [ "Task \"" ++ t.id ++ "\" timeout_seconds must be >= 1" ]
+
+                else
+                    []
+
+            Nothing ->
+                []
         , if List.member t.id t.dependsOn then
             [ "Task \"" ++ t.id ++ "\" depends on itself" ]
 
@@ -474,13 +516,16 @@ successors id byId =
 encodePlan : Plan -> E.Value
 encodePlan p =
     E.object
-        [ ( "schema_version", E.int p.schemaVersion )
-        , ( "name", E.string p.name )
-        , ( "goal", E.string p.goal )
-        , ( "concurrency", E.int p.concurrency )
-        , ( "default_max_attempts", E.int p.defaultMaxAttempts )
-        , ( "tasks", E.list encodeTask p.tasks )
-        ]
+        (List.filterMap identity
+            [ Just ( "schema_version", E.int p.schemaVersion )
+            , Just ( "name", E.string p.name )
+            , Just ( "goal", E.string p.goal )
+            , Just ( "concurrency", E.int p.concurrency )
+            , Just ( "default_max_attempts", E.int p.defaultMaxAttempts )
+            , Maybe.map (\s -> ( "default_timeout_seconds", E.int s )) p.defaultTimeoutSeconds
+            , Just ( "tasks", E.list encodeTask p.tasks )
+            ]
+        )
 
 
 encodeTask : TaskNode -> E.Value
@@ -494,6 +539,7 @@ encodeTask t =
             , Maybe.map (\p -> ( "preset", E.string p )) t.preset
             , Maybe.map (\x -> ( "tools", E.string x )) t.tools
             , Just ( "max_attempts", E.int t.maxAttempts )
+            , Maybe.map (\s -> ( "timeout_seconds", E.int s )) t.timeoutSeconds
             ]
         )
 

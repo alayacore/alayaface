@@ -14,7 +14,7 @@
 
 import puppeteer from 'puppeteer-core';
 import { execSync, spawn } from 'node:child_process';
-import { mkdtempSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
@@ -62,7 +62,7 @@ const SRCGO = path.join(ROOT, 'src-go');
 execSync(`mkdir -p "${artifacts}" "${home}"`);
 // fail-once markers are shared under os.TempDir (keyed by prompt hash);
 // clean them so a fresh run exercises the failure path again.
-execSync('rm -f /tmp/alayaface-fakecore-fail-once-*.marker');
+execSync('rm -f /tmp/alayaface-fakecore-fail-once-*.marker /tmp/alayaface-fakecore-hang-once-*.marker');
 console.log('artifacts:', tmp);
 
 // ── 1. build binaries ───────────────────────────────────────────────
@@ -194,6 +194,16 @@ try {
   assert(succ.length === 3, 'all 3 nodes Succeeded, got: ' + JSON.stringify(succ));
   console.log('PASS: run completed, nodes succeeded:', JSON.stringify(succ));
 
+  // Per-plan working directory: node sessions were spawned with
+  // ~/.alayaface/plans/<planId>/work as their cwd (created by backend).
+  const plansRoot = path.join(home, '.alayaface', 'plans');
+  const workDirs = readdirSync(plansRoot)
+    .filter(n => n.startsWith('e2e-demo-'))
+    .map(n => path.join(plansRoot, n, 'work'))
+    .filter(existsSync);
+  assert(workDirs.length >= 1, 'plan work dir exists, found: ' + JSON.stringify(workDirs));
+  console.log('PASS: plan work dir isolated:', workDirs[0]);
+
   // ── 6. Retry evidence: t2 failed once and auto-retried ─────────────
   // (Succeeded nodes open their session on click — the detail panel with
   // failure history is for nodes without a live/restorable session — so
@@ -206,6 +216,10 @@ try {
   assert(logText.includes('waiting'), 'run log shows the backoff (waiting) after the t2 failure, got: ' + logText.slice(0, 400));
   // attempts counts FAILURES: t2 shows [1] (failed once, then retried ok).
   assert(logText.includes('t2 [1'), 'run log shows attempt 1 for t2 (auto-retry), got: ' + logText.slice(0, 400));
+  // t3 HUNG on its first attempt: the 5s task timeout failed it and the
+  // auto-retry succeeded (attempts [1] again, waiting appears for t3).
+  assert(logText.includes('t3 [1'), 'run log shows attempt 1 for t3 (timeout → auto-retry), got: ' + logText.slice(0, 400));
+  assert((logText.match(/t3 \[1[^]*?waiting/g) || []).length >= 1, 'run log shows t3 waiting after timeout, got: ' + logText.slice(0, 500));
   await shot(page, '04-run-log.png');
   console.log('PASS: t2 failed once → auto-retry (run log):', logText.split('\n').filter(Boolean).join(' | '));
 

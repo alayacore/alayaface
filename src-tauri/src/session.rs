@@ -64,6 +64,9 @@ pub struct SessionConfig<'a> {
     pub tool_confirm: &'a str,
     pub builtin_tools: &'a str,
     pub system_prompt: &'a str,
+    /// Child process working directory (per-plan isolation; None =
+    /// inherit the backend's cwd).
+    pub work_dir: Option<String>,
 }
 
 // ─── Factory ──────────────────────────────────────────────────────────
@@ -79,6 +82,7 @@ pub async fn create(cfg: SessionConfig<'_>) -> Result<String, String> {
         cfg.tool_confirm,
         cfg.builtin_tools,
         cfg.system_prompt,
+        cfg.work_dir.as_deref(),
     )
     .map_err(|e| format!("Failed to start alayacore: {e}"))?;
 

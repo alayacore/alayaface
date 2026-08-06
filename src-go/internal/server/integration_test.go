@@ -549,6 +549,68 @@ func TestIntegrationGracefulCloseSavesSession(t *testing.T) {
 	}
 }
 
+// ─── Work-dir isolation (per-plan working directory) ────────────────
+
+func TestIntegrationSessionWorkDir(t *testing.T) {
+	e := newTestEnv(t, "")
+	workDir := filepath.Join(dirs.AlayafaceDir(), "plans", "demo-1", "work")
+
+	// create_session with workDir: the backend must create it and spawn
+	// the child with it as cwd (fakecore reports cwd in the boot SM).
+	sid := e.rpcOK(t, "create_session", map[string]any{
+		"binaryPath": "", "configPath": "", "toolConfirm": nil, "workDir": workDir,
+	})
+	var id string
+	if err := json.Unmarshal(sid, &id); err != nil {
+		t.Fatalf("create_session: %s", sid)
+	}
+	ev := e.waitEvent(t, "tlv-frame", func(p map[string]any) bool {
+		js, _ := p["json"].(map[string]any)
+		return p["session_id"] == id && p["tag"] == "SM" && js != nil && js["type"] == "task"
+	})
+	js, _ := ev["json"].(map[string]any)
+	data, _ := js["data"].(map[string]any)
+	if cwd, _ := data["cwd"].(string); cwd != workDir {
+		t.Fatalf("create_session cwd = %q, want %q", cwd, workDir)
+	}
+	if _, err := os.Stat(workDir); err != nil {
+		t.Fatalf("workDir not created: %v", err)
+	}
+	e.rpcOK(t, "close_session", map[string]any{"sessionId": id})
+
+	// resume_session with workDir: the resumed child keeps the cwd.
+	body := e.rpcOK(t, "resume_session", map[string]any{"sessionId": id, "binaryPath": "", "workDir": workDir})
+	var newID string
+	if err := json.Unmarshal(body, &newID); err != nil {
+		t.Fatalf("resume_session: %s", body)
+	}
+	ev2 := e.waitEvent(t, "tlv-frame", func(p map[string]any) bool {
+		js, _ := p["json"].(map[string]any)
+		return p["session_id"] == newID && p["tag"] == "SM" && js != nil && js["type"] == "task"
+	})
+	js2, _ := ev2["json"].(map[string]any)
+	data2, _ := js2["data"].(map[string]any)
+	if cwd, _ := data2["cwd"].(string); cwd != workDir {
+		t.Fatalf("resume_session cwd = %q, want %q", cwd, workDir)
+	}
+	e.rpcOK(t, "close_session", map[string]any{"sessionId": newID})
+
+	// Without workDir the child keeps the backend's cwd (pre-isolation).
+	sid2 := e.createSession(t)
+	ev3 := e.waitEvent(t, "tlv-frame", func(p map[string]any) bool {
+		js, _ := p["json"].(map[string]any)
+		return p["session_id"] == sid2 && p["tag"] == "SM" && js != nil && js["type"] == "task"
+	})
+	js3, _ := ev3["json"].(map[string]any)
+	data3, _ := js3["data"].(map[string]any)
+	cwd, _ := data3["cwd"].(string)
+	backendCwd, _ := os.Getwd()
+	if cwd != backendCwd {
+		t.Fatalf("default cwd = %q, want backend cwd %q", cwd, backendCwd)
+	}
+	e.rpcOK(t, "close_session", map[string]any{"sessionId": sid2})
+}
+
 // ─── Token auth hardening ───────────────────────────────────────────
 
 func TestIntegrationTokenAuth(t *testing.T) {

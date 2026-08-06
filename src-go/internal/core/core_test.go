@@ -2,6 +2,7 @@ package core
 
 import (
 	"bufio"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,7 +49,7 @@ func TestSpawnArgsAndCommunication(t *testing.T) {
 	sessionFile := filepath.Join(dir, "session.alaya")
 	configDir := filepath.Join(dir, "config")
 
-	proc, err := Spawn(fakeCorePath, configDir, sessionFile, "tool1,tool2", "", "")
+	proc, err := Spawn(fakeCorePath, configDir, sessionFile, "tool1,tool2", "", "", "")
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -108,8 +109,42 @@ func TestSpawnArgsAndCommunication(t *testing.T) {
 }
 
 func TestSpawnError(t *testing.T) {
-	if _, err := Spawn("/nonexistent/alayacore", "", "", "", "", ""); err == nil {
+	if _, err := Spawn("/nonexistent/alayacore", "", "", "", "", "", ""); err == nil {
 		t.Fatal("Spawn with missing binary should error")
+	}
+}
+
+func TestSpawnWorkDir(t *testing.T) {
+	// The child's working directory must follow the workDir argument
+	// (per-plan isolation). fakecore reports its cwd in the startup SM
+	// frame, so we can assert it end-to-end.
+	dir := t.TempDir()
+	workDir := filepath.Join(dir, "work")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	proc, err := Spawn(fakeCorePath, filepath.Join(dir, "config"), filepath.Join(dir, "s.alaya"), "", "", "", workDir)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	defer KillChild(proc.Cmd)
+
+	reader := bufio.NewReader(proc.Stdout)
+	frame, err := tlv.ReadFrame(reader)
+	if err != nil || frame == nil {
+		t.Fatalf("read startup frame: %v", err)
+	}
+	var env struct {
+		Data struct {
+			Cwd string `json:"cwd"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(frame.Value), &env); err != nil {
+		t.Fatalf("bad SM payload %q: %v", frame.Value, err)
+	}
+	if env.Data.Cwd != workDir {
+		t.Errorf("child cwd = %q, want %q", env.Data.Cwd, workDir)
 	}
 }
 

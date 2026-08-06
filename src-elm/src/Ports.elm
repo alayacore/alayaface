@@ -85,7 +85,7 @@ port onStatus : (E.Value -> msg) -> Sub msg
 
 -- Outbound commands (Elm → Tauri via JS bridge)
 
-port createSession : { toolConfirm : Maybe String, preset : Maybe String, builtinTools : Maybe String, systemPrompt : Maybe String } -> Cmd msg
+port createSession : { toolConfirm : Maybe String, preset : Maybe String, builtinTools : Maybe String, systemPrompt : Maybe String, workDir : Maybe String } -> Cmd msg
 port closeSession : { sessionId : String } -> Cmd msg
 port sendPrompt : { sessionId : String, text : String, media : List E.Value } -> Cmd msg
 port cancelTask : { sessionId : String } -> Cmd msg
@@ -114,7 +114,7 @@ port confirmTool : { sessionId : String, id : String, allowed : Bool } -> Cmd ms
 port sendMcpDecline : { sessionId : String, server : String } -> Cmd msg
 port sendMcpCancel : { sessionId : String } -> Cmd msg
 port forkSession : { sourceSessionId : String, historyId : String } -> Cmd msg
-port resumeSession : { sessionId : String } -> Cmd msg
+port resumeSession : { sessionId : String, workDir : Maybe String } -> Cmd msg
 port listSessionDirs : {} -> Cmd msg
 port deleteSessionDir : { sessionId : String } -> Cmd msg
 port fsListDir : { path : String } -> Cmd msg

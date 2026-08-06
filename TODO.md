@@ -59,6 +59,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P13 Attempt-session history (attempt_session_ids + detail-panel list) | [x] |
 | P14 Concurrency selector in the plan header | [x] |
 | P15 Automated headless-browser E2E + 4 real bugs found & fixed | [x] |
+| P16 Per-plan work dir isolation + task timeouts | [x] |
 
 ## P11 — 第二轮审查：创建队列串行化 + 创建失败恢复
 
@@ -197,6 +198,40 @@ alayacore 替身）+ **系统 Chrome 无头** + Go 后端，跑真实 DOM。
       （6 个 PASS + 5 张截图）。
 - [ ] 可选：真实模型 E2E（OpenAI 兼容 API key 或本地 .gguf）—— 需要
       用户提供其一；不做也不阻塞（fakecore 已覆盖协议+UI 全链路）。
+
+## P16 — per-plan 工作目录隔离 + 任务超时（用户确认的两项）
+
+### 目录隔离（§8.4）
+- [x] `create_session` / `resume_session` 加可选 `workDir`（Rust+Go）：
+      非空 → 后端 MkdirAll + spawn 设子进程 cwd（`Command::current_dir`
+      / `cmd.Dir`，纯 AlayaFace 侧、C1 安全）；fork/probe/普通会话不传
+      （向后兼容）；
+- [x] Elm：`planWorkDir planId model` = `plans/<planId>/work`；
+      `nodeSessionArgsIn` 传 workDir；plan 节点 resume（PlanOpenNodeSession /
+      PlanOpenAttemptSession）传 workDir；普通 resume 不传；Ports+bridge
+      带 workDir 字段；
+- [x] fakecore 启动 SM 帧上报 `cwd`（测试可断言）；
+- [x] 测试：Go `TestSpawnWorkDir`（spawn cwd）+ `TestIntegrationSessionWorkDir`
+      （create/resume 带 workDir → cwd 匹配；不带 → 后端 cwd）+ Rust 机制级
+      `spawn_current_dir_mechanism` + E2E 断言 `plans/<planId>/work` 存在；
+- [x] 文档：plan-mode §8.4/§13、go-backend 命令表、README、manual-acceptance。
+
+### 任务超时（§8.5）
+- [x] schema：`default_timeout_seconds`（计划级）+ `timeout_seconds`
+      （节点级覆盖），缺省无超时；validate ≥1；`effectiveTimeoutSeconds`
+      导出；codec roundtrip；
+- [x] Runner：`Tick Int` 事件（app 层 `Time.every 1000ms` 单订阅喂所有
+      InProgress plan）；schedule 在节点进入 Starting 时设 `startedAt`
+      （超时从启动计，覆盖 create_session 挂起）；`checkTimeouts` →
+      `failNode "Timeout after Ns"`（复用关闭+重试/终态路径）；
+- [x] 测试：Elm runner 5 例（超时→Waiting+close+retry / 未到 no-op /
+      无超时永不 / 节点覆盖默认 / 超时→重试→成功闭环）+ schema 3 例
+      （decode/roundtrip/非法值）→ Elm 145；
+- [x] E2E：fakecore `hang-once`（挂起 30s，marker 跨进程）→ t3 首次挂起
+      → 5s 超时 → 自动重试成功（runLog 断言 t3 waiting + attempts [1]）；
+      E2E 全过；
+- [x] 文档：plan-mode §5 schema/§8.5/§13、TODO、README、manual-acceptance。
+- [x] 测试：Elm 145 / Rust 40 / Go 8 包（-race）全绿；`make e2e` 全过。
 
 ## P10 — 全面审查修复（评审轮）
 

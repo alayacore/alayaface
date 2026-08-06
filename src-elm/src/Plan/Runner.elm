@@ -51,6 +51,10 @@ type Event
     | SessionDisconnected String String
     | RetryNode String
     | RetryTick String
+    -- Periodic heartbeat (app-level Time.every): fails nodes whose
+    -- startedAt + effective timeout has elapsed (timeout_seconds /
+    -- default_timeout_seconds; Nothing = never times out).
+    | Tick Int
 
 
 step : Int -> Event -> PT.RunState -> ( PT.RunState, List PT.Effect )
@@ -110,6 +114,10 @@ step now ev run =
                 -- Manual retry from the node detail panel.
                 RetryNode nodeId ->
                     ( retryNode nodeId run, [] )
+
+                -- Periodic heartbeat: fail nodes past their timeout.
+                Tick tickNow ->
+                    ( checkTimeouts tickNow run, [] )
     in
     let
         ( runFinal, effects ) =
@@ -369,7 +377,7 @@ finishStep now before run =
             updateRunStatus now run2
 
         ( run4, createEffects ) =
-            schedule run3
+            schedule now run3
 
         retryEffects =
             -- Schedule the backoff timer only when a node newly entered
@@ -438,10 +446,12 @@ closeAndClear run =
 
 {-| Launch up to `concurrency - running` Pending nodes whose deps all
 succeeded. Marks the launched nodes Starting (so bindSession works) and
-returns their CreateSessionFor effects.
+returns their CreateSessionFor effects. startedAt is set when a node
+enters Starting — the timeout clock starts at launch (covers a hanging
+create_session as well as a hanging task).
 -}
-schedule : PT.RunState -> ( PT.RunState, List PT.Effect )
-schedule run =
+schedule : Int -> PT.RunState -> ( PT.RunState, List PT.Effect )
+schedule now run =
     if run.status /= PT.InProgress then
         ( run, [] )
 
@@ -484,7 +494,7 @@ schedule run =
                         updateNode nodeId
                             (\n ->
                                 if n.status == PT.Pending then
-                                    { n | status = PT.Starting }
+                                    { n | status = PT.Starting, startedAt = Just now }
 
                                 else
                                     n
@@ -495,6 +505,53 @@ schedule run =
                     chosen
         in
         ( run1, List.map PT.CreateSessionFor chosen )
+
+
+{-| Fail Starting/Running nodes whose effective timeout has elapsed.
+The effective timeout is the node's timeout_seconds, else the plan's
+default_timeout_seconds, else no timeout (v1 behavior). A timeout goes
+through failNode: it records "Timeout after Ns", closes the session,
+and either schedules an auto-retry or marks the node Failed.
+-}
+checkTimeouts : Int -> PT.RunState -> PT.RunState
+checkTimeouts now run =
+    Dict.foldl
+        (\_ n acc ->
+            case ( n.status, n.startedAt ) of
+                ( PT.Starting, Just t0 ) ->
+                    timeoutNode now t0 n acc
+
+                ( PT.Running, Just t0 ) ->
+                    timeoutNode now t0 n acc
+
+                _ ->
+                    acc
+        )
+        run
+        run.nodes
+
+
+timeoutNode : Int -> Int -> PT.NodeRunState -> PT.RunState -> PT.RunState
+timeoutNode now startedAt node run =
+    let
+        task =
+            List.filter (\t -> t.id == node.nodeId) run.plan.tasks |> List.head
+
+        timeoutSec =
+            task |> Maybe.andThen (\t -> PT.effectiveTimeoutSeconds t run.plan)
+    in
+    case timeoutSec of
+        Just sec ->
+            if now - startedAt >= sec * 1000 then
+                updateNode node.nodeId
+                    (\n -> failNode now ("Timeout after " ++ String.fromInt sec ++ "s") n)
+                    run
+
+            else
+                run
+
+        Nothing ->
+            run
 
 
 allDepsSucceeded : String -> PT.RunState -> Bool

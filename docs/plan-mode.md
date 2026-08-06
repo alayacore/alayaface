@@ -137,6 +137,7 @@ Plan.Types.decode + normalize + validate（id 唯一/依赖存在/无环）
 | `goal` | 否 | 总体目标，DAG 视图头部展示 |
 | `concurrency` | 否 | 并行上限，默认 2（范围 1–8） |
 | `default_max_attempts` | 否 | 节点默认重试上限，默认 3 |
+| `default_timeout_seconds` | 否 | 节点默认超时（秒）；缺省 = 无超时（v1 行为）；节点可经 `timeout_seconds` 覆盖 |
 | `tasks[].id` | 是 | 全局唯一、非空 |
 | `tasks[].title` | 是 | 节点标题 |
 | `tasks[].prompt` | 是 | 发给该节点会话的完整 prompt（**v1 自包含**，不做上游输出注入） |
@@ -144,11 +145,13 @@ Plan.Types.decode + normalize + validate（id 唯一/依赖存在/无环）
 | `tasks[].preset` | 否 | 运行该节点的 preset 名；缺省 = active preset |
 | `tasks[].tools` | 否 | 节点级内置工具集覆盖（逗号列表）；缺省 = preset settings.conf 的 builtin_tools（再缺省 = 全开） |
 | `tasks[].max_attempts` | 否 | 节点级重试上限；缺省 = default_max_attempts |
+| `tasks[].timeout_seconds` | 否 | 节点级超时（秒）；缺省 = default_timeout_seconds（再缺省 = 无超时） |
 
 ### 校验规则（纯 Elm，decode 后归一化）
 
 - id 唯一非空；title/prompt 非空；
 - depends_on 引用存在、无自依赖；**Kahn 拓扑排序检测环**；
+- timeout 值（default_timeout_seconds / timeout_seconds）若给出必须 ≥ 1；
 - 归一化：补默认值、`schema_version` 固定为 1、输出**归一化后的 JSON**（保存到文件的就是它）；
 - 校验失败 → DAG 视图顶部列出可读错误（如 `t2 依赖不存在的节点 x`、`检测到循环依赖: t1→t2→t1`）。
 
@@ -362,6 +365,44 @@ close_session:
 SIGKILL——此时 `save` 帧已先行落盘，至少保留任务开始前的全部内容；
 真正「杀不死的断点续跑」仍是 v2（resume 子进程）。
 
+### 8.4 目录隔离（per-plan 工作目录，P16）
+
+**问题**：所有 alayacore 子进程 cwd = 后端进程启动目录（共享）。并行
+节点写文件互相踩、plan 之间互相污染、后端 cwd 被写乱。
+
+**方案**：**per-plan 工作目录** `~/.alayaface/plans/<planId>/work/`——
+一个 plan 的所有节点会话共享该目录（文件传递模式照常工作：t1 写文件
+t4 能读），plan 之间互不可见，且不再污染后端 cwd。普通会话 / fork /
+probe 不传（保持后端 cwd，向后兼容）。
+
+- `create_session` / `resume_session` 加可选 `workDir`：非空 → 后端
+  `MkdirAll` + spawn 设子进程 cwd（Rust `Command::current_dir` /
+  Go `cmd.Dir`——**纯 AlayaFace 侧改动，C1 安全**，alayacore 无感知）；
+- Plan Mode 节点会话由 Elm 侧派生 `planWorkDir planId model` 传入
+  （homeDir 已知时），创建与 resume 都带；
+- 测试：Go 集成（create/resume 带 workDir → fakecore 启动帧上报
+  `cwd` 断言匹配；不带 → 后端 cwd）+ Rust 机制级（current_dir 生效）+
+  E2E（Run 后断言 `plans/<planId>/work` 存在）。
+
+### 8.5 任务超时（P16）
+
+**问题**：Runner 事件驱动、无心跳——真实模型 API 挂起 / 工具卡死 /
+MCP 卡住时节点永远 Running、run 永远挂起。
+
+**方案**：`default_timeout_seconds`（计划级）+ `timeout_seconds`（节点级，
+覆盖），缺省无超时（v1 兼容）。app 订阅 `Time.every 1000ms` →
+`PlanTick` → 对每个 InProgress 的 plan 窗口喂 `Tick now` → runner 检查
+`Starting/Running` 节点：`now - startedAt >= timeout*1000` → `failNode
+"Timeout after Ns"`（复用失败路径：关会话 + 自动重试 / 耗尽 → Failed +
+下游 Blocked）。计时从节点进入 Starting（schedule 设 startedAt）——
+**覆盖 create_session 挂起**（迟到返回的会话被孤儿清理关闭）。
+
+- 单 tick 服务所有并行 plan（无 run 时 no-op）；
+- 测试：Elm runner 5 例（超时→Waiting+close+retry effects / 未到超时
+  no-op / 无超时永不 / 节点覆盖计划默认 / 超时→重试→成功闭环）+ schema
+  3 例（decode/roundtrip/非法值）+ E2E（fakecore `hang-once` 挂起 →
+  5s 超时 → 自动重试成功，runLog 断言 t3 waiting）。
+
 ---
 
 ## 9. preset 与种子 preset
@@ -455,7 +496,8 @@ SIGKILL——此时 `save` 帧已先行落盘，至少保留任务开始前的�
 ### 默认值（未显式确认，实现时按此执行，可在评审时调整）
 - `concurrency` 默认 2（1–8 可调）；
 - `default_max_attempts` 默认 3，重试退避 2s；
-- 失败判定：SM task_error / SM error / 会话断连；**超时默认关闭**（v2）；
+- 失败判定：SM task_error / SM error / 会话断连 / **任务超时**
+  （`default_timeout_seconds` / `timeout_seconds`，缺省无超时；P16 已实现）；
 - 下游上下文：v1 prompt 自包含，**不做**上游输出注入（v2 可加 `{{t1.output}}` 模板）；
 - Runner 会话 `toolConfirm="allow"`；
 - 文件位置 `~/.alayaface/plans/<planId>.json`；Resume v1 = 重跑未完成节点；
@@ -463,13 +505,15 @@ SIGKILL——此时 `save` 帧已先行落盘，至少保留任务开始前的�
 - 种子 preset：Default / Fast / Deep / Data / Safe；
 - 优雅关闭（§8.3）：close_session = save CI → EOF → 5s 宽限 → SIGKILL；
   kill_child/KillChild = EOF → 3s 宽限 → SIGKILL；
-- Plan 头部可覆盖并发度（1–8，留空 = plan JSON 的 concurrency；P14 已实现）。
+- Plan 头部可覆盖并发度（1–8，留空 = plan JSON 的 concurrency；P14 已实现）；
+- **per-plan 工作目录**（§8.4）：节点会话 cwd = `plans/<planId>/work/`；
+  普通会话保持后端 cwd（P16 已实现）。
 
 ### 待定（v2，不阻塞）
 - 节点 `outputs` 字段（产出物描述，先存不用）；
 - 真断点续跑（resume 子进程）；
 - MCP-only 模式（`builtin_tools: "none"`）；
-- 任务超时。
+- 上游输出注入（`{{t1.output}}` 模板）。
 
 ---
 

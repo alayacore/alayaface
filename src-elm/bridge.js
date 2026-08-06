@@ -151,6 +151,7 @@
         preset: data.preset || null,
         builtinTools: data.builtinTools || null,
         systemPrompt: data.systemPrompt || null,
+        workDir: data.workDir || null,
       }).then(function (id) { app.ports.onSessionCreated.send(id); })
         .catch(function (err) {
           console.error("create_session failed:", err);
@@ -356,6 +357,7 @@
     on("resumeSession", function (data) {
       transport.invoke("resume_session", {
         sessionId: data.sessionId, binaryPath: "",
+        workDir: (data && data.workDir) || null,
       }).then(function (id) {
         app.ports.onSessionCreated.send(id);
         app.ports.onSessionActionResult.send({ ok: true, error: "", kind: "resume" });

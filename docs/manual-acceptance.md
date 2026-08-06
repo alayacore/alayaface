@@ -63,6 +63,17 @@
       FailedRun
 - [ ] 运行中创建普通会话（New Session）→ 排队，不误绑到 runner 节点
       （P11 统一创建队列）
+- [ ] **任务超时（P16）**：计划设 `default_timeout_seconds: 3` → 节点挂起
+      3s 后失败（"Timeout after 3s"）→ 自动重试；无超时字段的计划永不
+      超时；节点 `timeout_seconds` 覆盖计划默认
+
+## 5. 工作目录隔离（P16）
+
+- [ ] Run 后 `~/.alayaface/plans/<planId>/work/` 存在
+- [ ] 节点会话中 `pwd` = 该 work 目录（模型执行 `pwd`/相对路径写文件落在
+      work 内，不污染后端启动目录）
+- [ ] 两个 plan 并行运行时文件互不可见
+- [ ] 普通会话（非 plan 节点）cwd 仍为后端启动目录（向后兼容）
 
 ## 5. 优雅关闭（v2 本轮新增）
 

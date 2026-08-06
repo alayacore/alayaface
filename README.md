@@ -185,6 +185,14 @@ for you:
 **AlayaCore is never modified** — every capability difference is expressed
 through spawn arguments and preset config files.
 
+**Plan node sessions are isolated**: every node of a plan runs with cwd
+`~/.alayaface/plans/<planId>/work/` (created by the backend on spawn), so
+tasks exchange files within the plan while plans stay isolated from each
+other and from the backend's directory. **Task timeouts**: a plan may set
+`default_timeout_seconds` / per-node `timeout_seconds` (no timeout by
+default); a node that hangs past its timeout fails and auto-retries like
+any other failure — this also covers a hanging `create_session`.
+
 **Session close is graceful**: `close_session` asks AlayaCore to save (CI
 `save` → `session.alaya`), closes stdin (AlayaCore drains an in-progress
 task, auto-saving at task end, then exits), and only SIGKILLs after a 5s

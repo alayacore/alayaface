@@ -80,8 +80,8 @@ One-way push (server → client), message format:
 
 | Rust command | Go endpoint | Args (camelCase) | Return |
 |--------------|-------------|------------------|--------|
-| `create_session` | `POST /rpc/create_session` | `binaryPath`, `configPath`, `toolConfirm`(nullable), `preset`(nullable), `builtinTools`(nullable) | string sessionId |
-| `resume_session` | `POST /rpc/resume_session` | `sessionId`, `binaryPath` | string sessionId |
+| `create_session` | `POST /rpc/create_session` | `binaryPath`, `configPath`, `toolConfirm`(nullable), `preset`(nullable), `builtinTools`(nullable), `systemPrompt`(nullable), `workDir`(nullable) | string sessionId |
+| `resume_session` | `POST /rpc/resume_session` | `sessionId`, `binaryPath`, `workDir`(nullable) | string sessionId |
 | `close_session` | `POST /rpc/close_session` | `sessionId` | — (graceful: CI `save` → stdin EOF → ≤5s natural exit → SIGKILL fallback) |
 | `list_session_dirs` | `POST /rpc/list_session_dirs` | — | `[{id, has_session_file, created_at}]` |
 | `delete_session_dir` | `POST /rpc/delete_session_dir` | `sessionId` | — |

@@ -13,6 +13,7 @@ import Set exposing (Set)
 import Html exposing (Html)
 import Json.Decode as D
 import Task
+import Time
 import App.Types exposing (..)
 import App.Update
 import App.View
@@ -82,7 +83,7 @@ init _ =
       , homeDir = ""
       }
     , Cmd.batch
-        [ Ports.createSession { toolConfirm = Nothing, preset = Nothing, builtinTools = Nothing, systemPrompt = Nothing }
+        [ Ports.createSession { toolConfirm = Nothing, preset = Nothing, builtinTools = Nothing, systemPrompt = Nothing, workDir = Nothing }
         , Ports.listPresets {}
         , Ports.fsHomeDir {}
         , Task.attempt GotContainerSize (Dom.getElement "main-content")
@@ -138,4 +139,5 @@ subscriptions model =
                 (D.field "defaultPrevented" D.bool)
         , Evts.onMouseMove (D.map2 WindowDragMove (D.field "clientX" D.float) (D.field "clientY" D.float))
         , Evts.onMouseUp (D.succeed WindowDragEnd)
+        , Time.every 1000 (\t -> PlanTick (Time.posixToMillis t))
         ]
