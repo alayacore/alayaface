@@ -132,7 +132,7 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, _ ) =
-                            R.step 3000 (R.TaskDone "s1" False Nothing) run2
+                            R.step 3000 (R.TaskDone "s1" False Nothing False) run2
                     in
                     -- after a succeeded, b (Pending) should be launched
                     Expect.all
@@ -205,7 +205,7 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, _ ) =
-                            R.step 3000 (R.TaskDone "s1" False Nothing) run2
+                            R.step 3000 (R.TaskDone "s1" False Nothing False) run2
                     in
                     Expect.all
                         [ \_ -> Expect.equal True (List.member "create:a" (effects es1))
@@ -231,7 +231,7 @@ tests =
 
                         -- first attempt fails → Waiting (backoff)
                         ( run4, _ ) =
-                            R.step 3000 (R.TaskDone "s1" True Nothing) run3
+                            R.step 3000 (R.TaskDone "s1" True Nothing False) run3
 
                         -- auto-retry tick relaunches → new session s2
                         ( run5, _ ) =
@@ -271,137 +271,6 @@ tests =
                         ]
                         run4
             ]
-        , describe "timeouts"
-            [ test "Tick past the timeout fails the node (Waiting + retry effects)" <|
-                \_ ->
-                    let
-                        plan =
-                            planFromJson """{ "type": "alayaface-plan", "name": "x", "concurrency": 3, "default_timeout_seconds": 5, "tasks": [
-                                { "id": "a", "title": "A", "prompt": "do A" }
-                            ] }"""
-
-                        ( run1, _ ) =
-                            R.step 1000 R.StartRun (runFromPlan plan)
-
-                        ( run2, _ ) =
-                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
-
-                        -- elapsed 1000ms < 5000ms: no-op
-                        ( run3, es3 ) =
-                            R.step 3000 (R.Tick 3000) run2
-
-                        -- elapsed 5000ms >= 5000ms: timeout
-                        ( run4, es4 ) =
-                            R.step 6000 (R.Tick 6000) run3
-
-                        failures =
-                            (nodeState "a" run4).failures |> List.map .reason
-                    in
-                    Expect.all
-                        [ \_ -> Expect.equal (Just P.Waiting) (Dict.get "a" (statuses run4))
-                        , \_ -> Expect.equal 1 (nodeState "a" run4).attempts
-                        , \_ -> Expect.equal True (List.member "close:s1" (effects es4))
-                        , \_ -> Expect.equal True (List.member "retry:a" (effects es4))
-                        , \_ -> Expect.equal [ "Timeout after 5s" ] failures
-                        , \_ -> Expect.equal 0 (List.length (List.filter (\e -> String.startsWith "create:" e) (effects es3)))
-                        ]
-                        ()
-            , test "Tick before the timeout is a no-op (status unchanged)" <|
-                \_ ->
-                    let
-                        plan =
-                            planFromJson """{ "type": "alayaface-plan", "name": "x", "concurrency": 3, "default_timeout_seconds": 30, "tasks": [
-                                { "id": "a", "title": "A", "prompt": "do A" }
-                            ] }"""
-
-                        ( run1, _ ) =
-                            R.step 1000 R.StartRun (runFromPlan plan)
-
-                        ( run2, _ ) =
-                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
-
-                        ( run3, _ ) =
-                            R.step 5000 (R.Tick 5000) run2
-                    in
-                    Expect.all
-                        [ \r -> Expect.equal P.Running (nodeState "a" r).status
-                        , \r -> Expect.equal 0 (nodeState "a" r).attempts
-                        , \r -> Expect.equal (Just "s1") (nodeState "a" r).sessionId
-                        ]
-                        run3
-            , test "no default_timeout_seconds → nodes never time out" <|
-                \_ ->
-                    let
-                        ( run1, _ ) =
-                            R.step 1000 R.StartRun (runFromPlan singlePlan)
-
-                        ( run2, _ ) =
-                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
-
-                        -- 10 minutes later: still Running (v1 behavior)
-                        ( run3, _ ) =
-                            R.step 601000 (R.Tick 601000) run2
-                    in
-                    Expect.all
-                        [ \r -> Expect.equal P.Running (nodeState "a" r).status
-                        , \r -> Expect.equal 0 (nodeState "a" r).attempts
-                        ]
-                        run3
-            , test "node timeout_seconds overrides the plan default" <|
-                \_ ->
-                    let
-                        plan =
-                            planFromJson """{ "type": "alayaface-plan", "name": "x", "concurrency": 3, "default_timeout_seconds": 60, "tasks": [
-                                { "id": "a", "title": "A", "prompt": "do A", "timeout_seconds": 2 }
-                            ] }"""
-
-                        ( run1, _ ) =
-                            R.step 1000 R.StartRun (runFromPlan plan)
-
-                        ( run2, _ ) =
-                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
-
-                        -- elapsed 3000ms >= 2000ms → timeout (not 60s)
-                        ( run3, _ ) =
-                            R.step 5000 (R.Tick 5000) run2
-                    in
-                    Expect.equal (Just P.Waiting) (Dict.get "a" (statuses run3))
-            , test "timeout → auto-retry → success (full cycle)" <|
-                \_ ->
-                    let
-                        plan =
-                            planFromJson """{ "type": "alayaface-plan", "name": "x", "concurrency": 3, "default_timeout_seconds": 5, "tasks": [
-                                { "id": "a", "title": "A", "prompt": "do A" }
-                            ] }"""
-
-                        ( run1, _ ) =
-                            R.step 1000 R.StartRun (runFromPlan plan)
-
-                        ( run2, _ ) =
-                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
-
-                        -- timeout at 6000
-                        ( run3, _ ) =
-                            R.step 6000 (R.Tick 6000) run2
-
-                        -- backoff tick relaunches (new session s2)
-                        ( run4, _ ) =
-                            R.step 8000 (R.RetryTick "a") run3
-
-                        ( run5, _ ) =
-                            R.step 9000 (R.SessionCreatedFor "a" "s2") run4
-
-                        ( run6, _ ) =
-                            R.step 10000 (R.TaskDone "s2" False Nothing) run5
-                    in
-                    Expect.all
-                        [ \r -> Expect.equal P.Succeeded (nodeState "a" r).status
-                        , \r -> Expect.equal 1 (nodeState "a" r).attempts
-                        , \r -> Expect.equal [ "s1", "s2" ] (nodeState "a" r).attemptSessions
-                        , \r -> Expect.equal "Timeout after 5s" (Maybe.withDefault { attempt = 0, reason = "", at = 0 } (List.head (nodeState "a" r).failures)).reason
-                        ]
-                        run6
-            ]
         , describe "task completion"
             [ test "TaskDone ok marks node Succeeded and keeps session" <|
                 \_ ->
@@ -413,7 +282,7 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, _ ) =
-                            R.step 3000 (R.TaskDone "s1" False Nothing) run2
+                            R.step 3000 (R.TaskDone "s1" False Nothing False) run2
                     in
                     Expect.all
                         [ \r -> Expect.equal P.Succeeded (nodeState "a" r).status
@@ -430,7 +299,7 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, es ) =
-                            R.step 3000 (R.TaskDone "s1" True Nothing) run2
+                            R.step 3000 (R.TaskDone "s1" True Nothing False) run2
 
                         a =
                             nodeState "a" run3
@@ -457,7 +326,7 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, _ ) =
-                            R.step 3000 (R.TaskDone "s1" True Nothing) run2
+                            R.step 3000 (R.TaskDone "s1" True Nothing False) run2
 
                         ( run4, es ) =
                             R.step 4000 (R.RetryTick "a") run3
@@ -477,7 +346,7 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, _ ) =
-                            R.step 3000 (R.TaskDone "s1" True Nothing) run2
+                            R.step 3000 (R.TaskDone "s1" True Nothing False) run2
 
                         -- user presses Stop while the node waits for backoff
                         ( run4, _ ) =
@@ -503,7 +372,7 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, _ ) =
-                            R.step 3000 (R.TaskDone "s1" True Nothing) run2
+                            R.step 3000 (R.TaskDone "s1" True Nothing False) run2
 
                         ( run4, _ ) =
                             R.step 3500 R.StopRun run3
@@ -529,7 +398,7 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, es1 ) =
-                            R.step 3000 (R.TaskDone "s1" True Nothing) run2
+                            R.step 3000 (R.TaskDone "s1" True Nothing False) run2
 
                         -- another unrelated event while a stays Waiting must
                         -- NOT schedule a second retry timer
@@ -636,7 +505,7 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, _ ) =
-                            R.step 3000 (R.TaskDone "s1" True Nothing) run2
+                            R.step 3000 (R.TaskDone "s1" True Nothing False) run2
 
                         ( run4, _ ) =
                             R.step 4000 (R.RetryNode "a") run3
@@ -645,7 +514,7 @@ tests =
                             R.step 5000 (R.SessionCreatedFor "a" "s2") run4
 
                         ( run6, _ ) =
-                            R.step 6000 (R.TaskDone "s2" True Nothing) run5
+                            R.step 6000 (R.TaskDone "s2" True Nothing False) run5
 
                         a =
                             nodeState "a" run6
@@ -676,7 +545,7 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, _ ) =
-                            R.step 3000 (R.TaskDone "s1" True Nothing) run2
+                            R.step 3000 (R.TaskDone "s1" True Nothing False) run2
 
                         a =
                             nodeState "a" run3
@@ -703,7 +572,7 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, _ ) =
-                            R.step 3000 (R.TaskDone "s1" True Nothing) run2
+                            R.step 3000 (R.TaskDone "s1" True Nothing False) run2
 
                         ( run4, _ ) =
                             R.step 4000 R.StartRun run3
@@ -730,16 +599,16 @@ tests =
                             R.step 3000 (R.SessionCreatedFor "b" "s2") run2
 
                         ( run4, _ ) =
-                            R.step 4000 (R.TaskDone "s1" False Nothing) run3
+                            R.step 4000 (R.TaskDone "s1" False Nothing False) run3
 
                         ( run5, _ ) =
-                            R.step 5000 (R.TaskDone "s2" False Nothing) run4
+                            R.step 5000 (R.TaskDone "s2" False Nothing False) run4
 
                         ( run6, _ ) =
                             R.step 6000 (R.SessionCreatedFor "c" "s3") run5
 
                         ( run7, _ ) =
-                            R.step 7000 (R.TaskDone "s3" False Nothing) run6
+                            R.step 7000 (R.TaskDone "s3" False Nothing False) run6
                     in
                     Expect.equal P.Completed run7.status
             ]
@@ -799,11 +668,11 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, _ ) =
-                            R.step 3000 (R.TaskDone "s1" True Nothing) run2
+                            R.step 3000 (R.TaskDone "s1" True Nothing False) run2
 
                         -- a is Waiting now; a late TaskDone must not touch it
                         ( run4, _ ) =
-                            R.step 4000 (R.TaskDone "s1" False Nothing) run3
+                            R.step 4000 (R.TaskDone "s1" False Nothing False) run3
 
                         a =
                             nodeState "a" run4
@@ -863,7 +732,7 @@ tests =
                             R.step 4000 (R.SessionCreatedFor "a" "s1") run3
 
                         ( run5, es2 ) =
-                            R.step 5000 (R.TaskDone "s1" False Nothing) run4
+                            R.step 5000 (R.TaskDone "s1" False Nothing False) run4
                     in
                     Expect.all
                         [ \_ -> Expect.equal P.InProgress run5.status
@@ -885,7 +754,7 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, _ ) =
-                            R.step 3000 (R.TaskDone "s1" True Nothing) run2
+                            R.step 3000 (R.TaskDone "s1" True Nothing False) run2
 
                         ( run4, _ ) =
                             R.step 4000 (R.RetryNode "a") run3
@@ -921,7 +790,7 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, _ ) =
-                            R.step 3000 (R.TaskDone "s1" False (Just "the answer")) run2
+                            R.step 3000 (R.TaskDone "s1" False (Just "the answer") False) run2
                     in
                     Expect.equal (Just "the answer") (nodeState "a" run3).output
             , test "TaskDone failure does not record output" <|
@@ -934,7 +803,7 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, _ ) =
-                            R.step 3000 (R.TaskDone "s1" True Nothing) run2
+                            R.step 3000 (R.TaskDone "s1" True Nothing False) run2
                     in
                     Expect.equal Nothing (nodeState "a" run3).output
             , test "downstream SendPrompt injects the upstream output" <|
@@ -953,7 +822,7 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, _ ) =
-                            R.step 3000 (R.TaskDone "s1" False (Just "ANSWER-123")) run2
+                            R.step 3000 (R.TaskDone "s1" False (Just "ANSWER-123") False) run2
 
                         ( run4, es ) =
                             R.step 4000 (R.SessionCreatedFor "b" "s2") run3
@@ -981,7 +850,7 @@ tests =
                         -- a succeeds but with NO output (e.g. an old run
                         -- file resumed from before output recording)
                         ( run3, _ ) =
-                            R.step 3000 (R.TaskDone "s1" False Nothing) run2
+                            R.step 3000 (R.TaskDone "s1" False Nothing False) run2
 
                         ( run4, es ) =
                             R.step 4000 (R.SessionCreatedFor "b" "s2") run3
@@ -1035,11 +904,146 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, _ ) =
-                            R.step 3000 (R.TaskDone "s1" False (Just "old")) run2
+                            R.step 3000 (R.TaskDone "s1" False (Just "old") False) run2
 
                         ( run4, _ ) =
                             R.step 4000 R.StartRun run3
                     in
                     Expect.equal Nothing (nodeState "a" run4).output
+            ]
+        , describe "recursion (node delegation)"
+            [ test "TaskDone with delegation enters WaitingForPlan, run stays InProgress" <|
+                \_ ->
+                    let
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan singlePlan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        ( run3, _ ) =
+                            R.step 3000 (R.TaskDone "s1" False Nothing True) run2
+                    in
+                    Expect.all
+                        [ \r -> Expect.equal P.WaitingForPlan (nodeState "a" r).status
+                        , \r -> Expect.equal P.InProgress r.status
+                        , \r -> Expect.equal (Just "s1") (nodeState "a" r).sessionId
+                        , \r -> Expect.equal Nothing (nodeState "a" r).output
+                        ]
+                        run3
+            , test "ResumeDelegatedNode sends the waiting node back to Running" <|
+                \_ ->
+                    let
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan singlePlan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        ( run3, _ ) =
+                            R.step 3000 (R.TaskDone "s1" False Nothing True) run2
+
+                        ( run4, _ ) =
+                            R.step 4000 (R.ResumeDelegatedNode "s1") run3
+                    in
+                    Expect.equal P.Running (nodeState "a" run4).status
+            , test "recursion: a second delegated answer after feedback delegates again" <|
+                \_ ->
+                    let
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan singlePlan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        ( run3, _ ) =
+                            R.step 3000 (R.TaskDone "s1" False Nothing True) run2
+
+                        ( run4, _ ) =
+                            R.step 4000 (R.ResumeDelegatedNode "s1") run3
+
+                        ( run5, _ ) =
+                            R.step 5000 (R.TaskDone "s1" False (Just "again") True) run4
+                    in
+                    Expect.equal P.WaitingForPlan (nodeState "a" run5).status
+            , test "feedback then final non-delegated answer succeeds the node" <|
+                \_ ->
+                    let
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan singlePlan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        ( run3, _ ) =
+                            R.step 3000 (R.TaskDone "s1" False Nothing True) run2
+
+                        ( run4, _ ) =
+                            R.step 4000 (R.ResumeDelegatedNode "s1") run3
+
+                        ( run5, _ ) =
+                            R.step 5000 (R.TaskDone "s1" False (Just "final") False) run4
+                    in
+                    Expect.all
+                        [ \r -> Expect.equal P.Succeeded (nodeState "a" r).status
+                        , \r -> Expect.equal (Just "final") (nodeState "a" r).output
+                        ]
+                        run5
+            , test "Stop cancels a waiting node" <|
+                \_ ->
+                    let
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan singlePlan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        ( run3, _ ) =
+                            R.step 3000 (R.TaskDone "s1" False Nothing True) run2
+
+                        ( run4, _ ) =
+                            R.step 4000 R.StopRun run3
+                    in
+                    Expect.all
+                        [ \r -> Expect.equal P.Canceled (nodeState "a" run4).status
+                        , \r -> Expect.equal P.Stopped run4.status
+                        ]
+                        run4
+            , test "a manual non-delegated answer in a waiting node completes it" <|
+                \_ ->
+                    let
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan singlePlan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        ( run3, _ ) =
+                            R.step 3000 (R.TaskDone "s1" False Nothing True) run2
+
+                        ( run4, _ ) =
+                            R.step 4000 (R.TaskDone "s1" False (Just "manual") False) run3
+                    in
+                    Expect.all
+                        [ \r -> Expect.equal P.Succeeded (nodeState "a" r).status
+                        , \r -> Expect.equal (Just "manual") (nodeState "a" r).output
+                        ]
+                        run4
+            , test "a failed task in a waiting node is ignored (keeps waiting)" <|
+                \_ ->
+                    let
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan singlePlan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        ( run3, _ ) =
+                            R.step 3000 (R.TaskDone "s1" False Nothing True) run2
+
+                        ( run4, _ ) =
+                            R.step 4000 (R.TaskDone "s1" True Nothing False) run3
+                    in
+                    Expect.equal P.WaitingForPlan (nodeState "a" run4).status
             ]
         ]

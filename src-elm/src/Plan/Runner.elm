@@ -47,15 +47,21 @@ type Event
     | StopRun
     | SessionCreatedFor String String
     | SessionCreateFailed String String
-    | TaskDone String Bool (Maybe String)
+    -- TaskDone sid isError output delegated: `delegated` is true when the
+    -- node session's LAST assistant message was a plan JSON (the Update
+    -- layer detects this via Plan.Detect) — the node does NOT succeed;
+    -- it enters WaitingForPlan until the sub-plan's result is fed back
+    -- (ResumeDelegatedNode) and the model answers again.
+    | TaskDone String Bool (Maybe String) Bool
     | SessionError String String
     | SessionDisconnected String String
     | RetryNode String
     | RetryTick String
-    -- Periodic heartbeat (app-level Time.every): fails nodes whose
-    -- startedAt + effective timeout has elapsed (timeout_seconds /
-    -- default_timeout_seconds; Nothing = never times out).
-    | Tick Int
+    -- The sub-plan delegated by a WaitingForPlan node completed and its
+    -- result was fed back into the node session (Update layer sent the
+    -- continuation prompt): the node goes back to Running and waits for
+    -- the model's final answer (which may delegate again — recursion).
+    | ResumeDelegatedNode String
 
 
 step : Int -> Event -> PT.RunState -> ( PT.RunState, List PT.Effect )
@@ -92,8 +98,8 @@ step now ev run =
                     -- once (bindSession only fires on Starting → Running).
                     bindSession nodeId sid run
 
-                TaskDone sid isError output ->
-                    ( taskDone now sid isError output run, [] )
+                TaskDone sid isError output delegated ->
+                    ( taskDone now sid isError output delegated run, [] )
 
                 -- create_session failed (e.g. invalid node preset): treat
                 -- it as a node failure so retry/backoff applies instead
@@ -112,13 +118,12 @@ step now ev run =
                 RetryTick nodeId ->
                     ( retryTick nodeId run, [] )
 
+                ResumeDelegatedNode sid ->
+                    ( resumeDelegatedNode sid run, [] )
+
                 -- Manual retry from the node detail panel.
                 RetryNode nodeId ->
                     ( retryNode nodeId run, [] )
-
-                -- Periodic heartbeat: fail nodes past their timeout.
-                Tick tickNow ->
-                    ( checkTimeouts tickNow run, [] )
     in
     let
         ( runFinal, effects ) =
@@ -171,7 +176,7 @@ stopRun run =
         nodes =
             Dict.map
                 (\_ n ->
-                    if n.status == PT.Pending || n.status == PT.Starting || n.status == PT.Running || n.status == PT.Waiting then
+                    if n.status == PT.Pending || n.status == PT.Starting || n.status == PT.Running || n.status == PT.Waiting || n.status == PT.WaitingForPlan then
                         { n | status = PT.Canceled }
 
                     else
@@ -237,18 +242,55 @@ outputsOf run =
         run.nodes
 
 
-taskDone : Int -> String -> Bool -> Maybe String -> PT.RunState -> PT.RunState
-taskDone now sid isError output run =
+taskDone : Int -> String -> Bool -> Maybe String -> Bool -> PT.RunState -> PT.RunState
+taskDone now sid isError output delegated run =
     case nodeBySessionId sid run of
         Just nodeId ->
             updateNode nodeId
                 (\n ->
-                    if n.status == PT.Running then
-                        if isError then
+                    case ( n.status, isError, delegated ) of
+                        -- Successful task whose last assistant message was
+                        -- a plan JSON: the node delegated to a sub-plan and
+                        -- must wait for its feedback (recursion).
+                        ( PT.Running, False, True ) ->
+                            { n | status = PT.WaitingForPlan }
+
+                        -- Normal completion.
+                        ( PT.Running, False, False ) ->
+                            { n | status = PT.Succeeded, finishedAt = Just now, output = output }
+
+                        -- Task failure (delegation flag is meaningless).
+                        ( PT.Running, True, _ ) ->
                             failNode now "Task failed" n
 
-                        else
+                        -- A manual message in a waiting node completed it
+                        -- without delegation → the node is done (edge case:
+                        -- the user talked to the waiting session directly).
+                        ( PT.WaitingForPlan, False, False ) ->
                             { n | status = PT.Succeeded, finishedAt = Just now, output = output }
+
+                        _ ->
+                            n
+                )
+                run
+
+        Nothing ->
+            run
+
+
+{-| The sub-plan delegated by a WaitingForPlan node completed and its
+result was fed back into the node session (the Update layer sent the
+continuation prompt): the node goes back to Running and awaits the
+model's final answer (which may delegate again — recursion).
+-}
+resumeDelegatedNode : String -> PT.RunState -> PT.RunState
+resumeDelegatedNode sid run =
+    case nodeBySessionId sid run of
+        Just nodeId ->
+            updateNode nodeId
+                (\n ->
+                    if n.status == PT.WaitingForPlan then
+                        { n | status = PT.Running }
 
                     else
                         n
@@ -529,53 +571,6 @@ schedule now run =
                     chosen
         in
         ( run1, List.map PT.CreateSessionFor chosen )
-
-
-{-| Fail Starting/Running nodes whose effective timeout has elapsed.
-The effective timeout is the node's timeout_seconds, else the plan's
-default_timeout_seconds, else no timeout (v1 behavior). A timeout goes
-through failNode: it records "Timeout after Ns", closes the session,
-and either schedules an auto-retry or marks the node Failed.
--}
-checkTimeouts : Int -> PT.RunState -> PT.RunState
-checkTimeouts now run =
-    Dict.foldl
-        (\_ n acc ->
-            case ( n.status, n.startedAt ) of
-                ( PT.Starting, Just t0 ) ->
-                    timeoutNode now t0 n acc
-
-                ( PT.Running, Just t0 ) ->
-                    timeoutNode now t0 n acc
-
-                _ ->
-                    acc
-        )
-        run
-        run.nodes
-
-
-timeoutNode : Int -> Int -> PT.NodeRunState -> PT.RunState -> PT.RunState
-timeoutNode now startedAt node run =
-    let
-        task =
-            List.filter (\t -> t.id == node.nodeId) run.plan.tasks |> List.head
-
-        timeoutSec =
-            task |> Maybe.andThen (\t -> PT.effectiveTimeoutSeconds t run.plan)
-    in
-    case timeoutSec of
-        Just sec ->
-            if now - startedAt >= sec * 1000 then
-                updateNode node.nodeId
-                    (\n -> failNode now ("Timeout after " ++ String.fromInt sec ++ "s") n)
-                    run
-
-            else
-                run
-
-        Nothing ->
-            run
 
 
 allDepsSucceeded : String -> PT.RunState -> Bool

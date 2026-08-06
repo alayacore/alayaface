@@ -141,5 +141,4 @@ subscriptions model =
                 (D.field "defaultPrevented" D.bool)
         , Evts.onMouseMove (D.map2 WindowDragMove (D.field "clientX" D.float) (D.field "clientY" D.float))
         , Evts.onMouseUp (D.succeed WindowDragEnd)
-        , Time.every 1000 (\t -> PlanTick (Time.posixToMillis t))
         ]

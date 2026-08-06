@@ -140,14 +140,16 @@ plan 完成自动关窗（先回填）。
 ## 6. 重构阶段（每阶段：实现 → 全量测试 → 提交 → push 三 remote）
 
 ### R1 基础：schema 与纯逻辑
-- [ ] `Plan/Types.elm`：删 `defaultTimeoutSeconds`/`timeoutSeconds` 字段与 validate 校验
+- [x] `Plan/Types.elm`：删 `defaultTimeoutSeconds`/`timeoutSeconds` 字段与 validate 校验
       （decode 忽略未知字段 → 旧文件兼容）；`NodeStatus` 新增 `WaitingForPlan`
       （nodeStatusToString/FromString "waiting_for_plan"）；codec 兼容
-- [ ] `Plan/Runner.elm`：删 `Tick`/`checkTimeouts`/`timeoutNode`；TaskDone 判委托
+- [x] `Plan/Runner.elm`：删 `Tick`/`checkTimeouts`/`timeoutNode`；TaskDone 判委托
       （事件带 `delegated : Bool`——由 Update 层按最后消息判定传入）；WaitingForPlan 状态
-      迁移（TaskDone+delegated → WaitingForPlan；回填继续事件 → Running；
-      等待中 Stop → Canceled；等待中手动 TaskDone(非委托) → Succeeded）
-- [ ] 测试：删超时 5 例 + schema 3 例；加 WaitingForPlan 迁移测试；Elm 全绿
+      迁移（TaskDone+delegated → WaitingForPlan；回填继续事件 `ResumeDelegatedNode` →
+      Running；等待中 Stop → Canceled；等待中手动 TaskDone(非委托) → Succeeded；
+      等待中 TaskDone error → 忽略保持等待）
+- [x] 测试：删超时 5 例 + schema 3 例；加 WaitingForPlan 迁移 7 例 + codec roundtrip 1 例；
+      Elm 180 全绿；Rust 42 / Go -race 8 包不受影响
 
 ### R2 检测与自动创建
 - [ ] `App/Update.elm`：pendingPlanOffers 改造为**自动创建**（检测即 PlanSaveReady 流程，

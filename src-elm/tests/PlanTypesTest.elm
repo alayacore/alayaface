@@ -381,64 +381,6 @@ tests =
             , test "too large clamps to 8" <|
                 \_ -> Expect.equal (Just 8) (P.parseConcurrency "99")
             ]
-        , describe "timeout fields"
-            [ test "decodes default_timeout_seconds and timeout_seconds" <|
-                \_ ->
-                    let
-                        plan =
-                            P.parsePlan """{ "type": "alayaface-plan", "name": "t", "concurrency": 2, "default_timeout_seconds": 30, "tasks": [
-                                { "id": "a", "title": "A", "prompt": "p", "timeout_seconds": 5 },
-                                { "id": "b", "title": "B", "prompt": "q" }
-                            ] }"""
-                    in
-                    case plan of
-                        Ok p ->
-                            Expect.all
-                                [ \pl -> Expect.equal (Just 30) pl.defaultTimeoutSeconds
-                                , \pl -> Expect.equal (Just 5) (Maybe.withDefault { id = "", title = "", prompt = "", dependsOn = [], preset = Nothing, tools = Nothing, maxAttempts = 0, timeoutSeconds = Nothing } (List.head pl.tasks)).timeoutSeconds
-                                , \pl -> Expect.equal Nothing (Maybe.withDefault { id = "", title = "", prompt = "", dependsOn = [], preset = Nothing, tools = Nothing, maxAttempts = 0, timeoutSeconds = Nothing } (List.head (List.drop 1 pl.tasks))).timeoutSeconds
-                                ]
-                                p
-
-                        Err errs ->
-                            Expect.fail ("parse failed: " ++ String.join "; " errs)
-            , test "roundtrips timeout fields through encodePlan" <|
-                \_ ->
-                    let
-                        plan =
-                            case P.parsePlan """{ "type": "alayaface-plan", "name": "t", "default_timeout_seconds": 45, "tasks": [
-                                { "id": "a", "title": "A", "prompt": "p", "timeout_seconds": 7 }
-                            ] }""" of
-                                Ok p -> p
-                                Err e -> Debug.todo (String.join "; " e)
-
-                        encoded =
-                            P.encodePlan plan
-                    in
-                    case D.decodeValue P.decodePlan encoded of
-                        Ok p2 ->
-                            Expect.all
-                                [ \pl -> Expect.equal (Just 45) pl.defaultTimeoutSeconds
-                                , \pl -> Expect.equal (Just 7) (Maybe.withDefault { id = "", title = "", prompt = "", dependsOn = [], preset = Nothing, tools = Nothing, maxAttempts = 0, timeoutSeconds = Nothing } (List.head pl.tasks)).timeoutSeconds
-                                ]
-                                p2
-
-                        Err e ->
-                            Expect.fail ("decode failed: " ++ D.errorToString e)
-            , test "invalid timeout values are rejected" <|
-                \_ ->
-                    let
-                        isErr r =
-                            case r of
-                                Err _ -> True
-                                Ok _ -> False
-                    in
-                    Expect.all
-                        [ \_ -> Expect.equal True (isErr (P.parsePlan """{ "type": "alayaface-plan", "name": "t", "default_timeout_seconds": 0, "tasks": [{ "id": "a", "title": "A", "prompt": "p" }] }"""))
-                        , \_ -> Expect.equal True (isErr (P.parsePlan """{ "type": "alayaface-plan", "name": "t", "tasks": [{ "id": "a", "title": "A", "prompt": "p", "timeout_seconds": -1 }] }"""))
-                        ]
-                        ()
-            ]
         , describe "run state codec"
             [ test "encode then decode overlay roundtrips" <|
                 \_ ->
@@ -560,5 +502,12 @@ tests =
 
                         Ok _ ->
                             Expect.fail "should have failed"
+            , test "waiting_for_plan node status roundtrips through the string codec" <|
+                \_ ->
+                    Expect.all
+                        [ \_ -> Expect.equal "waiting_for_plan" (P.nodeStatusToString P.WaitingForPlan)
+                        , \_ -> Expect.equal (Just P.WaitingForPlan) (P.nodeStatusFromString "waiting_for_plan")
+                        ]
+                        ()
             ]
         ]

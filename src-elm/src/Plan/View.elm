@@ -156,6 +156,9 @@ statusClass s =
         PT.Canceled ->
             "canceled"
 
+        PT.WaitingForPlan ->
+            "waiting-for-plan"
+
 
 statusIcon : PT.NodeStatus -> String
 statusIcon s =
@@ -183,3 +186,6 @@ statusIcon s =
 
         PT.Canceled ->
             "—"
+
+        PT.WaitingForPlan ->
+            "⏳"

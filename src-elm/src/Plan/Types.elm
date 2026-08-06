@@ -29,7 +29,6 @@ module Plan.Types exposing
     , applyRunStateOverlay
     , nodeRunStateDecoderPublic
     , parseConcurrency
-    , effectiveTimeoutSeconds
     )
 
 {-| Plan Mode data model: DAG plan schema, JSON codecs, normalization
@@ -113,9 +112,6 @@ type alias TaskNode =
     , preset : Maybe String
     , tools : Maybe String
     , maxAttempts : Int
-    -- Optional per-node timeout in seconds; Nothing = inherit the
-    -- plan's default_timeout_seconds (or no timeout at all).
-    , timeoutSeconds : Maybe Int
     }
 
 
@@ -125,9 +121,6 @@ type alias Plan =
     , goal : String
     , concurrency : Int
     , defaultMaxAttempts : Int
-    -- Optional default timeout in seconds for all nodes (nodes may
-    -- override via timeout_seconds). Nothing = no timeout (v1 behavior).
-    , defaultTimeoutSeconds : Maybe Int
     , tasks : List TaskNode
     -- The top-level "type" marker. REQUIRED (P26, user: no backward
     -- compatibility): missing or wrong values are rejected by validate
@@ -135,19 +128,6 @@ type alias Plan =
     -- normalize keeps Just planTypeMarker so encodePlan always writes it.
     , planType : Maybe String
     }
-
-
-{-| Effective timeout for a node in seconds: node override, else the
-plan default, else Nothing (no timeout).
--}
-effectiveTimeoutSeconds : TaskNode -> Plan -> Maybe Int
-effectiveTimeoutSeconds t plan =
-    case t.timeoutSeconds of
-        Just s ->
-            Just s
-
-        Nothing ->
-            plan.defaultTimeoutSeconds
 
 
 -- Runner types (defined here so Types.elm stays the single model home;
@@ -163,6 +143,13 @@ type NodeStatus
     | Failed
     | Blocked
     | Canceled
+    -- The node's last assistant message was a plan JSON (delegation):
+    -- a sub-plan was auto-created and the node is waiting for its
+    -- result to be fed back (R-series recursion). No timeout applies;
+    -- the parent run stays InProgress. Exits: feedback+continue →
+    -- Running; manual TaskDone without delegation → Succeeded; Stop →
+    -- Canceled.
+    | WaitingForPlan
 
 
 type RunStatus
@@ -265,7 +252,7 @@ emptyRunState runId plan =
 
 taskDecoder : D.Decoder TaskNode
 taskDecoder =
-    D.map8 TaskNode
+    D.map7 TaskNode
         (D.field "id" D.string)
         (D.field "title" D.string)
         (D.field "prompt" D.string)
@@ -273,19 +260,17 @@ taskDecoder =
         (D.maybe (D.field "preset" D.string))
         (D.maybe (D.field "tools" D.string))
         (D.oneOf [ D.field "max_attempts" D.int, D.succeed defaultMaxAttempts ])
-        (D.maybe (D.field "timeout_seconds" D.int))
 
 
 planDecoder : D.Decoder Plan
 planDecoder =
-    -- map8: planType is lenient (missing → Nothing, wrong value → validate)
-    D.map8 Plan
+    -- map7: planType is lenient (missing → Nothing, wrong value → validate)
+    D.map7 Plan
         (D.oneOf [ D.field "schema_version" D.int, D.succeed schemaVersion ])
         (D.field "name" D.string)
         (D.oneOf [ D.field "goal" D.string, D.succeed "" ])
         (D.oneOf [ D.field "concurrency" D.int, D.succeed defaultConcurrency ])
         (D.oneOf [ D.field "default_max_attempts" D.int, D.succeed defaultMaxAttempts ])
-        (D.maybe (D.field "default_timeout_seconds" D.int))
         (D.field "tasks" (D.list taskDecoder))
         (D.maybe (D.field "type" D.string))
 
@@ -380,16 +365,6 @@ validate plan =
 
             Nothing ->
                 [ "Missing top-level \"type\": \"" ++ planTypeMarker ++ "\" marker" ]
-        , case plan.defaultTimeoutSeconds of
-            Just s ->
-                if s < 1 then
-                    [ "default_timeout_seconds must be >= 1" ]
-
-                else
-                    []
-
-            Nothing ->
-                []
         , List.concatMap (validateTask plan) plan.tasks
         , duplicateIdErrors plan.tasks
         , cycleErrors plan.tasks
@@ -419,16 +394,6 @@ validateTask plan t =
 
           else
             []
-        , case t.timeoutSeconds of
-            Just s ->
-                if s < 1 then
-                    [ "Task \"" ++ t.id ++ "\" timeout_seconds must be >= 1" ]
-
-                else
-                    []
-
-            Nothing ->
-                []
         , if List.member t.id t.dependsOn then
             [ "Task \"" ++ t.id ++ "\" depends on itself" ]
 
@@ -564,7 +529,6 @@ encodePlan p =
             , Just ( "goal", E.string p.goal )
             , Just ( "concurrency", E.int p.concurrency )
             , Just ( "default_max_attempts", E.int p.defaultMaxAttempts )
-            , Maybe.map (\s -> ( "default_timeout_seconds", E.int s )) p.defaultTimeoutSeconds
             , Just ( "tasks", E.list encodeTask p.tasks )
             ]
         )
@@ -581,7 +545,6 @@ encodeTask t =
             , Maybe.map (\p -> ( "preset", E.string p )) t.preset
             , Maybe.map (\x -> ( "tools", E.string x )) t.tools
             , Just ( "max_attempts", E.int t.maxAttempts )
-            , Maybe.map (\s -> ( "timeout_seconds", E.int s )) t.timeoutSeconds
             ]
         )
 
@@ -637,6 +600,7 @@ nodeStatusToString s =
         Failed -> "failed"
         Blocked -> "blocked"
         Canceled -> "canceled"
+        WaitingForPlan -> "waiting_for_plan"
 
 
 nodeStatusFromString : String -> Maybe NodeStatus
@@ -650,6 +614,7 @@ nodeStatusFromString s =
         "failed" -> Just Failed
         "blocked" -> Just Blocked
         "canceled" -> Just Canceled
+        "waiting_for_plan" -> Just WaitingForPlan
         _ -> Nothing
 
 

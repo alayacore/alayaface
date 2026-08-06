@@ -163,15 +163,16 @@ C1 安全：`cancelTask` → `activeTask.cancel()` → 任务经 `taskResultCh`
 > 每阶段完成：全量测试 → 提交 → push 三 remote（origin/gitee/org）。
 
 ### R1 基础：schema 与纯逻辑（Plan/Types + Runner）
-- [ ] Plan/Types.elm：删 `defaultTimeoutSeconds`/`timeoutSeconds` 字段与 validate 校验
+- [x] Plan/Types.elm：删 `defaultTimeoutSeconds`/`timeoutSeconds` 字段与 validate 校验
       （decode 忽略未知字段 → 旧 plan 文件带 timeout 照常打开）；NodeStatus 新增
       `WaitingForPlan`（nodeStatusToString/FromString `"waiting_for_plan"`）；
-- [ ] Plan/Runner.elm：删 `Tick`/`checkTimeouts`/`timeoutNode`；TaskDone 事件加
+- [x] Plan/Runner.elm：删 `Tick`/`checkTimeouts`/`timeoutNode`；TaskDone 事件加
       `delegated : Bool`（Update 层按"最后消息含 plan JSON"判定传入）；
-      WaitingForPlan 迁移：TaskDone+delegated → WaitingForPlan；回填继续事件 →
-      Running；等待中 Stop → Canceled；等待中手动 TaskDone(非委托) → Succeeded；
-- [ ] 测试：删超时 5 例（runner）+ 3 例（schema timeout）；加 WaitingForPlan 迁移测试；
-      Elm 全绿
+      WaitingForPlan 迁移：TaskDone+delegated → WaitingForPlan；`ResumeDelegatedNode`
+      回填继续 → Running；等待中 Stop → Canceled；等待中手动 TaskDone(非委托) →
+      Succeeded；等待中 TaskDone error → 忽略保持等待；
+- [x] 测试：删超时 5 例（runner）+ 3 例（schema timeout）；加 WaitingForPlan 迁移 7 例
+      + codec roundtrip 1 例；Elm 180 全绿；Rust 42 / Go -race 8 包不受影响
 
 ### R2 检测与自动创建
 - [ ] App/Update.elm：pendingPlanOffers 改造为自动创建（检测即创建，不弹按钮）；

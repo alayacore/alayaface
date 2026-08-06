@@ -294,7 +294,6 @@ type Msg
     | PlanRunRetryNode String
     | PlanRunnerTick String String
     | PlanRunFrame Int R.Event
-    | PlanTick Int
     | PlanBindSession Int String String String
     | PlanResume
       -- Session wrapper

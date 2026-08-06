@@ -816,6 +816,7 @@ statusClassFor st =
         PT.Failed -> "failed"
         PT.Blocked -> "blocked"
         PT.Canceled -> "canceled"
+        PT.WaitingForPlan -> "waiting-for-plan"
 
 
 statusLabelFor : PT.NodeStatus -> String
@@ -829,6 +830,7 @@ statusLabelFor st =
         PT.Failed -> "Failed"
         PT.Blocked -> "Blocked"
         PT.Canceled -> "Canceled"
+        PT.WaitingForPlan -> "Waiting for plan…"
 
 
 {-| Compact display of a session id (UUID): first 8 chars + ellipsis. -}

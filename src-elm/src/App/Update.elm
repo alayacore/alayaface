@@ -493,7 +493,7 @@ findPlanIdBySession model sid =
 eventSessionId : R.Event -> Maybe String
 eventSessionId ev =
     case ev of
-        R.TaskDone sid _ _ ->
+        R.TaskDone sid _ _ _ ->
             Just sid
 
         R.SessionError sid _ ->
@@ -834,7 +834,7 @@ planEventFromFrame model ev =
                                             Nothing
 
                                         else
-                                            Just (R.TaskDone ev.sessionId taskError (lastAssistantOutput model ev.sessionId))
+                                            Just (R.TaskDone ev.sessionId taskError (lastAssistantOutput model ev.sessionId) (lastAssistantIsPlan model ev.sessionId))
 
                                     "error" ->
                                         let
@@ -875,6 +875,38 @@ lastAssistantOutput model sid =
 
         Nothing ->
             Nothing
+
+
+{-| Whether the session's LAST assistant message contains a plan JSON
+(with the alayaface-plan marker) — the recursion delegation judgment.
+A node whose final answer is a plan document is NOT done: it waits for
+the auto-created sub-plan's result to be fed back (R-series).
+-}
+lastAssistantIsPlan : Model -> String -> Bool
+lastAssistantIsPlan model sid =
+    case Dict.get sid model.sessions of
+        Just s ->
+            case
+                s.messages
+                    |> List.filter (\m -> m.role == T.Assistant)
+                    |> List.map .content
+                    |> List.filter (not << String.isEmpty)
+                    |> List.reverse
+                    |> List.head
+            of
+                Just content ->
+                    case Plan.Detect.extractPlanJson content of
+                        Just raw ->
+                            Plan.Detect.hasPlanTypeMarker raw
+
+                        Nothing ->
+                            False
+
+                Nothing ->
+                    False
+
+        Nothing ->
+            False
 
 
 -- UPDATE
@@ -3063,31 +3095,6 @@ update msg model =
 
         PlanRunnerTick planId nodeId ->
             runStepIn planId 0 (R.RetryTick nodeId) model
-
-        PlanTick ts ->
-            -- Periodic heartbeat for task timeouts: feed every plan
-            -- window whose run is in progress (one subscription serves
-            -- all plans; a no-op when nothing is running).
-            List.foldl
-                (\pid ( m, c ) ->
-                    case Dict.get pid m.planWindows of
-                        Just win ->
-                            case win.run of
-                                Just run ->
-                                    if run.status == PT.InProgress then
-                                        runStepIn pid ts (R.Tick ts) m
-
-                                    else
-                                        ( m, c )
-
-                                Nothing ->
-                                    ( m, c )
-
-                        Nothing ->
-                            ( m, c )
-                )
-                ( model, Cmd.none )
-                model.planOrder
 
         PlanRunFrame ts ev ->
             case eventSessionId ev of
