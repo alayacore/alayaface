@@ -67,6 +67,13 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
       `Running` 后 prompt 从未发送。现在 `bindSession`（Starting→Running）
       恰好发出一次 `SendPrompt`；测试覆盖（绑定发 prompt、重复绑定不发、
       全生命周期 create→bind→prompt→done）；
+- [x] **第二轮修复（仍空窗口）**：修复后 SendPrompt 虽已生成，但
+      `runStepIn` 用 step **前**的旧 run 状态应用 effects → `nodePromptIn`
+      按 sessionId 查 prompt 返回空串被丢弃。修复：① effects 改为在
+      step **后**状态上应用（runStepIn 先更新窗口 run 再 dispatch）；
+      ② `SendPrompt` 改为携带 prompt 文本（runner 绑定会话时从 plan
+      解析），Update 层不再依赖查表，杜绝此类丢失；新增测试
+      “SendPrompt carries the exact plan prompt”；Elm 测试 118；
 - [x] 手动关闭节点会话窗口 → 注入 `SessionDisconnected`（防 runner 悬挂）；
 - [x] `planCreating`/`planCreateQueue` 升级为 `(planId, nodeId)` 全局串行，
       `SessionCreated` → `PlanBindSession ts planId nodeId sid` 无歧义绑定；

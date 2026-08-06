@@ -163,8 +163,18 @@ bindSession nodeId sid run =
     case Dict.get nodeId run.nodes of
         Just n ->
             if n.status == PT.Starting then
+                -- Carry the prompt text in the effect so the update layer
+                -- never has to re-resolve it from (possibly stale) state.
+                let
+                    promptText =
+                        run.plan.tasks
+                            |> List.filter (\t -> t.id == nodeId)
+                            |> List.head
+                            |> Maybe.map .prompt
+                            |> Maybe.withDefault ""
+                in
                 ( { run | nodes = Dict.insert nodeId { n | status = PT.Running, sessionId = Just sid } run.nodes }
-                , [ PT.SendPrompt sid nodeId ]
+                , [ PT.SendPrompt sid promptText ]
                 )
 
             else

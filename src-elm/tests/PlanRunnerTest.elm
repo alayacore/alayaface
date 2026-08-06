@@ -46,7 +46,7 @@ effectName : P.Effect -> String
 effectName e =
     case e of
         P.CreateSessionFor id -> "create:" ++ id
-        P.SendPrompt sid id -> "prompt:" ++ id
+        P.SendPrompt sid text -> "prompt:" ++ sid ++ ":" ++ text
         P.CloseSessionFor sid _ -> "close:" ++ sid
         P.ScheduleRetry id _ -> "retry:" ++ id
         P.PersistRunState -> "persist"
@@ -143,7 +143,7 @@ tests =
                         run3
             ]
         , describe "prompt dispatch"
-            [ test "binding a created session emits exactly one SendPrompt" <|
+            [ test "binding a created session emits exactly one SendPrompt with the node prompt text" <|
                 \_ ->
                     let
                         ( run1, _ ) =
@@ -155,8 +155,8 @@ tests =
                     Expect.all
                         [ \_ -> Expect.equal (Just P.Running) (Dict.get "a" (statuses run2))
                         , \_ -> Expect.equal (Just "s1") (nodeState "a" run2).sessionId
-                        , \_ -> Expect.equal True (List.member "prompt:a" (effects es))
-                        , \_ -> Expect.equal 1 (List.length (List.filter (\e -> String.startsWith "prompt:a" e) (effects es)))
+                        , \_ -> Expect.equal True (List.member "prompt:s1:a" (effects es))
+                        , \_ -> Expect.equal 1 (List.length (List.filter (\e -> String.startsWith "prompt:" e) (effects es)))
                         ]
                         ()
             , test "re-binding an already Running node does not re-send" <|
@@ -173,8 +173,28 @@ tests =
                         ( run3, es ) =
                             R.step 3000 (R.SessionCreatedFor "a" "s1") run2
                     in
-                    Expect.equal 0 (List.length (List.filter (\e -> String.startsWith "prompt:a" e) (effects es)))
+                    Expect.equal 0 (List.length (List.filter (\e -> String.startsWith "prompt:" e) (effects es)))
                         |> always (Expect.equal (Just "s1") (nodeState "a" run3).sessionId)
+            , test "SendPrompt carries the exact plan prompt (parallel plan)" <|
+                \_ ->
+                    let
+                        plan =
+                            planFromJson """{ "name": "x", "concurrency": 3, "tasks": [
+                              { "id": "a", "title": "A", "prompt": "do task A now" },
+                              { "id": "b", "title": "B", "prompt": "do task B now" }
+                            ] }"""
+
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan plan)
+
+                        ( run2, es ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal True (List.member "prompt:s1:do task A now" (effects es))
+                        , \_ -> Expect.equal False (List.member "prompt:s1:do task B now" (effects es))
+                        ]
+                        ()
             , test "full lifecycle: create → bind → prompt → done" <|
                 \_ ->
                     let
@@ -189,7 +209,7 @@ tests =
                     in
                     Expect.all
                         [ \_ -> Expect.equal True (List.member "create:a" (effects es1))
-                        , \_ -> Expect.equal True (List.member "prompt:a" (effects es2))
+                        , \_ -> Expect.equal True (List.member "prompt:s1:a" (effects es2))
                         , \r -> Expect.equal P.Succeeded (nodeState "a" r).status
                         ]
                         run3

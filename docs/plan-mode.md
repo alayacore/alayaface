@@ -202,7 +202,7 @@ type alias FailureRecord =
 
 type Effect
     = CreateSessionFor String            -- 节点 id（携带节点 preset/tools/toolConfirm）
-    | SendPrompt String String           -- sessionId, nodeId
+    | SendPrompt String String           -- sessionId, promptText（runner 绑定会话时从 plan 解析，随 effect 携带）
     | CloseSessionFor String String      -- sessionId, nodeId
     | ScheduleRetry String Int           -- nodeId, delayMs（默认退避 2000ms）
     | PersistRunState                    -- 写 <planId>.run.json
@@ -371,7 +371,10 @@ type Effect
 > 到节点。**Plan 窗口是多实例的**（`planWindows : Dict String PlanWindow`，
 > 每个窗口自带 run 状态/日志/选中节点/创建队列），通过 ⚙ 系统菜单切换，
 > 而不是单一 overlay；`SendPrompt` 在会话绑定（Starting→Running）时由
-> runner 恰好发出一次（早期版本遗漏导致节点会话打开但无消息）。
+> runner **解析出节点 prompt 文本并随 effect 携带**（`SendPrompt sid promptText`），
+> Update 层不再查表重解析——早期两处缺陷（① runner 从未生成 SendPrompt；
+> ② 生成后 Update 层用 step 前的旧 run 状态查 prompt 返回空串被丢弃）都曾导致
+> 节点会话打开但无任何消息。
 
 ---
 

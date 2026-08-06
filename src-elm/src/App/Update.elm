@@ -345,18 +345,24 @@ runStepIn planId now ev model =
                         ( run2, effects ) =
                             R.step now ev run
 
-                        ( model1, cmds ) =
-                            applyEffectsIn planId model effects
-
                         diff =
                             runDiffLog run run2
 
                         win2 =
                             { win | run = Just run2, runLog = List.take 80 (win.runLog ++ diff) }
+
+                        -- Apply effects against the POST-step model: e.g.
+                        -- SendPrompt resolves the node prompt through the
+                        -- run that already contains the just-bound session
+                        -- id (looking it up in the pre-step run would drop
+                        -- the prompt, leaving node sessions empty).
+                        model1 =
+                            { model | planWindows = Dict.insert planId win2 model.planWindows }
+
+                        ( model2, cmds ) =
+                            applyEffectsIn planId model1 effects
                     in
-                    ( { model1 | planWindows = Dict.insert planId win2 model1.planWindows }
-                    , cmds
-                    )
+                    ( model2, cmds )
 
                 Nothing ->
                     ( model, Cmd.none )
@@ -415,19 +421,18 @@ applyEffectIn planId e ( m, cmds ) =
             else
                 ( { m | planCreateQueue = m.planCreateQueue ++ [ ( planId, nodeId ) ] }, cmds )
 
-        PT.SendPrompt sid _ ->
-            let
-                promptText =
-                    nodePromptIn planId sid m
-            in
-            if promptText == "" then
+        PT.SendPrompt sid text ->
+            -- The prompt text is carried by the effect (resolved by the
+            -- runner from the plan at bind time), so there is nothing to
+            -- re-resolve here.
+            if text == "" then
                 ( m, cmds )
 
             else
                 ( m
                 , Cmd.batch
                     [ cmds
-                    , Ports.sendPrompt { sessionId = sid, text = promptText, media = [] }
+                    , Ports.sendPrompt { sessionId = sid, text = text, media = [] }
                     ]
                 )
 
@@ -485,32 +490,6 @@ nodeSessionArgsIn planId nodeId model =
     , builtinTools = task |> Maybe.andThen .tools
     , systemPrompt = Nothing
     }
-
-
-{-| The prompt text for a node-owned session (from the plan).
--}
-nodePromptIn : String -> String -> Model -> String
-nodePromptIn planId sid model =
-    case Dict.get planId model.planWindows of
-        Just win ->
-            case win.run of
-                Just run ->
-                    case R.nodeBySessionId sid run of
-                        Just nodeId ->
-                            run.plan.tasks
-                                |> List.filter (\t -> t.id == nodeId)
-                                |> List.head
-                                |> Maybe.map .prompt
-                                |> Maybe.withDefault ""
-
-                        Nothing ->
-                            ""
-
-                Nothing ->
-                    ""
-
-        Nothing ->
-            ""
 
 
 {-| Persist the current run state to <planId>.run.json.

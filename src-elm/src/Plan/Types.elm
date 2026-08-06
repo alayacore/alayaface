@@ -165,6 +165,9 @@ type alias RunState =
 
 type Effect
     = CreateSessionFor String
+    -- SendPrompt sessionId promptText — the prompt text is carried by
+    -- the effect (resolved by the runner from the plan) so the update
+    -- layer never has to re-resolve it from possibly stale state.
     | SendPrompt String String
     | CloseSessionFor String String
     | ScheduleRetry String Int
