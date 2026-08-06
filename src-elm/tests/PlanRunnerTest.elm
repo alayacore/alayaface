@@ -373,6 +373,65 @@ tests =
                         , \_ -> Expect.equal 0 (List.length (List.filter (\e -> String.startsWith "prompt:" e) (effects es)))
                         ]
                         ()
+            , test "SessionCreateFailed fails the Starting node (retry, no hang)" <|
+                \_ ->
+                    let
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan singlePlan)
+
+                        ( run2, es ) =
+                            R.step 1500 (R.SessionCreateFailed "a" "preset not found") run1
+
+                        a =
+                            nodeState "a" run2
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal P.Waiting a.status
+                        , \_ -> Expect.equal 1 a.attempts
+                        , \_ -> Expect.equal "Session create failed: preset not found" (Maybe.withDefault "" (List.head a.failures |> Maybe.map .reason))
+                        , \_ -> Expect.equal True (List.any (\e -> String.startsWith "retry:a" e) (effects es))
+                        , \_ -> Expect.equal Nothing a.sessionId
+                        ]
+                        ()
+            , test "SessionCreateFailed on a non-Starting node is ignored" <|
+                \_ ->
+                    let
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan singlePlan)
+
+                        ( run2, _ ) =
+                            R.step 1500 R.StopRun run1
+
+                        ( run3, es ) =
+                            R.step 2000 (R.SessionCreateFailed "a" "boom") run2
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal P.Canceled (nodeState "a" run3).status
+                        , \_ -> Expect.equal 0 (List.length (List.filter (\e -> String.startsWith "retry:" e) (effects es)))
+                        ]
+                        ()
+            , test "SessionCreateFailed exhausts attempts then Failed" <|
+                \_ ->
+                    let
+                        plan =
+                            planFromJson """{ "name": "x", "tasks": [
+                              { "id": "a", "title": "A", "prompt": "a", "max_attempts": 1 }
+                            ] }"""
+
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan plan)
+
+                        ( run2, _ ) =
+                            R.step 1500 (R.SessionCreateFailed "a" "bad preset") run1
+
+                        a =
+                            nodeState "a" run2
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal P.Failed a.status
+                        , \_ -> Expect.equal P.FailedRun run2.status
+                        ]
+                        ()
             , test "exhausts max attempts then Failed, downstream Blocked" <|
                 \_ ->
                     let

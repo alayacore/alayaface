@@ -23,6 +23,7 @@ module App.Types exposing
     , PlanWindow
     , emptyPlanWindow
     , PlanReadTarget
+    , CreateTask(..)
     )
 
 {-| Application-level model, message, and editor/window types.
@@ -88,8 +89,8 @@ type alias Model =
     , planActiveId : Maybe String
     , planManager : PlanManagerState
     , pendingPlanOffers : Dict String String
-    , planCreating : Maybe ( String, String )
-    , planCreateQueue : List ( String, String )
+    , planCreating : Maybe CreateTask
+    , planCreateQueue : List CreateTask
     , planReadTarget : Maybe PlanReadTarget
     , planNodeSessions : Dict String String
     , planResumeOwner : Maybe String
@@ -107,6 +108,7 @@ type Msg
       CreateSession
     | CreatePlanSession
     | SessionCreated String
+    | SessionCreateError String
     | CloseSession String
       -- Transport events
     | DeltaEvent E.Value
@@ -524,3 +526,13 @@ type alias PlanReadTarget =
     , isResume : Bool
     , continueRun : Bool
     }
+
+
+{-| A queued session-creation request. Runner creates are tagged with
+their (planId, nodeId); user-initiated creates ("normal" / "plan") go
+through the SAME serialized queue so a user click can never be misbound
+to a runner node (and vice versa).
+-}
+type CreateTask
+    = RunnerCreate String String
+    | UserCreate String

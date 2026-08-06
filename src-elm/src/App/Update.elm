@@ -442,14 +442,15 @@ applyEffectIn planId e ( m, cmds ) =
         PT.CreateSessionFor nodeId ->
             -- Serialized session creation: one in-flight create at a
             -- time (globally); SessionCreated binds it to the pending
-            -- node via (planId, nodeId).
+            -- node via (planId, nodeId). User creates share the queue
+            -- (tagged UserCreate) so they can never be misbound.
             if m.planCreating == Nothing then
-                ( { m | planCreating = Just ( planId, nodeId ) }
+                ( { m | planCreating = Just (RunnerCreate planId nodeId) }
                 , Cmd.batch [ cmds, Ports.createSession (nodeSessionArgsIn planId nodeId m) ]
                 )
 
             else
-                ( { m | planCreateQueue = m.planCreateQueue ++ [ ( planId, nodeId ) ] }, cmds )
+                ( { m | planCreateQueue = m.planCreateQueue ++ [ RunnerCreate planId nodeId ] }, cmds )
 
         PT.SendPrompt sid text ->
             -- The prompt text is carried by the effect (resolved by the
@@ -485,14 +486,39 @@ applyEffectIn planId e ( m, cmds ) =
 
 
 {-| Kick off the next queued session creation (one in-flight at a time).
+Handles both runner creates and user creates from the same queue.
 -}
 startNextCreateIn : Model -> ( Model, Cmd Msg )
 startNextCreateIn model =
     case ( model.planCreating, model.planCreateQueue ) of
-        ( Nothing, ( planId, nodeId ) :: rest ) ->
-            ( { model | planCreating = Just ( planId, nodeId ), planCreateQueue = rest }
-            , Ports.createSession (nodeSessionArgsIn planId nodeId model)
-            )
+        ( Nothing, task :: rest ) ->
+            let
+                m1 =
+                    { model | planCreating = Just task, planCreateQueue = rest }
+            in
+            case task of
+                RunnerCreate planId nodeId ->
+                    ( m1, Ports.createSession (nodeSessionArgsIn planId nodeId model) )
+
+                UserCreate "plan" ->
+                    ( { m1 | planSessionPending = True, pendingSwitchOnCreate = True }
+                    , Ports.createSession
+                        { toolConfirm = Nothing
+                        , preset = Nothing
+                        , builtinTools = Nothing
+                        , systemPrompt = Just planSystemPrompt
+                        }
+                    )
+
+                UserCreate _ ->
+                    ( { m1 | pendingSwitchOnCreate = True }
+                    , Ports.createSession
+                        { toolConfirm = Nothing
+                        , preset = Nothing
+                        , builtinTools = Nothing
+                        , systemPrompt = Nothing
+                        }
+                    )
 
         _ ->
             ( model, Cmd.none )
@@ -623,27 +649,44 @@ update msg model =
     case msg of
         -- Session Lifecycle
         CreateSession ->
-            ( { model | pendingSwitchOnCreate = True, showGlobalMenu = False }
-            , Ports.createSession { toolConfirm = Nothing, preset = Nothing, builtinTools = Nothing, systemPrompt = Nothing }
-            )
+            case model.planCreating of
+                -- A session create is in flight: queue the user's create
+                -- on the same serialized queue so the runner's
+                -- SessionCreated cannot be misbound to it.
+                Just _ ->
+                    ( { model | planCreateQueue = model.planCreateQueue ++ [ UserCreate "normal" ], showGlobalMenu = False }
+                    , Cmd.none
+                    )
+
+                Nothing ->
+                    ( { model | pendingSwitchOnCreate = True, showGlobalMenu = False }
+                    , Ports.createSession { toolConfirm = Nothing, preset = Nothing, builtinTools = Nothing, systemPrompt = Nothing }
+                    )
 
         CreatePlanSession ->
             -- A Plan Session is a normal session whose alayacore process
             -- gets the planner system prompt via --system. The user only
             -- describes the goal; the model emits the plan JSON, and the
             -- existing Create Plan flow takes over.
-            ( { model
-                | planSessionPending = True
-                , pendingSwitchOnCreate = True
-                , showGlobalMenu = False
-              }
-            , Ports.createSession
-                { toolConfirm = Nothing
-                , preset = Nothing
-                , builtinTools = Nothing
-                , systemPrompt = Just planSystemPrompt
-                }
-            )
+            case model.planCreating of
+                Just _ ->
+                    ( { model | planCreateQueue = model.planCreateQueue ++ [ UserCreate "plan" ], showGlobalMenu = False }
+                    , Cmd.none
+                    )
+
+                Nothing ->
+                    ( { model
+                        | planSessionPending = True
+                        , pendingSwitchOnCreate = True
+                        , showGlobalMenu = False
+                      }
+                    , Ports.createSession
+                        { toolConfirm = Nothing
+                        , preset = Nothing
+                        , builtinTools = Nothing
+                        , systemPrompt = Just planSystemPrompt
+                        }
+                    )
 
         SessionCreated id ->
             let
@@ -661,15 +704,26 @@ update msg model =
                     List.foldl applyPendingEvent newSessions buffered
 
                 -- Only auto-switch on initial creation (activeId was Nothing)
-                -- If user is already viewing a session, don't steal focus
+                -- If user is already viewing a session, don't steal focus.
+                -- Runner-created node sessions never steal focus: the user
+                -- is watching the plan DAG and opens node sessions by
+                -- clicking the DAG.
+                isRunnerCreate =
+                    case model.planCreating of
+                        Just (RunnerCreate _ _) ->
+                            True
+
+                        _ ->
+                            False
+
                 newActiveId =
-                    if model.pendingSwitchOnCreate || model.activeId == Nothing then
+                    if not isRunnerCreate && (model.pendingSwitchOnCreate || model.activeId == Nothing) then
                         Just id
                     else
                         model.activeId
 
                 cmds =
-                    if model.pendingSwitchOnCreate || model.activeId == Nothing then
+                    if not isRunnerCreate && (model.pendingSwitchOnCreate || model.activeId == Nothing) then
                         Cmd.batch [ Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ id)), Ports.scrollToBottom { sessionId = id } ]
                     else
                         Cmd.none
@@ -715,17 +769,27 @@ update msg model =
                                     }
                                     model.windowPositions
                         , nextZIndex = model.nextZIndex + 1
-                        , pendingSwitchOnCreate = False
+                        -- Only consume pendingSwitchOnCreate when this
+                        -- session actually consumed it (non-runner). A
+                        -- runner session arriving in between must not
+                        -- steal a user/resume focus request.
+                        , pendingSwitchOnCreate =
+                            if isRunnerCreate then
+                                model.pendingSwitchOnCreate
+
+                            else
+                                False
                         , pendingEvents = Dict.remove id model.pendingEvents
                     }
 
                 -- A session resumed for a plan node (PlanOpenNodeSession)
                 -- gets a fresh id from resume_session: rebind the node to
                 -- the new id so clicking the node keeps working and the
-                -- binding stays in sync.
+                -- binding stays in sync. Never consumed by a runner-created
+                -- session.
                 resumedModel =
-                    case model.planResumeNode of
-                        Just ( planId, nodeId ) ->
+                    case ( model.planResumeNode, isRunnerCreate ) of
+                        ( Just ( planId, nodeId ), False ) ->
                             { baseModel
                                 | planResumeNode = Nothing
                                 , planNodeSessions =
@@ -736,22 +800,74 @@ update msg model =
                                         baseModel.planWindows
                             }
 
-                        Nothing ->
+                        _ ->
                             baseModel
+
+                -- Consume the in-flight marker for user creates (runner
+                -- creates are consumed inside PlanBindSession).
+                settledModel =
+                    case model.planCreating of
+                        Just (UserCreate _) ->
+                            { resumedModel | planCreating = Nothing }
+
+                        _ ->
+                            resumedModel
+
+                ( drainedModel, drainCmd ) =
+                    case model.planCreating of
+                        -- user create finished: start the next queued create
+                        Just (UserCreate _) ->
+                            startNextCreateIn settledModel
+
+                        _ ->
+                            ( settledModel, Cmd.none )
             in
-            ( resumedModel
+            ( drainedModel
             , Cmd.batch
                 [ cmds
+                , drainCmd
                 , case model.planCreating of
                     -- A runner-created session: bind it to its node
                     -- (PlanBindSession also starts the next queued create).
-                    Just ( planId, nodeId ) ->
+                    Just (RunnerCreate planId nodeId) ->
                         Task.perform (\t -> PlanBindSession (Time.posixToMillis t) planId nodeId id) Time.now
 
-                    Nothing ->
+                    _ ->
                         Cmd.none
                 ]
             )
+
+        SessionCreateError text ->
+            -- create_session failed. Without this the in-flight marker
+            -- (planCreating) would stay set forever: every later create
+            -- queues behind it and the run deadlocks (e.g. invalid node
+            -- preset). Fail the pending node so retry/backoff applies,
+            -- then drain the queue.
+            case model.planCreating of
+                Just (RunnerCreate planId nodeId) ->
+                    let
+                        m0 =
+                            { model | planCreating = Nothing }
+
+                        ( m1, c1 ) =
+                            runStepIn planId 0 (R.SessionCreateFailed nodeId text) m0
+
+                        ( m2, c2 ) =
+                            startNextCreateIn m1
+                    in
+                    ( m2, c2 )
+
+                Just (UserCreate _) ->
+                    -- A user-initiated create failed: clear the marker and
+                    -- continue with the next queued create.
+                    let
+                        m0 =
+                            { model | planCreating = Nothing }
+                    in
+                    startNextCreateIn m0
+
+                Nothing ->
+                    ( model, Cmd.none )
 
         CloseSession id ->
             -- If the closed window belongs to a plan run, fail its node
@@ -1787,7 +1903,15 @@ update msg model =
                                 model2.planManager
                         in
                         ( { model2 | planManager = { pm | loading = False, error = Nothing } }
-                        , refreshPlanList model2
+                        -- Refresh the manager list only while it is open:
+                        -- run.json writes happen on every runner step and
+                        -- a stray fs_list_dir (plans dir) would otherwise
+                        -- land in the file picker branch of FsListDirResult.
+                        , if model2.planManager.show then
+                            refreshPlanList model2
+
+                          else
+                            Cmd.none
                         )
 
                     else
@@ -2258,7 +2382,16 @@ update msg model =
                 , planOrder = List.filter (\k -> k /= planId) model.planOrder
                 , windowPositions = Dict.remove planId model.windowPositions
                 , planCreateQueue =
-                    List.filter (\( qpid, _ ) -> qpid /= planId) model.planCreateQueue
+                    List.filter
+                        (\task ->
+                            case task of
+                                RunnerCreate qpid _ ->
+                                    qpid /= planId
+
+                                UserCreate _ ->
+                                    True
+                        )
+                        model.planCreateQueue
                 , planActiveId =
                     if model.planActiveId == Just planId then
                         List.head (List.reverse (List.filter (\k -> k /= planId) model.planOrder))
@@ -2358,7 +2491,16 @@ update msg model =
                     -- produce orphans (closed right after by PlanBindSession).
                     ( { m1
                         | planCreateQueue =
-                            List.filter (\( qpid, _ ) -> qpid /= pid) m1.planCreateQueue
+                            List.filter
+                                (\task ->
+                                    case task of
+                                        RunnerCreate qpid _ ->
+                                            qpid /= pid
+
+                                        UserCreate _ ->
+                                            True
+                                )
+                                m1.planCreateQueue
                       }
                     , c1
                     )

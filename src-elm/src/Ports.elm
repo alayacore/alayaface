@@ -42,6 +42,7 @@ port module Ports exposing
     , listSessionDirs
     , deleteSessionDir
     , onSessionCreated
+    , onSessionCreateError
     , onSessionDirs
     , onSessionActionResult
       -- File system
@@ -130,6 +131,7 @@ port fillMcpAuthUrl : { sessionId : String, serverName : String, authUrl : Strin
 -- Inbound responses (Tauri → Elm for command results)
 
 port onSessionCreated : (String -> msg) -> Sub msg
+port onSessionCreateError : (String -> msg) -> Sub msg
 port onSessionDirs : (List E.Value -> msg) -> Sub msg
 port onSessionActionResult : (E.Value -> msg) -> Sub msg
 port onFsListDir : (List E.Value -> msg) -> Sub msg

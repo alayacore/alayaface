@@ -54,6 +54,32 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P8 Node↔session binding: click node opens/resumes its session | [x] |
 | P9 Keep failed/canceled sessions reopenable (lastSessionId) | [x] |
 | P10 Review pass: runner race fixes + orphan cleanup | [x] |
+| P11 Review pass 2: create-queue serialization + create-failure recovery | [x] |
+
+## P11 — 第二轮审查：创建队列串行化 + 创建失败恢复
+
+- [x] **create_session 失败死锁**：此前失败只在 bridge console.error，Elm
+      永远收不到 SessionCreated → `planCreating` 永远不释放 → 后续所有
+      创建（runner + 用户）全部排队卡死（如节点 preset 无效时整个 run
+      挂起）。新增 `onSessionCreateError` 端口（Ports+bridge+Main）+
+      `SessionCreateError` Msg + Runner `SessionCreateFailed` 事件
+      （Starting 节点按失败处理 → 自动重试/最终 Failed，不再悬挂）；
+- [x] **用户创建与 runner 创建竞态（根治）**：会话创建改为**统一串行队列**
+      `planCreateQueue : List CreateTask`（`RunnerCreate planId nodeId` /
+      `UserCreate "normal" | "plan"`），`planCreating : Maybe CreateTask`；
+      用户点击 New Session/Plan Session 在 runner 创建期间自动排队，
+      SessionCreated 按标记区分：RunnerCreate→绑定节点，UserCreate→只激活
+      并排空队列 → 用户会话永远不会被误绑到 runner 节点；
+- [x] **runner 会话不抢焦点**：SessionCreated 中 runner 创建不激活/不聚焦
+      （用户在看 DAG，点节点才打开）；`pendingSwitchOnCreate` 仅被非
+      runner 会话消费（resume/用户创建不被 runner 会话偷走）；
+- [x] **planResumeNode 消费加守卫**：仅非 runner 会话消费，runner 会话
+      不会错误重绑；
+- [x] **fs 列表污染**：run.json 每次 step 都会写 → FsWriteResult 触发
+      refreshPlanList（plans 目录 list）→ 管理器未打开时结果落入文件
+      选择器分支污染其列表 → 仅管理器打开时才刷新；
+- [x] 测试：Elm 128（新增 SessionCreateFailed 3 例：Starting 失败→Waiting
+      重试、非 Starting 忽略、耗尽→Failed）；Rust 35；Go 全绿。
 
 ## P10 — 全面审查修复（评审轮）
 

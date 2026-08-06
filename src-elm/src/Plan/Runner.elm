@@ -45,6 +45,7 @@ type Event
     | ResumeRun
     | StopRun
     | SessionCreatedFor String String
+    | SessionCreateFailed String String
     | TaskDone String Bool
     | SessionError String String
     | SessionDisconnected String String
@@ -88,6 +89,12 @@ step now ev run =
 
                 TaskDone sid isError ->
                     ( taskDone now sid isError run, [] )
+
+                -- create_session failed (e.g. invalid node preset): treat
+                -- it as a node failure so retry/backoff applies instead
+                -- of the node hanging in Starting forever.
+                SessionCreateFailed nodeId text ->
+                    ( sessionCreateFailed now nodeId text run, [] )
 
                 SessionError sid text ->
                     ( sessionError now sid text run, [] )
@@ -229,6 +236,19 @@ sessionError now sid text run =
 
         Nothing ->
             run
+
+
+sessionCreateFailed : Int -> String -> String -> PT.RunState -> PT.RunState
+sessionCreateFailed now nodeId text run =
+    updateNode nodeId
+        (\n ->
+            if n.status == PT.Starting then
+                failNode now ("Session create failed: " ++ text) n
+
+            else
+                n
+        )
+        run
 
 
 sessionDisconnected : Int -> String -> String -> PT.RunState -> PT.RunState

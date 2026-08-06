@@ -117,6 +117,7 @@ subscriptions model =
         , Ports.onPresetsList (\raw -> PresetsListResult raw)
         , Ports.onPresetActionResult (\raw -> PresetActionResult raw)
         , Ports.onSessionCreated (\id -> SessionCreated id)
+        , Ports.onSessionCreateError (\err -> SessionCreateError err)
         , Ports.onSessionDirs (\dirs -> SessionDirsResult dirs)
         , Ports.onSessionActionResult (\raw -> SessionActionResult raw)
         , Ports.onFsListDir (\entries -> FsListDirResult entries)
