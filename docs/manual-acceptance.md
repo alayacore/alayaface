@@ -1,131 +1,101 @@
-# AlayaFace Plan Mode — 手工验收清单（GUI 环境）
+# AlayaFace Plan Mode — Manual Acceptance Checklist (GUI Environment)
 
-> **核心流程已自动化**：`make e2e`（无头 Chrome + fakecore 假模型）已覆盖
-> Plan Session → Create Plan → Run → 节点成功/失败重试 → 节点打开会话的
-> 全链路（见 TODO.md P15）。本清单剩余项是**自动化覆盖不到**的部分：
-> 真实 alayacore + 真实模型的对话质量、Tauri 原生窗口、MCP。
+> **Core flow is automated**: `make e2e` (headless Chrome + fakecore fake model)
+> already covers the whole chain of Plan Session → Create Plan → Run → node
+> success/failure retry → opening a node's session (see TODO.md P15). The items
+> left in this checklist are those **not covered by automation**: conversation
+> quality with real alayacore + a real model, Tauri native windows, and MCP.
 >
-> 用途：有桌面环境 + 模型 API key（或本地 .gguf）时按本清单逐项冒烟，
-> 勾选后回写 TODO.md。
+> Usage: when a desktop environment + a model API key (or a local .gguf) is
+> available, smoke-test each item below and tick it off; write the results back
+> to TODO.md.
 >
-> 前置：`alayacore` 可执行（`which alayacore` 或 `ALAYACORE_BIN`），
-> 模型 API key 已配置（Default preset 的 model.conf），MCP 当前为
-> 禁用状态（`~/.alayaface/presets/Default/mcp.conf` 全部注释，恢复 =
-> 取消注释）。
+> Prerequisites: `alayacore` executable (`which alayacore` or `ALAYACORE_BIN`),
+> model API key configured (Default preset's model.conf), MCP currently
+> disabled (`~/.alayaface/presets/Default/mcp.conf` fully commented out;
+> re-enable = uncomment).
 
-## 启动
+## Startup
 
-- [ ] Tauri：`make run`；或浏览器：`make run-go` → http://127.0.0.1:8765/
-- [ ] ⚙ 菜单出现：New Session / **New Plan Session** / Plans / Presets / Settings / Sessions
+- [ ] Tauri: `make run`; or browser: `make run-go` → http://127.0.0.1:8765/
+- [ ] ⚙ menu shows: New Session / **New Plan Session** / Plans / Presets / Settings / Sessions
 
-## 1. Plan Session + 创建计划（P2/P6）
+## 1. Plan Session + Creating a Plan (P2/P6)
 
-- [ ] ⚙ → **New Plan Session** → 会话窗口标题带 `[Plan]` 前缀
-- [ ] 用自然语言描述任务（如「写一份月度报告：先列大纲，再写三节正文」）
-- [ ] 模型回复中出现 fenced ```json 计划块 → 消息下方出现 **Create Plan** 按钮
-- [ ] 点击 Create Plan → 打开 Plan 窗口（独立窗口，非 overlay），显示
-      DAG（节点 + 依赖边）、目标、元信息
-- [ ] `~/.alayaface/plans/<name>-<ts>.json` 已保存（归一化后版本）
-- [ ] ⚙ → Plans 管理器：**Saved** tab 列出该计划（带模糊过滤），可 Open / Delete
-- [ ] ⚙ → Plans 管理器 → **Browse** tab：文件浏览器（目录导航 + 模糊匹配），
-      点击任意位置的 plan JSON 可导入并打开 Plan 窗口
+- [ ] ⚙ → **New Plan Session** → session window title carries a `[Plan]` prefix
+- [ ] Describe the task in natural language (e.g. "write a monthly report: first an outline, then three body sections")
+- [ ] A fenced ```json plan block appears in the model reply → **Create Plan** button below the message
+- [ ] Click Create Plan → Plan window opens (independent window, not an overlay), showing the DAG (nodes + dependency edges), goal, and metadata
+- [ ] `~/.alayaface/plans/<name>-<ts>.json` saved (normalized version)
+- [ ] ⚙ → Plans manager: **Saved** tab lists the plan (with fuzzy filter), can Open / Delete
+- [ ] ⚙ → Plans manager → **Browse** tab: file browser (directory navigation + fuzzy match); clicking a plan JSON anywhere imports and opens a Plan window
 
-## 2. Run + 节点会话内容（P4/P7 修复点）
+## 2. Run + Node Session Content (P4/P7 fix points)
 
-- [ ] Plan 窗口点 **Run** → 无依赖节点先启动（并行 ≤ concurrency），
-      依赖满足后逐层启动
-- [ ] 头部「并发」输入框：留空按计划默认；填 3 → 最多 3 个节点并行；
-      0 或超界自动 clamp 1–8；完成后重 Run 同样生效
-- [ ] **每个节点会话打开后必须显示 prompt 和模型回复**（P7 修复：
-      SendPrompt 携带文本，不再空窗口）
-- [ ] 标题带 `[Plan · planId/nodeId]` 绑定标记
-- [ ] 会话窗口可拖动/缩放/关闭；多个 plan 窗口互不干扰，⚙ 菜单可切换置顶
+- [ ] Click **Run** in the Plan window → dependency-free nodes start first (parallel ≤ concurrency), further layers start as dependencies are satisfied
+- [ ] Header "concurrency" input: empty = plan default; set 3 → at most 3 nodes in parallel; 0 or out-of-range auto-clamped to 1–8; re-Run after completion applies it too
+- [ ] **Every node session must show its prompt and the model reply** (P7 fix: SendPrompt carries the text, no more empty windows)
+- [ ] Title carries the `[Plan · planId/nodeId]` binding marker
+- [ ] Session windows can be dragged/resized/closed; multiple plan windows don't interfere; ⚙ menu can raise one to front
 
-## 3. 节点点击 ↔ 会话绑定（P8/P9）
+## 3. Node Click ↔ Session Binding (P8/P9)
 
-- [ ] 点**存活**节点 → 聚焦其会话窗口
-- [ ] 关闭某节点会话窗口 → 点该节点 → 自动 `resume_session` 从磁盘恢复，
-      内容完整（UT/AT/AF/UF/AR 全历史渲染）
-- [ ] **重复开关多次**（关闭 → 点节点 → 关闭 → 点节点…）不再报
-      "Session directory not found"；重启应用后点节点同样能恢复
-      （P18：节点始终绑定 on-disk 目录 id，live 映射走 planResumedFrom）
-- [ ] 失败/取消的节点 → 点节点 → 经 `last_session_id` 恢复旧会话可回看
-- [ ] **连接曲线（P19）**：聚焦某节点会话 → plan 窗口提到第二层（session
-      z = plan z + 1），一条虚线贝塞尔从会话窗口边缘连到节点卡片；拖动/
-      缩放/滚动窗口时曲线实时跟随；关闭会话/聚焦别处 → 曲线消失；节点被
-      滚出画布 → 曲线隐藏
-- [ ] 节点详情面板显示「历史会话 (N)」列表 → 点某个短 id → 打开**该次**
-      尝试的会话（重试替换绑定后旧尝试仍可达；打开的旧会话**不**改变
-      节点当前绑定）
-- [ ] 重开 app → 打开计划 → 自动静默恢复 run.json → 点已运行节点能重新
-      打开会话；节点详情「历史会话」列表同样保留
-- [ ] **Load run** → 恢复并继续执行未完成任务
+- [ ] Click a **live** node → its session window is focused
+- [ ] Close a node's session window → click the node → automatically `resume_session` from disk, content complete (full UT/AT/AF/UF/AR history rendered)
+- [ ] **Repeated open/close cycles** (close → click node → close → click node…) no longer report "Session directory not found"; after app restart clicking a node still recovers (P18: nodes are always bound to the on-disk dir id; live mapping goes through planResumedFrom)
+- [ ] Failed/canceled node → click node → old session recovered via `last_session_id` for review
+- [ ] **Connection curve (P19)**: focus a node's session → plan window is raised to the second layer (session z = plan z + 1), a dashed bezier curve connects the session window edge to the node card; the curve follows live when dragging/resizing/scrolling; closing the session or focusing elsewhere → curve disappears; node scrolled out of the canvas → curve hidden
+- [ ] Node detail panel shows a "history sessions (N)" list → click a short id → opens **that** attempt's session (old attempts remain reachable after retry rebinds; opening an old session does **not** change the node's current binding)
+- [ ] Reopen the app → open the plan → run.json silently restored → clicking a ran node reopens its session; the node detail "history sessions" list is preserved too
+- [ ] **Load run** → restore and continue executing unfinished tasks
 
-## 4. 失败与重试（P4/P10/P11）
+## 4. Failure & Retry (P4/P10/P11)
 
-- [ ] 节点 preset 设为不存在的名字 → 创建失败不再卡死（P11：失败显示在
-      节点上，可 Retry；整个 run 不悬挂）
-- [ ] 自动重试：失败 → 节点变 Waiting（x2 徽章）→ 2s 后自动重试
-- [ ] 退避期间点 **Stop** → 保持停止，迟到的自动重试不复活节点（P10）
-- [ ] 手动 Retry：失败/取消节点 → 节点详情面板 Retry 按钮 → 复活重跑
-- [ ] 达到 max_attempts → Failed，下游 Blocked（fixpoint 传播），run 状态
-      FailedRun
-- [ ] 运行中创建普通会话（New Session）→ 排队，不误绑到 runner 节点
-      （P11 统一创建队列）
-- [ ] **任务超时（P16）**：计划设 `default_timeout_seconds: 3` → 节点挂起
-      3s 后失败（"Timeout after 3s"）→ 自动重试；无超时字段的计划永不
-      超时；节点 `timeout_seconds` 覆盖计划默认
+- [ ] Node preset set to a nonexistent name → creation failure no longer hangs (P11: failure shown on the node, can Retry; the whole run doesn't hang)
+- [ ] Auto-retry: failure → node becomes Waiting (x2 badge) → auto-retry after 2s
+- [ ] Press **Stop** during backoff → stays stopped; the late auto-retry does not revive the node (P10)
+- [ ] Manual Retry: failed/canceled node → Retry button in the node detail panel → revived and rerun
+- [ ] max_attempts reached → Failed, downstream Blocked (fixpoint propagation), run status FailedRun
+- [ ] Creating a normal session (New Session) while a run is active → queued, not mistakenly bound to a runner node (P11 unified create queue)
+- [ ] **Task timeout (P16)**: plan sets `default_timeout_seconds: 3` → a hung node fails after 3s ("Timeout after 3s") → auto-retry; plans without the field never time out; node `timeout_seconds` overrides the plan default
 
-## 5. 工作目录隔离（P16）
+## 5. Working Directory Isolation (P16)
 
-- [ ] Run 后 `~/.alayaface/plans/<planId>/work/` 存在
-- [ ] 节点会话中 `pwd` = 该 work 目录（模型执行 `pwd`/相对路径写文件落在
-      work 内，不污染后端启动目录）
-- [ ] 两个 plan 并行运行时文件互不可见
-- [ ] 普通会话（非 plan 节点）cwd 仍为后端启动目录（向后兼容）
+- [ ] After Run, `~/.alayaface/plans/<planId>/work/` exists
+- [ ] `pwd` inside a node session = that work directory (model running `pwd`/relative-path file writes land inside work, not in the backend's startup dir)
+- [ ] Two plans running in parallel cannot see each other's files
+- [ ] Normal sessions (non-plan nodes) keep cwd = backend startup dir (backward compatible)
 
-## 5b. 输出注入（P24）
+## 5b. Output Injection (P24)
 
-- [ ] 用 Plan Session 生成计划：下游任务 prompt 写 `基于 {{t1.output}} 完成...`
-      （下游依赖已声明 t1）→ 模型接受该模板
-- [ ] Run 后点击下游节点打开会话 → 其用户消息里 `{{t1.output}}` **已被
-      替换**为 t1 的实际最终回答（无原始模板残留）
-- [ ] 节点详情面板显示该节点的 Output（成功节点的最终回答；未成功节点
-      显示「无输出记录」）
-- [ ] 引用了不存在的任务 id（如 `{{t9.output}}`）→ 下游 prompt 里是中文
-      占位提示而非原始模板
-- [ ] 重开 app → 打开计划 → 静默恢复后重新 Run 未完成任务 → 下游节点
-      仍能注入（上游 Succeeded 不重跑，输出从 run.json 恢复）
+- [ ] Generate a plan with a Plan Session: downstream prompt writes `based on {{t1.output}} ...` (downstream declares t1 as a dependency) → the model accepts the template
+- [ ] After Run, click the downstream node to open its session → `{{t1.output}}` in its user message has **been replaced** with t1's actual final answer (no raw template residue)
+- [ ] Node detail panel shows the node's Output (final answer for succeeded nodes; "no output recorded" for unsuccessful nodes)
+- [ ] Referencing a nonexistent task id (e.g. `{{t9.output}}`) → the downstream prompt contains a Chinese placeholder notice, not the raw template
+- [ ] Reopen the app → open the plan → silently restore and re-Run unfinished tasks → downstream nodes still inject (upstream Succeeded nodes don't rerun; output restored from run.json)
 
-## 5. 优雅关闭（P25 cancel-first）
+## 5. Graceful Close (P25 cancel-first)
 
-- [ ] 关闭一个进行中的节点会话窗口 → 任务被**取消**（不是等它跑完）→
-      进程快速退出（<3s，cancel → save → EOF 序列）
-- [ ] 关闭后 `~/.alayaface/sessions/<id>/session.alaya` 存在且**包含取消
-      点之前的对话**（cancel 后 alayacore 经 handleTaskDone 自动保存；
-      `save` 帧兜底落盘）
-- [ ] **Stop**：正在 Running 的节点任务被 cancel → 节点 Canceled、进程
-      退出、窗口关闭（不再出现"Stop 后节点还在执行"）
-- [ ] 关闭空闲会话（无任务）→ session.alaya 同样已保存（`save` 生效；
-      cancel 返回 NOTHING_TO_CANCEL 被忽略，无副作用）
-- [ ] 连续快速关闭多个会话 → 无残留 alayacore 进程（`pgrep -f alayacore`）
+- [ ] Closing an in-progress node session window → the task is **canceled** (not waited to finish) → process exits quickly (<3s, cancel → save → EOF sequence)
+- [ ] After closing, `~/.alayaface/sessions/<id>/session.alaya` exists and **contains the conversation up to the cancel point** (after cancel, alayacore auto-saves via handleTaskDone; the `save` frame is a fallback)
+- [ ] **Stop**: a Running node's task is canceled → node Canceled, process exits, window closes (no more "node keeps executing after Stop")
+- [ ] Closing an idle session (no task) → session.alaya is saved too (`save` applies; cancel returns NOTHING_TO_CANCEL which is ignored, no side effects)
+- [ ] Rapidly closing several sessions in a row → no leftover alayacore processes (`pgrep -f alayacore`)
 
-## 6. Presets / 工具集（P4.5）
+## 6. Presets / Tool Sets (P4.5)
 
-- [ ] Presets 管理器显示 5 个种子 preset（Default/Fast/Deep/Data/Safe）
-- [ ] Safe preset 的节点运行时不出现 execute_command（settings.conf
-      builtin_tools 生效）
-- [ ] 节点 `tools` 字段覆盖生效
+- [ ] Presets manager shows the 5 seed presets (Default/Fast/Deep/Data/Safe)
+- [ ] Nodes running under the Safe preset never see execute_command (settings.conf builtin_tools applies)
+- [ ] Node-level `tools` field override works
 
-## 回归（非 Plan 功能不受影响）
+## Regression (non-Plan features unaffected)
 
-- [ ] 普通 New Session 对话正常（无 [Plan] 前缀、无 planner system prompt）
-- [ ] Session 管理器 / 删除会话 / 恢复会话正常
-- [ ] 文件选择器、Settings 编辑器（tool_confirm / builtin_tools）正常
+- [ ] Normal New Session conversations work (no [Plan] prefix, no planner system prompt)
+- [ ] Session manager / deleting sessions / restoring sessions work
+- [ ] File picker, Settings editor (tool_confirm / builtin_tools) work
 
-## 已知限制（验收时确认「符合预期」即可）
+## Known Limitations (acceptance: confirm "as expected")
 
-- app 在任务进行中被杀 → 丢进行中那一轮（alayacore 只在任务结束保存，
-  C1 不改 alayacore）
-- 5s 宽限内未跑完的长任务仍会被 SIGKILL（save 帧已先行落盘）
-- 两个 plan 在 ~50ms 内同时打开可能干扰自动恢复链（planReadTarget 单槽）
+- Killing the app mid-task loses the in-flight turn (alayacore only saves at task end; C1 forbids modifying alayacore)
+- Long tasks not finished within the 5s grace are still SIGKILLed (the save frame has already flushed first)
+- Two plans opened within ~50ms of each other may interfere with the auto-restore chain (planReadTarget is single-slot)
