@@ -1,0 +1,30 @@
+#!/bin/sh
+# post-commit-push — after every commit, push the current branch to ALL
+# git remotes automatically (non-fatal: a failed push never breaks the
+# commit; the hook only reports it).
+#
+# Install (per clone — .git/hooks is not version-controlled):
+#   cp scripts/post-commit-push .git/hooks/post-commit && chmod +x .git/hooks/post-commit
+#
+# Behavior:
+#   * pushes HEAD:<current-branch> to every remote from `git remote`
+#   * 30s timeout per remote (no hanging on unreachable hosts)
+#   * prints "[push] <remote> -> <branch>: OK/FAILED"
+
+set -u
+
+branch="$(git branch --show-current 2>/dev/null)"
+[ -z "$branch" ] && exit 0
+
+remotes="$(git remote 2>/dev/null)"
+[ -z "$remotes" ] && exit 0
+
+for r in $remotes; do
+  if timeout 30 git push "$r" "HEAD:$branch" >/dev/null 2>&1; then
+    echo "[push] $r -> $branch: OK"
+  else
+    echo "[push] $r -> $branch: FAILED (run: git push $r HEAD:$branch)" >&2
+  fi
+done
+
+exit 0
