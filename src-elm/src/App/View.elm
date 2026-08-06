@@ -777,6 +777,17 @@ viewPlanNodeDetail planId win plan =
                                         attemptSessions
                                     )
                                 ]
+                        , let
+                            nodeOutput =
+                                win.run
+                                    |> Maybe.andThen (\run -> Dict.get nodeId run.nodes)
+                                    |> Maybe.andThen .output
+                          in
+                          Html.div []
+                              [ Html.div [ Attr.class "plan-node-detail-label" ] [ Html.text "Output" ]
+                              , Html.div [ Attr.class "plan-node-detail-output" ]
+                                  [ Html.text (Maybe.withDefault "（无输出记录）" nodeOutput) ]
+                              ]
                         , Html.div [ Attr.class "plan-node-detail-label" ] [ Html.text "Prompt" ]
                         , Html.div [ Attr.class "plan-node-detail-prompt" ] [ Html.text t.prompt ]
                         , Html.button

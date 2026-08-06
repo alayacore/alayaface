@@ -181,6 +181,12 @@ type alias NodeRunState =
     , failures : List FailureRecord
     , startedAt : Maybe Int
     , finishedAt : Maybe Int
+    -- The final assistant answer of the node's last successful attempt
+    -- (recorded when the task completes). Downstream prompts can
+    -- reference it via {{<id>.output}} (Plan.Inject). Persisted so a
+    -- resumed run can still inject upstream outputs. Nothing until the
+    -- node succeeds (failures/retries don't record output).
+    , output : Maybe String
     }
 
 
@@ -219,6 +225,7 @@ emptyNodeRunState node =
     , failures = []
     , startedAt = Nothing
     , finishedAt = Nothing
+    , output = Nothing
     }
 
 
@@ -660,6 +667,7 @@ encodeNodeRunState n =
         , ( "failures", E.list encodeFailure n.failures )
         , ( "started_at", maybeInt n.startedAt )
         , ( "finished_at", maybeInt n.finishedAt )
+        , ( "output", maybeString n.output )
         ]
 
 
@@ -726,44 +734,50 @@ decodeRunStateOverlay =
 
 nodeRunStateDecoder : D.Decoder NodeRunState
 nodeRunStateDecoder =
-    -- elm/json has no map9: overlay attempt_session_ids (missing in old
-    -- run files → []) on top of the last_session_id overlay (missing →
-    -- Nothing) on top of the map8 base record.
+    -- elm/json has no map9: overlay output (missing → Nothing) on top of
+    -- attempt_session_ids (missing in old run files → []) on top of the
+    -- last_session_id overlay (missing → Nothing) on top of the map8
+    -- base record.
     D.map2
-        (\attemptIds n -> { n | attemptSessions = attemptIds })
-        (D.oneOf [ D.field "attempt_session_ids" (D.list D.string), D.succeed [] ])
+        (\output n -> { n | output = output })
+        (D.oneOf [ D.field "output" (D.nullable D.string), D.succeed Nothing ])
         (D.map2
-            (\lastSid n -> { n | lastSessionId = lastSid })
-            (D.oneOf [ D.field "last_session_id" (D.nullable D.string), D.succeed Nothing ])
-            (D.map8
-                (\nodeId status attempts maxAttempts sessionId failures startedAt finishedAt ->
-                    { nodeId = nodeId
-                    , status = status
-                    , attempts = attempts
-                    , maxAttempts = maxAttempts
-                    , sessionId = sessionId
-                    , lastSessionId = Nothing
-                    , attemptSessions = []
-                    , failures = failures
-                    , startedAt = startedAt
-                    , finishedAt = finishedAt
-                    }
+            (\attemptIds n -> { n | attemptSessions = attemptIds })
+            (D.oneOf [ D.field "attempt_session_ids" (D.list D.string), D.succeed [] ])
+            (D.map2
+                (\lastSid n -> { n | lastSessionId = lastSid })
+                (D.oneOf [ D.field "last_session_id" (D.nullable D.string), D.succeed Nothing ])
+                (D.map8
+                    (\nodeId status attempts maxAttempts sessionId failures startedAt finishedAt ->
+                        { nodeId = nodeId
+                        , status = status
+                        , attempts = attempts
+                        , maxAttempts = maxAttempts
+                        , sessionId = sessionId
+                        , lastSessionId = Nothing
+                        , attemptSessions = []
+                        , failures = failures
+                        , startedAt = startedAt
+                        , finishedAt = finishedAt
+                        , output = Nothing
+                        }
+                    )
+                    (D.oneOf [ D.field "node_id" D.string, D.succeed "" ])
+                    (D.field "status" D.string
+                        |> D.andThen
+                            (\s ->
+                                case nodeStatusFromString s of
+                                    Just st -> D.succeed st
+                                    Nothing -> D.fail ("Unknown node status: " ++ s)
+                            )
+                    )
+                    (D.oneOf [ D.field "attempts" D.int, D.succeed 0 ])
+                    (D.oneOf [ D.field "max_attempts" D.int, D.succeed defaultMaxAttempts ])
+                    (D.field "session_id" (D.nullable D.string))
+                    (D.field "failures" (D.list failureDecoder))
+                    (D.field "started_at" (D.nullable D.int))
+                    (D.field "finished_at" (D.nullable D.int))
                 )
-                (D.oneOf [ D.field "node_id" D.string, D.succeed "" ])
-                (D.field "status" D.string
-                    |> D.andThen
-                        (\s ->
-                            case nodeStatusFromString s of
-                                Just st -> D.succeed st
-                                Nothing -> D.fail ("Unknown node status: " ++ s)
-                        )
-                )
-                (D.oneOf [ D.field "attempts" D.int, D.succeed 0 ])
-                (D.oneOf [ D.field "max_attempts" D.int, D.succeed defaultMaxAttempts ])
-                (D.field "session_id" (D.nullable D.string))
-                (D.field "failures" (D.list failureDecoder))
-                (D.field "started_at" (D.nullable D.int))
-                (D.field "finished_at" (D.nullable D.int))
             )
         )
 

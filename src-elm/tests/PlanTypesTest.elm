@@ -436,6 +436,7 @@ tests =
                                                 , failures = []
                                                 , startedAt = Just 100
                                                 , finishedAt = Just 200
+                                                , output = Just "the answer"
                                                 }
                                         )
                                         (Dict.update "t2"
@@ -451,6 +452,7 @@ tests =
                                                     , failures = [ { attempt = 1, reason = "boom", at = 300 } ]
                                                     , startedAt = Nothing
                                                     , finishedAt = Nothing
+                                                    , output = Nothing
                                                     }
                                             )
                                             run.nodes
@@ -475,9 +477,11 @@ tests =
                                 , \r -> Expect.equal (Just "s1") (nodeState "t1" r).sessionId
                                 , \r -> Expect.equal (Just "s1") (nodeState "t1" r).lastSessionId
                                 , \r -> Expect.equal [ "s1" ] (nodeState "t1" r).attemptSessions
+                                , \r -> Expect.equal (Just "the answer") (nodeState "t1" r).output
                                 , \r -> Expect.equal P.Waiting (nodeState "t2" r).status
                                 , \r -> Expect.equal (Just "s-old") (nodeState "t2" r).lastSessionId
                                 , \r -> Expect.equal [ "s-old", "s-old2" ] (nodeState "t2" r).attemptSessions
+                                , \r -> Expect.equal Nothing (nodeState "t2" r).output
                                 , \r -> Expect.equal 1 (List.length (nodeState "t2" r).failures)
                                 , \r -> Expect.equal "boom" (Maybe.withDefault { attempt = 0, reason = "", at = 0 } (List.head (nodeState "t2" r).failures)).reason
                                 ]
@@ -505,6 +509,7 @@ tests =
                                 [ \ns -> Expect.equal P.Failed ns.status
                                 , \ns -> Expect.equal (Just "s-old") ns.lastSessionId
                                 , \ns -> Expect.equal [] ns.attemptSessions
+                                , \ns -> Expect.equal Nothing ns.output
                                 ]
                                 n
 

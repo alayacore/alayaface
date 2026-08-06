@@ -159,7 +159,7 @@ Plan.Types.decode + normalize + validate（id 唯一/依赖存在/无环）
 | `default_timeout_seconds` | 否 | 节点默认超时（秒）；缺省 = 无超时（v1 行为）；节点可经 `timeout_seconds` 覆盖 |
 | `tasks[].id` | 是 | 全局唯一、非空 |
 | `tasks[].title` | 是 | 节点标题 |
-| `tasks[].prompt` | 是 | 发给该节点会话的完整 prompt（**v1 自包含**，不做上游输出注入） |
+| `tasks[].prompt` | 是 | 发给该节点会话的完整 prompt；可用 `{{<taskId>.output}}` 引用上游任务输出（P24：运行时替换为该任务完成时的最终回答；只能引用 `depends_on` 已声明的任务） |
 | `tasks[].depends_on` | 否 | 依赖 id 列表，默认 `[]`；引用必须存在、不允许自依赖、整体无环 |
 | `tasks[].preset` | 否 | 运行该节点的 preset 名；缺省 = active preset |
 | `tasks[].tools` | 否 | 节点级内置工具集覆盖（逗号列表）；缺省 = preset settings.conf 的 builtin_tools（再缺省 = 全开） |
@@ -449,6 +449,36 @@ MCP 卡住时节点永远 Running、run 永远挂起。
   3 例（decode/roundtrip/非法值）+ E2E（fakecore `hang-once` 挂起 →
   5s 超时 → 自动重试成功，runLog 断言 t3 waiting）。
 
+### 8.6 输出注入（`{{tX.output}}`，P24）
+
+**问题**：下游任务常需要上游任务的产出（如"基于 t1 的调研结果写报告"）。
+v1 prompt 自包含 → 下游模型只能重搜或瞎编（真模型 run 实测：t4 需要
+t1/t2/t3 结果但拿不到）。
+
+**方案**：`tasks[].prompt` 支持模板 `{{<taskId>.output}}`，运行时替换为
+该任务**完成时的最终回答**（会话最后一条非空 assistant 文本）：
+
+- **记录**：TaskDone（SM task 结束帧）时，Update 层从该会话消息历史
+  提取最后一条 assistant 文本（帧有序：AT 先于 SM task-done 到达）→
+  `R.TaskDone sid isError output` 携带 → runner 在成功时写入
+  `NodeRunState.output`；失败/重试不记录；
+- **注入时机**：节点只在所有依赖 Succeeded 后才调度（Starting），
+  bindSession 生成 `SendPrompt` 时解析模板 —— 上游输出必然已存在；
+  模板替换是纯函数 `Plan.Inject.injectOutputs`（`{{` 后找 `.output}}`，
+  精确匹配无空格；未知 id / 无输出 → 替换为中文占位提示，**绝不把
+  原始模板泄漏给模型**；无 `.output}}` 的 `{{` 原样保留）；
+- **持久化**：`output` 写入 run.json（§10）→ 重启/静默恢复后下游节点
+  启动时仍能注入（上游 Succeeded 不重跑，输出必须跨重启保留）；
+  重新 Run（StartRun）清空全部 output（全新一轮）；
+- **UI**：节点详情面板显示 Output（无记录显示占位）；
+- **规划器教学**：Plan Session 的 `planSystemPrompt` 告知模型：下游需要
+  上游产出时用 `{{t1.output}}` 引用（仅限已声明依赖的任务）；
+- 测试：`PlanInjectTest`（10 例替换/缺失/未知/原样保留）+ runner
+  （成功记录、失败不记录、下游 SendPrompt 注入、缺失→占位、重 Run
+  清空）+ codec roundtrip + E2E（fixture t2 prompt 引用 `{{t1.output}}`，
+  fakecore 回复回显收到的 prompt → 断言 t2 会话里含 t1 输出文本且无
+  原始模板）。
+
 ---
 
 ## 9. preset 与种子 preset
@@ -482,7 +512,8 @@ MCP 卡住时节点永远 Running、run 永远挂起。
 - 节点绑定多字段持久化：`session_id`（当前活跃绑定）、`last_session_id`
   （最近一次运行该节点的会话，即使已被关闭/失败，仍可 `resume_session`
   回看）、`attempt_session_ids`（**全部**绑定过该节点的会话 id 历史，
-  去重、跨重试/跨 run 保留）→ 节点 ↔ 会话绑定跨重启保留，旧尝试的会话
+  去重、跨重试/跨 run 保留）、`output`（该节点成功完成的最终回答，
+  供下游 `{{tX.output}}` 注入）→ 节点 ↔ 会话绑定跨重启保留，旧尝试的会话
   不再因重试替换绑定而丢失（节点详情面板「历史会话」列表可直接打开）；
   打开 plan 窗口时自动静默恢复，点击节点可重新打开对应会话；
 - **Resume（v1）**：重开 app → 打开计划 → 从 run.json 恢复，未完成/失败/阻塞节点**从头重新执行**（新建会话，不尝试恢复子进程；真断点续跑为 v2）；
@@ -516,6 +547,8 @@ MCP 卡住时节点永远 Running、run 永远挂起。
 | P4.5 | `create_session` 加 `preset`/`builtinTools` 参数 + settings.conf `builtin_tools` + 种子 preset 播种 | ✅ 完成 |
 | P5 | 打磨（运行日志/文档/README 等） | ✅ 完成 |
 | P6 | Plan Session（菜单入口 + `--system` 规划器指令 + `[Plan]` 标题） | ✅ 完成 |
+| P17–P23 | Plans 管理器 Browse 导入 / 节点会话 resume 目录 id / 节点↔会话连接曲线 / config 空壳 / Plan Session 角色锁+无工具 / Stop 关节点窗口（详见 TODO.md） | ✅ 完成 |
+| P24 | 输出注入 `{{tX.output}}`（§8.6：TaskDone 记录 output → run.json 持久化 → 下游 SendPrompt 替换 → 详情面板展示） | ✅ 完成 |
 
 > 实现偏差：DAG 渲染用纯 HTML/CSS（div 绝对定位 + 正交连线），因为
 > elm/svg 不在离线包缓存中；效果与 SVG 等价。会话创建采用**串行化**
@@ -544,7 +577,8 @@ MCP 卡住时节点永远 Running、run 永远挂起。
 - `default_max_attempts` 默认 3，重试退避 2s；
 - 失败判定：SM task_error / SM error / 会话断连 / **任务超时**
   （`default_timeout_seconds` / `timeout_seconds`，缺省无超时；P16 已实现）；
-- 下游上下文：v1 prompt 自包含，**不做**上游输出注入（v2 可加 `{{t1.output}}` 模板）；
+- 下游上下文：prompt 支持 `{{<taskId>.output}}` 上游输出注入（P24 已
+  实现；§8.6）；未引用的下游 prompt 保持自包含；
 - Runner 会话 `toolConfirm="allow"`；
 - 文件位置 `~/.alayaface/plans/<planId>.json`；Resume v1 = 重跑未完成节点；
 - Plan 只读展示（节点编辑 v2）；
@@ -558,8 +592,7 @@ MCP 卡住时节点永远 Running、run 永远挂起。
 ### 待定（v2，不阻塞）
 - 节点 `outputs` 字段（产出物描述，先存不用）；
 - 真断点续跑（resume 子进程）；
-- MCP-only 模式（`builtin_tools: "none"`）；
-- 上游输出注入（`{{t1.output}}` 模板）。
+- MCP-only 模式（`builtin_tools: "none"`）。
 
 ---
 

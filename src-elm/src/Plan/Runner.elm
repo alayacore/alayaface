@@ -35,6 +35,7 @@ frame arriving while Starting (before the prompt is sent) is ignored.
 -}
 
 import Dict exposing (Dict)
+import Plan.Inject
 import Plan.Types as PT
 
 
@@ -46,7 +47,7 @@ type Event
     | StopRun
     | SessionCreatedFor String String
     | SessionCreateFailed String String
-    | TaskDone String Bool
+    | TaskDone String Bool (Maybe String)
     | SessionError String String
     | SessionDisconnected String String
     | RetryNode String
@@ -91,8 +92,8 @@ step now ev run =
                     -- once (bindSession only fires on Starting → Running).
                     bindSession nodeId sid run
 
-                TaskDone sid isError ->
-                    ( taskDone now sid isError run, [] )
+                TaskDone sid isError output ->
+                    ( taskDone now sid isError output run, [] )
 
                 -- create_session failed (e.g. invalid node preset): treat
                 -- it as a node failure so retry/backoff applies instead
@@ -144,6 +145,7 @@ startRun now run =
                             , failures = []
                             , startedAt = Nothing
                             , finishedAt = Nothing
+                            , output = Nothing
                         }
                     )
                     run.nodes
@@ -187,12 +189,16 @@ bindSession nodeId sid run =
             if n.status == PT.Starting then
                 -- Carry the prompt text in the effect so the update layer
                 -- never has to re-resolve it from (possibly stale) state.
+                -- Downstream {{<id>.output}} templates are resolved HERE
+                -- against the outputs of succeeded upstream nodes (a node
+                -- is only scheduled once all its deps succeeded, so the
+                -- referenced outputs always exist by bind time).
                 let
                     promptText =
                         run.plan.tasks
                             |> List.filter (\t -> t.id == nodeId)
                             |> List.head
-                            |> Maybe.map .prompt
+                            |> Maybe.map (.prompt >> Plan.Inject.injectOutputs (outputsOf run))
                             |> Maybe.withDefault ""
 
                     attemptSessions =
@@ -213,8 +219,26 @@ bindSession nodeId sid run =
             ( run, [] )
 
 
-taskDone : Int -> String -> Bool -> PT.RunState -> PT.RunState
-taskDone now sid isError run =
+{-| Recorded outputs of succeeded nodes — the lookup table for
+{{<id>.output}} injection. Only succeeded nodes have output.
+-}
+outputsOf : PT.RunState -> Dict String String
+outputsOf run =
+    Dict.foldl
+        (\_ n acc ->
+            case ( n.status, n.output ) of
+                ( PT.Succeeded, Just out ) ->
+                    Dict.insert n.nodeId out acc
+
+                _ ->
+                    acc
+        )
+        Dict.empty
+        run.nodes
+
+
+taskDone : Int -> String -> Bool -> Maybe String -> PT.RunState -> PT.RunState
+taskDone now sid isError output run =
     case nodeBySessionId sid run of
         Just nodeId ->
             updateNode nodeId
@@ -224,7 +248,7 @@ taskDone now sid isError run =
                             failNode now "Task failed" n
 
                         else
-                            { n | status = PT.Succeeded, finishedAt = Just now }
+                            { n | status = PT.Succeeded, finishedAt = Just now, output = output }
 
                     else
                         n

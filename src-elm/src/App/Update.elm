@@ -493,7 +493,7 @@ findPlanIdBySession model sid =
 eventSessionId : R.Event -> Maybe String
 eventSessionId ev =
     case ev of
-        R.TaskDone sid _ ->
+        R.TaskDone sid _ _ ->
             Just sid
 
         R.SessionError sid _ ->
@@ -537,7 +537,7 @@ planSystemPrompt =
   ]
 }
 规则：
-- id 全局唯一；prompt 必须自包含（不要引用其他任务的输出）
+- id 全局唯一；prompt 默认自包含；如果下游任务需要上游任务的产出，在 prompt 中用 {{t1.output}} 引用该任务的输出（框架会在该上游任务完成后把它的最终输出替换进下游 prompt；只能引用已声明依赖的任务，不要引用依赖关系之外的任务）
 - 能并行执行的任务之间不要互相依赖
 - 需要特定环境的任务用 preset 指定（Default/Fast/Deep/Data/Safe）
 - 涉及执行命令等有风险操作的任务用 preset: "Safe"（禁 execute_command）或 tools 字段限制
@@ -832,7 +832,7 @@ planEventFromFrame model ev =
                                             Nothing
 
                                         else
-                                            Just (R.TaskDone ev.sessionId taskError)
+                                            Just (R.TaskDone ev.sessionId taskError (lastAssistantOutput model ev.sessionId))
 
                                     "error" ->
                                         let
@@ -851,6 +851,28 @@ planEventFromFrame model ev =
 
                     Nothing ->
                         Nothing
+
+
+{-| The final assistant answer of a session — recorded as the node's
+output when its task completes (used by {{<id>.output}} injection).
+Frames arrive in order: the final AT text is handled before the SM
+task-done frame that triggers this lookup, so the last Assistant
+message here is the completed task's answer.
+-}
+lastAssistantOutput : Model -> String -> Maybe String
+lastAssistantOutput model sid =
+    case Dict.get sid model.sessions of
+        Just s ->
+            s.messages
+                |> List.filter (\m -> m.role == T.Assistant)
+                |> List.map .content
+                |> List.filter (not << String.isEmpty)
+                |> List.reverse
+                |> List.head
+                |> Maybe.map String.trim
+
+        Nothing ->
+            Nothing
 
 
 -- UPDATE

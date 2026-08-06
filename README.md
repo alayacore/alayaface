@@ -193,6 +193,13 @@ other and from the backend's directory. **Task timeouts**: a plan may set
 default); a node that hangs past its timeout fails and auto-retries like
 any other failure — this also covers a hanging `create_session`.
 
+**Output injection**: a downstream node prompt may reference an upstream
+task's result with `{{<taskId>.output}}` (e.g. `{{t1.output}}`); when the
+downstream node launches, the template is replaced with the upstream
+task's final answer (recorded on success, persisted in
+`<plan>.run.json`, so it survives restarts). The node detail panel shows
+each node's recorded output.
+
 **Session close is graceful**: `close_session` asks AlayaCore to save (CI
 `save` → `session.alaya`), closes stdin (AlayaCore drains an in-progress
 task, auto-saving at task end, then exits), and only SIGKILLs after a 5s

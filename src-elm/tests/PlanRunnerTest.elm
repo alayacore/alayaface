@@ -132,7 +132,7 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, _ ) =
-                            R.step 3000 (R.TaskDone "s1" False) run2
+                            R.step 3000 (R.TaskDone "s1" False Nothing) run2
                     in
                     -- after a succeeded, b (Pending) should be launched
                     Expect.all
@@ -205,7 +205,7 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, _ ) =
-                            R.step 3000 (R.TaskDone "s1" False) run2
+                            R.step 3000 (R.TaskDone "s1" False Nothing) run2
                     in
                     Expect.all
                         [ \_ -> Expect.equal True (List.member "create:a" (effects es1))
@@ -231,7 +231,7 @@ tests =
 
                         -- first attempt fails → Waiting (backoff)
                         ( run4, _ ) =
-                            R.step 3000 (R.TaskDone "s1" True) run3
+                            R.step 3000 (R.TaskDone "s1" True Nothing) run3
 
                         -- auto-retry tick relaunches → new session s2
                         ( run5, _ ) =
@@ -392,7 +392,7 @@ tests =
                             R.step 9000 (R.SessionCreatedFor "a" "s2") run4
 
                         ( run6, _ ) =
-                            R.step 10000 (R.TaskDone "s2" False) run5
+                            R.step 10000 (R.TaskDone "s2" False Nothing) run5
                     in
                     Expect.all
                         [ \r -> Expect.equal P.Succeeded (nodeState "a" r).status
@@ -413,7 +413,7 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, _ ) =
-                            R.step 3000 (R.TaskDone "s1" False) run2
+                            R.step 3000 (R.TaskDone "s1" False Nothing) run2
                     in
                     Expect.all
                         [ \r -> Expect.equal P.Succeeded (nodeState "a" r).status
@@ -430,7 +430,7 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, es ) =
-                            R.step 3000 (R.TaskDone "s1" True) run2
+                            R.step 3000 (R.TaskDone "s1" True Nothing) run2
 
                         a =
                             nodeState "a" run3
@@ -457,7 +457,7 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, _ ) =
-                            R.step 3000 (R.TaskDone "s1" True) run2
+                            R.step 3000 (R.TaskDone "s1" True Nothing) run2
 
                         ( run4, es ) =
                             R.step 4000 (R.RetryTick "a") run3
@@ -477,7 +477,7 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, _ ) =
-                            R.step 3000 (R.TaskDone "s1" True) run2
+                            R.step 3000 (R.TaskDone "s1" True Nothing) run2
 
                         -- user presses Stop while the node waits for backoff
                         ( run4, _ ) =
@@ -503,7 +503,7 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, _ ) =
-                            R.step 3000 (R.TaskDone "s1" True) run2
+                            R.step 3000 (R.TaskDone "s1" True Nothing) run2
 
                         ( run4, _ ) =
                             R.step 3500 R.StopRun run3
@@ -529,7 +529,7 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, es1 ) =
-                            R.step 3000 (R.TaskDone "s1" True) run2
+                            R.step 3000 (R.TaskDone "s1" True Nothing) run2
 
                         -- another unrelated event while a stays Waiting must
                         -- NOT schedule a second retry timer
@@ -636,7 +636,7 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, _ ) =
-                            R.step 3000 (R.TaskDone "s1" True) run2
+                            R.step 3000 (R.TaskDone "s1" True Nothing) run2
 
                         ( run4, _ ) =
                             R.step 4000 (R.RetryNode "a") run3
@@ -645,7 +645,7 @@ tests =
                             R.step 5000 (R.SessionCreatedFor "a" "s2") run4
 
                         ( run6, _ ) =
-                            R.step 6000 (R.TaskDone "s2" True) run5
+                            R.step 6000 (R.TaskDone "s2" True Nothing) run5
 
                         a =
                             nodeState "a" run6
@@ -676,7 +676,7 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, _ ) =
-                            R.step 3000 (R.TaskDone "s1" True) run2
+                            R.step 3000 (R.TaskDone "s1" True Nothing) run2
 
                         a =
                             nodeState "a" run3
@@ -703,7 +703,7 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, _ ) =
-                            R.step 3000 (R.TaskDone "s1" True) run2
+                            R.step 3000 (R.TaskDone "s1" True Nothing) run2
 
                         ( run4, _ ) =
                             R.step 4000 R.StartRun run3
@@ -730,16 +730,16 @@ tests =
                             R.step 3000 (R.SessionCreatedFor "b" "s2") run2
 
                         ( run4, _ ) =
-                            R.step 4000 (R.TaskDone "s1" False) run3
+                            R.step 4000 (R.TaskDone "s1" False Nothing) run3
 
                         ( run5, _ ) =
-                            R.step 5000 (R.TaskDone "s2" False) run4
+                            R.step 5000 (R.TaskDone "s2" False Nothing) run4
 
                         ( run6, _ ) =
                             R.step 6000 (R.SessionCreatedFor "c" "s3") run5
 
                         ( run7, _ ) =
-                            R.step 7000 (R.TaskDone "s3" False) run6
+                            R.step 7000 (R.TaskDone "s3" False Nothing) run6
                     in
                     Expect.equal P.Completed run7.status
             ]
@@ -799,11 +799,11 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, _ ) =
-                            R.step 3000 (R.TaskDone "s1" True) run2
+                            R.step 3000 (R.TaskDone "s1" True Nothing) run2
 
                         -- a is Waiting now; a late TaskDone must not touch it
                         ( run4, _ ) =
-                            R.step 4000 (R.TaskDone "s1" False) run3
+                            R.step 4000 (R.TaskDone "s1" False Nothing) run3
 
                         a =
                             nodeState "a" run4
@@ -863,7 +863,7 @@ tests =
                             R.step 4000 (R.SessionCreatedFor "a" "s1") run3
 
                         ( run5, es2 ) =
-                            R.step 5000 (R.TaskDone "s1" False) run4
+                            R.step 5000 (R.TaskDone "s1" False Nothing) run4
                     in
                     Expect.all
                         [ \_ -> Expect.equal P.InProgress run5.status
@@ -885,7 +885,7 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "a" "s1") run1
 
                         ( run3, _ ) =
-                            R.step 3000 (R.TaskDone "s1" True) run2
+                            R.step 3000 (R.TaskDone "s1" True Nothing) run2
 
                         ( run4, _ ) =
                             R.step 4000 (R.RetryNode "a") run3
@@ -909,5 +909,137 @@ tests =
                             R.step 2000 (R.SessionCreatedFor "b" "s2") run1
                     in
                     Expect.equal (Just "b") (R.nodeBySessionId "s2" run2)
+            ]
+        , describe "output injection ({{tX.output}})"
+            [ test "TaskDone records the node output on success" <|
+                \_ ->
+                    let
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan singlePlan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        ( run3, _ ) =
+                            R.step 3000 (R.TaskDone "s1" False (Just "the answer")) run2
+                    in
+                    Expect.equal (Just "the answer") (nodeState "a" run3).output
+            , test "TaskDone failure does not record output" <|
+                \_ ->
+                    let
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan singlePlan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        ( run3, _ ) =
+                            R.step 3000 (R.TaskDone "s1" True Nothing) run2
+                    in
+                    Expect.equal Nothing (nodeState "a" run3).output
+            , test "downstream SendPrompt injects the upstream output" <|
+                \_ ->
+                    let
+                        plan =
+                            planFromJson """{ "name": "x", "tasks": [
+                              { "id": "a", "title": "A", "prompt": "a" },
+                              { "id": "b", "title": "B", "prompt": "use {{a.output}} now", "depends_on": ["a"] }
+                            ] }"""
+
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan plan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        ( run3, _ ) =
+                            R.step 3000 (R.TaskDone "s1" False (Just "ANSWER-123")) run2
+
+                        ( run4, es ) =
+                            R.step 4000 (R.SessionCreatedFor "b" "s2") run3
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal P.Running (nodeState "b" run4).status
+                        , \_ -> Expect.equal True (List.member "prompt:s2:use ANSWER-123 now" (effects es))
+                        ]
+                        ()
+            , test "missing upstream output is replaced with a marker" <|
+                \_ ->
+                    let
+                        plan =
+                            planFromJson """{ "name": "x", "tasks": [
+                              { "id": "a", "title": "A", "prompt": "a" },
+                              { "id": "b", "title": "B", "prompt": "use {{a.output}} now", "depends_on": ["a"] }
+                            ] }"""
+
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan plan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        -- a succeeds but with NO output (e.g. an old run
+                        -- file resumed from before output recording)
+                        ( run3, _ ) =
+                            R.step 3000 (R.TaskDone "s1" False Nothing) run2
+
+                        ( run4, es ) =
+                            R.step 4000 (R.SessionCreatedFor "b" "s2") run3
+                    in
+                    Expect.equal True
+                        (List.any
+                            (\e ->
+                                case e of
+                                    P.SendPrompt _ text ->
+                                        String.contains "没有可用输出记录" text
+
+                                    _ ->
+                                        False
+                            )
+                            es
+                        )
+            , test "unknown task reference is replaced with a marker" <|
+                \_ ->
+                    let
+                        plan =
+                            planFromJson """{ "name": "x", "tasks": [
+                              { "id": "a", "title": "A", "prompt": "use {{z.output}}" }
+                            ] }"""
+
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan plan)
+
+                        ( run2, es ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+                    in
+                    Expect.equal True
+                        (List.any
+                            (\e ->
+                                case e of
+                                    P.SendPrompt _ text ->
+                                        String.contains "没有可用输出记录" text
+                                            && not (String.contains "{{" text)
+
+                                    _ ->
+                                        False
+                            )
+                            es
+                        )
+            , test "re-run clears recorded outputs" <|
+                \_ ->
+                    let
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan singlePlan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        ( run3, _ ) =
+                            R.step 3000 (R.TaskDone "s1" False (Just "old")) run2
+
+                        ( run4, _ ) =
+                            R.step 4000 R.StartRun run3
+                    in
+                    Expect.equal Nothing (nodeState "a" run4).output
             ]
         ]

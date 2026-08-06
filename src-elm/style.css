@@ -2853,6 +2853,19 @@ body {
   overflow-y: auto;
 }
 
+.plan-node-detail-output {
+  font-size: 0.78rem;
+  background: #f6f8ff;
+  border: 1px solid #e3e8f5;
+  border-radius: 6px;
+  padding: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 180px;
+  overflow-y: auto;
+  color: #2b3a67;
+}
+
 /* ─── Plan runner (P4) ───────────────────────────────────────────── */
 
 .plan-run-badge {

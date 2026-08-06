@@ -60,6 +60,42 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P14 Concurrency selector in the plan header | [x] |
 | P15 Automated headless-browser E2E + 4 real bugs found & fixed | [x] |
 | P16 Per-plan work dir isolation + task timeouts | [x] |
+| P22 Plan Session role-lock + no builtin tools + **真模型验证（用户实测完整 run 跑通）** | [x] |
+| P24 Output injection `{{tX.output}}`（TaskDone 记录输出 → run.json 持久化 → 下游 prompt 替换 → 详情面板） | [x] |
+
+## P24 — 输出注入（{{tX.output}}）
+
+用户真模型 run 实测暴露：下游任务（如 t4）需要上游 t1/t2/t3 的产出，
+但 v1 prompt 自包含 → 模型只能重搜/瞎编。真模型 run 也确认了任务输出
+确实落盘到 per-plan work 目录（模型用 write_file 写 `work/` 下文件），
+但文件命名无固定约定 → 注入采用「最终回答文本」而非猜文件名。
+
+- [x] `Plan/Inject.elm`（新纯模块）：`injectOutputs : Dict String String
+      -> String -> String` 替换 `{{<taskId>.output}}`（精确匹配无空格；
+      未知 id / 无输出 → 中文占位提示，原始模板绝不泄漏给模型；无
+      `.output}}` 的 `{{` 原样保留）；
+- [x] `NodeRunState.output : Maybe String`：TaskDone 成功时记录（会话
+      最后一条非空 assistant 文本，Update 层 `lastAssistantOutput` 从
+      `model.sessions` 提取，帧有序 AT 先于 SM task-done）；失败/重试
+      不记录；StartRun 重跑清空；
+- [x] runner：`TaskDone sid isError (Maybe String)` 三参事件；
+      `bindSession` 生成 `SendPrompt` 时经 `outputsOf run`（Succeeded 且
+      有输出）注入 —— 节点只在依赖全 Succeeded 后调度，注入时机成立；
+- [x] run.json codec：`output` 字段 encode + lenient decode（缺省
+      Nothing，兼容旧文件）→ resume/静默恢复后下游仍能注入；
+- [x] UI：节点详情面板新增 Output 区（无记录显示占位）；
+- [x] 规划器教学：`planSystemPrompt` 规则改为「下游需要上游产出时用
+      {{t1.output}} 引用（仅限已声明依赖的任务）」；
+- [x] 测试：`PlanInjectTest`（10 例）+ runner 6 例（成功记录/失败不记录/
+      下游注入/缺失占位/未知 id 占位/重 Run 清空）+ codec roundtrip +
+      lenient → **Elm 172**；
+- [x] E2E：fixture t2 prompt 引用 `{{t1.output}}`；fakecore `streamReply`
+      追加回显收到的 prompt（`Received prompt: ...`，成为节点最终回答）
+      → e2e 断言 t2 会话含 t1 输出文本（`research the topic and
+      summarize findings`）+ 注入标签 + 无原始模板；`make e2e` ALL PASS
+      （含新步骤 7c：注入断言 + 关 t2 后曲线隐藏）；
+- [x] 文档：docs/plan-mode.md §5 表、新增 §8.6、§10 持久化、§13 决策、
+      §12 进度表。
 
 ## P11 — 第二轮审查：创建队列串行化 + 创建失败恢复
 
@@ -737,8 +773,11 @@ Fix (two layers):
 - [x] Tests: elm 156 / Rust 42 / Go -race all pkgs / make e2e ALL PASS
       (e2e server log shows `with --builtin-tools=<none>` for the Plan
       Session, runner sessions unaffected)
-- [ ] Real-model validation: plan session now cannot do anything but
-      answer with text → JSON; verify with the user's model
+- [x] Real-model validation: 用户用实际模型（Qwen+DeepSeek 组合）实测
+      完整 run 跑通（t1/t2/t3 Succeeded，模型正常产出、work 目录落盘
+      真实文件）；Plan Session 只吐 JSON 的行为用户实测可用；遗留：真
+      模型下 Plan Session 的 JSON 输出质量未自动化（需要真实 API key，
+      e2e 用 fakecore 覆盖协议层）
 
 ---
 

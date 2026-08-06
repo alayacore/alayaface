@@ -78,13 +78,18 @@ func echoID(tag, id, content string) {
 
 // streamReply emits a canned assistant reply: reasoning + text deltas
 // followed by empty AT/AR terminators (delta mode) and the task-done SM
-// frame (in_progress=false → the runner marks the node Succeeded).
+// frame (in_progress=false → the runner marks the node Succeeded). The
+// last assistant message echoes the received prompt so the E2E can
+// verify output injection: a downstream node's prompt contains the
+// upstream node's final answer (which itself echoes its own prompt).
 func streamReply() {
 	echoID("Ar", "r1", "Thinking about it...")
 	echoID("At", "t1", "Hello")
 	echoID("At", "t1", " world")
 	echoID("AT", "t1", "")
 	echoID("AR", "r1", "")
+	echoID("At", "p1", "Received prompt: "+stagedText)
+	echoID("AT", "p1", "")
 	writeFrame("SM", `{"type":"task","data":{"in_progress":false,"task_error":false}}`)
 }
 
@@ -279,7 +284,7 @@ func planReply() {
   "default_timeout_seconds": 5,
   "tasks": [
     { "id": "t1", "title": "Research", "prompt": "research the topic and summarize findings", "depends_on": [], "max_attempts": 3 },
-    { "id": "t2", "title": "Draft", "prompt": "draft the report from the research (fail-once marker)", "depends_on": ["t1"], "max_attempts": 3 },
+    { "id": "t2", "title": "Draft", "prompt": "draft the report from the research (fail-once marker). 参考上游任务输出: {{t1.output}}", "depends_on": ["t1"], "max_attempts": 3 },
     { "id": "t3", "title": "Review", "prompt": "review the draft and fix any issues (hang-once marker)", "depends_on": ["t2"], "max_attempts": 3 }
   ]
 }`

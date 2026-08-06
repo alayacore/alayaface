@@ -277,6 +277,51 @@ try {
   await assertConnection('node↔session connection (plan second layer + bezier)');
   await shot(page, '05a-node-connection.png');
 
+  // ── 7c. Output injection: {{t1.output}} → t1's recorded output ────
+  // t2's prompt references {{t1.output}}; when t2's session was created
+  // the runner replaced it with t1's recorded output (t1's final AT,
+  // which fakecore echoes as "Received prompt: <t1 prompt>"). Click t2
+  // and verify its received prompt + reply contain the injected text
+  // and that no raw template leaked into the model.
+  await clickNode(page, 't2');
+  await page.waitForFunction(() => {
+    const t = document.querySelector('.session-panel.session-panel-active .session-bar-title')?.textContent || '';
+    return t.includes('/t2');
+  }, { timeout: 30000 });
+  await sleep(600);
+  const t2Texts = await page.evaluate(() => {
+    const p = document.querySelector('.session-panel.session-panel-active');
+    return p ? [...p.querySelectorAll('.message-content')].map(e => e.textContent) : [];
+  });
+  const t2Joined = t2Texts.join('\n');
+  assert(t2Texts.some(t => t.includes('参考上游任务输出')), 't2 prompt carries the injection label, got: ' + JSON.stringify(t2Texts));
+  assert(t2Joined.includes('research the topic and summarize findings'), 't2 prompt contains t1\'s recorded output, got: ' + JSON.stringify(t2Texts));
+  assert(!t2Joined.includes('{{t1.output}}'), 'raw template fully replaced, got: ' + JSON.stringify(t2Texts));
+  await shot(page, '05b-output-injection.png');
+  console.log('PASS: {{t1.output}} injected t1\'s recorded output into t2\'s prompt (no raw template)');
+
+  // Restore state for step 8: close t2's session (the connection curve
+  // now belongs to t2, so step 8's close-t1 → curve-hidden check needs
+  // t2's window gone first).
+  await page.evaluate(() => {
+    const panels = [...document.querySelectorAll('.session-panel')];
+    for (const p of panels) {
+      const t = p.querySelector('.session-bar-title')?.textContent || '';
+      if (t.includes('/t2]')) {
+        const btn = p.querySelector('.session-bar-close');
+        if (btn) btn.click();
+        break;
+      }
+    }
+  });
+  await sleep(500);
+  const hiddenAfterT2Close = await page.evaluate(() => {
+    const svg = document.querySelector('.node-connection-overlay');
+    return svg ? getComputedStyle(svg).display === 'none' : true;
+  });
+  assert(hiddenAfterT2Close, 'connection curve hidden after t2 closes');
+  console.log('PASS: connection curve hidden after closing t2');
+
   // ── 8. Close/reopen node session (resume regression) ───────────────
   // The node stays bound to the ON-DISK dir id; resume_session hands out
   // a FRESH id that must NOT become the persistent binding (its dir does
