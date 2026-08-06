@@ -64,6 +64,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P24 Output injection `{{tX.output}}`（TaskDone 记录输出 → run.json 持久化 → 下游 prompt 替换 → 详情面板） | [x] |
 | P25 Close_session cancel-first（Stop/关窗口立即取消任务，不等 drain 跑完；历史保存到取消点） | [x] |
 | P26 plan JSON 顶层 `"type": "alayaface-plan"` 标志（按钮只认显式标志，普通 ```json 不误触发；**必填无兼容**——缺失/错误值直接报错） | [x] |
+| R 系列 | Plan 重构：模型自主子流程 + 递归（自动创建 / 回填自动继续 / 重跑级联 / 状态条 / 超时移除）——**详见 REFACTOR.md** | 进行中 |
 
 ## P24 — 输出注入（{{tX.output}}）
 
@@ -152,6 +153,58 @@ C1 安全：`cancelTask` → `activeTask.cancel()` → 任务经 `taskResultCh`
       （无标志）→ 管理器显示 `Missing top-level "type"...` 且不开窗口；
       ALL PASS；
 - [x] 文档：plan-mode.md §5 schema/字段表（type 必填）、§6.7、§12、§13 已确认。
+
+---
+
+## R 系列 — Plan 重构：模型自主子流程 + 递归
+
+> **核心文档：`REFACTOR.md`**（完整设计 + 阶段流程 + 已确认决策 D1–D15）。
+> 中断恢复：读 REFACTOR.md → 本清单 → 从第一个 `[ ]` 继续。
+> 每阶段完成：全量测试 → 提交 → push 三 remote（origin/gitee/org）。
+
+### R1 基础：schema 与纯逻辑（Plan/Types + Runner）
+- [ ] Plan/Types.elm：删 `defaultTimeoutSeconds`/`timeoutSeconds` 字段与 validate 校验
+      （decode 忽略未知字段 → 旧 plan 文件带 timeout 照常打开）；NodeStatus 新增
+      `WaitingForPlan`（nodeStatusToString/FromString `"waiting_for_plan"`）；
+- [ ] Plan/Runner.elm：删 `Tick`/`checkTimeouts`/`timeoutNode`；TaskDone 事件加
+      `delegated : Bool`（Update 层按"最后消息含 plan JSON"判定传入）；
+      WaitingForPlan 迁移：TaskDone+delegated → WaitingForPlan；回填继续事件 →
+      Running；等待中 Stop → Canceled；等待中手动 TaskDone(非委托) → Succeeded；
+- [ ] 测试：删超时 5 例（runner）+ 3 例（schema timeout）；加 WaitingForPlan 迁移测试；
+      Elm 全绿
+
+### R2 检测与自动创建
+- [ ] App/Update.elm：pendingPlanOffers 改造为自动创建（检测即创建，不弹按钮）；
+      重放路径跳过检测（防重复创建）；解析失败错误内联到原消息；
+- [ ] planSystemPrompt 重写（去角色锁，建议性）+ 所有 session 创建注入
+      （普通会话 + 节点会话 = 递归入口）；
+- [ ] 删除 Plan Session：菜单入口、CreatePlanSession Msg、planSessionPending、
+      planSessionIds、[Plan] 标题、Plan Session 的 builtinTools=""；
+- [ ] 测试 + E2E：offer 断言 → 自动创建断言
+
+### R3 回填 + 状态条 + 持久化
+- [ ] meta.json codec（origin/feedbacks）+ 自动创建时写 origin；
+- [ ] 状态条组件（View + CSS）：消息下 plan 绑定（名称/状态/打开/重新执行）；
+- [ ] 回填：plan Completed → 构造汇总 prompt（节点 output 汇总 + `[Plan: xxx]`）→
+      发 origin 会话（已关则 resume）→ 自动继续；Failed/Stopped 零回填；写 feedbacks；
+- [ ] `[Plan: xxx]` 链接渲染（扫描消息文本 → clickable → openPlanFile）；
+- [ ] 重启恢复：打开会话时扫描 plans 目录重建 messageId → planId 索引；重放渲染状态条；
+- [ ] 测试 + E2E
+
+### R4 关闭规则 + 重跑级联
+- [ ] closeAndClear：Succeeded 也关节点窗口（保留绑定）；WaitingForPlan 不关；
+- [ ] Plan Completed → 先回填 → 自动关 Plan 窗口；Failed/Stopped 保留；
+- [ ] 重跑（PlanRunRestart）：跳过 Succeeded + 未完成节点分类
+      （普通重跑 / WaitingForPlan → 重跑子 plan，planId 不变）；Blocked 重置可调度；
+- [ ] E2E 8/8b 重写（成功节点窗口已关 → 点击 resume；Stop 场景保留）
+
+### R5 清理 + E2E 重写 + 文档
+- [ ] 死代码清理（P22 残余、plan-offer-btn CSS）；Time.every 订阅删除；
+- [ ] E2E 全量重写：fixture t3 保留 hang-once（供 Stop）；E2E 开头预置 t3 hang marker
+      （第一次 run 秒成功）；新增递归/回填/状态条/重跑级联步骤；
+- [ ] 文档：docs/plan-mode.md（§5/§6.7/§7/§8.5 超时移除/§13）、README、
+      docs/manual-acceptance.md；
+- [ ] 全量验证：Elm / Rust / Go -race / make e2e 全绿 → 提交 → push 三 remote
 
 ## P11 — 第二轮审查：创建队列串行化 + 创建失败恢复
 
