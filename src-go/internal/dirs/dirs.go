@@ -26,8 +26,33 @@ import (
 	"time"
 )
 
-// Default model config template (key-value block format).
-const DefaultModelConf = `name: "Placeholder"
+// ─── Legacy config seeds (detection only) ───────────────────────────
+//
+// Fresh presets are seeded as EMPTY shells: alayacore creates
+// model.conf, runtime.conf and themes/ itself when they are missing
+// (verified against the real binary — an empty config dir starts with
+// zero error frames and alayacore writes a working local-Ollama default
+// model). "Empty" seeds are therefore noise — a literal "{}" in
+// runtime.conf even makes alayacore emit a parse error on every
+// startup. Copying an EXISTING preset (clone) is the only path that
+// should produce files, and that keeps whatever is in the source.
+//
+// These constants exist ONLY to detect and remove files that still hold
+// exactly a legacy seed (never anything alayacore or the user has
+// written since).
+
+// LegacyRuntimeConfEmpty is the runtime.conf seed written by early
+// versions (JSON empty object — unparseable by alayacore).
+const LegacyRuntimeConfEmpty = "{}"
+
+// LegacyRuntimeConfComment is the runtime.conf seed written by the P20
+// fix (bare comment). Equivalent to empty; removing it lets alayacore
+// write the real file.
+const LegacyRuntimeConfComment = "# auto-managed by alayacore: active_model / active_theme selections"
+
+// LegacyModelConfSeed is the model.conf seed with the fake "Placeholder"
+// model (empty api_key → "API key is required" on every prompt).
+const LegacyModelConfSeed = `name: "Placeholder"
 protocol_type: "openai"
 base_url: "https://api.openai.com/v1"
 api_key: ""
@@ -36,30 +61,29 @@ context_limit: 128000
 max_tokens: 4096
 `
 
-// DefaultRuntimeConf is the runtime.conf seed. IMPORTANT: alayacore
-// parses this file as `key: value` lines (NOT JSON) — an empty object
-// `{}` (seeded by early versions) makes alayacore emit a parse error on
-// every startup:
-//
-//	runtime.conf: key "{}": cannot parse value "": line without ':'
-//
-// Comment lines are skipped by alayacore's parser, so a bare comment is
-// the safe "empty" seed; alayacore manages the real keys itself.
-const DefaultRuntimeConf = "# auto-managed by alayacore: active_model / active_theme selections\n"
-
-// RepairBrokenRuntimeConf heals runtime.conf files left over from
-// installs seeded before the format fix: alayacore parses runtime.conf
-// as `key: value` lines and a literal `{}` makes it emit "cannot parse
-// value" on every session start. Idempotent: only rewrites files whose
-// content is exactly "{}".
-func RepairBrokenRuntimeConf(path string) error {
+// HealLegacyConfigSeeds removes config files that still hold exactly a
+// legacy empty seed. alayacore recreates model.conf/runtime.conf on its
+// next spawn, so deletion is lossless. Anything that differs from a
+// seed (real models the user configured, alayacore's own
+// active_model/theme selections) is kept untouched. Idempotent; missing
+// files are fine.
+func HealLegacyConfigSeeds(path string) error {
+	name := filepath.Base(path)
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return nil // missing file is fine (alayacore creates it)
+		return nil
 	}
-	if strings.TrimSpace(string(content)) == "{}" {
-		if err := os.WriteFile(path, []byte(DefaultRuntimeConf), 0o644); err != nil {
-			return fmt.Errorf("Cannot repair runtime.conf %s: %w", path, err)
+	trimmed := strings.TrimSpace(string(content))
+	var isLegacySeed bool
+	switch name {
+	case "runtime.conf":
+		isLegacySeed = trimmed == LegacyRuntimeConfEmpty || trimmed == LegacyRuntimeConfComment
+	case "model.conf":
+		isLegacySeed = trimmed == strings.TrimSpace(LegacyModelConfSeed)
+	}
+	if isLegacySeed {
+		if err := os.Remove(path); err != nil {
+			return fmt.Errorf("Cannot remove legacy config seed %s: %w", path, err)
 		}
 	}
 	return nil
@@ -211,12 +235,17 @@ func Ensure() (string, string, error) {
 		}
 	}
 
-	// Heal installs seeded before the runtime.conf format fix: presets
-	// AND existing session config copies may still hold a literal "{}".
+	// Heal installs seeded before the empty-shell change: presets AND
+	// existing session config copies may still hold legacy empty seeds
+	// (runtime.conf "{}" / comment, Placeholder model.conf). alayacore
+	// recreates them, so removal is lossless.
 	presetEntries, err := os.ReadDir(presets)
 	if err == nil {
 		for _, e := range presetEntries {
-			if err := RepairBrokenRuntimeConf(filepath.Join(presets, e.Name(), "runtime.conf")); err != nil {
+			if err := HealLegacyConfigSeeds(filepath.Join(presets, e.Name(), "runtime.conf")); err != nil {
+				return "", "", err
+			}
+			if err := HealLegacyConfigSeeds(filepath.Join(presets, e.Name(), "model.conf")); err != nil {
 				return "", "", err
 			}
 		}
@@ -224,7 +253,11 @@ func Ensure() (string, string, error) {
 	sessionEntries, err := os.ReadDir(sessions)
 	if err == nil {
 		for _, e := range sessionEntries {
-			if err := RepairBrokenRuntimeConf(filepath.Join(sessions, e.Name(), "config", "runtime.conf")); err != nil {
+			config := filepath.Join(sessions, e.Name(), "config")
+			if err := HealLegacyConfigSeeds(filepath.Join(config, "runtime.conf")); err != nil {
+				return "", "", err
+			}
+			if err := HealLegacyConfigSeeds(filepath.Join(config, "model.conf")); err != nil {
 				return "", "", err
 			}
 		}
@@ -296,17 +329,14 @@ func ClonePresetDir(src, dst string) error {
 
 // CreatePresetDefaults seeds a new preset's config with built-in
 // defaults. The Safe preset disables execute_command via settings.conf.
+//
+// Presets are seeded as EMPTY shells: model.conf, runtime.conf and
+// themes/ are auto-created by alayacore on first use (verified against
+// the real binary — an empty config dir starts clean and alayacore
+// writes a working local-Ollama default model). Only AlayaFace-owned
+// settings.conf is written here, and only where it is meaningful.
 func CreatePresetDefaults(dir, name string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(dir, "model.conf"), []byte(DefaultModelConf), 0o644); err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(dir, "runtime.conf"), []byte(DefaultRuntimeConf), 0o644); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Join(dir, "themes"), 0o755); err != nil {
 		return err
 	}
 	if name == "Safe" {

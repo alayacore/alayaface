@@ -39,16 +39,21 @@
   - 内置工具（`read_file`/`edit_file`/`write_file`/`execute_command`/`search_content`）由 alayacore `--builtin-tools` flag 控制（**未指定 = 全开**、逗号列表 = 子集、显式空串 = 无内置工具）；
   - **AlayaFace 目前 spawn 不传该 flag** → 所有会话默认全开（需要新增传参，见 §9）；
   - 外部工具来自 MCP（preset 的 mcp.conf）。
-- **preset 结构**（`~/.alayaface/presets/<name>/`）：
-  - `model.conf` — 模型列表（能力来源）；
-  - `mcp.conf` — MCP 服务器（外部工具来源）；
+- **preset 结构**（`~/.alayaface/presets/<name>/`）—— **空壳种子**：
+  `model.conf`、`runtime.conf`、`themes/` **都不预创建**，由 alayacore
+  首次使用时自动生成（已验证：空配置目录零报错，alayacore 自建一个可用的
+  本地 Ollama 默认模型 + runtime.conf）；"拷贝已有 preset"（clone / 建会话
+  复制 config）才是产生文件的有意义路径；
+  - `model.conf` — 模型列表（能力来源）；缺失 = alayacore 自动建默认；
+  - `mcp.conf` — MCP 服务器（外部工具来源）；有才复制；
   - `runtime.conf` — 仅 active_model/active_theme（alayacore 管理，勿当配置用）。
-    **注意：alayacore 按 `key: value` 行格式解析，不是 JSON** —— 种子内容为
-    `#` 注释行（空文件语义），绝不能写 `{}`（早期版本写过，alayacore 每条
-    会话启动都报 `cannot parse value "": line without ':' separator`）；
-    `dirs::ensure` 启动时自动修复残留的 `{}`（presets + 旧会话 config 拷贝）；
-  - `settings.conf` — **AlayaFace-owned，按 preset 存储**，`{"tool_confirm": "id1,id2"}`；不复制进会话目录；`get_global_settings(preset)` / `sync_global_settings(config, preset)` 已支持按 preset 读写；
-  - `themes/`。
+    **注意：alayacore 按 `key: value` 行格式解析，不是 JSON**；
+  - `settings.conf` — **AlayaFace-owned，按 preset 存储**，`{"tool_confirm": "id1,id2"}`；不复制进会话目录；`get_global_settings(preset)` / `sync_global_settings(config, preset)` 已支持按 preset 读写；仅 Safe 种子携带；
+  - `themes/` — alayacore 缺失时自动创建默认主题。
+  - **遗留种子自愈**：`dirs::ensure` 启动时删除仍持有旧空种子的文件
+    （runtime.conf 的 `{}` / 注释、Placeholder model.conf），presets 与旧
+    会话 config 拷贝都扫——alayacore 会重建，删除无损；内容与种子不同的
+    真实文件（用户配的模型、alayacore 写的 active_model）绝不动；
 - **create_session 命令**：已支持 `configPath`（非空 = 直接用指定目录当会话配置）；`toolConfirm` 缺省 = active preset settings.conf 的 tool_confirm；**新建会话目录时把 active preset 复制进 `session_dir/config`**（`dirs::create_session_dir`，排除 settings.conf）。
 - **resume_session 依赖 `session_dir/config`** → 若直接传 preset 路径当 configPath 会破坏 resume；必须走「按 preset 名复制模板」的路径。
 - **alayacore 工具集不可在 UI 侧扩展** → 计划 JSON 只能经「fenced ```json 输出」或「write_file 写文件」捕获。

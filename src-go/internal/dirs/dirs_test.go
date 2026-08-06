@@ -42,24 +42,16 @@ func TestEnsureSeedsDefaults(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := os.Stat(filepath.Join(config, "model.conf")); err != nil {
-			t.Errorf("model.conf missing: %v", err)
+		// Presets are EMPTY shells: alayacore auto-creates model.conf /
+		// runtime.conf / themes on first use. Seeding an empty model.conf
+		// even produced "API key is required" noise (fake Placeholder
+		// model), and a "{}" runtime.conf made alayacore emit a parse
+		// error on every startup.
+		if _, err := os.Stat(filepath.Join(config, "model.conf")); err == nil {
+			t.Error("model.conf must not be pre-seeded")
 		}
-		if _, err := os.Stat(filepath.Join(config, "runtime.conf")); err != nil {
-			t.Errorf("runtime.conf missing: %v", err)
-		}
-		// runtime.conf must be alayacore key:value format (comment lines
-		// are skipped), never a JSON "{}" — alayacore emits a parse error
-		// on every startup for the latter.
-		rc, err := os.ReadFile(filepath.Join(config, "runtime.conf"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.TrimSpace(string(rc)) == "{}" {
-			t.Error("runtime.conf must not be a JSON empty object")
-		}
-		if fi, err := os.Stat(filepath.Join(config, "themes")); err != nil || !fi.IsDir() {
-			t.Errorf("themes dir missing: %v", err)
+		if _, err := os.Stat(filepath.Join(config, "runtime.conf")); err == nil {
+			t.Error("runtime.conf must not be pre-seeded")
 		}
 		active, err := ReadActivePreset()
 		if err != nil {
@@ -68,25 +60,58 @@ func TestEnsureSeedsDefaults(t *testing.T) {
 		if active != "Default" {
 			t.Errorf("active preset = %q, want Default", active)
 		}
+		// Only the Safe preset carries AlayaFace-owned settings.conf.
+		if _, err := os.Stat(filepath.Join(config, "settings.conf")); err == nil {
+			t.Error("Default preset must not carry settings.conf")
+		}
+		safeSettings, err := os.ReadFile(filepath.Join(PresetsRoot(), "Safe", "settings.conf"))
+		if err != nil {
+			t.Fatalf("Safe settings.conf missing: %v", err)
+		}
+		if !strings.Contains(string(safeSettings), "read_file,write_file,edit_file,search_content") {
+			t.Errorf("Safe settings.conf wrong: %s", safeSettings)
+		}
 	})
 }
 
-func TestHealsBrokenRuntimeConf(t *testing.T) {
+func TestHealsLegacyConfigSeeds(t *testing.T) {
 	isolatedHome(t, func() {
 		config, sessions, err := Ensure()
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Simulate an install seeded before the format fix: the active
-		// preset and an existing session's config copy both hold "{}".
+		// Simulate an install seeded before the empty-shell change: the
+		// active preset holds "{}" + comment runtime.conf seeds and a
+		// Placeholder model.conf; an existing session's config copy holds
+		// a comment seed too. ensure() must REMOVE all of them (alayacore
+		// recreates), while a real runtime.conf is kept.
 		if err := os.WriteFile(filepath.Join(config, "runtime.conf"), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		placeholder := `name: "Placeholder"
+protocol_type: "openai"
+base_url: "https://api.openai.com/v1"
+api_key: ""
+model_name: "gpt-4o"
+context_limit: 128000
+max_tokens: 4096
+`
+		if err := os.WriteFile(filepath.Join(config, "model.conf"), []byte(placeholder), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		sconf := filepath.Join(sessions, "sess-1", "config")
 		if err := os.MkdirAll(sconf, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(sconf, "runtime.conf"), []byte("{}"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(sconf, "runtime.conf"), []byte(LegacyRuntimeConfComment), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		// A meaningful runtime.conf must survive the heal.
+		other := filepath.Join(sessions, "sess-2", "config")
+		if err := os.MkdirAll(other, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(other, "runtime.conf"), []byte("active_model: \"GPT-4o\"\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 
@@ -94,19 +119,21 @@ func TestHealsBrokenRuntimeConf(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		rc, err := os.ReadFile(filepath.Join(config, "runtime.conf"))
+		if _, err := os.Stat(filepath.Join(config, "runtime.conf")); err == nil {
+			t.Error("preset runtime.conf seed not removed")
+		}
+		if _, err := os.Stat(filepath.Join(config, "model.conf")); err == nil {
+			t.Error("preset Placeholder model.conf not removed")
+		}
+		if _, err := os.Stat(filepath.Join(sconf, "runtime.conf")); err == nil {
+			t.Error("session comment seed not removed")
+		}
+		kept, err := os.ReadFile(filepath.Join(other, "runtime.conf"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.TrimSpace(string(rc)) == "{}" || !strings.HasPrefix(string(rc), "#") {
-			t.Errorf("preset runtime.conf not healed: %q", string(rc))
-		}
-		src, err := os.ReadFile(filepath.Join(sconf, "runtime.conf"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.TrimSpace(string(src)) == "{}" {
-			t.Errorf("session runtime.conf not healed: %q", string(src))
+		if string(kept) != "active_model: \"GPT-4o\"\n" {
+			t.Errorf("real runtime.conf not kept: %q", string(kept))
 		}
 	})
 }
@@ -117,7 +144,11 @@ func TestSessionDirCopyExcludesSettingsConf(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Put a settings.conf in the active preset; it must not be copied.
+		// Copying an EXISTING preset is the meaningful path: files in the
+		// source are copied, settings.conf (AlayaFace-owned) is not.
+		if err := os.WriteFile(filepath.Join(config, "model.conf"), []byte("name: \"Real\"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.WriteFile(filepath.Join(config, "settings.conf"), []byte(`{"tool_confirm":"x"}`), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -126,8 +157,12 @@ func TestSessionDirCopyExcludesSettingsConf(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := os.Stat(filepath.Join(sessionDir, "config", "model.conf")); err != nil {
+		copied, err := os.ReadFile(filepath.Join(sessionDir, "config", "model.conf"))
+		if err != nil {
 			t.Errorf("model.conf not copied: %v", err)
+		}
+		if string(copied) != "name: \"Real\"\n" {
+			t.Errorf("model.conf copy wrong: %q", string(copied))
 		}
 		if _, err := os.Stat(filepath.Join(sessionDir, "config", "settings.conf")); err == nil {
 			t.Error("settings.conf should NOT be copied into sessions")

@@ -642,6 +642,10 @@ session window edge to the node card.
 
 ## P20 — runtime.conf seeding fix (alayacore key:value format, not JSON)
 
+> Superseded in part by P21: instead of seeding a comment, presets are
+> now EMPTY shells (no runtime.conf at all) and the heal REMOVES legacy
+> seeds. P20's detection/verification work still applies.
+
 Bug report: EVERY session window shows
 `runtime.conf: key "{}": cannot parse value "": line without ':' separator (missing colon?)`
 (plus `API key is required` when the unconfigured Placeholder model is used).
@@ -670,6 +674,38 @@ comment → 0 error frames.
       model). Expected until a real model is configured; optional UX
       improvement: fail plan runs fast with a clear message when the
       active model has no api_key (v2, not implemented)
+
+---
+
+## P21 — Config files: empty shells only (alayacore auto-creates)
+
+Follow-up to P20, per the principle "empty config files shouldn't be
+created at all — alayacore creates them; copying an EXISTING preset is
+the only meaningful file source".
+
+Verified against the real binary: an EMPTY config dir starts with ZERO
+error frames, and alayacore auto-creates model.conf (a working local
+Ollama default: `api_key: "no-key-by-default"` — no "API key is
+required" noise) + runtime.conf (proper key:value, no "{}" parse error).
+
+- [x] `create_preset_defaults` / `CreatePresetDefaults`: presets seed as
+      EMPTY shells (dir only); Safe still gets AlayaFace-owned
+      settings.conf (meaningful — disables execute_command)
+- [x] Removed DEFAULT_MODEL_CONF (fake "Placeholder" model) and
+      DEFAULT_RUNTIME_CONF seeds entirely
+- [x] Heal upgraded: legacy seeds are now REMOVED, not rewritten —
+      runtime.conf "{}" / P20 comment seed, and an EXACT Placeholder
+      model.conf (anything the user/alayacore wrote since is kept)
+      — presets AND old session config copies
+- [x] Session config copies: copyDirExcluding of an existing preset is
+      the file-producing path (tests updated to write a source file
+      first, then assert the copy + settings.conf exclusion)
+- [x] list_default_models / sync_default_models unaffected (probe-based;
+      alayacore auto-creates model.conf → ModelSelector shows the
+      working Ollama default instead of Placeholder)
+- [x] Tests: Rust 41 / Go -race all pkgs / elm 156 / make e2e ALL PASS
+- [ ] Optional follow-up: ModelSelector hint when the active model has
+      no api_key (fail plan runs fast with a clear message) — v2
 
 ---
 

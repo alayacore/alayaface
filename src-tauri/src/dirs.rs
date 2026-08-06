@@ -5,20 +5,42 @@
 //!     active-preset        — name of the currently active preset
 //!     presets/
 //!       <name>/            — one config directory per preset
-//!         model.conf
-//!         runtime.conf
-//!         mcp.conf
+//!         model.conf       (auto-created by alayacore when missing)
+//!         runtime.conf     (auto-managed by alayacore)
+//!         mcp.conf         (optional; copied when present)
 //!         settings.conf    — AlayaFace-owned (tool_confirm etc.); NOT copied into sessions
-//!         themes/
+//!         themes/          (auto-created by alayacore when missing)
 //!     sessions/
 //!       <uuid>/
 //!         config/          — copy of the active preset's config (minus settings.conf)
-//!         session.alaya
+//!         session.alaya    (created by alayacore)
 
 use std::path::PathBuf;
 
-/// Default model config template (key-value block format).
-const DEFAULT_MODEL_CONF: &str = r##"name: "Placeholder"
+// ─── Legacy config seeds (detection only) ───────────────────────────
+//
+// Fresh presets are seeded as EMPTY shells: alayacore creates
+// model.conf, runtime.conf and themes/ itself when they are missing
+// (verified against the real binary — an empty config dir starts with
+// zero error frames and alayacore writes a working local-Ollama default
+// model). "Empty" seeds are therefore noise — a literal "{}" in
+// runtime.conf even makes alayacore emit a parse error on every
+// startup. Copying an EXISTING preset (clone) is the only path that
+// should produce files, and that keeps whatever is in the source.
+//
+// These constants exist ONLY to detect and remove files that still hold
+// exactly a legacy seed (never anything alayacore or the user has
+// written since).
+
+/// runtime.conf seed written by early versions (JSON empty object).
+const LEGACY_RUNTIME_CONF_EMPTY: &str = "{}";
+
+/// runtime.conf seed written by the P20 fix (bare comment). Equivalent
+/// to empty; removing it lets alayacore write the real file.
+const LEGACY_RUNTIME_CONF_COMMENT: &str = "# auto-managed by alayacore: active_model / active_theme selections";
+
+/// model.conf seed with the fake "Placeholder" model (empty api_key).
+const LEGACY_MODEL_CONF_SEED: &str = r##"name: "Placeholder"
 protocol_type: "openai"
 base_url: "https://api.openai.com/v1"
 api_key: ""
@@ -27,24 +49,31 @@ context_limit: 128000
 max_tokens: 4096
 "##;
 
-/// Default runtime.conf. IMPORTANT: alayacore parses this file as
-/// `key: value` lines (NOT JSON) — an empty object `{}` (seeded by
-/// early versions) makes alayacore emit a parse error on every startup:
-///   runtime.conf: key "{}": cannot parse value "": line without ':'
-/// Comment lines are skipped by alayacore's parser, so a bare comment
-/// is the safe "empty" seed; alayacore manages the real keys itself.
-const DEFAULT_RUNTIME_CONF: &str = "# auto-managed by alayacore: active_model / active_theme selections\n";
-
-/// Heal runtime.conf files left over from installs seeded before the
-/// format fix: alayacore parses runtime.conf as `key: value` lines and
-/// a literal `{}` makes it emit "cannot parse value" on every session
-/// start. Idempotent: only rewrites files whose content is exactly "{}".
-pub fn repair_broken_runtime_conf(path: &std::path::Path) -> Result<(), String> {
-    if let Ok(content) = std::fs::read_to_string(path) {
-        if content.trim() == "{}" {
-            std::fs::write(path, DEFAULT_RUNTIME_CONF)
-                .map_err(|e| format!("Cannot repair runtime.conf {:?}: {}", path, e))?;
-        }
+/// Remove config files that still hold exactly a legacy empty seed.
+/// alayacore recreates model.conf/runtime.conf on its next spawn, so
+/// deletion is lossless. Anything that differs from a seed (real models
+/// the user configured, alayacore's own active_model/theme selections)
+/// is kept untouched. Idempotent; missing files are fine.
+pub fn heal_legacy_config_seeds(path: &std::path::Path) -> Result<(), String> {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return Ok(());
+    };
+    let trimmed = content.trim();
+    let is_legacy_seed =
+        if name == "runtime.conf" {
+            trimmed == LEGACY_RUNTIME_CONF_EMPTY || trimmed == LEGACY_RUNTIME_CONF_COMMENT
+        } else if name == "model.conf" {
+            trimmed == LEGACY_MODEL_CONF_SEED.trim()
+        } else {
+            false
+        };
+    if is_legacy_seed {
+        std::fs::remove_file(path)
+            .map_err(|e| format!("Cannot remove legacy config seed {:?}: {}", path, e))?;
     }
     Ok(())
 }
@@ -180,16 +209,21 @@ pub fn ensure() -> Result<(PathBuf, PathBuf), String> {
         }
     }
 
-    // Heal installs seeded before the runtime.conf format fix: presets
-    // AND existing session config copies may still hold a literal "{}".
+    // Heal installs seeded before the empty-shell change: presets AND
+    // existing session config copies may still hold legacy empty seeds
+    // (runtime.conf "{}" / comment, Placeholder model.conf). alayacore
+    // recreates them, so removal is lossless.
     if let Ok(preset_entries) = std::fs::read_dir(&presets) {
         for entry in preset_entries.flatten() {
-            repair_broken_runtime_conf(&entry.path().join("runtime.conf"))?;
+            heal_legacy_config_seeds(&entry.path().join("runtime.conf"))?;
+            heal_legacy_config_seeds(&entry.path().join("model.conf"))?;
         }
     }
     if let Ok(session_entries) = std::fs::read_dir(&sessions) {
         for entry in session_entries.flatten() {
-            repair_broken_runtime_conf(&entry.path().join("config").join("runtime.conf"))?;
+            let config = entry.path().join("config");
+            heal_legacy_config_seeds(&config.join("runtime.conf"))?;
+            heal_legacy_config_seeds(&config.join("model.conf"))?;
         }
     }
 
@@ -249,23 +283,19 @@ pub fn clone_preset_dir(src: &std::path::Path, dst: &std::path::Path) -> Result<
 
 /// Seed a new preset's config with built-in defaults. `name` selects the
 /// template: the Safe preset disables execute_command via settings.conf.
+///
+/// Presets are seeded as EMPTY shells: model.conf, runtime.conf and
+/// themes/ are auto-created by alayacore on first use (verified against
+/// the real binary — an empty config dir starts clean and alayacore
+/// writes a working local-Ollama default model). Only AlayaFace-owned
+/// settings.conf is written here, and only where it is meaningful.
 pub fn create_preset_defaults(dir: &std::path::Path, name: &str) -> Result<(), String> {
     std::fs::create_dir_all(dir)
         .map_err(|e| format!("Cannot create {:?}: {}", dir, e))?;
-    write_defaults(&dir.to_path_buf(), name)
-}
-
-fn write_defaults(config: &PathBuf, name: &str) -> Result<(), String> {
-    std::fs::write(config.join("model.conf"), DEFAULT_MODEL_CONF)
-        .map_err(|e| format!("Cannot write model.conf: {e}"))?;
-    std::fs::write(config.join("runtime.conf"), DEFAULT_RUNTIME_CONF)
-        .map_err(|e| format!("Cannot write runtime.conf: {e}"))?;
-    std::fs::create_dir_all(config.join("themes"))
-        .map_err(|e| format!("Cannot create themes dir: {e}"))?;
     if name == "Safe" {
         // No execute_command: read/write/edit/search only.
         std::fs::write(
-            config.join("settings.conf"),
+            dir.join("settings.conf"),
             "{\n  \"tool_confirm\": \"\",\n  \"builtin_tools\": \"read_file,write_file,edit_file,search_content\"\n}\n",
         )
         .map_err(|e| format!("Cannot write settings.conf: {e}"))?;
@@ -351,14 +381,13 @@ mod tests {
     fn ensure_seeds_defaults() {
         isolated_home(|| {
             let (config, _) = ensure().unwrap();
-            assert!(config.join("model.conf").exists());
-            assert!(config.join("runtime.conf").exists());
-            // runtime.conf must be alayacore key:value format (comment
-            // lines are skipped), never a JSON "{}" — alayacore emits a
-            // parse error on every startup for the latter.
-            let runtime = std::fs::read_to_string(config.join("runtime.conf")).unwrap();
-            assert_ne!(runtime.trim(), "{}", "runtime.conf must not be a JSON empty object");
-            assert!(config.join("themes").is_dir());
+            // Presets are EMPTY shells: alayacore auto-creates
+            // model.conf/runtime.conf/themes on first use. Seeding an
+            // empty model.conf even produced "API key is required"
+            // noise (fake Placeholder model), and a "{}" runtime.conf
+            // made alayacore emit a parse error on every startup.
+            assert!(!config.join("model.conf").exists(), "model.conf must not be pre-seeded");
+            assert!(!config.join("runtime.conf").exists(), "runtime.conf must not be pre-seeded");
             assert_eq!(read_active_preset().unwrap(), "Default");
 
             // All seed presets exist; Safe disables execute_command.
@@ -369,28 +398,49 @@ mod tests {
                 std::fs::read_to_string(preset_dir("Safe").join("settings.conf")).unwrap();
             assert!(safe_settings.contains("read_file,write_file,edit_file,search_content"));
             assert!(!safe_settings.contains("execute_command"));
+            // Non-Safe presets carry no settings.conf (defaults apply).
+            assert!(!preset_dir("Default").join("settings.conf").exists());
         });
     }
 
     #[test]
-    fn heals_broken_runtime_conf() {
+    fn heals_legacy_config_seeds() {
         isolated_home(|| {
-            // Simulate an install seeded before the format fix: the
-            // active preset and an existing session's config copy both
-            // hold a literal "{}". ensure() must heal both.
+            // Simulate an install seeded before the empty-shell change:
+            // the active preset holds "{}" + comment runtime.conf seeds
+            // and a Placeholder model.conf; an existing session's config
+            // copy holds "{}" too. ensure() must REMOVE all of them
+            // (alayacore recreates), while a real runtime.conf (alayacore
+            // wrote active_model) is kept.
             let (config, sessions) = ensure().unwrap();
             std::fs::write(config.join("runtime.conf"), "{}").unwrap();
+            std::fs::write(
+                config.join("model.conf"),
+                "name: \"Placeholder\"\nprotocol_type: \"openai\"\nbase_url: \"https://api.openai.com/v1\"\napi_key: \"\"\nmodel_name: \"gpt-4o\"\ncontext_limit: 128000\nmax_tokens: 4096\n",
+            )
+            .unwrap();
             let sconf = sessions.join("sess-1").join("config");
             std::fs::create_dir_all(&sconf).unwrap();
-            std::fs::write(sconf.join("runtime.conf"), "{}").unwrap();
+            std::fs::write(
+                sconf.join("runtime.conf"),
+                "# auto-managed by alayacore: active_model / active_theme selections\n",
+            )
+            .unwrap();
+            // A meaningful runtime.conf must survive the heal.
+            let other = sessions.join("sess-2").join("config");
+            std::fs::create_dir_all(&other).unwrap();
+            std::fs::write(other.join("runtime.conf"), "active_model: \"GPT-4o\"\n").unwrap();
 
             ensure().unwrap();
 
-            let preset_conf = std::fs::read_to_string(config.join("runtime.conf")).unwrap();
-            assert_ne!(preset_conf.trim(), "{}", "preset runtime.conf repaired");
-            assert!(preset_conf.trim_start().starts_with('#'), "preset runtime.conf is a comment");
-            let sess_conf = std::fs::read_to_string(sconf.join("runtime.conf")).unwrap();
-            assert_ne!(sess_conf.trim(), "{}", "session runtime.conf healed");
+            assert!(!config.join("runtime.conf").exists(), "preset runtime.conf removed");
+            assert!(!config.join("model.conf").exists(), "preset Placeholder model.conf removed");
+            assert!(!sconf.join("runtime.conf").exists(), "session comment seed removed");
+            assert_eq!(
+                std::fs::read_to_string(other.join("runtime.conf")).unwrap(),
+                "active_model: \"GPT-4o\"\n",
+                "real runtime.conf kept"
+            );
         });
     }
 
@@ -398,11 +448,16 @@ mod tests {
     fn session_dir_copy_excludes_settings_conf() {
         isolated_home(|| {
             let (config, sessions) = ensure().unwrap();
-            // Put a settings.conf in the active preset; it must not be copied.
+            // Copying an EXISTING preset is the meaningful path: files in
+            // the source are copied, settings.conf (AlayaFace-owned) is not.
+            std::fs::write(config.join("model.conf"), "name: \"Real\"\n").unwrap();
             std::fs::write(config.join("settings.conf"), "{\"tool_confirm\":\"x\"}").unwrap();
 
             let session_dir = create_session_dir(&sessions, "abc").unwrap();
-            assert!(session_dir.join("config").join("model.conf").exists());
+            assert_eq!(
+                std::fs::read_to_string(session_dir.join("config").join("model.conf")).unwrap(),
+                "name: \"Real\"\n"
+            );
             assert!(!session_dir.join("config").join("settings.conf").exists());
         });
     }
@@ -411,9 +466,14 @@ mod tests {
     fn create_session_dir_from_specific_preset() {
         isolated_home(|| {
             let (_, sessions) = ensure().unwrap();
-            // Safe's settings.conf must not leak into the session config.
+            // Safe's settings.conf must not leak into the session config,
+            // while its real files (e.g. a configured model.conf) are copied.
+            std::fs::write(preset_dir("Safe").join("model.conf"), "name: \"SafeModel\"\n").unwrap();
             let dir = create_session_dir_from(&sessions, "xyz", "Safe").unwrap();
-            assert!(dir.join("config").join("model.conf").exists());
+            assert_eq!(
+                std::fs::read_to_string(dir.join("config").join("model.conf")).unwrap(),
+                "name: \"SafeModel\"\n"
+            );
             assert!(!dir.join("config").join("settings.conf").exists());
 
             // Unknown preset is rejected.

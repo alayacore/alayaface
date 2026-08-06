@@ -121,11 +121,28 @@ func TestCreateSessionWithPreset(t *testing.T) {
 		t.Fatalf("create with preset failed: body=%s err=%v", body, err)
 	}
 
-	// Session dir must exist and its config must contain model.conf but
-	// NOT settings.conf (Safe's builtin_tools must not leak into sessions).
+	// Session dir must exist and its config must contain the preset's
+	// copied files (write a real model.conf into Safe first — presets
+	// are empty shells until the user/alayacore create files) but NOT
+	// settings.conf (Safe's builtin_tools must not leak into sessions).
+	safePreset := filepath.Join(os.Getenv("HOME"), ".alayaface", "presets", "Safe")
+	if err := os.WriteFile(filepath.Join(safePreset, "model.conf"), []byte("name: \"SafeModel\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	body = e.rpcOK(t, "create_session", map[string]any{
+		"binaryPath": "", "configPath": "", "toolConfirm": nil,
+		"preset": "Safe", "builtinTools": "",
+	})
+	if err := json.Unmarshal(body, &sid); err != nil || sid == "" {
+		t.Fatalf("create with preset failed: body=%s err=%v", body, err)
+	}
 	sessionsDir := filepath.Join(os.Getenv("HOME"), ".alayaface", "sessions", sid)
-	if _, err := os.Stat(filepath.Join(sessionsDir, "config", "model.conf")); err != nil {
-		t.Fatalf("session config missing model.conf: %v", err)
+	copied, err := os.ReadFile(filepath.Join(sessionsDir, "config", "model.conf"))
+	if err != nil {
+		t.Fatalf("session config missing copied model.conf: %v", err)
+	}
+	if string(copied) != "name: \"SafeModel\"\n" {
+		t.Fatalf("session model.conf copy wrong: %q", string(copied))
 	}
 	if _, err := os.Stat(filepath.Join(sessionsDir, "config", "settings.conf")); err == nil {
 		t.Fatal("settings.conf leaked into session config")
