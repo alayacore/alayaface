@@ -317,6 +317,32 @@ viewPlanOverlay model =
         let
             pv =
                 model.planView
+
+            runStates =
+                case model.planRun of
+                    Just run ->
+                        run.nodes
+
+                    Nothing ->
+                        Dict.empty
+
+            nodeClick nodeId =
+                case model.planRun of
+                    Just run ->
+                        case Dict.get nodeId run.nodes of
+                            Just n ->
+                                case n.sessionId of
+                                    Just sid ->
+                                        ActivateSession sid
+
+                                    Nothing ->
+                                        PlanSelectNode nodeId
+
+                            Nothing ->
+                                PlanSelectNode nodeId
+
+                    Nothing ->
+                        PlanSelectNode nodeId
         in
         viewOverlay ClosePlanView
             [ Html.div [ Attr.class "plan-page" ]
@@ -331,7 +357,7 @@ viewPlanOverlay model =
                 , case pv.plan of
                     Just plan ->
                         Html.div [ Attr.class "plan-page-body" ]
-                            [ viewPlanHeader pv plan
+                            [ viewPlanHeader model plan
                             , case pv.path of
                                 Just p ->
                                     Html.div [ Attr.class "plan-page-path" ]
@@ -340,7 +366,7 @@ viewPlanOverlay model =
                                 Nothing ->
                                     Html.text ""
                             , Html.div [ Attr.class "plan-page-canvas" ]
-                                [ Plan.View.viewDag PlanSelectNode Dict.empty plan ]
+                                [ Plan.View.viewDag nodeClick runStates plan ]
                             , viewPlanNodeDetail model plan
                             , viewPlanExport pv
                             ]
@@ -354,8 +380,42 @@ viewPlanOverlay model =
         Html.text ""
 
 
-viewPlanHeader : PlanViewState -> PT.Plan -> Html Msg
-viewPlanHeader pv plan =
+viewPlanHeader : Model -> PT.Plan -> Html Msg
+viewPlanHeader model plan =
+    let
+        runStatus =
+            model.planRun |> Maybe.map .status
+
+        runBadge =
+            case runStatus of
+                Just st ->
+                    Html.span [ Attr.class ("plan-run-badge plan-run-badge-" ++ runStatusClass st) ]
+                        [ Html.text (runStatusLabel st) ]
+
+                Nothing ->
+                    Html.text ""
+
+        canRun =
+            case runStatus of
+                Nothing ->
+                    True
+
+                Just st ->
+                    List.member st [ PT.NotStarted, PT.Completed, PT.FailedRun, PT.Stopped ]
+
+        canPause =
+            runStatus == Just PT.InProgress
+
+        canResume =
+            runStatus == Just PT.Paused
+
+        canStop =
+            runStatus == Just PT.InProgress || runStatus == Just PT.Paused
+
+        canLoadRun =
+            model.planView.path /= Nothing
+                && (runStatus == Nothing || runStatus == Just PT.Completed || runStatus == Just PT.FailedRun || runStatus == Just PT.Stopped || runStatus == Just PT.NotStarted)
+    in
     Html.div [ Attr.class "plan-header" ]
         [ Html.div [ Attr.class "plan-header-text" ]
             [ Html.div [ Attr.class "plan-page-name" ] [ Html.text plan.name ]
@@ -369,28 +429,90 @@ viewPlanHeader pv plan =
                         ++ String.fromInt plan.defaultMaxAttempts
                     )
                 ]
+            , runBadge
             ]
         , Html.div [ Attr.class "plan-header-controls" ]
             [ Html.button
                 [ Attr.class "confirm-page-btn confirm-page-btn-allow"
-                , Attr.disabled True
-                , Attr.title "Runner lands in P4"
+                , Attr.disabled (not canRun)
+                , Ev.onClick PlanRunStart
+                , Attr.title "Run all tasks"
                 ]
                 [ Html.text "Run" ]
             , Html.button
                 [ Attr.class "confirm-page-btn"
-                , Attr.disabled True
-                , Attr.title "Runner lands in P4"
+                , Attr.disabled (not canPause)
+                , Ev.onClick PlanRunPause
+                , Attr.title "Pause launching new tasks"
                 ]
                 [ Html.text "Pause" ]
             , Html.button
+                [ Attr.class "confirm-page-btn"
+                , Attr.disabled (not canResume)
+                , Ev.onClick PlanRunResume
+                , Attr.title "Resume a paused run"
+                ]
+                [ Html.text "Resume" ]
+            , Html.button
                 [ Attr.class "confirm-page-btn confirm-page-btn-deny"
-                , Attr.disabled True
-                , Attr.title "Runner lands in P4"
+                , Attr.disabled (not canStop)
+                , Ev.onClick PlanRunStop
+                , Attr.title "Stop all running tasks"
                 ]
                 [ Html.text "Stop" ]
+            , Html.button
+                [ Attr.class "confirm-page-btn"
+                , Attr.disabled (not canLoadRun)
+                , Ev.onClick PlanResume
+                , Attr.title "Load the saved run state and continue unfinished tasks"
+                ]
+                [ Html.text "Load run" ]
             ]
         ]
+
+
+runStatusLabel : PT.RunStatus -> String
+runStatusLabel st =
+    case st of
+        PT.NotStarted ->
+            "Not started"
+
+        PT.InProgress ->
+            "Running…"
+
+        PT.Paused ->
+            "Paused"
+
+        PT.Completed ->
+            "Completed"
+
+        PT.FailedRun ->
+            "Failed"
+
+        PT.Stopped ->
+            "Stopped"
+
+
+runStatusClass : PT.RunStatus -> String
+runStatusClass st =
+    case st of
+        PT.NotStarted ->
+            "idle"
+
+        PT.InProgress ->
+            "running"
+
+        PT.Paused ->
+            "paused"
+
+        PT.Completed ->
+            "completed"
+
+        PT.FailedRun ->
+            "failed"
+
+        PT.Stopped ->
+            "stopped"
 
 
 viewPlanNodeDetail : Model -> PT.Plan -> Html Msg
@@ -399,10 +521,52 @@ viewPlanNodeDetail model plan =
         Just nodeId ->
             case List.filter (\t -> t.id == nodeId) plan.tasks |> List.head of
                 Just t ->
+                    let
+                        nodeStatus =
+                            model.planRun
+                                |> Maybe.andThen (\run -> Dict.get nodeId run.nodes)
+                                |> Maybe.map .status
+
+                        canRetry =
+                            case nodeStatus of
+                                Just st ->
+                                    List.member st [ PT.Failed, PT.Canceled, PT.Waiting ]
+
+                                Nothing ->
+                                    False
+
+                        retryLabel =
+                            case nodeStatus of
+                                Just PT.Waiting ->
+                                    "Retry now"
+
+                                Just st ->
+                                    if st == PT.Canceled || st == PT.Failed then
+                                        "Retry node"
+
+                                    else
+                                        "Retry node"
+
+                                Nothing ->
+                                    "Retry node"
+
+                        failures =
+                            model.planRun
+                                |> Maybe.andThen (\run -> Dict.get nodeId run.nodes)
+                                |> Maybe.map .failures
+                                |> Maybe.withDefault []
+                    in
                     Html.div [ Attr.class "plan-node-detail" ]
                         [ Html.div [ Attr.class "plan-node-detail-head" ]
                             [ Html.span [ Attr.class "plan-task-id" ] [ Html.text t.id ]
                             , Html.span [ Attr.class "plan-task-title" ] [ Html.text t.title ]
+                            , case nodeStatus of
+                                Just st ->
+                                    Html.span [ Attr.class ("plan-node-detail-status plan-node-detail-status-" ++ statusClassFor st) ]
+                                        [ Html.text (statusLabelFor st) ]
+
+                                Nothing ->
+                                    Html.text ""
                             ]
                         , Html.div [ Attr.class "plan-node-detail-row" ]
                             [ Html.text ("preset: " ++ Maybe.withDefault "default" t.preset) ]
@@ -419,14 +583,26 @@ viewPlanNodeDetail model plan =
                                        )
                                 )
                             ]
+                        , if List.isEmpty failures then
+                            Html.text ""
+
+                          else
+                            Html.div [ Attr.class "plan-node-detail-failures" ]
+                                (List.map
+                                    (\f ->
+                                        Html.div [ Attr.class "plan-node-detail-failure" ]
+                                            [ Html.text ("第 " ++ String.fromInt f.attempt ++ " 次失败: " ++ f.reason) ]
+                                    )
+                                    (List.reverse failures)
+                                )
                         , Html.div [ Attr.class "plan-node-detail-label" ] [ Html.text "Prompt" ]
                         , Html.div [ Attr.class "plan-node-detail-prompt" ] [ Html.text t.prompt ]
                         , Html.button
                             [ Attr.class "confirm-page-btn"
-                            , Attr.disabled True
-                            , Attr.title "Runner lands in P4"
+                            , Attr.disabled (not canRetry)
+                            , Ev.onClick (PlanRunRetryNode nodeId)
                             ]
-                            [ Html.text "Retry node" ]
+                            [ Html.text retryLabel ]
                         ]
 
                 Nothing ->
@@ -434,6 +610,32 @@ viewPlanNodeDetail model plan =
 
         Nothing ->
             Html.text ""
+
+
+statusClassFor : PT.NodeStatus -> String
+statusClassFor st =
+    case st of
+        PT.Pending -> "pending"
+        PT.Starting -> "starting"
+        PT.Running -> "running"
+        PT.Waiting -> "waiting"
+        PT.Succeeded -> "succeeded"
+        PT.Failed -> "failed"
+        PT.Blocked -> "blocked"
+        PT.Canceled -> "canceled"
+
+
+statusLabelFor : PT.NodeStatus -> String
+statusLabelFor st =
+    case st of
+        PT.Pending -> "Pending"
+        PT.Starting -> "Starting…"
+        PT.Running -> "Running…"
+        PT.Waiting -> "Retrying…"
+        PT.Succeeded -> "Succeeded"
+        PT.Failed -> "Failed"
+        PT.Blocked -> "Blocked"
+        PT.Canceled -> "Canceled"
 
 
 viewPlanExport : PlanViewState -> Html Msg

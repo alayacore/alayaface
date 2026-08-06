@@ -33,6 +33,7 @@ import Browser.Dom as Dom
 import Dict exposing (Dict)
 import Json.Encode as E
 import Plan.Types as PT
+import Plan.Runner as R
 import Session.Selector as Sel
 import Session.Types as T
 
@@ -83,6 +84,11 @@ type alias Model =
     , planManager : PlanManagerState
     , pendingPlanOffers : Dict String String
     , planSelectedNode : Maybe String
+    , planRun : Maybe PT.RunState
+    , planCreating : Maybe String
+    , planCreateQueue : List String
+    , planRunPath : Maybe String
+    , planResumePath : Maybe String
     , homeDir : String
     }
 
@@ -243,6 +249,17 @@ type Msg
     | PlanSelectNode String
     | PlanSetExportPath String
     | PlanExport
+      -- Plan runner
+    | PlanRunStart
+    | PlanRunStartAt Int
+    | PlanRunPause
+    | PlanRunResume
+    | PlanRunStop
+    | PlanRunRetryNode String
+    | PlanRunnerTick String
+    | PlanRunFrame Int R.Event
+    | PlanBindSession Int String String
+    | PlanResume
       -- Session wrapper
     | ForSession String Msg
       -- Window dragging

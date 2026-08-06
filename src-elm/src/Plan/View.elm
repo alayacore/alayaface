@@ -131,6 +131,9 @@ statusClass s =
         PT.Running ->
             "running"
 
+        PT.Waiting ->
+            "waiting"
+
         PT.Succeeded ->
             "succeeded"
 
@@ -155,6 +158,9 @@ statusIcon s =
 
         PT.Running ->
             "◐"
+
+        PT.Waiting ->
+            "↻"
 
         PT.Succeeded ->
             "✓"

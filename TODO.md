@@ -46,7 +46,8 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P1 fs_write_file_text / fs_read_file_text (Rust+Go+bridge+Ports) | [x] |
 | P2 Create Plan flow + plans dir + Plans manager | [x] |
 | P3 DAG layout + SVG view + node→session click | [x] |
-| P4 Runner state machine + retry + run.json + resume | [ ] |
+| P4 Runner state machine + retry + run.json + resume | [x] |
+| P4.5 create_session preset/builtinTools + settings.conf + seed presets | [ ] |
 | P4 Runner state machine + retry + run.json + resume | [ ] |
 | P4.5 create_session preset/builtinTools + settings.conf + seed presets | [ ] |
 | P5 Polish (badges/logs/concurrency/export/docs/README) | [ ] |
@@ -146,25 +147,44 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 
 ## P4 — Runner state machine + retry + run.json + resume
 
-- [ ] `Plan/Runner.elm`: types (NodeStatus incl. Starting/Blocked/Canceled,
-      Effect, Event) + `step : Event -> RunState -> (RunState, List Effect)`
-- [ ] Scheduler: runnable = Pending && all deps Succeeded; cap
-      `concurrency - Running`
-- [ ] Event handling: SessionCreatedFor→SendPrompt; TaskDone (task_error vs ok);
-      SessionError; SessionDisconnected; Stop/Pause/Resume; RetryNode
-- [ ] Retry: FailureRecord{attempt, reason, at} append; attempts<max→Close+
-      ScheduleRetry(2000)→Pending; else Failed→downstream Blocked
-- [ ] App/Update wiring: runner effects ↔ ports (createSession with
-      toolConfirm="allow", sendPrompt, closeSession); FrameEvent/StatusEvent
-      for node-owned sessions feed step()
-- [ ] run.json persistence: write on transitions (terminal always, interim
-      throttled); read on open for Resume
-- [ ] Resume: from run.json, re-run unfinished/failed/blocked from scratch
-- [ ] Tests: `tests/PlanRunnerTest.elm` (concurrency cap, dep gating, retry
-      count + FailureRecord, stop/pause/manual retry, disconnect/task_error)
-- [ ] fakecore integration: task_error → retry → success; E2E create→run→
-      parallel windows→node click opens window
-- [ ] `elm-test` + `go test -race` + manual E2E green
+- [x] `Plan/Runner.elm`: Event/step state machine (Started via
+      `step now ev run -> (run, effects)`); NodeStatus gains `Waiting`
+      (backoff before auto-retry). Effects: CreateSessionFor/SendPrompt/
+      CloseSessionFor/ScheduleRetry(2000ms)/PersistRunState/Notify
+- [x] Scheduler: runnable = Pending && all deps Succeeded; cap
+      `concurrency - running`; marks launched nodes Starting
+- [x] Event handling: SessionCreatedFor→bind+SendPrompt; TaskDone (only
+      for Running nodes — idle SM task frames while Starting are ignored);
+      SessionError; SessionDisconnected (Running/Starting); Stop/Pause/
+      Resume/ContinueRun; RetryNode (auto tick + manual, reactivates a
+      finished run)
+- [x] Retry: FailureRecord{attempt, reason, at} appended; attempts<max →
+      Waiting + ScheduleRetry(2000) + CloseSession; attempts>=max → Failed
+      + downstream Blocked (fixpoint propagation) + run FailedRun;
+      run Completed when all terminal & none failed
+- [x] App/Update wiring: `runStep now ev model` + applyEffects ↔ ports;
+      serialized session creation (planCreating/planCreateQueue,
+      PlanBindSession binds SessionCreated to its node); frame/status
+      events for node-owned sessions feed the machine (PlanRunFrame with
+      Time.now via Task); SendPrompt uses the node prompt
+- [x] run.json persistence: PersistRunState → fs_write_file_text
+      <plan>.run.json (encodeRunState/decodeRunStateOverlay/
+      applyRunStateOverlay codecs in Plan/Types); written on every step
+      (throttling deferred)
+- [x] Resume: PlanResume reads run.json → applyRunStateOverlay →
+      R.resumeState (Starting/Running/Waiting → Pending, drop stale
+      sessions) → ContinueRun relaunches unfinished nodes from scratch
+- [x] Tests: `tests/PlanRunnerTest.elm` (17 cases: concurrency cap, dep
+      gating, retry count + FailureRecord, stop/pause/resume/manual retry,
+      disconnect/task_error, late-event ignore) + run-state codec
+      roundtrip in PlanTypesTest → elm-test 114 green
+- [x] UI: Run/Pause/Resume/Stop/Load-run buttons (enabled by run status),
+      run status badge, node click opens its session window (ActivateSession)
+      when it has one else detail panel; Retry node button; failure
+      history in detail panel
+- [ ] fakecore/E2E: task_error → retry → success, parallel windows, node
+      click opens window — needs GUI/browser env (manual)
+- [x] `elm-test` green
 
 ## P4.5 — create_session preset/builtinTools + settings.conf + seed presets
 

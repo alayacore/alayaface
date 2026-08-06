@@ -4,7 +4,18 @@ import Expect
 import Json.Decode as D
 import Json.Encode as E
 import Test exposing (Test, describe, test)
+import Dict exposing (Dict)
 import Plan.Types as P
+
+
+nodeState : String -> P.RunState -> P.NodeRunState
+nodeState id run =
+    case Dict.get id run.nodes of
+        Just n ->
+            n
+
+        Nothing ->
+            Debug.todo ("missing node " ++ id)
 
 
 sampleJson : String
@@ -322,5 +333,89 @@ tests =
                 \_ -> Expect.equal "plan" (P.slugify "")
             , test "keeps digits" <|
                 \_ -> Expect.equal "report-2025" (P.slugify "Report 2025")
+            ]
+        , describe "run state codec"
+            [ test "encode then decode overlay roundtrips" <|
+                \_ ->
+                    let
+                        plan =
+                            case P.parsePlan sampleJson of
+                                Ok p -> p
+                                Err errs -> Debug.todo ("bad plan: " ++ String.join "; " errs)
+
+                        run =
+                            P.emptyRunState "run-1" plan
+
+                        -- simulate: a succeeded, b failed once then waiting
+                        withStates =
+                            { run
+                                | status = P.InProgress
+                                , nodes =
+                                    Dict.update "t1"
+                                        (\_ ->
+                                            Just
+                                                { nodeId = "t1"
+                                                , status = P.Succeeded
+                                                , attempts = 1
+                                                , maxAttempts = 3
+                                                , sessionId = Just "s1"
+                                                , failures = []
+                                                , startedAt = Just 100
+                                                , finishedAt = Just 200
+                                                }
+                                        )
+                                        (Dict.update "t2"
+                                            (\_ ->
+                                                Just
+                                                    { nodeId = "t2"
+                                                    , status = P.Waiting
+                                                    , attempts = 1
+                                                    , maxAttempts = 3
+                                                    , sessionId = Nothing
+                                                    , failures = [ { attempt = 1, reason = "boom", at = 300 } ]
+                                                    , startedAt = Nothing
+                                                    , finishedAt = Nothing
+                                                    }
+                                            )
+                                            run.nodes
+                                        )
+                            }
+
+                        encoded =
+                            P.encodeRunState withStates
+
+                        decoded =
+                            D.decodeValue P.decodeRunStateOverlay encoded
+                    in
+                    case decoded of
+                        Ok overlay ->
+                            let
+                                restored =
+                                    P.applyRunStateOverlay overlay (P.emptyRunState "run-1" plan)
+                            in
+                            Expect.all
+                                [ \r -> Expect.equal P.InProgress r.status
+                                , \r -> Expect.equal P.Succeeded (nodeState "t1" r).status
+                                , \r -> Expect.equal (Just "s1") (nodeState "t1" r).sessionId
+                                , \r -> Expect.equal P.Waiting (nodeState "t2" r).status
+                                , \r -> Expect.equal 1 (List.length (nodeState "t2" r).failures)
+                                , \r -> Expect.equal "boom" (Maybe.withDefault { attempt = 0, reason = "", at = 0 } (List.head (nodeState "t2" r).failures)).reason
+                                ]
+                                restored
+
+                        Err err ->
+                            Expect.fail ("decode failed: " ++ D.errorToString err)
+            , test "unknown status strings are rejected" <|
+                \_ ->
+                    let
+                        json =
+                            """{ "run_id": "r", "status": "bogus", "nodes": {} }"""
+                    in
+                    case D.decodeString P.decodeRunStateOverlay json of
+                        Err _ ->
+                            Expect.pass
+
+                        Ok _ ->
+                            Expect.fail "should have failed"
             ]
         ]

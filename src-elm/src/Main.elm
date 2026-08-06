@@ -70,6 +70,11 @@ init _ =
       , planManager = emptyPlanManager
       , pendingPlanOffers = Dict.empty
       , planSelectedNode = Nothing
+      , planRun = Nothing
+      , planCreating = Nothing
+      , planCreateQueue = []
+      , planRunPath = Nothing
+      , planResumePath = Nothing
       , homeDir = ""
       }
     , Cmd.batch

@@ -17,6 +17,7 @@ import Dict exposing (Dict)
 import Set exposing (Set)
 import Json.Decode as D
 import Json.Encode as E
+import Process
 import Task
 import Time
 import App.Types exposing (..)
@@ -27,6 +28,7 @@ import Session.Handlers as H
 import Session.Selector as Sel exposing (Page(..))
 import Session.FilePicker as FP
 import Plan.Types as PT
+import Plan.Runner as R
 import Plan.Detect
 import Overlay.HelpWindow exposing (HelpItem, filterHelpItems)
 import Ports
@@ -155,6 +157,203 @@ setPlanErrors errs model =
     }
 
 
+-- ─── Plan runner wiring (effects ↔ ports) ──────────────────────────
+
+{-| Run one state-machine step with a timestamp, then dispatch effects.
+-}
+runStep : Int -> R.Event -> Model -> ( Model, Cmd Msg )
+runStep now ev model =
+    case model.planRun of
+        Just run ->
+            let
+                ( run2, effects ) =
+                    R.step now ev run
+
+                ( model1, cmds ) =
+                    applyEffects model effects
+            in
+            ( { model1 | planRun = Just run2 }, cmds )
+
+        Nothing ->
+            ( model, Cmd.none )
+
+
+applyEffects : Model -> List PT.Effect -> ( Model, Cmd Msg )
+applyEffects model effects =
+    List.foldl applyEffect ( model, Cmd.none ) effects
+
+
+applyEffect : PT.Effect -> ( Model, Cmd Msg ) -> ( Model, Cmd Msg )
+applyEffect e ( m, cmds ) =
+    case e of
+        PT.CreateSessionFor nodeId ->
+            -- Serialized session creation: one in-flight create at a
+            -- time; SessionCreated binds it to the pending node.
+            if m.planCreating == Nothing then
+                ( { m | planCreating = Just nodeId }
+                , Cmd.batch [ cmds, Ports.createSession { toolConfirm = Just "allow" } ]
+                )
+
+            else
+                ( { m | planCreateQueue = m.planCreateQueue ++ [ nodeId ] }, cmds )
+
+        PT.SendPrompt sid _ ->
+            let
+                promptText =
+                    nodePrompt m sid
+            in
+            if promptText == "" then
+                ( m, cmds )
+
+            else
+                ( m
+                , Cmd.batch
+                    [ cmds
+                    , Ports.sendPrompt { sessionId = sid, text = promptText, media = [] }
+                    ]
+                )
+
+        PT.CloseSessionFor sid _ ->
+            ( m, Cmd.batch [ cmds, Ports.closeSession { sessionId = sid } ] )
+
+        PT.ScheduleRetry nodeId delayMs ->
+            ( m
+            , Cmd.batch
+                [ cmds
+                , Task.perform (\_ -> PlanRunnerTick nodeId) (Process.sleep (toFloat delayMs))
+                ]
+            )
+
+        PT.PersistRunState ->
+            ( m, Cmd.batch [ cmds, persistRun m ] )
+
+        PT.Notify _ ->
+            ( m, cmds )
+
+
+{-| Kick off the next queued session creation (one in-flight at a time).
+-}
+startNextCreate : Model -> ( Model, Cmd Msg )
+startNextCreate model =
+    case ( model.planCreating, model.planCreateQueue ) of
+        ( Nothing, next :: rest ) ->
+            ( { model | planCreating = Just next, planCreateQueue = rest }
+            , Ports.createSession { toolConfirm = Just "allow" }
+            )
+
+        _ ->
+            ( model, Cmd.none )
+
+
+{-| The prompt text for a node-owned session (from the plan).
+-}
+nodePrompt : Model -> String -> String
+nodePrompt model sid =
+    case model.planRun of
+        Just run ->
+            case R.nodeBySessionId sid run of
+                Just nodeId ->
+                    run.plan.tasks
+                        |> List.filter (\t -> t.id == nodeId)
+                        |> List.head
+                        |> Maybe.map .prompt
+                        |> Maybe.withDefault ""
+
+                Nothing ->
+                    ""
+
+        Nothing ->
+            ""
+
+
+{-| Persist the current run state to <planId>.run.json.
+-}
+persistRun : Model -> Cmd Msg
+persistRun model =
+    case ( model.planRun, model.planRunPath ) of
+        ( Just run, Just path ) ->
+            Ports.fsWriteFileText
+                { path = path
+                , content = E.encode 2 (PT.encodeRunState run)
+                , createParents = True
+                }
+
+        _ ->
+            Cmd.none
+
+
+{-| Derive the run.json path from a plan file path (plan.json → plan.run.json).
+-}
+runPathFor : String -> String
+runPathFor planPath =
+    if String.endsWith ".json" planPath then
+        String.dropRight 5 planPath ++ ".run.json"
+
+    else
+        planPath ++ ".run.json"
+
+
+{-| Extract a runner event from a frame for a node-owned session:
+SM task done (in_progress=false) or SM error.
+-}
+planEventFromFrame : Model -> P.FrameEvent -> Maybe R.Event
+planEventFromFrame model ev =
+    case model.planRun of
+        Nothing ->
+            Nothing
+
+        Just run ->
+            if ev.tag /= "SM" then
+                Nothing
+
+            else
+                case R.nodeBySessionId ev.sessionId run of
+                    Nothing ->
+                        Nothing
+
+                    Just _ ->
+                        case ev.json of
+                            Just json ->
+                                case D.decodeValue P.systemMsgDecoder json of
+                                    Ok env ->
+                                        case env.msgType of
+                                            "task" ->
+                                                let
+                                                    inProgress =
+                                                        D.decodeValue (D.field "in_progress" D.bool) env.data
+                                                            |> Result.toMaybe
+                                                            |> Maybe.withDefault True
+
+                                                    taskError =
+                                                        D.decodeValue (D.field "task_error" D.bool) env.data
+                                                            |> Result.toMaybe
+                                                            |> Maybe.withDefault False
+                                                in
+                                                if inProgress then
+                                                    Nothing
+
+                                                else
+                                                    Just (R.TaskDone ev.sessionId taskError)
+
+                                            "error" ->
+                                                let
+                                                    text =
+                                                        D.decodeValue (D.field "text" D.string) env.data
+                                                            |> Result.toMaybe
+                                                            |> Maybe.withDefault "Error"
+                                                in
+                                                Just (R.SessionError ev.sessionId text)
+
+                                            _ ->
+                                                Nothing
+
+                                    Err _ ->
+                                        Nothing
+
+                            Nothing ->
+                                Nothing
+
+
 -- UPDATE
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -231,7 +430,17 @@ update msg model =
                 , pendingSwitchOnCreate = False
                 , pendingEvents = Dict.remove id model.pendingEvents
               }
-            , cmds
+            , Cmd.batch
+                [ cmds
+                , case model.planCreating of
+                    -- A runner-created session: bind it to its node
+                    -- (PlanBindSession also starts the next queued create).
+                    Just nodeId ->
+                        Task.perform (\t -> PlanBindSession (Time.posixToMillis t) nodeId id) Time.now
+
+                    Nothing ->
+                        Cmd.none
+                ]
             )
 
         CloseSession id ->
@@ -347,6 +556,16 @@ update msg model =
 
                                     else
                                         updatedModel
+
+                                -- Runner injection: task done / SM error for
+                                -- a node-owned session feeds the state machine.
+                                runnerFrameCmd =
+                                    case planEventFromFrame updatedModel2 ev of
+                                        Just runnerEv ->
+                                            Task.perform (\t -> PlanRunFrame (Time.posixToMillis t) runnerEv) Time.now
+
+                                        Nothing ->
+                                            Cmd.none
                             in
                             -- model_sync completes asynchronously via CO:
                             -- success closes the overlay, failure keeps it open
@@ -356,10 +575,10 @@ update msg model =
                                         update (ForSession ev.sessionId (ModelSelectorSyncResult isError message)) updatedModel2
 
                                     else
-                                        ( updatedModel2, cmds )
+                                        ( updatedModel2, Cmd.batch [ cmds, runnerFrameCmd ] )
 
                                 Nothing ->
-                                    ( updatedModel2, cmds )
+                                    ( updatedModel2, Cmd.batch [ cmds, runnerFrameCmd ] )
 
                         Nothing ->
                             bufferPendingEvent model ev.sessionId raw
@@ -370,6 +589,31 @@ update msg model =
         StatusEvent raw ->
             case D.decodeValue P.statusEventDecoder raw of
                 Ok ev ->
+                    let
+                        -- Runner injection: a node-owned session that
+                        -- disconnects before task completion is a failure.
+                        statusRunnerCmd =
+                            if not ev.connected then
+                                case model.planRun of
+                                    Just run ->
+                                        case R.nodeBySessionId ev.sessionId run of
+                                            Just _ ->
+                                                Task.perform
+                                                    (\t ->
+                                                        PlanRunFrame (Time.posixToMillis t)
+                                                            (R.SessionDisconnected ev.sessionId ev.message)
+                                                    )
+                                                    Time.now
+
+                                            Nothing ->
+                                                Cmd.none
+
+                                    Nothing ->
+                                        Cmd.none
+
+                            else
+                                Cmd.none
+                    in
                     case Dict.get ev.sessionId model.sessions of
                         Just session ->
                             let
@@ -390,18 +634,22 @@ update msg model =
                                         }
                                         model.sessions
                                   }
-                                , Cmd.none
+                                , statusRunnerCmd
                                 )
 
                             else
                                 ( { model
                                     | sessions = Dict.insert ev.sessionId updated model.sessions
                                   }
-                                , Cmd.none
+                                , statusRunnerCmd
                                 )
 
                         Nothing ->
-                            bufferPendingEvent model ev.sessionId raw
+                            let
+                                ( model1, cmds1 ) =
+                                    bufferPendingEvent model ev.sessionId raw
+                            in
+                            ( model1, Cmd.batch [ cmds1, statusRunnerCmd ] )
 
                 Err _ ->
                     ( model, Cmd.none )
@@ -1233,41 +1481,101 @@ update msg model =
                 Err _ ->
                     ( model, Cmd.none )
 
-        -- Text file read result: Plan Mode open/import.
+        -- Text file read result: Plan Mode open/import (or resume when
+        -- planResumePath is set).
         FsReadResult raw ->
-            case D.decodeValue fsReadOkDecoder raw of
-                Ok { ok, content, error } ->
-                    if ok then
-                        case PT.parsePlan content of
-                            Ok plan ->
+            case model.planResumePath of
+                Just runPath ->
+                    case D.decodeValue fsReadOkDecoder raw of
+                        Ok { ok, content, error } ->
+                            if ok then
+                                case ( D.decodeString PT.decodeRunStateOverlay content, model.planView.plan ) of
+                                    ( Ok overlay, Just plan ) ->
+                                        let
+                                            baseRun =
+                                                PT.applyRunStateOverlay overlay (PT.emptyRunState "resume" plan)
+
+                                            run =
+                                                R.resumeState baseRun
+
+                                            m1 =
+                                                { model
+                                                    | planRun = Just run
+                                                    , planRunPath = Just runPath
+                                                    , planResumePath = Nothing
+                                                    , planSelectedNode = Nothing
+                                                }
+                                        in
+                                        runStep 0 R.ContinueRun m1
+
+                                    ( Ok _, Nothing ) ->
+                                        ( { model | planResumePath = Nothing }, Cmd.none )
+
+                                    ( Err err, _ ) ->
+                                        ( { model
+                                            | planResumePath = Nothing
+                                            , planView =
+                                                { plan = model.planView.plan
+                                                , path = model.planView.path
+                                                , errors = [ "Invalid run state: " ++ D.errorToString err ]
+                                                , saving = False
+                                                , exportPath = model.planView.exportPath
+                                                }
+                                          }
+                                        , Cmd.none
+                                        )
+
+                            else
                                 ( { model
-                                    | showPlanView = True
+                                    | planResumePath = Nothing
                                     , planView =
-                                        { plan = Just plan
-                                        , path = Nothing
-                                        , errors = []
+                                        { plan = model.planView.plan
+                                        , path = model.planView.path
+                                        , errors = [ error ]
                                         , saving = False
-                                        , exportPath = ""
-                                        }
-                                    , planManager =
-                                        { show = False
-                                        , loading = False
-                                        , plans = model.planManager.plans
-                                        , error = Nothing
-                                        , importPath = ""
+                                        , exportPath = model.planView.exportPath
                                         }
                                   }
                                 , Cmd.none
                                 )
 
-                            Err errs ->
-                                ( setPlanErrors errs model, Cmd.none )
+                        Err _ ->
+                            ( { model | planResumePath = Nothing }, Cmd.none )
 
-                    else
-                        ( setPlanErrors [ error ] model, Cmd.none )
+                Nothing ->
+                    case D.decodeValue fsReadOkDecoder raw of
+                        Ok { ok, content, error } ->
+                            if ok then
+                                case PT.parsePlan content of
+                                    Ok plan ->
+                                        ( { model
+                                            | showPlanView = True
+                                            , planView =
+                                                { plan = Just plan
+                                                , path = Nothing
+                                                , errors = []
+                                                , saving = False
+                                                , exportPath = ""
+                                                }
+                                            , planManager =
+                                                { show = False
+                                                , loading = False
+                                                , plans = model.planManager.plans
+                                                , error = Nothing
+                                                , importPath = ""
+                                                }
+                                          }
+                                        , Cmd.none
+                                        )
 
-                Err _ ->
-                    ( model, Cmd.none )
+                                    Err errs ->
+                                        ( setPlanErrors errs model, Cmd.none )
+
+                            else
+                                ( setPlanErrors [ error ] model, Cmd.none )
+
+                        Err _ ->
+                            ( model, Cmd.none )
 
         FsDeleteResult raw ->
             case D.decodeValue fsOkDecoder raw of
@@ -1441,6 +1749,91 @@ update msg model =
 
         ClosePlanView ->
             ( { model | showPlanView = False, planSelectedNode = Nothing }, Cmd.none )
+
+        -- ─── Plan runner ────────────────────────────────────────────
+
+        PlanRunStart ->
+            case model.planView.plan of
+                Just _ ->
+                    case model.planRun of
+                        Just run ->
+                            -- re-run only from a finished/stopped state
+                            if List.member run.status [ PT.Completed, PT.FailedRun, PT.Stopped, PT.NotStarted ] then
+                                ( model
+                                , Task.perform (\t -> PlanRunStartAt (Time.posixToMillis t)) Time.now
+                                )
+
+                            else
+                                ( model, Cmd.none )
+
+                        Nothing ->
+                            ( model
+                            , Task.perform (\t -> PlanRunStartAt (Time.posixToMillis t)) Time.now
+                            )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        PlanRunStartAt ts ->
+            let
+                m1 =
+                    case ( model.planRun, model.planView.plan ) of
+                        ( Nothing, Just plan ) ->
+                            { model
+                                | planRun = Just (PT.emptyRunState (PT.slugify plan.name ++ "-" ++ String.fromInt ts) plan)
+                                , planRunPath = Maybe.map runPathFor model.planView.path
+                                , planSelectedNode = Nothing
+                            }
+
+                        _ ->
+                            model
+            in
+            runStep ts R.StartRun m1
+
+        PlanRunPause ->
+            runStep 0 R.PauseRun model
+
+        PlanRunResume ->
+            runStep 0 R.ResumeRun model
+
+        PlanRunStop ->
+            runStep 0 R.StopRun model
+
+        PlanRunRetryNode nodeId ->
+            runStep 0 (R.RetryNode nodeId) model
+
+        PlanRunnerTick nodeId ->
+            runStep 0 (R.RetryNode nodeId) model
+
+        PlanRunFrame ts ev ->
+            runStep ts ev model
+
+        PlanBindSession ts nodeId sid ->
+            let
+                m0 =
+                    { model | planCreating = Nothing }
+
+                ( m1, c1 ) =
+                    runStep ts (R.SessionCreatedFor nodeId sid) m0
+
+                ( m2, c2 ) =
+                    startNextCreate m1
+            in
+            ( m2, Cmd.batch [ c1, c2 ] )
+
+        PlanResume ->
+            case model.planView.path of
+                Just planPath ->
+                    let
+                        runPath =
+                            runPathFor planPath
+                    in
+                    ( { model | planResumePath = Just runPath }
+                    , Ports.fsReadFileText { path = runPath }
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
 
         PlanSelectNode nodeId ->
             ( { model | planSelectedNode = Just nodeId }, Cmd.none )

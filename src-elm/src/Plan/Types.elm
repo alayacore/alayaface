@@ -18,6 +18,14 @@ module Plan.Types exposing
     , Effect(..)
     , emptyNodeRunState
     , emptyRunState
+      -- Run state JSON (run.json persistence)
+    , nodeStatusToString
+    , nodeStatusFromString
+    , runStatusToString
+    , runStatusFromString
+    , encodeRunState
+    , decodeRunStateOverlay
+    , applyRunStateOverlay
     )
 
 {-| Plan Mode data model: DAG plan schema, JSON codecs, normalization
@@ -109,6 +117,7 @@ type NodeStatus
     = Pending
     | Starting
     | Running
+    | Waiting
     | Succeeded
     | Failed
     | Blocked
@@ -493,3 +502,212 @@ slugify name =
 
     else
         raw
+
+
+-- ─── Run state JSON (run.json persistence) ─────────────────────────
+
+
+nodeStatusToString : NodeStatus -> String
+nodeStatusToString s =
+    case s of
+        Pending -> "pending"
+        Starting -> "starting"
+        Running -> "running"
+        Waiting -> "waiting"
+        Succeeded -> "succeeded"
+        Failed -> "failed"
+        Blocked -> "blocked"
+        Canceled -> "canceled"
+
+
+nodeStatusFromString : String -> Maybe NodeStatus
+nodeStatusFromString s =
+    case s of
+        "pending" -> Just Pending
+        "starting" -> Just Starting
+        "running" -> Just Running
+        "waiting" -> Just Waiting
+        "succeeded" -> Just Succeeded
+        "failed" -> Just Failed
+        "blocked" -> Just Blocked
+        "canceled" -> Just Canceled
+        _ -> Nothing
+
+
+runStatusToString : RunStatus -> String
+runStatusToString s =
+    case s of
+        NotStarted -> "not_started"
+        InProgress -> "in_progress"
+        Paused -> "paused"
+        Completed -> "completed"
+        FailedRun -> "failed"
+        Stopped -> "stopped"
+
+
+runStatusFromString : String -> Maybe RunStatus
+runStatusFromString s =
+    case s of
+        "not_started" -> Just NotStarted
+        "in_progress" -> Just InProgress
+        "paused" -> Just Paused
+        "completed" -> Just Completed
+        "failed" -> Just FailedRun
+        "stopped" -> Just Stopped
+        _ -> Nothing
+
+
+encodeRunState : RunState -> E.Value
+encodeRunState run =
+    E.object
+        [ ( "run_id", E.string run.runId )
+        , ( "status", E.string (runStatusToString run.status) )
+        , ( "concurrency", E.int run.concurrency )
+        , ( "started_at", maybeInt run.startedAt )
+        , ( "finished_at", maybeInt run.finishedAt )
+        , ( "nodes"
+          , E.dict identity encodeNodeRunState run.nodes
+          )
+        ]
+
+
+encodeNodeRunState : NodeRunState -> E.Value
+encodeNodeRunState n =
+    E.object
+        [ ( "status", E.string (nodeStatusToString n.status) )
+        , ( "attempts", E.int n.attempts )
+        , ( "max_attempts", E.int n.maxAttempts )
+        , ( "session_id", maybeString n.sessionId )
+        , ( "failures", E.list encodeFailure n.failures )
+        , ( "started_at", maybeInt n.startedAt )
+        , ( "finished_at", maybeInt n.finishedAt )
+        ]
+
+
+encodeFailure : FailureRecord -> E.Value
+encodeFailure f =
+    E.object
+        [ ( "attempt", E.int f.attempt )
+        , ( "reason", E.string f.reason )
+        , ( "at", E.int f.at )
+        ]
+
+
+maybeInt : Maybe Int -> E.Value
+maybeInt v =
+    case v of
+        Just i ->
+            E.int i
+
+        Nothing ->
+            E.null
+
+
+maybeString : Maybe String -> E.Value
+maybeString v =
+    case v of
+        Just s ->
+            E.string s
+
+        Nothing ->
+            E.null
+
+
+{-| Decode the run-state overlay (everything except the plan itself,
+which lives in plan.json). Apply with `applyRunStateOverlay` (Update).
+-}
+decodeRunStateOverlay : D.Decoder { status : RunStatus, concurrency : Int, startedAt : Maybe Int, finishedAt : Maybe Int, nodes : Dict String NodeRunState }
+decodeRunStateOverlay =
+    D.map5
+        (\status concurrency startedAt finishedAt nodes ->
+            { status = status
+            , concurrency = concurrency
+            , startedAt = startedAt
+            , finishedAt = finishedAt
+            , nodes = nodes
+            }
+        )
+        (D.field "status" D.string
+            |> D.andThen
+                (\s ->
+                    case runStatusFromString s of
+                        Just st -> D.succeed st
+                        Nothing -> D.fail ("Unknown run status: " ++ s)
+                )
+        )
+        (D.oneOf [ D.field "concurrency" D.int, D.succeed defaultConcurrency ])
+        (D.field "started_at" (D.nullable D.int))
+        (D.field "finished_at" (D.nullable D.int))
+        (D.field "nodes"
+            (D.keyValuePairs nodeRunStateDecoder
+                |> D.map Dict.fromList
+            )
+        )
+
+
+nodeRunStateDecoder : D.Decoder NodeRunState
+nodeRunStateDecoder =
+    D.map8 NodeRunState
+        (D.oneOf [ D.field "node_id" D.string, D.succeed "" ])
+        (D.field "status" D.string
+            |> D.andThen
+                (\s ->
+                    case nodeStatusFromString s of
+                        Just st -> D.succeed st
+                        Nothing -> D.fail ("Unknown node status: " ++ s)
+                )
+        )
+        (D.oneOf [ D.field "attempts" D.int, D.succeed 0 ])
+        (D.oneOf [ D.field "max_attempts" D.int, D.succeed defaultMaxAttempts ])
+        (D.field "session_id" (D.nullable D.string))
+        (D.field "failures" (D.list failureDecoder))
+        (D.field "started_at" (D.nullable D.int))
+        (D.field "finished_at" (D.nullable D.int))
+
+
+failureDecoder : D.Decoder FailureRecord
+failureDecoder =
+    D.map3 FailureRecord
+        (D.field "attempt" D.int)
+        (D.field "reason" D.string)
+        (D.field "at" D.int)
+
+
+{-| Apply a decoded overlay onto an existing RunState (plan comes from
+plan.json). Node ids missing from the overlay keep their current state.
+-}
+applyRunStateOverlay :
+    { status : RunStatus
+    , concurrency : Int
+    , startedAt : Maybe Int
+    , finishedAt : Maybe Int
+    , nodes : Dict String NodeRunState
+    }
+    -> RunState
+    -> RunState
+applyRunStateOverlay overlay run =
+    let
+        merged =
+            Dict.union overlay.nodes run.nodes
+
+        -- nodes in the plan but absent from the overlay stay Pending
+        nodes =
+            Dict.foldl
+                (\id n acc ->
+                    case Dict.get id acc of
+                        Just _ ->
+                            acc
+
+                        Nothing ->
+                            Dict.insert id n acc
+                )
+                merged
+                run.nodes
+    in
+    { run
+        | status = overlay.status
+        , concurrency = overlay.concurrency
+        , startedAt = overlay.startedAt
+        , finishedAt = overlay.finishedAt
+        , nodes = nodes
+    }
