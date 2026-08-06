@@ -20,6 +20,9 @@ module App.Types exposing
     , emptyPlanView
     , PlanManagerState
     , emptyPlanManager
+    , PlanWindow
+    , emptyPlanWindow
+    , PlanReadTarget
     )
 
 {-| Application-level model, message, and editor/window types.
@@ -80,17 +83,14 @@ type alias Model =
     , appWidth : Int
     , appHeight : Int
       -- Plan Mode
-    , showPlanView : Bool
-    , planView : PlanViewState
+    , planWindows : Dict String PlanWindow
+    , planOrder : List String
+    , planActiveId : Maybe String
     , planManager : PlanManagerState
     , pendingPlanOffers : Dict String String
-    , planSelectedNode : Maybe String
-    , planRun : Maybe PT.RunState
-    , planCreating : Maybe String
-    , planCreateQueue : List String
-    , planRunPath : Maybe String
-    , planResumePath : Maybe String
-    , planRunLog : List String
+    , planCreating : Maybe ( String, String )
+    , planCreateQueue : List ( String, String )
+    , planReadTarget : Maybe PlanReadTarget
     , planSessionIds : Set String
     , planSessionPending : Bool
     , homeDir : String
@@ -251,7 +251,8 @@ type Msg
     | PlanManagerImport
     | PlanCreateOffer String
     | PlanSaveReady PT.Plan Int
-    | ClosePlanView
+    | PlanActivate String
+    | PlanClose String
     | PlanSelectNode String
     | PlanSetExportPath String
     | PlanExport
@@ -262,9 +263,9 @@ type Msg
     | PlanRunResume
     | PlanRunStop
     | PlanRunRetryNode String
-    | PlanRunnerTick String
+    | PlanRunnerTick String String
     | PlanRunFrame Int R.Event
-    | PlanBindSession Int String String
+    | PlanBindSession Int String String String
     | PlanResume
       -- Session wrapper
     | ForSession String Msg
@@ -272,8 +273,10 @@ type Msg
     | WindowDragStart String Float Float
     | WindowDragMove Float Float
     | WindowDragEnd
+    | PlanWindowDragStart String Float Float
       -- Window resizing
     | ResizeStart String ResizeHandle Float Float
+    | PlanResizeStart String ResizeHandle Float Float
       -- Instant activation on mousedown
     | ActivateSession String
       -- Context menu
@@ -471,4 +474,44 @@ emptyPlanManager =
     , plans = []
     , error = Nothing
     , importPath = ""
+    }
+
+
+{-| A plan opened in its own draggable window (like a session window).
+One window per plan file; the window owns its run state so multiple
+plans can run independently.
+-}
+type alias PlanWindow =
+    { view : PlanViewState
+    , run : Maybe PT.RunState
+    , runPath : Maybe String
+    , runLog : List String
+    , selectedNode : Maybe String
+    , creating : Maybe String
+    , createQueue : List String
+    , resumePath : Maybe String
+    }
+
+
+emptyPlanWindow : PlanWindow
+emptyPlanWindow =
+    { view = emptyPlanView
+    , run = Nothing
+    , runPath = Nothing
+    , runLog = []
+    , selectedNode = Nothing
+    , creating = Nothing
+    , createQueue = []
+    , resumePath = Nothing
+    }
+
+
+{-| A pending fs_read_file_text request initiated from Plan Mode:
+which window it belongs to and whether it is a resume read or an
+open/import read.
+-}
+type alias PlanReadTarget =
+    { planId : String
+    , path : String
+    , isResume : Bool
     }

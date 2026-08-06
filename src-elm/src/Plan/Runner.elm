@@ -15,7 +15,8 @@ the machine stays pure. Effects are consumed by App/Update:
 
   - CreateSessionFor nodeId  → Ports.createSession (serialized: one
     in-flight create at a time; bind via SessionCreatedFor)
-  - SendPrompt sid nodeId    → Ports.sendPrompt (node prompt text)
+  - SendPrompt sid nodeId    → Ports.sendPrompt (node prompt text); emitted
+    exactly once when the created session is bound (Starting → Running)
   - CloseSessionFor sid nodeId → Ports.closeSession
   - ScheduleRetry nodeId ms  → Process.sleep then RetryNode
   - PersistRunState          → write <planId>.run.json
@@ -54,47 +55,54 @@ type Event
 step : Int -> Event -> PT.RunState -> ( PT.RunState, List PT.Effect )
 step now ev run =
     let
-        updated =
+        ( updated, preEffects ) =
             case ev of
                 StartRun ->
-                    startRun now run
+                    ( startRun now run, [] )
 
                 ContinueRun ->
-                    continueRun run
+                    ( continueRun run, [] )
 
                 PauseRun ->
                     if run.status == PT.InProgress then
-                        { run | status = PT.Paused }
+                        ( { run | status = PT.Paused }, [] )
 
                     else
-                        run
+                        ( run, [] )
 
                 ResumeRun ->
                     if run.status == PT.Paused then
-                        { run | status = PT.InProgress }
+                        ( { run | status = PT.InProgress }, [] )
 
                     else
-                        run
+                        ( run, [] )
 
                 StopRun ->
-                    stopRun run
+                    ( stopRun run, [] )
 
                 SessionCreatedFor nodeId sid ->
+                    -- Sending the node prompt is the direct consequence of
+                    -- binding a freshly created session: emit it exactly
+                    -- once (bindSession only fires on Starting → Running).
                     bindSession nodeId sid run
 
                 TaskDone sid isError ->
-                    taskDone now sid isError run
+                    ( taskDone now sid isError run, [] )
 
                 SessionError sid text ->
-                    sessionError now sid text run
+                    ( sessionError now sid text run, [] )
 
                 SessionDisconnected sid reason ->
-                    sessionDisconnected now sid reason run
+                    ( sessionDisconnected now sid reason run, [] )
 
                 RetryNode nodeId ->
-                    retryNode nodeId run
+                    ( retryNode nodeId run, [] )
     in
-    finishStep now updated
+    let
+        ( runFinal, effects ) =
+            finishStep now updated
+    in
+    ( runFinal, preEffects ++ effects )
 
 
 -- ─── Event handlers ────────────────────────────────────────────────
@@ -150,17 +158,20 @@ stopRun run =
     { run | status = PT.Stopped, nodes = nodes }
 
 
-bindSession : String -> String -> PT.RunState -> PT.RunState
+bindSession : String -> String -> PT.RunState -> ( PT.RunState, List PT.Effect )
 bindSession nodeId sid run =
-    updateNode nodeId
-        (\n ->
+    case Dict.get nodeId run.nodes of
+        Just n ->
             if n.status == PT.Starting then
-                { n | status = PT.Running, sessionId = Just sid }
+                ( { run | nodes = Dict.insert nodeId { n | status = PT.Running, sessionId = Just sid } run.nodes }
+                , [ PT.SendPrompt sid nodeId ]
+                )
 
             else
-                n
-        )
-        run
+                ( run, [] )
+
+        Nothing ->
+            ( run, [] )
 
 
 taskDone : Int -> String -> Bool -> PT.RunState -> PT.RunState

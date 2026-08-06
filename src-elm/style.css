@@ -370,6 +370,35 @@ body {
   flex-shrink: 0;
 }
 
+/* ─── Open plans sub-list ───────────────────────────────────────────── */
+
+.global-menu-plans {
+  border-top: 1px solid rgba(255,255,255,0.08);
+  margin-top: 2px;
+  padding-top: 2px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.global-menu-sub {
+  padding: 7px 14px 7px 28px;
+  font-size: 0.78rem;
+  color: #aaa;
+}
+.global-menu-sub .global-menu-icon {
+  font-size: 0.8rem;
+  width: 16px;
+}
+.global-menu-item-active {
+  background: rgba(99,102,241,0.18);
+  color: #c7d2fe;
+}
+
+@media (prefers-color-scheme: light) {
+  .global-menu-plans { border-top-color: rgba(0,0,0,0.08); }
+  .global-menu-sub { color: #666; }
+  .global-menu-item-active { background: rgba(99,102,241,0.1); color: #3730a3; }
+}
+
 @media (prefers-color-scheme: light) {
   .global-menu-btn {
     background: rgba(99,102,241,0.1);
@@ -2483,6 +2512,24 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+/* ─── Plan window (draggable, like a session window) ────────────────── */
+
+.plan-panel {
+  min-width: 480px;
+  min-height: 320px;
+}
+.plan-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px;
+}
+.plan-panel .plan-page {
+  min-width: 0;
+  max-width: none;
+  max-height: none;
 }
 
 .plan-page-title {

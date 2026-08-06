@@ -56,11 +56,12 @@ view model =
             []
             [ Html.text (".app{--content-width:" ++ String.fromInt (min 864 (max 400 model.appWidth - 40)) ++ "px}") ]
         , Html.div [ Attr.id "main-content", Attr.class "main-content" ]
-            (if List.isEmpty model.sessionOrder then
+            (if List.isEmpty model.sessionOrder && List.isEmpty model.planOrder then
                 [ viewNoSessionPanel model ]
 
              else
                 List.map (\id -> viewSessionPanel model id) model.sessionOrder
+                    ++ List.map (\pid -> viewPlanPanel model pid) model.planOrder
             )
         , viewGlobalMenu model
         , viewContextMenu model
@@ -69,7 +70,6 @@ view model =
         , viewDefaultModelsEditorOverlay model
         , viewMcpEditorOverlay model
         , viewSettingsEditorOverlay model
-        , viewPlanOverlay model
         , viewPlanManagerOverlay model
         ]
 
@@ -235,6 +235,12 @@ viewGlobalMenu model =
                 [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "🕸" ]
                 , Html.text " Plans"
                 ]
+            , if List.isEmpty model.planOrder then
+                Html.text ""
+
+              else
+                Html.div [ Attr.class "global-menu-plans" ]
+                    (List.map (viewGlobalMenuPlan model) model.planOrder)
             ]
         , Html.button
             [ Attr.class "global-menu-btn"
@@ -242,6 +248,48 @@ viewGlobalMenu model =
             , Attr.title "Menu"
             ]
             [ Html.text "⚙" ]
+        ]
+
+
+{-| One entry per open plan window in the global menu: clicking brings
+that plan window to the front. Shows the plan name and run status.
+-}
+viewGlobalMenuPlan : Model -> String -> Html Msg
+viewGlobalMenuPlan model planId =
+    let
+        win =
+            Dict.get planId model.planWindows
+
+        name =
+            win
+                |> Maybe.andThen (.view >> .plan)
+                |> Maybe.map .name
+                |> Maybe.withDefault planId
+
+        runLabel =
+            win
+                |> Maybe.andThen .run
+                |> Maybe.map (.status >> runStatusLabel)
+                |> Maybe.withDefault ""
+
+        isActive =
+            model.planActiveId == Just planId
+    in
+    Html.div
+        [ Attr.class
+            ("global-menu-item global-menu-sub"
+                ++ (if isActive then " global-menu-item-active" else "")
+            )
+        , Ev.onClick (PlanActivate planId)
+        ]
+        [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "🕸" ]
+        , Html.text
+            (if runLabel == "" then
+                name
+
+             else
+                name ++ " — " ++ runLabel
+            )
         ]
 
 
@@ -326,81 +374,168 @@ viewSessionManagerOverlay model =
 
 -- PLAN MODE VIEWS
 
-viewPlanOverlay : Model -> Html Msg
-viewPlanOverlay model =
-    if model.showPlanView then
-        let
-            pv =
-                model.planView
+-- PLAN MODE VIEWS
 
-            runStates =
-                case model.planRun of
-                    Just run ->
-                        run.nodes
+{-| A plan window: draggable/resizable like a session window, owns its
+run state. Multiple plans can be open at once; the global menu lists
+them all.
+-}
+viewPlanPanel : Model -> String -> Html Msg
+viewPlanPanel model planId =
+    case Dict.get planId model.planWindows of
+        Just win ->
+            let
+                isActive =
+                    model.planActiveId == Just planId
 
-                    Nothing ->
-                        Dict.empty
+                winPos =
+                    Dict.get planId model.windowPositions
 
-            nodeClick nodeId =
-                case model.planRun of
-                    Just run ->
-                        case Dict.get nodeId run.nodes of
-                            Just n ->
-                                case n.sessionId of
-                                    Just sid ->
-                                        ActivateSession sid
-
-                                    Nothing ->
-                                        PlanSelectNode nodeId
-
-                            Nothing ->
-                                PlanSelectNode nodeId
-
-                    Nothing ->
-                        PlanSelectNode nodeId
-        in
-        viewOverlay ClosePlanView
-            [ Html.div [ Attr.class "plan-page" ]
-                [ Html.div [ Attr.class "plan-page-title" ] [ Html.text "Plan" ]
-                , case pv.errors of
-                    err :: _ ->
-                        Html.div [ Attr.class "sel-page-status sel-page-status-error" ]
-                            [ Html.text (String.join "\n" pv.errors) ]
-
-                    [] ->
-                        Html.text ""
-                , case pv.plan of
-                    Just plan ->
-                        Html.div [ Attr.class "plan-page-body" ]
-                            [ viewPlanHeader model plan
-                            , case pv.path of
-                                Just p ->
-                                    Html.div [ Attr.class "plan-page-path" ]
-                                        [ Html.text ("Saved: " ++ p) ]
-
-                                Nothing ->
-                                    Html.text ""
-                            , Html.div [ Attr.class "plan-page-canvas" ]
-                                [ Plan.View.viewDag nodeClick runStates plan ]
-                            , viewPlanNodeDetail model plan
-                            , viewPlanRunLog model
-                            , viewPlanExport pv
+                positionStyles =
+                    case winPos of
+                        Just p ->
+                            [ Attr.style "left" (String.fromInt p.x ++ "px")
+                            , Attr.style "top" (String.fromInt p.y ++ "px")
+                            , Attr.style "width" (String.fromInt p.w ++ "px")
+                            , Attr.style "height" (String.fromInt p.h ++ "px")
+                            , Attr.style "z-index" (String.fromInt p.z)
+                            , Attr.style "position" "absolute"
                             ]
 
-                    Nothing ->
-                        Html.text ""
+                        Nothing ->
+                            []
+
+                pv =
+                    win.view
+
+                runStates =
+                    win.run
+                        |> Maybe.map .nodes
+                        |> Maybe.withDefault Dict.empty
+
+                nodeClick nodeId =
+                    case win.run of
+                        Just run ->
+                            case Dict.get nodeId run.nodes of
+                                Just n ->
+                                    case n.sessionId of
+                                        Just sid ->
+                                            ActivateSession sid
+
+                                        Nothing ->
+                                            PlanSelectNode nodeId
+
+                                Nothing ->
+                                    PlanSelectNode nodeId
+
+                        Nothing ->
+                            PlanSelectNode nodeId
+
+                planName =
+                    pv.plan |> Maybe.map .name |> Maybe.withDefault planId
+            in
+            Html.div
+                ([ Attr.class
+                    ("session-panel plan-panel"
+                        ++ (if isActive then " session-panel-active" else "")
+                    )
+                 , Ev.onClick (PlanActivate planId)
+                 , Ev.on "mousedown" (D.succeed (PlanActivate planId))
+                 ]
+                    ++ positionStyles
+                )
+                [ viewPlanResizeHandle planId NW
+                , viewPlanResizeHandle planId N
+                , viewPlanResizeHandle planId NE
+                , viewPlanResizeHandle planId W
+                , viewPlanResizeHandle planId E
+                , viewPlanResizeHandle planId SW
+                , viewPlanResizeHandle planId S
+                , viewPlanResizeHandle planId SE
+                , Html.div
+                    [ Attr.class "session-bar plan-bar"
+                    , Ev.preventDefaultOn "mousedown"
+                        (D.map2
+                            (\clientX clientY ->
+                                ( PlanWindowDragStart planId clientX clientY, True )
+                            )
+                            (D.field "clientX" D.float)
+                            (D.field "clientY" D.float)
+                        )
+                    , Attr.title "Drag to move"
+                    ]
+                    [ Html.span [ Attr.class "session-bar-title" ]
+                        [ Html.text ("Plan — " ++ planName) ]
+                    , Html.button
+                        [ Attr.class "session-bar-close"
+                        , Ev.stopPropagationOn "mousedown" (D.succeed ( NoOp, True ))
+                        , Ev.stopPropagationOn "click" (D.succeed ( PlanClose planId, True ))
+                        , Attr.title "Close plan window"
+                        ]
+                        [ Html.text "✕" ]
+                    ]
+                , Html.div [ Attr.class "plan-panel-body" ]
+                    [ Html.div [ Attr.class "plan-page" ]
+                        [ case pv.errors of
+                            err :: _ ->
+                                Html.div [ Attr.class "sel-page-status sel-page-status-error" ]
+                                    [ Html.text (String.join "\n" pv.errors) ]
+
+                            [] ->
+                                Html.text ""
+                        , case pv.plan of
+                            Just plan ->
+                                Html.div [ Attr.class "plan-page-body" ]
+                                    [ viewPlanHeader win plan
+                                    , case pv.path of
+                                        Just p ->
+                                            Html.div [ Attr.class "plan-page-path" ]
+                                                [ Html.text ("Saved: " ++ p) ]
+
+                                        Nothing ->
+                                            Html.text ""
+                                    , Html.div [ Attr.class "plan-page-canvas" ]
+                                        [ Plan.View.viewDag nodeClick runStates plan ]
+                                    , viewPlanNodeDetail win plan
+                                    , viewPlanRunLog win
+                                    , viewPlanExport pv
+                                    ]
+
+                            Nothing ->
+                                Html.text ""
+                        ]
+                    ]
                 ]
-            ]
 
-    else
-        Html.text ""
+        Nothing ->
+            Html.text ""
 
 
-viewPlanHeader : Model -> PT.Plan -> Html Msg
-viewPlanHeader model plan =
+viewPlanResizeHandle : String -> ResizeHandle -> Html Msg
+viewPlanResizeHandle planId handle =
+    let
+        className =
+            "resize-handle resize-handle-" ++ resizeHandleString handle
+    in
+    Html.div
+        [ Attr.class className
+        , Ev.preventDefaultOn "mousedown"
+            (D.map2
+                (\clientX clientY ->
+                    ( PlanResizeStart planId handle clientX clientY, True )
+                )
+                (D.field "clientX" D.float)
+                (D.field "clientY" D.float)
+            )
+        ]
+        []
+
+
+viewPlanHeader : PlanWindow -> PT.Plan -> Html Msg
+viewPlanHeader win plan =
     let
         runStatus =
-            model.planRun |> Maybe.map .status
+            win.run |> Maybe.map .status
 
         runBadge =
             case runStatus of
@@ -429,7 +564,7 @@ viewPlanHeader model plan =
             runStatus == Just PT.InProgress || runStatus == Just PT.Paused
 
         canLoadRun =
-            model.planView.path /= Nothing
+            win.view.path /= Nothing
                 && (runStatus == Nothing || runStatus == Just PT.Completed || runStatus == Just PT.FailedRun || runStatus == Just PT.Stopped || runStatus == Just PT.NotStarted)
     in
     Html.div [ Attr.class "plan-header" ]
@@ -531,15 +666,15 @@ runStatusClass st =
             "stopped"
 
 
-viewPlanNodeDetail : Model -> PT.Plan -> Html Msg
-viewPlanNodeDetail model plan =
-    case model.planSelectedNode of
+viewPlanNodeDetail : PlanWindow -> PT.Plan -> Html Msg
+viewPlanNodeDetail win plan =
+    case win.selectedNode of
         Just nodeId ->
             case List.filter (\t -> t.id == nodeId) plan.tasks |> List.head of
                 Just t ->
                     let
                         nodeStatus =
-                            model.planRun
+                            win.run
                                 |> Maybe.andThen (\run -> Dict.get nodeId run.nodes)
                                 |> Maybe.map .status
 
@@ -556,18 +691,11 @@ viewPlanNodeDetail model plan =
                                 Just PT.Waiting ->
                                     "Retry now"
 
-                                Just st ->
-                                    if st == PT.Canceled || st == PT.Failed then
-                                        "Retry node"
-
-                                    else
-                                        "Retry node"
-
-                                Nothing ->
+                                _ ->
                                     "Retry node"
 
                         failures =
-                            model.planRun
+                            win.run
                                 |> Maybe.andThen (\run -> Dict.get nodeId run.nodes)
                                 |> Maybe.map .failures
                                 |> Maybe.withDefault []
@@ -654,9 +782,9 @@ statusLabelFor st =
         PT.Canceled -> "Canceled"
 
 
-viewPlanRunLog : Model -> Html Msg
-viewPlanRunLog model =
-    if List.isEmpty model.planRunLog then
+viewPlanRunLog : PlanWindow -> Html Msg
+viewPlanRunLog win =
+    if List.isEmpty win.runLog then
         Html.text ""
 
     else
@@ -665,7 +793,7 @@ viewPlanRunLog model =
             , Html.div [ Attr.class "plan-run-log-lines" ]
                 (List.map
                     (\l -> Html.div [ Attr.class "plan-run-log-line" ] [ Html.text l ])
-                    (List.reverse (List.take 15 model.planRunLog))
+                    (List.reverse (List.take 15 win.runLog))
                 )
             ]
 

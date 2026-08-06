@@ -50,9 +50,32 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P4.5 create_session preset/builtinTools + settings.conf + seed presets | [x] |
 | P5 Polish (badges/logs/concurrency/export/docs/README) | [x] |
 | P6 Plan Session (menu entry, --system planner prompt, [Plan] title) | [x] |
-| P4 Runner state machine + retry + run.json + resume | [ ] |
-| P4.5 create_session preset/builtinTools + settings.conf + seed presets | [ ] |
-| P5 Polish (badges/logs/concurrency/export/docs/README) | [ ] |
+| P7 Plan windows (multi-instance, ⚙ menu list) + SendPrompt fix | [x] |
+
+## P7 — Plan windows + runner prompt dispatch fix（评审反馈）
+
+- [x] **Plan 界面改为独立窗口**（不再是 overlay）：`planWindows : Dict
+      String PlanWindow` + `planOrder` + `planActiveId`，每个窗口自带
+      `view`/`run`/`runPath`/`runLog`/`selectedNode`/`creating`/`createQueue`/
+      `resumePath`；窗口可拖动/缩放/关闭（复用 `windowPositions` + drag/
+      resize 机制，新增 `PlanWindowDragStart`/`PlanResizeStart`/`PlanActivate`/
+      `PlanClose`）；多 plan 可同时打开、独立运行；
+- [x] **系统菜单（⚙）列出所有打开的 plan**（名称 + 运行状态），点击置顶激活
+      （`viewGlobalMenuPlan`）；Plans 管理器保留为 launcher（open/delete/import）；
+- [x] **Run 后节点会话为空的问题已修复**：`Plan/Runner.elm` 从未生成
+      `SendPrompt` effect（只定义了类型/处理端），导致会话创建并绑定为
+      `Running` 后 prompt 从未发送。现在 `bindSession`（Starting→Running）
+      恰好发出一次 `SendPrompt`；测试覆盖（绑定发 prompt、重复绑定不发、
+      全生命周期 create→bind→prompt→done）；
+- [x] 手动关闭节点会话窗口 → 注入 `SessionDisconnected`（防 runner 悬挂）；
+- [x] `planCreating`/`planCreateQueue` 升级为 `(planId, nodeId)` 全局串行，
+      `SessionCreated` → `PlanBindSession ts planId nodeId sid` 无歧义绑定；
+      runner 事件（TaskDone/Error/Disconnect）按 sessionId 路由到所属窗口
+      （`findPlanIdBySession`）；
+- [x] FsReadResult 改为 `planReadTarget`（planId/path/isResume）路由：
+      打开/导入 → 新建或聚焦窗口；Load run → 恢复该窗口 run 并 ContinueRun；
+- [x] 文档同步（docs/plan-mode.md §7.1/偏差说明、README）；
+- [x] 测试：Elm 117（新增 prompt dispatch 3 例）。
 
 ## Design decisions (defaults, see docs/plan-mode.md §13)
 

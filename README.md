@@ -156,11 +156,12 @@ for you:
 2. **Save**: the plan is validated (unique ids, deps exist, no cycles),
    normalized, and written to `~/.alayaface/plans/<name>.json` (Plans
    manager in the ⚙ menu: open / delete / import / export).
-3. **Run**: the Plan window shows the DAG. **Run** launches each task in its
-   own session window (click a node to open it), respecting dependencies
-   and parallelism (`concurrency`, default 2). Tasks run under their
-   node-level `preset` / `tools` (see below) with tool confirmation
-   auto-approved.
+3. **Run**: each plan opens in its own **window** (like a session window —
+   drag / resize / close, and the ⚙ menu lists all open plans). The DAG is
+   shown in the window; **Run** launches each task in its own session window
+   (click a node to open it), respecting dependencies and parallelism
+   (`concurrency`, default 2). Tasks run under their node-level `preset` /
+   `tools` (see below) with tool confirmation auto-approved.
 4. **Retry**: failed tasks record the failure reason and attempt number
    (shown on the node and in the detail panel), auto-retry up to
    `max_attempts` (default 3, 2s backoff), then mark dependents **Blocked**.

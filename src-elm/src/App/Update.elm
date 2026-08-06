@@ -145,16 +145,163 @@ refreshPlanList model =
 
 setPlanErrors : List String -> Model -> Model
 setPlanErrors errs model =
+    case model.planActiveId of
+        Just pid ->
+            setPlanWin pid
+                (\w ->
+                    let
+                        wv =
+                            w.view
+                    in
+                    { w | view = { wv | errors = errs, saving = False } }
+                )
+                model
+
+        Nothing ->
+            -- No plan window yet (e.g. validation failed right after an
+            -- offer): show the errors in a fresh error-only window.
+            addPlanWindow
+                ("plan-error-" ++ String.fromInt (Dict.size model.planWindows))
+                { emptyPlanWindow | view = { emptyPlanView | errors = errs } }
+                model
+
+
+{-| Accessor for the active plan window.
+-}
+getPlanWin : Model -> Maybe PlanWindow
+getPlanWin model =
+    model.planActiveId
+        |> Maybe.andThen (\pid -> Dict.get pid model.planWindows)
+
+
+{-| Update a specific plan window.
+-}
+setPlanWin : String -> (PlanWindow -> PlanWindow) -> Model -> Model
+setPlanWin pid fn model =
+    { model | planWindows = Dict.update pid (Maybe.map fn) model.planWindows }
+
+
+{-| Update the active plan window.
+-}
+updateActivePlanWin : Model -> (PlanWindow -> PlanWindow) -> Model
+updateActivePlanWin model fn =
+    case model.planActiveId of
+        Just pid ->
+            setPlanWin pid fn model
+
+        Nothing ->
+            model
+
+
+{-| Insert (or update) a plan window, activate it, assign a default
+window position if it is new, and raise it to the top.
+-}
+addPlanWindow : String -> PlanWindow -> Model -> Model
+addPlanWindow key win model =
+    let
+        n =
+            Dict.size model.planWindows
+
+        positions1 =
+            if Dict.member key model.windowPositions then
+                model.windowPositions
+
+            else
+                Dict.insert key
+                    { x = 60 + remainderBy 6 n * 50
+                    , y = 60 + remainderBy 4 n * 40
+                    , z = model.nextZIndex
+                    , w = defaultWinW
+                    , h = defaultWinH
+                    }
+                    model.windowPositions
+
+        positions2 =
+            Dict.update key (Maybe.map (\p -> { p | z = model.nextZIndex })) positions1
+    in
     { model
-        | showPlanView = True
-        , planView =
-            { plan = model.planView.plan
-            , path = model.planView.path
-            , errors = errs
-            , saving = False
-            , exportPath = model.planView.exportPath
-            }
+        | planWindows = Dict.insert key win model.planWindows
+        , planOrder =
+            if List.member key model.planOrder then
+                model.planOrder
+
+            else
+                model.planOrder ++ [ key ]
+        , planActiveId = Just key
+        , windowPositions = positions2
+        , nextZIndex = model.nextZIndex + 1
     }
+
+
+{-| Window key for a plan file path. Saved plans (under plans dir) use
+their file name; imported files get a stable slugified key so reopening
+the same file focuses the same window.
+-}
+planWinKeyForPath : String -> String
+planWinKeyForPath path =
+    let
+        base =
+            String.split "/" path
+                |> List.reverse
+                |> List.head
+                |> Maybe.withDefault path
+
+        baseNoJson =
+            if String.endsWith ".json" base then
+                String.dropRight 5 base
+
+            else
+                base
+    in
+    if String.contains ".alayaface/plans" path then
+        baseNoJson
+
+    else
+        "import-" ++ PT.slugify baseNoJson
+
+
+{-| Find the plan window whose run owns the given session id.
+-}
+findPlanIdBySession : Model -> String -> Maybe String
+findPlanIdBySession model sid =
+    Dict.foldl
+        (\pid win acc ->
+            case acc of
+                Just _ ->
+                    acc
+
+                Nothing ->
+                    case win.run of
+                        Just run ->
+                            if R.nodeBySessionId sid run == Nothing then
+                                Nothing
+
+                            else
+                                Just pid
+
+                        Nothing ->
+                            Nothing
+        )
+        Nothing
+        model.planWindows
+
+
+{-| The session id carried by a runner event, if any.
+-}
+eventSessionId : R.Event -> Maybe String
+eventSessionId ev =
+    case ev of
+        R.TaskDone sid _ ->
+            Just sid
+
+        R.SessionError sid _ ->
+            Just sid
+
+        R.SessionDisconnected sid _ ->
+            Just sid
+
+        _ ->
+            Nothing
 
 
 -- ─── Plan runner wiring (effects ↔ ports) ──────────────────────────
@@ -184,30 +331,35 @@ planSystemPrompt =
 - 涉及执行命令等有风险操作的任务用 preset: "Safe"（禁 execute_command）或 tools 字段限制
 - 首次输出计划之后，如果用户继续对话，请正常回答，不要再输出计划代码块"""
 
-{-| Run one state-machine step with a timestamp, then dispatch effects.
-Appends a log line for every node whose status changed (bounded).
+{-| Run one state-machine step for a specific plan window, with a
+timestamp, then dispatch effects. Appends a log line for every node
+whose status changed (bounded).
 -}
-runStep : Int -> R.Event -> Model -> ( Model, Cmd Msg )
-runStep now ev model =
-    case model.planRun of
-        Just run ->
-            let
-                ( run2, effects ) =
-                    R.step now ev run
+runStepIn : String -> Int -> R.Event -> Model -> ( Model, Cmd Msg )
+runStepIn planId now ev model =
+    case Dict.get planId model.planWindows of
+        Just win ->
+            case win.run of
+                Just run ->
+                    let
+                        ( run2, effects ) =
+                            R.step now ev run
 
-                ( model1, cmds ) =
-                    applyEffects model effects
+                        ( model1, cmds ) =
+                            applyEffectsIn planId model effects
 
-                diff =
-                    runDiffLog run run2
+                        diff =
+                            runDiffLog run run2
 
-                model2 =
-                    { model1
-                        | planRun = Just run2
-                        , planRunLog = List.take 80 (model1.planRunLog ++ diff)
-                    }
-            in
-            ( model2, cmds )
+                        win2 =
+                            { win | run = Just run2, runLog = List.take 80 (win.runLog ++ diff) }
+                    in
+                    ( { model1 | planWindows = Dict.insert planId win2 model1.planWindows }
+                    , cmds
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
 
         Nothing ->
             ( model, Cmd.none )
@@ -243,29 +395,30 @@ runDiffLog before after =
         |> List.reverse
 
 
-applyEffects : Model -> List PT.Effect -> ( Model, Cmd Msg )
-applyEffects model effects =
-    List.foldl applyEffect ( model, Cmd.none ) effects
+applyEffectsIn : String -> Model -> List PT.Effect -> ( Model, Cmd Msg )
+applyEffectsIn planId model effects =
+    List.foldl (applyEffectIn planId) ( model, Cmd.none ) effects
 
 
-applyEffect : PT.Effect -> ( Model, Cmd Msg ) -> ( Model, Cmd Msg )
-applyEffect e ( m, cmds ) =
+applyEffectIn : String -> PT.Effect -> ( Model, Cmd Msg ) -> ( Model, Cmd Msg )
+applyEffectIn planId e ( m, cmds ) =
     case e of
         PT.CreateSessionFor nodeId ->
             -- Serialized session creation: one in-flight create at a
-            -- time; SessionCreated binds it to the pending node.
+            -- time (globally); SessionCreated binds it to the pending
+            -- node via (planId, nodeId).
             if m.planCreating == Nothing then
-                ( { m | planCreating = Just nodeId }
-                , Cmd.batch [ cmds, Ports.createSession (nodeSessionArgs m nodeId) ]
+                ( { m | planCreating = Just ( planId, nodeId ) }
+                , Cmd.batch [ cmds, Ports.createSession (nodeSessionArgsIn planId nodeId m) ]
                 )
 
             else
-                ( { m | planCreateQueue = m.planCreateQueue ++ [ nodeId ] }, cmds )
+                ( { m | planCreateQueue = m.planCreateQueue ++ [ ( planId, nodeId ) ] }, cmds )
 
         PT.SendPrompt sid _ ->
             let
                 promptText =
-                    nodePrompt m sid
+                    nodePromptIn planId sid m
             in
             if promptText == "" then
                 ( m, cmds )
@@ -285,12 +438,12 @@ applyEffect e ( m, cmds ) =
             ( m
             , Cmd.batch
                 [ cmds
-                , Task.perform (\_ -> PlanRunnerTick nodeId) (Process.sleep (toFloat delayMs))
+                , Task.perform (\_ -> PlanRunnerTick planId nodeId) (Process.sleep (toFloat delayMs))
                 ]
             )
 
         PT.PersistRunState ->
-            ( m, Cmd.batch [ cmds, persistRun m ] )
+            ( m, Cmd.batch [ cmds, persistRunIn planId m ] )
 
         PT.Notify _ ->
             ( m, cmds )
@@ -298,12 +451,12 @@ applyEffect e ( m, cmds ) =
 
 {-| Kick off the next queued session creation (one in-flight at a time).
 -}
-startNextCreate : Model -> ( Model, Cmd Msg )
-startNextCreate model =
+startNextCreateIn : Model -> ( Model, Cmd Msg )
+startNextCreateIn model =
     case ( model.planCreating, model.planCreateQueue ) of
-        ( Nothing, next :: rest ) ->
-            ( { model | planCreating = Just next, planCreateQueue = rest }
-            , Ports.createSession (nodeSessionArgs model next)
+        ( Nothing, ( planId, nodeId ) :: rest ) ->
+            ( { model | planCreating = Just ( planId, nodeId ), planCreateQueue = rest }
+            , Ports.createSession (nodeSessionArgsIn planId nodeId model)
             )
 
         _ ->
@@ -315,11 +468,12 @@ approve tools so tasks don't stall) plus the node's preset/tools
 overrides (Nothing = preset defaults / all tools). No planner system
 prompt — runner sessions execute tasks, not plans.
 -}
-nodeSessionArgs : Model -> String -> { toolConfirm : Maybe String, preset : Maybe String, builtinTools : Maybe String, systemPrompt : Maybe String }
-nodeSessionArgs model nodeId =
+nodeSessionArgsIn : String -> String -> Model -> { toolConfirm : Maybe String, preset : Maybe String, builtinTools : Maybe String, systemPrompt : Maybe String }
+nodeSessionArgsIn planId nodeId model =
     let
         task =
-            model.planRun
+            Dict.get planId model.planWindows
+                |> Maybe.andThen .run
                 |> Maybe.map .plan
                 |> Maybe.map .tasks
                 |> Maybe.withDefault []
@@ -335,17 +489,22 @@ nodeSessionArgs model nodeId =
 
 {-| The prompt text for a node-owned session (from the plan).
 -}
-nodePrompt : Model -> String -> String
-nodePrompt model sid =
-    case model.planRun of
-        Just run ->
-            case R.nodeBySessionId sid run of
-                Just nodeId ->
-                    run.plan.tasks
-                        |> List.filter (\t -> t.id == nodeId)
-                        |> List.head
-                        |> Maybe.map .prompt
-                        |> Maybe.withDefault ""
+nodePromptIn : String -> String -> Model -> String
+nodePromptIn planId sid model =
+    case Dict.get planId model.planWindows of
+        Just win ->
+            case win.run of
+                Just run ->
+                    case R.nodeBySessionId sid run of
+                        Just nodeId ->
+                            run.plan.tasks
+                                |> List.filter (\t -> t.id == nodeId)
+                                |> List.head
+                                |> Maybe.map .prompt
+                                |> Maybe.withDefault ""
+
+                        Nothing ->
+                            ""
 
                 Nothing ->
                     ""
@@ -356,17 +515,22 @@ nodePrompt model sid =
 
 {-| Persist the current run state to <planId>.run.json.
 -}
-persistRun : Model -> Cmd Msg
-persistRun model =
-    case ( model.planRun, model.planRunPath ) of
-        ( Just run, Just path ) ->
-            Ports.fsWriteFileText
-                { path = path
-                , content = E.encode 2 (PT.encodeRunState run)
-                , createParents = True
-                }
+persistRunIn : String -> Model -> Cmd Msg
+persistRunIn planId model =
+    case Dict.get planId model.planWindows of
+        Just win ->
+            case ( win.run, win.runPath ) of
+                ( Just run, Just path ) ->
+                    Ports.fsWriteFileText
+                        { path = path
+                        , content = E.encode 2 (PT.encodeRunState run)
+                        , createParents = True
+                        }
 
-        _ ->
+                _ ->
+                    Cmd.none
+
+        Nothing ->
             Cmd.none
 
 
@@ -386,60 +550,55 @@ SM task done (in_progress=false) or SM error.
 -}
 planEventFromFrame : Model -> P.FrameEvent -> Maybe R.Event
 planEventFromFrame model ev =
-    case model.planRun of
-        Nothing ->
-            Nothing
+    if ev.tag /= "SM" then
+        Nothing
 
-        Just run ->
-            if ev.tag /= "SM" then
+    else
+        case findPlanIdBySession model ev.sessionId of
+            Nothing ->
                 Nothing
 
-            else
-                case R.nodeBySessionId ev.sessionId run of
-                    Nothing ->
-                        Nothing
+            Just _ ->
+                case ev.json of
+                    Just json ->
+                        case D.decodeValue P.systemMsgDecoder json of
+                            Ok env ->
+                                case env.msgType of
+                                    "task" ->
+                                        let
+                                            inProgress =
+                                                D.decodeValue (D.field "in_progress" D.bool) env.data
+                                                    |> Result.toMaybe
+                                                    |> Maybe.withDefault True
 
-                    Just _ ->
-                        case ev.json of
-                            Just json ->
-                                case D.decodeValue P.systemMsgDecoder json of
-                                    Ok env ->
-                                        case env.msgType of
-                                            "task" ->
-                                                let
-                                                    inProgress =
-                                                        D.decodeValue (D.field "in_progress" D.bool) env.data
-                                                            |> Result.toMaybe
-                                                            |> Maybe.withDefault True
+                                            taskError =
+                                                D.decodeValue (D.field "task_error" D.bool) env.data
+                                                    |> Result.toMaybe
+                                                    |> Maybe.withDefault False
+                                        in
+                                        if inProgress then
+                                            Nothing
 
-                                                    taskError =
-                                                        D.decodeValue (D.field "task_error" D.bool) env.data
-                                                            |> Result.toMaybe
-                                                            |> Maybe.withDefault False
-                                                in
-                                                if inProgress then
-                                                    Nothing
+                                        else
+                                            Just (R.TaskDone ev.sessionId taskError)
 
-                                                else
-                                                    Just (R.TaskDone ev.sessionId taskError)
+                                    "error" ->
+                                        let
+                                            text =
+                                                D.decodeValue (D.field "text" D.string) env.data
+                                                    |> Result.toMaybe
+                                                    |> Maybe.withDefault "Error"
+                                        in
+                                        Just (R.SessionError ev.sessionId text)
 
-                                            "error" ->
-                                                let
-                                                    text =
-                                                        D.decodeValue (D.field "text" D.string) env.data
-                                                            |> Result.toMaybe
-                                                            |> Maybe.withDefault "Error"
-                                                in
-                                                Just (R.SessionError ev.sessionId text)
-
-                                            _ ->
-                                                Nothing
-
-                                    Err _ ->
+                                    _ ->
                                         Nothing
 
-                            Nothing ->
+                            Err _ ->
                                 Nothing
+
+                    Nothing ->
+                        Nothing
 
 
 -- UPDATE
@@ -548,8 +707,8 @@ update msg model =
                 , case model.planCreating of
                     -- A runner-created session: bind it to its node
                     -- (PlanBindSession also starts the next queued create).
-                    Just nodeId ->
-                        Task.perform (\t -> PlanBindSession (Time.posixToMillis t) nodeId id) Time.now
+                    Just ( planId, nodeId ) ->
+                        Task.perform (\t -> PlanBindSession (Time.posixToMillis t) planId nodeId id) Time.now
 
                     Nothing ->
                         Cmd.none
@@ -557,6 +716,22 @@ update msg model =
             )
 
         CloseSession id ->
+            -- If the closed window belongs to a plan run, fail its node
+            -- so the runner retries/continues instead of hanging.
+            let
+                runnerFailCmd =
+                    case findPlanIdBySession model id of
+                        Just _ ->
+                            Task.perform
+                                (\t ->
+                                    PlanRunFrame (Time.posixToMillis t)
+                                        (R.SessionDisconnected id "Session window closed")
+                                )
+                                Time.now
+
+                        Nothing ->
+                            Cmd.none
+            in
             ( { model
                 | sessions = Dict.remove id model.sessions
                 , sessionOrder = List.filter (\k -> k /= id) model.sessionOrder
@@ -568,7 +743,7 @@ update msg model =
                     else
                         model.activeId
               }
-            , Ports.closeSession { sessionId = id }
+            , Cmd.batch [ Ports.closeSession { sessionId = id }, runnerFailCmd ]
             )
 
         -- Transport Events
@@ -705,19 +880,14 @@ update msg model =
                         -- disconnects before task completion is a failure.
                         statusRunnerCmd =
                             if not ev.connected then
-                                case model.planRun of
-                                    Just run ->
-                                        case R.nodeBySessionId ev.sessionId run of
-                                            Just _ ->
-                                                Task.perform
-                                                    (\t ->
-                                                        PlanRunFrame (Time.posixToMillis t)
-                                                            (R.SessionDisconnected ev.sessionId ev.message)
-                                                    )
-                                                    Time.now
-
-                                            Nothing ->
-                                                Cmd.none
+                                case findPlanIdBySession model ev.sessionId of
+                                    Just _ ->
+                                        Task.perform
+                                            (\t ->
+                                                PlanRunFrame (Time.posixToMillis t)
+                                                    (R.SessionDisconnected ev.sessionId ev.message)
+                                            )
+                                            Time.now
 
                                     Nothing ->
                                         Cmd.none
@@ -1565,24 +1735,19 @@ update msg model =
                     if ok then
                         let
                             model2 =
-                                { model
-                                    | planView =
-                                        { plan = model.planView.plan
-                                        , path = model.planView.path
-                                        , errors = model.planView.errors
-                                        , saving = False
-                                        , exportPath = model.planView.exportPath
-                                        }
-                                    , planManager =
-                                        { show = model.planManager.show
-                                        , loading = False
-                                        , plans = model.planManager.plans
-                                        , error = Nothing
-                                        , importPath = model.planManager.importPath
-                                        }
-                                }
+                                updateActivePlanWin model
+                                    (\w ->
+                                        let
+                                            wv =
+                                                w.view
+                                        in
+                                        { w | view = { wv | saving = False } }
+                                    )
+
+                            pm =
+                                model2.planManager
                         in
-                        ( model2
+                        ( { model2 | planManager = { pm | loading = False, error = Nothing } }
                         , refreshPlanList model2
                         )
 
@@ -1592,101 +1757,146 @@ update msg model =
                 Err _ ->
                     ( model, Cmd.none )
 
-        -- Text file read result: Plan Mode open/import (or resume when
-        -- planResumePath is set).
+        -- Text file read result: Plan Mode open/import (target set by
+        -- PlanManagerOpen/Import) or resume (target.isResume = True,
+        -- set by PlanResume).
         FsReadResult raw ->
-            case model.planResumePath of
-                Just runPath ->
-                    case D.decodeValue fsReadOkDecoder raw of
-                        Ok { ok, content, error } ->
-                            if ok then
-                                case ( D.decodeString PT.decodeRunStateOverlay content, model.planView.plan ) of
-                                    ( Ok overlay, Just plan ) ->
-                                        let
-                                            baseRun =
-                                                PT.applyRunStateOverlay overlay (PT.emptyRunState "resume" plan)
+            case model.planReadTarget of
+                Just target ->
+                    if target.isResume then
+                        -- Resume: read <plan>.run.json → restore run state
+                        -- in the target plan window and continue.
+                        case D.decodeValue fsReadOkDecoder raw of
+                            Ok { ok, content, error } ->
+                                if ok then
+                                    let
+                                        win0 =
+                                            Dict.get target.planId model.planWindows
+                                                |> Maybe.withDefault emptyPlanWindow
+                                    in
+                                    case ( D.decodeString PT.decodeRunStateOverlay content, win0.view.plan ) of
+                                        ( Ok overlay, Just plan ) ->
+                                            let
+                                                baseRun =
+                                                    PT.applyRunStateOverlay overlay (PT.emptyRunState "resume" plan)
 
-                                            run =
-                                                R.resumeState baseRun
+                                                run =
+                                                    R.resumeState baseRun
 
-                                            m1 =
-                                                { model
-                                                    | planRun = Just run
-                                                    , planRunPath = Just runPath
-                                                    , planResumePath = Nothing
-                                                    , planSelectedNode = Nothing
-                                                }
-                                        in
-                                        runStep 0 R.ContinueRun m1
+                                                win1 =
+                                                    { win0
+                                                        | run = Just run
+                                                        , runPath = Just target.path
+                                                        , resumePath = Nothing
+                                                        , selectedNode = Nothing
+                                                    }
 
-                                    ( Ok _, Nothing ) ->
-                                        ( { model | planResumePath = Nothing }, Cmd.none )
+                                                m1 =
+                                                    { model
+                                                        | planReadTarget = Nothing
+                                                        , planWindows = Dict.insert target.planId win1 model.planWindows
+                                                    }
+                                            in
+                                            runStepIn target.planId 0 R.ContinueRun m1
 
-                                    ( Err err, _ ) ->
-                                        ( { model
-                                            | planResumePath = Nothing
-                                            , planView =
-                                                { plan = model.planView.plan
-                                                , path = model.planView.path
-                                                , errors = [ "Invalid run state: " ++ D.errorToString err ]
-                                                , saving = False
-                                                , exportPath = model.planView.exportPath
-                                                }
-                                          }
-                                        , Cmd.none
-                                        )
+                                        ( Ok _, Nothing ) ->
+                                            ( { model | planReadTarget = Nothing }, Cmd.none )
 
-                            else
-                                ( { model
-                                    | planResumePath = Nothing
-                                    , planView =
-                                        { plan = model.planView.plan
-                                        , path = model.planView.path
-                                        , errors = [ error ]
-                                        , saving = False
-                                        , exportPath = model.planView.exportPath
-                                        }
-                                  }
-                                , Cmd.none
-                                )
+                                        ( Err err, _ ) ->
+                                            ( { model
+                                                | planReadTarget = Nothing
+                                                , planWindows =
+                                                    Dict.update target.planId
+                                                        (Maybe.map
+                                                            (\w ->
+                                                                let
+                                                                    wv =
+                                                                        w.view
+                                                                in
+                                                                { w
+                                                                    | resumePath = Nothing
+                                                                    , view = { wv | errors = [ "Invalid run state: " ++ D.errorToString err ], saving = False }
+                                                                }
+                                                            )
+                                                        )
+                                                        model.planWindows
+                                              }
+                                            , Cmd.none
+                                            )
 
-                        Err _ ->
-                            ( { model | planResumePath = Nothing }, Cmd.none )
+                                else
+                                    let
+                                        win0 =
+                                            Dict.get target.planId model.planWindows
+                                                |> Maybe.withDefault emptyPlanWindow
+                                    in
+                                    ( { model
+                                        | planReadTarget = Nothing
+                                        , planWindows =
+                                            Dict.insert target.planId
+                                                { win0 | resumePath = Nothing }
+                                                model.planWindows
+                                      }
+                                    , Cmd.none
+                                    )
+
+                            Err _ ->
+                                ( { model | planReadTarget = Nothing }, Cmd.none )
+
+                    else
+                        -- Open/import: parse the plan file and open (or
+                        -- focus) its window.
+                        case D.decodeValue fsReadOkDecoder raw of
+                            Ok { ok, content, error } ->
+                                if ok then
+                                    case PT.parsePlan content of
+                                        Ok plan ->
+                                            let
+                                                win0 =
+                                                    Dict.get target.planId model.planWindows
+                                                        |> Maybe.withDefault emptyPlanWindow
+
+                                                wv =
+                                                    win0.view
+
+                                                win1 =
+                                                    { win0
+                                                        | view =
+                                                            { wv
+                                                                | plan = Just plan
+                                                                , path = Just target.path
+                                                                , errors = []
+                                                                , saving = False
+                                                            }
+                                                    }
+
+                                                pm =
+                                                    model.planManager
+
+                                                m1 =
+                                                    { model
+                                                        | planReadTarget = Nothing
+                                                        , planManager =
+                                                            { pm | show = False, loading = False, importPath = "" }
+                                                    }
+                                            in
+                                            ( addPlanWindow target.planId win1 m1, Cmd.none )
+
+                                        Err errs ->
+                                            ( setPlanErrors errs { model | planReadTarget = Nothing }
+                                            , Cmd.none
+                                            )
+
+                                else
+                                    ( setPlanErrors [ error ] { model | planReadTarget = Nothing }
+                                    , Cmd.none
+                                    )
+
+                            Err _ ->
+                                ( { model | planReadTarget = Nothing }, Cmd.none )
 
                 Nothing ->
-                    case D.decodeValue fsReadOkDecoder raw of
-                        Ok { ok, content, error } ->
-                            if ok then
-                                case PT.parsePlan content of
-                                    Ok plan ->
-                                        ( { model
-                                            | showPlanView = True
-                                            , planView =
-                                                { plan = Just plan
-                                                , path = Nothing
-                                                , errors = []
-                                                , saving = False
-                                                , exportPath = ""
-                                                }
-                                            , planManager =
-                                                { show = False
-                                                , loading = False
-                                                , plans = model.planManager.plans
-                                                , error = Nothing
-                                                , importPath = ""
-                                                }
-                                          }
-                                        , Cmd.none
-                                        )
-
-                                    Err errs ->
-                                        ( setPlanErrors errs model, Cmd.none )
-
-                            else
-                                ( setPlanErrors [ error ] model, Cmd.none )
-
-                        Err _ ->
-                            ( model, Cmd.none )
+                    ( model, Cmd.none )
 
         FsDeleteResult raw ->
             case D.decodeValue fsOkDecoder raw of
@@ -1783,7 +1993,16 @@ update msg model =
             )
 
         PlanManagerOpen path ->
-            ( model, Ports.fsReadFileText { path = path } )
+            ( { model
+                | planReadTarget =
+                    Just
+                        { planId = planWinKeyForPath path
+                        , path = path
+                        , isResume = False
+                        }
+              }
+            , Ports.fsReadFileText { path = path }
+            )
 
         PlanManagerDelete path ->
             ( model, Ports.fsDeleteFile { path = path } )
@@ -1812,7 +2031,16 @@ update msg model =
                 )
 
             else
-                ( model, Ports.fsReadFileText { path = path } )
+                ( { model
+                    | planReadTarget =
+                        Just
+                            { planId = planWinKeyForPath path
+                            , path = path
+                            , isResume = False
+                            }
+                  }
+                , Ports.fsReadFileText { path = path }
+                )
 
         PlanCreateOffer messageId ->
             case Dict.get messageId model.pendingPlanOffers of
@@ -1844,43 +2072,89 @@ update msg model =
 
                 content =
                     E.encode 2 (PT.encodePlan plan)
-            in
-            ( { model
-                | showPlanView = True
-                , planView =
-                    { plan = Just plan
-                    , path = Just path
-                    , errors = []
-                    , saving = True
-                    , exportPath = ""
+
+                win0 =
+                    Dict.get planId model.planWindows
+                        |> Maybe.withDefault emptyPlanWindow
+
+                wv =
+                    win0.view
+
+                win1 =
+                    { win0
+                        | view =
+                            { wv
+                                | plan = Just plan
+                                , path = Just path
+                                , errors = []
+                                , saving = True
+                            }
                     }
-              }
+            in
+            ( addPlanWindow planId win1 model
             , Ports.fsWriteFileText { path = path, content = content, createParents = True }
             )
 
-        ClosePlanView ->
-            ( { model | showPlanView = False, planSelectedNode = Nothing }, Cmd.none )
+        PlanActivate planId ->
+            if model.planActiveId == Just planId then
+                ( { model | showGlobalMenu = False }, Cmd.none )
+
+            else
+                let
+                    newPositions =
+                        Dict.update planId
+                            (Maybe.map (\pos -> { pos | z = model.nextZIndex }))
+                            model.windowPositions
+                in
+                ( { model
+                    | planActiveId = Just planId
+                    , windowPositions = newPositions
+                    , nextZIndex = model.nextZIndex + 1
+                    , showGlobalMenu = False
+                  }
+                , Cmd.none
+                )
+
+        PlanClose planId ->
+            ( { model
+                | planWindows = Dict.remove planId model.planWindows
+                , planOrder = List.filter (\k -> k /= planId) model.planOrder
+                , windowPositions = Dict.remove planId model.windowPositions
+                , planActiveId =
+                    if model.planActiveId == Just planId then
+                        List.head (List.reverse (List.filter (\k -> k /= planId) model.planOrder))
+
+                    else
+                        model.planActiveId
+              }
+            , Cmd.none
+            )
 
         -- ─── Plan runner ────────────────────────────────────────────
 
         PlanRunStart ->
-            case model.planView.plan of
-                Just _ ->
-                    case model.planRun of
-                        Just run ->
-                            -- re-run only from a finished/stopped state
-                            if List.member run.status [ PT.Completed, PT.FailedRun, PT.Stopped, PT.NotStarted ] then
-                                ( model
-                                , Task.perform (\t -> PlanRunStartAt (Time.posixToMillis t)) Time.now
-                                )
+            case getPlanWin model of
+                Just win ->
+                    case win.view.plan of
+                        Just _ ->
+                            case win.run of
+                                Just run ->
+                                    -- re-run only from a finished/stopped state
+                                    if List.member run.status [ PT.Completed, PT.FailedRun, PT.Stopped, PT.NotStarted ] then
+                                        ( model
+                                        , Task.perform (\t -> PlanRunStartAt (Time.posixToMillis t)) Time.now
+                                        )
 
-                            else
-                                ( model, Cmd.none )
+                                    else
+                                        ( model, Cmd.none )
+
+                                Nothing ->
+                                    ( model
+                                    , Task.perform (\t -> PlanRunStartAt (Time.posixToMillis t)) Time.now
+                                    )
 
                         Nothing ->
-                            ( model
-                            , Task.perform (\t -> PlanRunStartAt (Time.posixToMillis t)) Time.now
-                            )
+                            ( model, Cmd.none )
 
                 Nothing ->
                     ( model, Cmd.none )
@@ -1888,99 +2162,175 @@ update msg model =
         PlanRunStartAt ts ->
             let
                 m1 =
-                    case ( model.planRun, model.planView.plan ) of
-                        ( Nothing, Just plan ) ->
-                            { model
-                                | planRun = Just (PT.emptyRunState (PT.slugify plan.name ++ "-" ++ String.fromInt ts) plan)
-                                , planRunPath = Maybe.map runPathFor model.planView.path
-                                , planSelectedNode = Nothing
-                                , planRunLog = []
-                            }
+                    case ( model.planActiveId, getPlanWin model ) of
+                        ( Just pid, Just win ) ->
+                            case ( win.run, win.view.plan ) of
+                                ( Nothing, Just plan ) ->
+                                    { model
+                                        | planWindows =
+                                            Dict.insert pid
+                                                { win
+                                                    | run = Just (PT.emptyRunState (PT.slugify plan.name ++ "-" ++ String.fromInt ts) plan)
+                                                    , runPath = Maybe.map runPathFor win.view.path
+                                                    , selectedNode = Nothing
+                                                    , runLog = []
+                                                }
+                                                model.planWindows
+                                    }
+
+                                _ ->
+                                    model
 
                         _ ->
                             model
             in
-            runStep ts R.StartRun m1
+            case model.planActiveId of
+                Just pid ->
+                    runStepIn pid ts R.StartRun m1
+
+                Nothing ->
+                    ( model, Cmd.none )
 
         PlanRunPause ->
-            runStep 0 R.PauseRun model
+            case model.planActiveId of
+                Just pid ->
+                    runStepIn pid 0 R.PauseRun model
+
+                Nothing ->
+                    ( model, Cmd.none )
 
         PlanRunResume ->
-            runStep 0 R.ResumeRun model
+            case model.planActiveId of
+                Just pid ->
+                    runStepIn pid 0 R.ResumeRun model
+
+                Nothing ->
+                    ( model, Cmd.none )
 
         PlanRunStop ->
-            runStep 0 R.StopRun model
+            case model.planActiveId of
+                Just pid ->
+                    runStepIn pid 0 R.StopRun model
+
+                Nothing ->
+                    ( model, Cmd.none )
 
         PlanRunRetryNode nodeId ->
-            runStep 0 (R.RetryNode nodeId) model
+            case model.planActiveId of
+                Just pid ->
+                    runStepIn pid 0 (R.RetryNode nodeId) model
 
-        PlanRunnerTick nodeId ->
-            runStep 0 (R.RetryNode nodeId) model
+                Nothing ->
+                    ( model, Cmd.none )
+
+        PlanRunnerTick planId nodeId ->
+            runStepIn planId 0 (R.RetryNode nodeId) model
 
         PlanRunFrame ts ev ->
-            runStep ts ev model
+            case eventSessionId ev of
+                Just sid ->
+                    case findPlanIdBySession model sid of
+                        Just pid ->
+                            runStepIn pid ts ev model
 
-        PlanBindSession ts nodeId sid ->
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        PlanBindSession ts planId nodeId sid ->
             let
                 m0 =
                     { model | planCreating = Nothing }
 
                 ( m1, c1 ) =
-                    runStep ts (R.SessionCreatedFor nodeId sid) m0
+                    runStepIn planId ts (R.SessionCreatedFor nodeId sid) m0
 
                 ( m2, c2 ) =
-                    startNextCreate m1
+                    startNextCreateIn m1
             in
             ( m2, Cmd.batch [ c1, c2 ] )
 
         PlanResume ->
-            case model.planView.path of
-                Just planPath ->
-                    let
-                        runPath =
-                            runPathFor planPath
-                    in
-                    ( { model | planResumePath = Just runPath }
-                    , Ports.fsReadFileText { path = runPath }
-                    )
+            case ( model.planActiveId, getPlanWin model ) of
+                ( Just pid, Just win ) ->
+                    case win.view.path of
+                        Just planPath ->
+                            let
+                                runPath =
+                                    runPathFor planPath
 
-                Nothing ->
+                                win1 =
+                                    { win | resumePath = Just runPath }
+                            in
+                            ( { model
+                                | planWindows = Dict.insert pid win1 model.planWindows
+                                , planReadTarget =
+                                    Just
+                                        { planId = pid
+                                        , path = runPath
+                                        , isResume = True
+                                        }
+                              }
+                            , Ports.fsReadFileText { path = runPath }
+                            )
+
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                _ ->
                     ( model, Cmd.none )
 
         PlanSelectNode nodeId ->
-            ( { model | planSelectedNode = Just nodeId }, Cmd.none )
+            ( updateActivePlanWin model (\w -> { w | selectedNode = Just nodeId })
+            , Cmd.none
+            )
 
         PlanSetExportPath text ->
-            let
-                pv =
-                    model.planView
-            in
-            ( { model | planView = { pv | exportPath = text } }, Cmd.none )
+            ( updateActivePlanWin model
+                (\w ->
+                    let
+                        wv =
+                            w.view
+                    in
+                    { w | view = { wv | exportPath = text } }
+                )
+            , Cmd.none
+            )
 
         PlanExport ->
-            case model.planView.plan of
-                Just plan ->
-                    let
-                        path =
-                            String.trim model.planView.exportPath
-                    in
-                    if path == "" then
-                        let
-                            pv =
-                                model.planView
-                        in
-                        ( { model | planView = { pv | errors = [ "Enter an export path" ] } }
-                        , Cmd.none
-                        )
+            case getPlanWin model of
+                Just win ->
+                    case win.view.plan of
+                        Just plan ->
+                            let
+                                path =
+                                    String.trim win.view.exportPath
+                            in
+                            if path == "" then
+                                ( updateActivePlanWin model
+                                    (\w ->
+                                        let
+                                            wv =
+                                                w.view
+                                        in
+                                        { w | view = { wv | errors = [ "Enter an export path" ] } }
+                                    )
+                                , Cmd.none
+                                )
 
-                    else
-                        ( model
-                        , Ports.fsWriteFileText
-                            { path = path
-                            , content = E.encode 2 (PT.encodePlan plan)
-                            , createParents = True
-                            }
-                        )
+                            else
+                                ( model
+                                , Ports.fsWriteFileText
+                                    { path = path
+                                    , content = E.encode 2 (PT.encodePlan plan)
+                                    , createParents = True
+                                    }
+                                )
+
+                        Nothing ->
+                            ( model, Cmd.none )
 
                 Nothing ->
                     ( model, Cmd.none )
@@ -2887,14 +3237,20 @@ update msg model =
                     , Cmd.none
                     )
 
-            -- Ctrl+W closes the active session window
+            -- Ctrl+W closes the active session window; with no active
+            -- session it closes the active plan window instead
             else if key == "w" && ctrl then
                 case model.activeId of
                     Just sid ->
                         update (CloseSession sid) model
 
                     Nothing ->
-                        ( model, Cmd.none )
+                        case model.planActiveId of
+                            Just pid ->
+                                update (PlanClose pid) model
+
+                            Nothing ->
+                                ( model, Cmd.none )
 
             else
                 ( model, Cmd.none )
@@ -2927,6 +3283,31 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
+        PlanResizeStart id handle mouseX mouseY ->
+            case Dict.get id model.windowPositions of
+                Just pos ->
+                    ( { model
+                        | resizeInfo =
+                            Just
+                                { sessionId = id
+                                , handle = handle
+                                , startMouseX = mouseX
+                                , startMouseY = mouseY
+                                , startWinX = pos.x
+                                , startWinY = pos.y
+                                , startWinW = pos.w
+                                , startWinH = pos.h
+                                }
+                        , windowPositions = Dict.insert id { pos | z = model.nextZIndex } model.windowPositions
+                        , nextZIndex = model.nextZIndex + 1
+                        , planActiveId = Just id
+                      }
+                    , Cmd.none
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
         WindowDragStart id mouseX mouseY ->
             case Dict.get id model.windowPositions of
                 Just pos ->
@@ -2942,6 +3323,28 @@ update msg model =
                         , windowPositions = Dict.insert id { pos | z = model.nextZIndex } model.windowPositions
                         , nextZIndex = model.nextZIndex + 1
                         , activeId = Just id
+                      }
+                    , Cmd.none
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        PlanWindowDragStart id mouseX mouseY ->
+            case Dict.get id model.windowPositions of
+                Just pos ->
+                    ( { model
+                        | dragInfo =
+                            Just
+                                { sessionId = id
+                                , startMouseX = mouseX
+                                , startMouseY = mouseY
+                                , startWinX = pos.x
+                                , startWinY = pos.y
+                                }
+                        , windowPositions = Dict.insert id { pos | z = model.nextZIndex } model.windowPositions
+                        , nextZIndex = model.nextZIndex + 1
+                        , planActiveId = Just id
                       }
                     , Cmd.none
                     )

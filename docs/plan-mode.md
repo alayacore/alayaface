@@ -1,6 +1,6 @@
 # Plan Mode 设计文档（AlayaFace）
 
-> 状态：**已实现（P0–P4.5 完成；P5 打磨中）**。开发进度见根目录 `TODO.md`（必须先读）。
+> 状态：**已实现（P0–P7 完成；含评审反馈：Plan 独立窗口 + SendPrompt 修复）**。开发进度见根目录 `TODO.md`（必须先读）。
 > 本文档是 Plan Mode 功能的唯一权威设计依据；任务中断后，先读本文 + `TODO.md` 再继续。
 > 实现与设计的偏差已标注（如 NodeStatus 增加 `Waiting`、会话创建串行化）。
 
@@ -247,14 +247,23 @@ type Effect
 
 ## 7. UI 设计
 
-### 7.1 Plan 窗口（主视图，类似会话窗口）
-- 头部：计划名 + goal + 运行状态徽章 + **Run / Pause / Stop / Retry** + 并发数选择 + **Export JSON**（FilePicker 导出任意路径）；
-- 画布：SVG DAG；节点圆角矩形卡片，颜色区分状态（灰=待执行、蓝=运行、绿=成功、红=失败、橙=重试中、虚=阻塞/取消）；
+### 7.1 Plan 窗口（独立窗口，类似会话窗口）
+- 每个打开的 plan 是一个**独立可拖动/缩放的窗口**（复用会话窗口的
+  panel/拖拽/缩放/z-order 机制），不是 overlay；可同时打开多个 plan；
+- 窗口标题栏：`Plan — <名称>` + 关闭按钮；窗口内：计划名 + goal + 运行
+  状态徽章 + **Run / Pause / Stop / Retry** + **Load run** + **Export JSON**；
+- **系统菜单（⚙）列出所有打开的 plan 窗口**（名称 + 运行状态），点击即
+  置顶激活；Plans 管理器（overlay）用于浏览/打开/删除/导入
+  `~/.alayaface/plans/*.json`；
+- 画布：HTML/CSS DAG；节点圆角矩形卡片，颜色区分状态（灰=待执行、蓝=运行、
+  绿=成功、红=失败、橙=重试中、虚=阻塞/取消）；
 - 节点卡片：`title`、状态图标、重试角标 `xN`、preset 徽标、失败悬停显示最近原因；
 - **点击节点**：
   - 有 sessionId → `ActivateSession` 置顶聚焦对应会话窗口（查看完整详情）；
   - 无会话 → 右侧节点详情面板（prompt 全文、依赖、失败历史、Retry / Run node 按钮）；
-- 底部：运行日志流（每节点启动/成功/失败/重试事件）。
+- 底部：运行日志流（每节点启动/成功/失败/重试事件）；
+- 关闭 plan 窗口不会停止正在运行的节点会话（run.json 持续落盘，可 Load run
+  恢复）；手动关闭某节点会话窗口会向 runner 注入断连事件 → 该节点按失败重试。
 
 ### 7.2 Plans 管理器（overlay，仿 Session Manager）
 - 列出 `~/.alayaface/plans/*.json`：名称、文件、创建时间、最近运行状态；
@@ -357,8 +366,12 @@ type Effect
 
 > 实现偏差：DAG 渲染用纯 HTML/CSS（div 绝对定位 + 正交连线），因为
 > elm/svg 不在离线包缓存中；效果与 SVG 等价。会话创建采用**串行化**
-> （一次一个 in-flight create，`planCreating`/`planCreateQueue`），
-> `SessionCreated` 经 `PlanBindSession` 绑定到节点。
+> （一次一个 in-flight create，`planCreating`/`planCreateQueue` 全局
+> 记录 `(planId, nodeId)`），`SessionCreated` 经 `PlanBindSession` 绑定
+> 到节点。**Plan 窗口是多实例的**（`planWindows : Dict String PlanWindow`，
+> 每个窗口自带 run 状态/日志/选中节点/创建队列），通过 ⚙ 系统菜单切换，
+> 而不是单一 overlay；`SendPrompt` 在会话绑定（Starting→Running）时由
+> runner 恰好发出一次（早期版本遗漏导致节点会话打开但无消息）。
 
 ---
 

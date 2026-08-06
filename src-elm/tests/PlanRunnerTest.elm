@@ -142,6 +142,58 @@ tests =
                         ]
                         run3
             ]
+        , describe "prompt dispatch"
+            [ test "binding a created session emits exactly one SendPrompt" <|
+                \_ ->
+                    let
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan singlePlan)
+
+                        ( run2, es ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal (Just P.Running) (Dict.get "a" (statuses run2))
+                        , \_ -> Expect.equal (Just "s1") (nodeState "a" run2).sessionId
+                        , \_ -> Expect.equal True (List.member "prompt:a" (effects es))
+                        , \_ -> Expect.equal 1 (List.length (List.filter (\e -> String.startsWith "prompt:a" e) (effects es)))
+                        ]
+                        ()
+            , test "re-binding an already Running node does not re-send" <|
+                \_ ->
+                    let
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan singlePlan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        -- a late/duplicate SessionCreatedFor (node already
+                        -- Running) must not emit a second prompt
+                        ( run3, es ) =
+                            R.step 3000 (R.SessionCreatedFor "a" "s1") run2
+                    in
+                    Expect.equal 0 (List.length (List.filter (\e -> String.startsWith "prompt:a" e) (effects es)))
+                        |> always (Expect.equal (Just "s1") (nodeState "a" run3).sessionId)
+            , test "full lifecycle: create → bind → prompt → done" <|
+                \_ ->
+                    let
+                        ( run1, es1 ) =
+                            R.step 1000 R.StartRun (runFromPlan singlePlan)
+
+                        ( run2, es2 ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        ( run3, _ ) =
+                            R.step 3000 (R.TaskDone "s1" False) run2
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal True (List.member "create:a" (effects es1))
+                        , \_ -> Expect.equal True (List.member "prompt:a" (effects es2))
+                        , \r -> Expect.equal P.Succeeded (nodeState "a" r).status
+                        ]
+                        run3
+            ]
         , describe "task completion"
             [ test "TaskDone ok marks node Succeeded and keeps session" <|
                 \_ ->
