@@ -55,6 +55,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P9 Keep failed/canceled sessions reopenable (lastSessionId) | [x] |
 | P10 Review pass: runner race fixes + orphan cleanup | [x] |
 | P11 Review pass 2: create-queue serialization + create-failure recovery | [x] |
+| P12 Graceful close (save+EOF+grace) + dead-code cleanup + acceptance doc | [x] |
 
 ## P11 — 第二轮审查：创建队列串行化 + 创建失败恢复
 
@@ -80,6 +81,41 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
       选择器分支污染其列表 → 仅管理器打开时才刷新；
 - [x] 测试：Elm 128（新增 SessionCreateFailed 3 例：Starting 失败→Waiting
       重试、非 Starting 忽略、耗尽→Failed）；Rust 35；Go 全绿。
+
+## P12 — 优雅关闭 + 死代码清理 + 验收文档（无 GUI 轮次）
+
+- [x] **close_session 优雅关闭（v2 backlog → 已实现）**：alayacore 只读
+      核实（save CI 空参数→session.alaya；EOF+活动任务→drainUntilTaskDone
+      跑完并 handleTaskDone 自动保存后退出；EOF+无任务→直接退出；rawio
+      无 SIGINT 处理，EOF 是唯一优雅退出信号）。实现：save CI → 关 stdin
+      （EOF）→ 等 ≤5s 自然退出 → SIGKILL 兜底（双后端对称）：
+  - [x] Rust `alayacore.rs`：`close_child_gracefully`（try_lock 写 save
+        帧→槽位置 None 关管道→宽限等待→SIGKILL）+ `kill_child` 改
+        「先 EOF 宽限 3s 再杀」；`SessionHandle.stdin` 改
+        `Arc<tokio::sync::Mutex<Option<ChildStdin>>>`（close 时真正
+        EOF，不依赖 Arc 计数）；io.rs/mod.rs 写方对 None 返回
+        "Session is disconnected"；
+  - [x] Go `session.go`：`closeGracefully`（SendCmd save → Stdin.Close →
+        轮询 Connected() 等 reader 观察自然退出 → 超时 kill）——
+        **不自己调 cmd.Wait()**（os/exec 禁并发 Wait，-race 实测告警，
+        收割统一归 reader 的 killOnce）；`core.go` KillChild 同步改
+        宽限式；
+  - [x] fakecore 新增 `save` 命令（写 session.alaya 标记）→ 集成测试
+        `TestIntegrationGracefulCloseSavesSession`（close 后文件含
+        saved 标记 + 二次 close 报 Session not found）；
+  - [x] Rust 单测 +4（save 帧到达子进程 stdin / 倔强子进程超时被杀 /
+        kill_child 先宽限自然退出 / 已死子进程不 panic）→ Rust 39；
+  - [x] 已知限制：宽限内没跑完的长任务仍被 SIGKILL（save 已先行落盘）；
+- [x] **死代码清理**：`PlanWindow.creating`/`createQueue` 遗留字段删除
+      （P7 全局化后无用，仅声明+初始化无引用）；Elm 128 保持全绿；
+- [x] **验收文档**：新增 `docs/manual-acceptance.md`（GUI 可用时的完整
+      冒烟清单：Plan Session→Create Plan→Run→节点绑定→重试→优雅关闭→
+      presets→回归；含已知限制说明）；
+- [x] 文档同步：docs/plan-mode.md（§8.3 优雅关闭、§10 持久化、§13 默认值、
+      §14 参考）、docs/go-backend.md（close_session 行 + killChild 说明）、
+      README（优雅关闭段落）；
+- [x] 测试：Elm 128 / Rust 39 / Go 全绿（-race）。
+- [ ] MANUAL smoke（GUI 环境，照 docs/manual-acceptance.md 执行）
 
 ## P10 — 全面审查修复（评审轮）
 
@@ -252,7 +288,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 - [x] Global menu: "Plans" entry (🕸)
 - [x] Plan view (P2 list form; P3 upgrades to SVG DAG): name/goal/meta/path +
       task list with id/title/preset/deps
-- [ ] MANUAL smoke (Go backend browser / Tauri) — needs GUI env
+- [ ] MANUAL smoke (Go backend browser / Tauri) — GUI env; checklist in docs/manual-acceptance.md
 - [x] Note: fs_list_dir results are shared with the file picker; the
       FsListDirResult branch routes to plan list when planManager.show
 - [x] Note: Elm record-update requires a variable on the left — cannot
@@ -275,7 +311,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
       fs_write_file_text; setPlanErrors now preserves the open plan)
 - [x] CSS (style.css): plan-dag/plan-node/edge/detail styles
 - [x] Elm 95 tests green
-- [ ] Manual visual acceptance (needs GUI env)
+- [ ] Manual visual acceptance — GUI env; checklist in docs/manual-acceptance.md
 - [x] Note: `Expect.lessThan a b` asserts b < a in test 2.2.0 (argument
       order is expected-first, actual-second) — use `Expect.equal True (a < b)`
 
@@ -317,7 +353,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
       when it has one else detail panel; Retry node button; failure
       history in detail panel
 - [ ] fakecore/E2E: task_error → retry → success, parallel windows, node
-      click opens window — needs GUI/browser env (manual)
+      click opens window — GUI env; checklist in docs/manual-acceptance.md
 - [x] `elm-test` green
 
 ## P4.5 — create_session preset/builtinTools + settings.conf + seed presets
@@ -363,8 +399,9 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 - [x] docs/plan-mode.md status + implementation-deviation notes synced
 - [ ] Concurrency selector in the Plan header (edit before run) — deferred
       to v2; concurrency comes from the plan JSON
-- [ ] Manual GUI acceptance (Tauri + Go browser) — needs GUI env; E2E via
-      fakecore covers backend, runner covered by 114 elm tests
+- [ ] Manual GUI acceptance (Tauri + Go browser) — GUI env; checklist in
+      docs/manual-acceptance.md; E2E via fakecore covers backend, runner
+      covered by 128 elm tests
 
 ## P6 — Plan Session (menu entry + --system planner prompt + [Plan] title)
 
@@ -386,7 +423,7 @@ No implementation details exposed to the user.
       window title gets a "[Plan] " prefix for plan sessions
 - [x] Tests: Go integration (create_session with systemPrompt works,
       fakecore answers prompts); Rust 35 / Go 8 pkgs / Elm 114 all green
-- [ ] Manual GUI smoke (needs GUI env)
+- [ ] Manual GUI smoke — GUI env; checklist in docs/manual-acceptance.md
 
 ---
 

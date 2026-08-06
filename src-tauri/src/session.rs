@@ -17,7 +17,10 @@ use uuid::Uuid;
 
 /// Internal handle to a running alayacore session.
 pub struct SessionHandle {
-    pub stdin: Arc<Mutex<std::process::ChildStdin>>,
+    /// stdin pipe; `None` once closed (graceful close / EOF sent).
+    /// The Option lets close_session drop the pipe even while other
+    /// Arcs exist (in-flight prompt sends lock the same mutex).
+    pub stdin: Arc<Mutex<Option<std::process::ChildStdin>>>,
     pub connected: Arc<AtomicBool>,
     /// Pending command call IDs → command names (CI sent, CO not yet received).
     /// Used by the stdout reader to attach the command name to CO frames
@@ -32,6 +35,12 @@ pub struct SessionHandle {
 
 impl Drop for SessionHandle {
     fn drop(&mut self) {
+        // Best-effort EOF so alayacore can drain + auto-save before the
+        // kill below gives it a short grace period (kill_child now waits
+        // for a natural exit before SIGKILL).
+        if let Ok(mut guard) = self.stdin.try_lock() {
+            *guard = None;
+        }
         if let Ok(mut guard) = self.child.lock() {
             if let Some(mut child) = guard.take() {
                 alayacore::kill_child(&mut child);
@@ -74,7 +83,7 @@ pub async fn create(cfg: SessionConfig<'_>) -> Result<String, String> {
     .map_err(|e| format!("Failed to start alayacore: {e}"))?;
 
     let connected = Arc::new(AtomicBool::new(true));
-    let stdin = Arc::new(Mutex::new(proc.stdin));
+    let stdin = Arc::new(Mutex::new(Some(proc.stdin)));
     let child = Arc::new(std::sync::Mutex::new(Some(proc.child)));
     let pending_commands = Arc::new(Mutex::new(std::collections::HashMap::new()));
 
@@ -108,17 +117,20 @@ pub async fn create(cfg: SessionConfig<'_>) -> Result<String, String> {
     Ok(session_id)
 }
 
-/// Close a session: kill the subprocess and remove from map.
+/// Close a session gracefully: ask alayacore to save, send EOF (it
+/// drains the active task — auto-saving at task end — then exits), and
+/// only SIGKILL after a grace period. See `alayacore::close_child_gracefully`.
 pub async fn close(session_id: &str, sessions: &SessionMap) -> Result<(), String> {
     let mut map = sessions.0.lock().await;
     if let Some(handle) = map.remove(session_id) {
         let child_opt = handle.child.lock().unwrap().take();
-        if let Some(mut child) = child_opt {
-            let _ = tokio::task::spawn_blocking(move || {
-                alayacore::kill_child(&mut child);
-            })
-            .await;
-        }
+        let stdin = handle.stdin.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Some(mut child) = child_opt {
+                alayacore::close_child_gracefully(&mut child, &stdin);
+            }
+        })
+        .await;
         Ok(())
     } else {
         Err("Session not found".to_string())

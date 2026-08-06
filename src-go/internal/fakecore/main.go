@@ -13,6 +13,9 @@
 //
 //	fork          input "<historyId> <targetFile>" — writes the session
 //	              file (like real alayacore) and replies CO ok
+//	save          writes the session file (mirrors real alayacore's
+//	              `:save` with an empty filename → --session file) and
+//	              replies CO ok with the path
 //	model_set     replies CO ok with the model id echoed
 //	model_load    emits SM model_list then replies CO ok
 //	model_sync    replies CO ok; if input contains `"invalid"` replies
@@ -37,6 +40,10 @@ import (
 
 	"alayaface/src-go/internal/tlv"
 )
+
+// sessionFile is the --session flag value; `save` writes to it (empty
+// filename semantics, like real alayacore).
+var sessionFile string
 
 const historyID = "hist-1"
 
@@ -114,6 +121,17 @@ func handleCmd(raw string) {
 			return
 		}
 		coOk(msg.ID, map[string]any{"message": "forked"})
+	case "save":
+		// Empty input = save to the --session file (real alayacore
+		// semantics). Overwrite with a marker so tests can verify the
+		// graceful-close save arrived before the process exited.
+		if sessionFile != "" {
+			if err := os.WriteFile(sessionFile, []byte(`{"version":1,"saved":true}`), 0o644); err != nil {
+				coErr(msg.ID, "cannot write session file")
+				return
+			}
+		}
+		coOk(msg.ID, map[string]any{"path": sessionFile})
 	case "model_set":
 		coOk(msg.ID, map[string]any{"modelId": msg.Input})
 	case "model_load":
@@ -138,7 +156,7 @@ func handleCmd(raw string) {
 
 func main() {
 	rawio := flag.Bool("rawio", false, "required rawio mode flag")
-	sessionPath := flag.String("session", "", "session file to create on startup")
+	flag.StringVar(&sessionFile, "session", "", "session file to create on startup")
 	_ = flag.String("config-path", "", "config dir (accepted, unused)")
 	_ = flag.String("tool-confirm", "", "pre-approved tool list (accepted, unused)")
 	flag.Parse()
@@ -150,8 +168,8 @@ func main() {
 	// Real alayacore creates session.alaya when started with --session
 	// (the session dir already exists). No MkdirAll: the fake must not
 	// resurrect a directory that was deleted mid-startup.
-	if *sessionPath != "" {
-		_ = os.WriteFile(*sessionPath, []byte(`{"version":1}`), 0o644)
+	if sessionFile != "" {
+		_ = os.WriteFile(sessionFile, []byte(`{"version":1}`), 0o644)
 	}
 
 	// Startup system message, like alayacore announcing its task.

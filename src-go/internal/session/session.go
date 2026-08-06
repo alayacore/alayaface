@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -175,15 +176,53 @@ func (m *Manager) Create(cfg CreateConfig, h *hub.Hub, cache *ModelCache) (*Sess
 	return s, nil
 }
 
-// Close kills the subprocess and removes the session from the map.
+// gracefulCloseTimeout is how long close_session waits for alayacore to
+// drain an active task (auto-saving at task end) and exit on stdin EOF
+// before SIGKILLing it. Mirrors alayacore::GRACEFUL_CLOSE_TIMEOUT (Rust).
+const gracefulCloseTimeout = 5 * time.Second
+
+// Close removes the session from the map and closes it gracefully:
+// ask alayacore to save (CI "save" → session file), close stdin (EOF →
+// drain + auto-save at task end → exit), then SIGKILL only after a
+// grace period.
 func (m *Manager) Close(id string) error {
 	s, ok := m.Remove(id)
 	if !ok {
 		return ErrNotFound
 	}
-	s.kill()
+	s.closeGracefully()
 	log.Printf("[session] closed %s", id)
 	return nil
+}
+
+// closeGracefully runs the graceful shutdown sequence for one session.
+//
+// It does NOT call cmd.Wait() itself: reaping is owned by the reader's
+// disconnect path (killOnce → core.KillChild), which fires exactly when
+// the child's stdout closes — i.e. when the child exits on its own. So
+// we only poll Connected() to learn the child has gone. Calling Wait
+// here would race with that path (os/exec forbids concurrent Waits).
+func (s *Session) closeGracefully() {
+	// 1. Ask alayacore to persist the conversation (best-effort: a dead
+	//    child produces a write error, which is ignored).
+	_, _ = s.SendCmd("save", "")
+	// 2. EOF: close the stdin pipe. alayacore drains an active task —
+	//    completing it and auto-saving via handleTaskDone — then exits;
+	//    with no active task it exits immediately. (rawio mode has no
+	//    SIGINT handler; EOF is the only graceful exit signal.)
+	_ = s.Stdin.Close()
+	// 3. Wait for the reader to observe the natural exit (stdout EOF →
+	//    disconnect → killOnce reaps the child).
+	deadline := time.Now().Add(gracefulCloseTimeout)
+	for s.Connected() {
+		if time.Now().After(deadline) {
+			// 4. Fallback: SIGKILL (killOnce also reaps; idempotent if
+			//    the reader already killed).
+			s.kill()
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // WriteFrame sends a raw TLV frame to the session's stdin.

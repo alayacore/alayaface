@@ -493,8 +493,6 @@ type alias PlanWindow =
     , runPath : Maybe String
     , runLog : List String
     , selectedNode : Maybe String
-    , creating : Maybe String
-    , createQueue : List String
     , resumePath : Maybe String
     }
 
@@ -506,8 +504,6 @@ emptyPlanWindow =
     , runPath = Nothing
     , runLog = []
     , selectedNode = Nothing
-    , creating = Nothing
-    , createQueue = []
     , resumePath = Nothing
     }
 

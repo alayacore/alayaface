@@ -82,7 +82,7 @@ One-way push (server → client), message format:
 |--------------|-------------|------------------|--------|
 | `create_session` | `POST /rpc/create_session` | `binaryPath`, `configPath`, `toolConfirm`(nullable), `preset`(nullable), `builtinTools`(nullable) | string sessionId |
 | `resume_session` | `POST /rpc/resume_session` | `sessionId`, `binaryPath` | string sessionId |
-| `close_session` | `POST /rpc/close_session` | `sessionId` | — |
+| `close_session` | `POST /rpc/close_session` | `sessionId` | — (graceful: CI `save` → stdin EOF → ≤5s natural exit → SIGKILL fallback) |
 | `list_session_dirs` | `POST /rpc/list_session_dirs` | — | `[{id, has_session_file, created_at}]` |
 | `delete_session_dir` | `POST /rpc/delete_session_dir` | `sessionId` | — |
 | `fork_session` | `POST /rpc/fork_session` | `sourceSessionId`, `historyId`, `binaryPath` | string sessionId |
@@ -227,7 +227,12 @@ Prefer the standard library; only one third-party dependency is required:
   `"alayacore"`.
 - `spawn(binary, configPath, sessionPath, toolConfirm)`: `--rawio`, optional
   `--config-path / --session / --tool-confirm=`; piped stdin/stdout, inherited stderr.
-- `killChild`: close stdin → `Process.Kill` → poll `Wait` for 3s → force kill.
+- `killChild`: close stdin (EOF) → wait ≤3s for natural exit → force kill.
+  `Manager.Close` additionally sends the CI `save` command before closing
+  stdin and waits ≤5s (`gracefulCloseTimeout`) for the reader to observe
+  the child's natural exit (polling `Connected()`, NOT calling `cmd.Wait()`
+  — reaping is owned by the reader's `killOnce → killChild`, since
+  `os/exec` forbids concurrent Waits), then SIGKILL fallback.
 
 ### 6.3 session + reader (internal/session)
 ```go

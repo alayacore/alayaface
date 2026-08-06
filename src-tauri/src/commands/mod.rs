@@ -53,8 +53,11 @@ pub(crate) async fn send_raw(
     if !handle.connected.load(std::sync::atomic::Ordering::SeqCst) {
         return Err("Session is disconnected".to_string());
     }
-    let mut stdin = handle.stdin.lock().await;
-    tlv::write_frame(&mut *stdin, tag, value).map_err(|e| format!("Write error: {e}"))?;
+    let mut guard = handle.stdin.lock().await;
+    let stdin = guard
+        .as_mut()
+        .ok_or_else(|| "Session is disconnected".to_string())?;
+    tlv::write_frame(stdin, tag, value).map_err(|e| format!("Write error: {e}"))?;
     stdin.flush().map_err(|e| format!("Flush error: {e}"))?;
 
     // Log outgoing frame for debugging

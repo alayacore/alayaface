@@ -319,6 +319,49 @@ type Effect
 
 **flag 语义注意**：alayacore `--builtin-tools` 未指定 = 全开；显式空串 = 无内置工具（MCP-only）。v1 只支持两态：**空 = 全开、非空列表 = 子集**；MCP-only 属边角场景，需要时用 `"none"` 特殊值再议。
 
+### 8.3 优雅关闭（close_session 持久化，v2 backlog → 已实现）
+
+**问题**：原 `close_session` 直接 SIGKILL 子进程。alayacore 只在
+`handleTaskDone`（任务结束）和 `:save` 命令时把完整会话写入
+`session.alaya`，且 rawio 适配器**没有** SIGINT 处理器——因此关闭窗口 =
+丢弃进行中那一轮对话（app 被杀同理）。C1 不允许改 alayacore，只能在
+**我们发送什么 / 等多久**上做文章（只读核实过 alayacore 的退出路径）。
+
+**alayacore 已核实事实**：
+- `save` CI 命令空参数 = 保存到 `--session` 文件（`session.alaya`）；
+- stdin EOF + 有活动任务 → `drainUntilTaskDone()`：把任务跑完（
+  `handleTaskDone` 自动保存）再退出；EOF + 无活动任务 → 直接退出（不保存）；
+- rawio 无 SIGINT 处理（plainio/terseio 才有），EOF 是唯一优雅退出信号。
+
+**AlayaFace 侧实现（双后端对称）**：
+
+```
+close_session:
+  1. 发 CI "save"（best-effort，子进程已死则写失败忽略）
+  2. 关闭 stdin → EOF（有任务则 drain+自动保存后退出；无任务立即退出）
+  3. 等 ≤ 5s 自然退出（GRACEFUL_CLOSE_TIMEOUT）
+  4. 仍活着 → SIGKILL 兜底
+```
+
+- `kill_child` / `KillChild`（Drop / 断连路径）同步改为**先 EOF 宽限 3s
+  再杀**：stdout 断连时子进程已死，立即返回；Drop 路径给 alayacore 3s
+  drain+保存的机会；
+- Rust 侧 `SessionHandle.stdin` 改为 `Arc<tokio::sync::Mutex<Option<ChildStdin>>>`：
+  优雅关闭时把槽位置 `None` 即关闭管道（不依赖 Arc 引用计数），写方（
+  send_prompt / send_raw）对 `None` 返回 "Session is disconnected"；
+  同步上下文用 `try_lock`（spawn_blocking / Drop）；
+- Go 侧 `closeGracefully` **不自己调 `cmd.Wait()`**——收割统一由 reader
+  断连路径的 `killOnce → KillChild` 负责（`os/exec` 禁止并发 Wait，
+  race 检测器实测告警），只轮询 `Connected()` 等到 stdout EOF（= 子进程
+  自然退出）或超时后 `kill()`；
+- 测试：Rust 4 例（save 帧到达子进程 stdin / 倔强子进程超时被杀 /
+  kill_child 先宽限自然退出 / 已死子进程不 panic）；Go 集成 1 例
+  （fakecore `save` 写 session.alaya 标记 → close 后文件含 saved 标记）。
+
+**已知限制**：drain 中的任务若超过宽限期（5s，如长工具链）仍会被
+SIGKILL——此时 `save` 帧已先行落盘，至少保留任务开始前的全部内容；
+真正「杀不死的断点续跑」仍是 v2（resume 子进程）。
+
 ---
 
 ## 9. preset 与种子 preset
@@ -353,7 +396,11 @@ type Effect
   （最近一次运行该节点的会话，即使已被关闭/失败，仍可 `resume_session`
   回看）→ 节点 ↔ 会话绑定跨重启保留；打开 plan 窗口时自动静默恢复，
   点击节点可重新打开对应会话；
-- **Resume（v1）**：重开 app → 打开计划 → 从 run.json 恢复，未完成/失败/阻塞节点**从头重新执行**（新建会话，不尝试恢复子进程；真断点续跑为 v2）。
+- **Resume（v1）**：重开 app → 打开计划 → 从 run.json 恢复，未完成/失败/阻塞节点**从头重新执行**（新建会话，不尝试恢复子进程；真断点续跑为 v2）；
+- **会话关闭即持久化（优雅关闭，§8.3）**：close_session 先发 CI `save`
+  再关 stdin（EOF → drain + 任务结束自动保存）→ 等 ≤5s 自然退出 → SIGKILL
+  兜底；Drop/断连路径经 kill_child 先 EOF 宽限 3s。进行中的那一轮在宽限
+  内跑完即可保存；超时则至少保留任务开始前内容。
 
 ---
 
@@ -411,7 +458,9 @@ type Effect
 - Runner 会话 `toolConfirm="allow"`；
 - 文件位置 `~/.alayaface/plans/<planId>.json`；Resume v1 = 重跑未完成节点；
 - Plan 只读展示（节点编辑 v2）；
-- 种子 preset：Default / Fast / Deep / Data / Safe。
+- 种子 preset：Default / Fast / Deep / Data / Safe；
+- 优雅关闭（§8.3）：close_session = save CI → EOF → 5s 宽限 → SIGKILL；
+  kill_child/KillChild = EOF → 3s 宽限 → SIGKILL。
 
 ### 待定（v2，不阻塞）
 - 节点 `outputs` 字段（产出物描述，先存不用）；
@@ -424,6 +473,7 @@ type Effect
 ## 14. 参考
 
 - `docs/go-backend.md` — Go 后端契约（字段命名/错误消息/命令映射）
+- `docs/manual-acceptance.md` — 无 GUI 环境下的手工验收清单（GUI 可用时照此执行）
 - `src-elm/src/Session/Protocol.elm` — 事件解码契约
 - `src-elm/src/Session/Handlers.elm` — 任务状态/tool call 现有处理
 - `src-tauri/src/dirs.rs` / `src-go/internal/dirs/dirs.go` — preset/session 目录结构

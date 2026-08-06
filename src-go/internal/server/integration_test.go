@@ -511,6 +511,44 @@ func TestIntegrationResumeAndDeleteSession(t *testing.T) {
 	}
 }
 
+// ─── Graceful close (save + EOF + natural exit) ─────────────────────
+
+func TestIntegrationGracefulCloseSavesSession(t *testing.T) {
+	e := newTestEnv(t, "")
+	sid := e.createSession(t)
+
+	// Wait until fakecore finished startup: the startup SM task frame is
+	// emitted AFTER the session file is written.
+	e.waitEvent(t, "tlv-frame", func(p map[string]any) bool {
+		js, _ := p["json"].(map[string]any)
+		return p["session_id"] == sid && p["tag"] == "SM" && js != nil && js["type"] == "task"
+	})
+
+	sessionFile := filepath.Join(dirs.AlayafaceDir(), "sessions", sid, "session.alaya")
+	if b, err := os.ReadFile(sessionFile); err != nil || !strings.Contains(string(b), `"version":1`) {
+		t.Fatalf("session file missing before close: %v %q", err, b)
+	}
+
+	// close_session must send the CI `save` frame before EOF: fakecore
+	// rewrites session.alaya with the saved marker, proving the save
+	// command arrived while the child was still alive (EOF alone would
+	// NOT persist — alayacore only auto-saves at task end).
+	e.rpcOK(t, "close_session", map[string]any{"sessionId": sid})
+
+	b, err := os.ReadFile(sessionFile)
+	if err != nil {
+		t.Fatalf("read session file after graceful close: %v", err)
+	}
+	if !strings.Contains(string(b), `"saved":true`) {
+		t.Fatalf("session file after close = %q, want save marker (graceful close did not save)", b)
+	}
+
+	// Double close still fails with the parity message.
+	if msg := e.rpcErr(t, "close_session", map[string]any{"sessionId": sid}); msg != "Session not found" {
+		t.Errorf("second close = %q, want 'Session not found'", msg)
+	}
+}
+
 // ─── Token auth hardening ───────────────────────────────────────────
 
 func TestIntegrationTokenAuth(t *testing.T) {

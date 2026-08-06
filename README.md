@@ -185,6 +185,13 @@ for you:
 **AlayaCore is never modified** — every capability difference is expressed
 through spawn arguments and preset config files.
 
+**Session close is graceful**: `close_session` asks AlayaCore to save (CI
+`save` → `session.alaya`), closes stdin (AlayaCore drains an in-progress
+task, auto-saving at task end, then exits), and only SIGKILLs after a 5s
+grace period — so closing a session window no longer loses the in-progress
+turn. (AlayaCore itself is untouched; rawio's only graceful exit signal is
+stdin EOF.)
+
 ## TLV Protocol
 
 AlayaFace communicates with AlayaCore via TLV (Tag-Length-Value) frames

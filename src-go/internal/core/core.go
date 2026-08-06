@@ -111,9 +111,10 @@ func FindBinary() string {
 	return "alayacore"
 }
 
-// KillChild kills a child process with a 3-second timeout.
-// Closes stdin first, then sends kill, then waits up to 3s for exit.
-// Safe to call from multiple goroutines (Wait errors are ignored).
+// KillChild closes the child's stdin (EOF), waits up to 3s for a natural
+// exit — alayacore drains the active task (auto-saving at task end) and
+// exits — then sends kill as a fallback. Safe to call from multiple
+// goroutines (Wait errors are ignored).
 func KillChild(cmd *exec.Cmd) {
 	if cmd == nil || cmd.Process == nil {
 		return
@@ -121,7 +122,6 @@ func KillChild(cmd *exec.Cmd) {
 	if stdin, ok := cmd.Stdin.(io.Closer); ok {
 		_ = stdin.Close()
 	}
-	_ = cmd.Process.Kill()
 
 	done := make(chan struct{})
 	go func() {
