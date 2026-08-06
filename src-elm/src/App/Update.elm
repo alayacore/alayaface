@@ -200,6 +200,29 @@ updateActivePlanWin model fn =
             model
 
 
+{-| Rebind a plan node to a (resumed) session id: resume_session hands
+out a fresh id, so after a node-session resume the node must point at
+the new id for future clicks to focus the live window.
+-}
+rebindNodeSession : String -> String -> PlanWindow -> PlanWindow
+rebindNodeSession nodeId sid win =
+    case win.run of
+        Just run ->
+            { win
+                | run =
+                    Just
+                        { run
+                            | nodes =
+                                Dict.update nodeId
+                                    (Maybe.map (\n -> { n | sessionId = Just sid, lastSessionId = Just sid }))
+                                    run.nodes
+                        }
+            }
+
+        Nothing ->
+            win
+
+
 {-| Insert (or update) a plan window, activate it, assign a default
 window position if it is new, and raise it to the top.
 -}
@@ -644,50 +667,73 @@ update msg model =
                         Cmd.batch [ Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ id)), Ports.scrollToBottom { sessionId = id } ]
                     else
                         Cmd.none
-            in
-            ( { model
-                | sessions = sessionsAfterBuffer
-                , activeId = newActiveId
-                , initializing = False
-                , sessionOrder = model.sessionOrder ++ [ id ]
-                , sessionNums = Dict.insert id model.nextSessionNum model.sessionNums
-                , nextSessionNum = model.nextSessionNum + 1
-                , planSessionIds =
-                    if model.planSessionPending then
-                        Set.insert id model.planSessionIds
 
-                    else
-                        model.planSessionIds
-                , planSessionPending = False
-                , windowPositions =
-                    if Dict.member id model.windowPositions then
-                        model.windowPositions
-                    else
-                        let
-                            -- Cascade: each new window offsets from previous
-                            -- Use nextSessionNum (monotonically increasing) to avoid
-                            -- overlapping with existing windows after session closures
-                            n =
-                                model.nextSessionNum
+                baseModel =
+                    { model
+                        | sessions = sessionsAfterBuffer
+                        , activeId = newActiveId
+                        , initializing = False
+                        , sessionOrder = model.sessionOrder ++ [ id ]
+                        , sessionNums = Dict.insert id model.nextSessionNum model.sessionNums
+                        , nextSessionNum = model.nextSessionNum + 1
+                        , planSessionIds =
+                            if model.planSessionPending then
+                                Set.insert id model.planSessionIds
 
-                            baseX =
-                                60 + remainderBy 6 n * 50
+                            else
+                                model.planSessionIds
+                        , planSessionPending = False
+                        , windowPositions =
+                            if Dict.member id model.windowPositions then
+                                model.windowPositions
+                            else
+                                let
+                                    -- Cascade: each new window offsets from previous
+                                    -- Use nextSessionNum (monotonically increasing) to avoid
+                                    -- overlapping with existing windows after session closures
+                                    n =
+                                        model.nextSessionNum
 
-                            baseY =
-                                60 + remainderBy 4 n * 40
-                        in
-                        Dict.insert id
-                            { x = baseX
-                            , y = baseY
-                            , z = model.nextZIndex
-                            , w = defaultWinW
-                            , h = defaultWinH
+                                    baseX =
+                                        60 + remainderBy 6 n * 50
+
+                                    baseY =
+                                        60 + remainderBy 4 n * 40
+                                in
+                                Dict.insert id
+                                    { x = baseX
+                                    , y = baseY
+                                    , z = model.nextZIndex
+                                    , w = defaultWinW
+                                    , h = defaultWinH
+                                    }
+                                    model.windowPositions
+                        , nextZIndex = model.nextZIndex + 1
+                        , pendingSwitchOnCreate = False
+                        , pendingEvents = Dict.remove id model.pendingEvents
+                    }
+
+                -- A session resumed for a plan node (PlanOpenNodeSession)
+                -- gets a fresh id from resume_session: rebind the node to
+                -- the new id so clicking the node keeps working and the
+                -- binding stays in sync.
+                resumedModel =
+                    case model.planResumeNode of
+                        Just ( planId, nodeId ) ->
+                            { baseModel
+                                | planResumeNode = Nothing
+                                , planNodeSessions =
+                                    Dict.insert id (planId ++ "/" ++ nodeId) baseModel.planNodeSessions
+                                , planWindows =
+                                    Dict.update planId
+                                        (Maybe.map (rebindNodeSession nodeId id))
+                                        baseModel.planWindows
                             }
-                            model.windowPositions
-                , nextZIndex = model.nextZIndex + 1
-                , pendingSwitchOnCreate = False
-                , pendingEvents = Dict.remove id model.pendingEvents
-              }
+
+                        Nothing ->
+                            baseModel
+            in
+            ( resumedModel
             , Cmd.batch
                 [ cmds
                 , case model.planCreating of
@@ -2335,10 +2381,8 @@ update msg model =
 
         PlanOpenNodeSession planId nodeId ->
             -- Node → session binding: click a node to open its session.
-            -- If the session window is alive, just focus it; if the
-            -- binding points at a dead session (window closed or app
-            -- restarted + Load run), resume it from disk so the history
-            -- comes back.
+            -- Priority: live sessionId (focus it) → lastSessionId (a
+            -- closed session — resume it from disk) → detail panel.
             case Dict.get planId model.planWindows of
                 Just win ->
                     case win.run of
@@ -2351,9 +2395,12 @@ update msg model =
                                                 update (ActivateSession sid) model
 
                                             else
+                                                -- dead live-binding (e.g.
+                                                -- restart): resume from disk
                                                 ( { model
                                                     | pendingSwitchOnCreate = True
                                                     , planResumeOwner = Just planId
+                                                    , planResumeNode = Just ( planId, nodeId )
                                                     , planNodeSessions =
                                                         Dict.insert sid (planId ++ "/" ++ nodeId) model.planNodeSessions
                                                   }
@@ -2361,9 +2408,25 @@ update msg model =
                                                 )
 
                                         Nothing ->
-                                            ( updateActivePlanWin model (\w -> { w | selectedNode = Just nodeId })
-                                            , Cmd.none
-                                            )
+                                            case n.lastSessionId of
+                                                Just sid ->
+                                                    -- failed/canceled node:
+                                                    -- its session was closed,
+                                                    -- reopen it from disk
+                                                    ( { model
+                                                        | pendingSwitchOnCreate = True
+                                                        , planResumeOwner = Just planId
+                                                        , planResumeNode = Just ( planId, nodeId )
+                                                        , planNodeSessions =
+                                                            Dict.insert sid (planId ++ "/" ++ nodeId) model.planNodeSessions
+                                                      }
+                                                    , Ports.resumeSession { sessionId = sid }
+                                                    )
+
+                                                Nothing ->
+                                                    ( updateActivePlanWin model (\w -> { w | selectedNode = Just nodeId })
+                                                    , Cmd.none
+                                                    )
 
                                 Nothing ->
                                     ( updateActivePlanWin model (\w -> { w | selectedNode = Just nodeId })

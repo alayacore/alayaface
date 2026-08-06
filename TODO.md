@@ -52,6 +52,35 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P6 Plan Session (menu entry, --system planner prompt, [Plan] title) | [x] |
 | P7 Plan windows (multi-instance, ⚙ menu list) + SendPrompt fix | [x] |
 | P8 Node↔session binding: click node opens/resumes its session | [x] |
+| P9 Keep failed/canceled sessions reopenable (lastSessionId) | [x] |
+
+## P9 — 失败/停止节点的会话不再丢失（lastSessionId）
+
+评审反馈：点击 node 打开的 session 内容不完整 / 有的 session 丢失。
+
+排查结论：
+- 内容完整性：alayacore 在每次任务结束（handleTaskDone）时把**完整会话**
+  写入 `session.alaya`（先保存、后发 task-done 帧），resume 时按序重放
+  UT/AT/AF/UF/AR（带 history id）。新增 HandlersTest 验证 UI 能把重放的
+  完整历史（用户 prompt/助手文本/工具调用/工具结果/最终回答）全部渲染；
+  仅「app 在任务进行中被杀」会丢失进行中的那一轮（alayacore 保存时机
+  限制，C1 不改 alayacore）。
+- session 丢失根因：`closeAndClear` 对 Failed/Waiting/Canceled 节点**清空
+  sessionId** → run.json 无绑定 → 重启后点击节点只剩详情面板，会话目录
+  虽在却无法找回。
+
+修复：
+- [x] `NodeRunState` 新增 `lastSessionId`：关闭会话时保留（`session_id`
+      清空避免重复 close，`last_session_id` 持久化到 run.json，codec
+      lenient 兼容旧文件）；`bindSession` 同时写两者；重跑时两者清空；
+- [x] `PlanOpenNodeSession` 优先级：sessionId（活）→ sessionId（死，
+      resume）→ lastSessionId（resume，失败/停止节点的会话可回看）→
+      详情面板；
+- [x] resume 成功后（resume_session 每次发新 UUID）经 `planResumeNode`
+      在 SessionCreated 中把节点**重新绑定**到新 id（`rebindNodeSession`），
+      再次点击直接聚焦，不再报 "Session is already active"；
+- [x] 测试：runner（失败保留 lastSessionId、重跑清空）、codec roundtrip
+      （last_session_id）、HandlersTest 重放渲染；Elm 121 全绿。
 
 ## P8 — 节点 ↔ 会话绑定（点击节点打开对应 session）
 

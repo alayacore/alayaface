@@ -359,6 +359,7 @@ tests =
                                                 , attempts = 1
                                                 , maxAttempts = 3
                                                 , sessionId = Just "s1"
+                                                , lastSessionId = Just "s1"
                                                 , failures = []
                                                 , startedAt = Just 100
                                                 , finishedAt = Just 200
@@ -372,6 +373,7 @@ tests =
                                                     , attempts = 1
                                                     , maxAttempts = 3
                                                     , sessionId = Nothing
+                                                    , lastSessionId = Just "s-old"
                                                     , failures = [ { attempt = 1, reason = "boom", at = 300 } ]
                                                     , startedAt = Nothing
                                                     , finishedAt = Nothing
@@ -397,7 +399,9 @@ tests =
                                 [ \r -> Expect.equal P.InProgress r.status
                                 , \r -> Expect.equal P.Succeeded (nodeState "t1" r).status
                                 , \r -> Expect.equal (Just "s1") (nodeState "t1" r).sessionId
+                                , \r -> Expect.equal (Just "s1") (nodeState "t1" r).lastSessionId
                                 , \r -> Expect.equal P.Waiting (nodeState "t2" r).status
+                                , \r -> Expect.equal (Just "s-old") (nodeState "t2" r).lastSessionId
                                 , \r -> Expect.equal 1 (List.length (nodeState "t2" r).failures)
                                 , \r -> Expect.equal "boom" (Maybe.withDefault { attempt = 0, reason = "", at = 0 } (List.head (nodeState "t2" r).failures)).reason
                                 ]

@@ -119,6 +119,7 @@ startRun now run =
                             | status = PT.Pending
                             , attempts = 0
                             , sessionId = Nothing
+                            , lastSessionId = Nothing
                             , failures = []
                             , startedAt = Nothing
                             , finishedAt = Nothing
@@ -173,7 +174,7 @@ bindSession nodeId sid run =
                             |> Maybe.map .prompt
                             |> Maybe.withDefault ""
                 in
-                ( { run | nodes = Dict.insert nodeId { n | status = PT.Running, sessionId = Just sid } run.nodes }
+                ( { run | nodes = Dict.insert nodeId { n | status = PT.Running, sessionId = Just sid, lastSessionId = Just sid } run.nodes }
                 , [ PT.SendPrompt sid promptText ]
                 )
 
@@ -341,8 +342,10 @@ retryDelayMs =
 
 
 {-| Close sessions of nodes that left Running without success (Waiting /
-Failed / Canceled) and drop the session binding so late events are
-ignored. Succeeded nodes keep their session (openable from the DAG).
+Failed / Canceled). The subprocess is closed (for Canceled this is what
+stops the running task) but the node KEEPS its lastSessionId so the DAG
+can reopen the session from disk later (resume_session). Succeeded nodes
+keep their live session (openable from the DAG).
 -}
 closeAndClear : PT.RunState -> ( PT.RunState, List PT.Effect )
 closeAndClear run =
@@ -351,7 +354,7 @@ closeAndClear run =
             case n.sessionId of
                 Just sid ->
                     if n.status == PT.Waiting || n.status == PT.Failed || n.status == PT.Canceled then
-                        ( { r | nodes = Dict.insert n.nodeId { n | sessionId = Nothing } r.nodes }
+                        ( { r | nodes = Dict.insert n.nodeId { n | sessionId = Nothing, lastSessionId = Just sid } r.nodes }
                         , PT.CloseSessionFor sid n.nodeId :: acc
                         )
 

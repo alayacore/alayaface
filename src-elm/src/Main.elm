@@ -76,6 +76,7 @@ init _ =
       , planReadTarget = Nothing
       , planNodeSessions = Dict.empty
       , planResumeOwner = Nothing
+      , planResumeNode = Nothing
       , planSessionIds = Set.empty
       , planSessionPending = False
       , homeDir = ""

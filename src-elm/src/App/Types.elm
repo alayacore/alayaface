@@ -93,6 +93,7 @@ type alias Model =
     , planReadTarget : Maybe PlanReadTarget
     , planNodeSessions : Dict String String
     , planResumeOwner : Maybe String
+    , planResumeNode : Maybe ( String, String )
     , planSessionIds : Set String
     , planSessionPending : Bool
     , homeDir : String

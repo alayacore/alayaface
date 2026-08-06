@@ -253,6 +253,8 @@ tests =
                         , \_ -> Expect.equal 1 (List.length a.failures)
                         , \_ -> Expect.equal 1 (Maybe.withDefault 0 (List.head a.failures |> Maybe.map .attempt))
                         , \_ -> Expect.equal Nothing a.sessionId
+                        -- the closed session stays reopenable via lastSessionId
+                        , \_ -> Expect.equal (Just "s1") a.lastSessionId
                         , \_ -> Expect.equal True (List.member "close:s1" (effects es))
                         , \_ -> Expect.equal True (List.any (\e -> String.startsWith "retry:a" e) (effects es))
                         ]
@@ -316,6 +318,62 @@ tests =
                         , \_ -> Expect.equal 2 (List.length a.failures)
                         , \_ -> Expect.equal P.Blocked b.status
                         , \_ -> Expect.equal P.FailedRun run6.status
+                        ]
+                        ()
+            , test "failed node keeps lastSessionId so the DAG can reopen it" <|
+                \_ ->
+                    let
+                        plan =
+                            planFromJson """{ "name": "x", "tasks": [
+                              { "id": "a", "title": "A", "prompt": "a", "max_attempts": 1 }
+                            ] }"""
+
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan plan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        ( run3, _ ) =
+                            R.step 3000 (R.TaskDone "s1" True) run2
+
+                        a =
+                            nodeState "a" run3
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal P.Failed a.status
+                        , \_ -> Expect.equal Nothing a.sessionId
+                        -- binding survives closeAndClear for reopening
+                        , \_ -> Expect.equal (Just "s1") a.lastSessionId
+                        ]
+                        ()
+            , test "re-run clears lastSessionId (fresh run, fresh bindings)" <|
+                \_ ->
+                    let
+                        plan =
+                            planFromJson """{ "name": "x", "tasks": [
+                              { "id": "a", "title": "A", "prompt": "a", "max_attempts": 1 }
+                            ] }"""
+
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan plan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        ( run3, _ ) =
+                            R.step 3000 (R.TaskDone "s1" True) run2
+
+                        ( run4, _ ) =
+                            R.step 4000 R.StartRun run3
+
+                        a =
+                            nodeState "a" run4
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal P.Starting a.status
+                        , \_ -> Expect.equal Nothing a.sessionId
+                        , \_ -> Expect.equal Nothing a.lastSessionId
                         ]
                         ()
             , test "run completes when all nodes succeed" <|

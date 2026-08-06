@@ -37,6 +37,20 @@ frame tag json =
     }
 
 
+-- A text-content frame as alayacore emits on resume history replay
+-- (content + history id).
+textFrame : String -> Maybe String -> String -> FrameEvent
+textFrame tag hid text =
+    { sessionId = "s1"
+    , tag = tag
+    , rawValue = ""
+    , historyId = hid
+    , content = Just text
+    , json = Nothing
+    , userContentType = Nothing
+    }
+
+
 toolCall : String -> String -> D.Value
 toolCall id name =
     E.object
@@ -241,5 +255,38 @@ tests =
                                 |> applyFrame (delta ",\"flag\":true}")
                     in
                     contains "{\"cmd\":\"ls\",\"flag\":true}" (msgContent s)
+            ]
+        , describe "resume replay rendering"
+            [ test "replayed history renders completely (user, assistant, tool call/result)" <|
+                \_ ->
+                    let
+                        s =
+                            emptySession "s1"
+                                |> applyFrame (textFrame "UT" (Just "1") "Collect data from sales.db")
+                                |> applyFrame (textFrame "AT" (Just "2") "I will read the file now.")
+                                |> applyFrame (frame "AF" (toolCall "t1" "read_file"))
+                                |> applyFrame
+                                    (frame "UF"
+                                        (toolResult "t1"
+                                            (E.list identity
+                                                [ E.object
+                                                    [ ( "type", E.string "text" )
+                                                    , ( "text", E.string "found 42 rows" )
+                                                    ]
+                                                ]
+                                            )
+                                        )
+                                    )
+                                |> applyFrame (textFrame "AT" (Just "5") "Done. 42 rows collected.")
+                    in
+                    Expect.all
+                        [ \st -> Expect.equal 4 (List.length st.messages)
+                        , \st -> Expect.equal True (List.any (\m -> m.content == "Collect data from sales.db") st.messages)
+                        , \st -> Expect.equal True (List.any (\m -> m.content == "I will read the file now.") st.messages)
+                        , \st -> Expect.equal True (List.any (\m -> m.toolName == Just "read_file") st.messages)
+                        , \st -> Expect.equal True (List.any (\m -> m.content == "found 42 rows") st.messages)
+                        , \st -> Expect.equal True (List.any (\m -> m.content == "Done. 42 rows collected.") st.messages)
+                        ]
+                        s
             ]
         ]
