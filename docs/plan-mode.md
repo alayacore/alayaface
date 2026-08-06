@@ -1,6 +1,6 @@
 # Plan Mode 设计文档（AlayaFace）
 
-> 状态：**已实现（P0–P7 完成；含评审反馈：Plan 独立窗口 + SendPrompt 修复）**。开发进度见根目录 `TODO.md`（必须先读）。
+> 状态：**已实现（P0–P8 完成；含评审反馈：Plan 独立窗口 + SendPrompt 修复 + 节点↔会话绑定）**。开发进度见根目录 `TODO.md`（必须先读）。
 > 本文档是 Plan Mode 功能的唯一权威设计依据；任务中断后，先读本文 + `TODO.md` 再继续。
 > 实现与设计的偏差已标注（如 NodeStatus 增加 `Waiting`、会话创建串行化）。
 
@@ -258,9 +258,18 @@ type Effect
 - 画布：HTML/CSS DAG；节点圆角矩形卡片，颜色区分状态（灰=待执行、蓝=运行、
   绿=成功、红=失败、橙=重试中、虚=阻塞/取消）；
 - 节点卡片：`title`、状态图标、重试角标 `xN`、preset 徽标、失败悬停显示最近原因；
-- **点击节点**：
-  - 有 sessionId → `ActivateSession` 置顶聚焦对应会话窗口（查看完整详情）；
-  - 无会话 → 右侧节点详情面板（prompt 全文、依赖、失败历史、Retry / Run node 按钮）；
+- **点击节点（节点 ↔ 会话绑定）**：
+  - 节点有 sessionId（成功节点保留绑定；run.json 持久化 `session_id`）：
+    - 会话窗口仍存活 → `ActivateSession` 置顶聚焦；
+    - 会话已关闭/重启后 → **自动 `resume_session` 从磁盘恢复该会话**（历史
+      完整回来，标题显示 `[Plan · planId/nodeId]` 绑定标记），恢复失败在
+      plan 窗口顶部报错；
+  - 节点无会话（Failed/Blocked/Canceled，会话已被关闭）→ 右侧节点详情面板
+    （prompt 全文、依赖、失败历史、Retry / Run node 按钮）；
+- **打开 plan 窗口自动恢复绑定**：打开/导入 plan 文件时静默读取
+  `<plan>.run.json`（best-effort），恢复各节点状态与 sessionId —— 之后
+  点击任意已运行节点即可重新打开其会话；**Load run** 则在恢复后继续执行
+  未完成任务；
 - 底部：运行日志流（每节点启动/成功/失败/重试事件）；
 - 关闭 plan 窗口不会停止正在运行的节点会话（run.json 持续落盘，可 Load run
   恢复）；手动关闭某节点会话窗口会向 runner 注入断连事件 → 该节点按失败重试。
@@ -336,6 +345,8 @@ type Effect
 
 - planId = name slug + 时间戳（如 `monthly-report-1722864000000`）；
 - 每次状态迁移落盘：终态迁移必写，中间迁移节流；
+- `session_id` 随 run.json 持久化 → 节点 ↔ 会话绑定跨重启保留；打开 plan
+  窗口时自动静默恢复，点击节点可 `resume_session` 重新打开对应会话；
 - **Resume（v1）**：重开 app → 打开计划 → 从 run.json 恢复，未完成/失败/阻塞节点**从头重新执行**（新建会话，不尝试恢复子进程；真断点续跑为 v2）。
 
 ---

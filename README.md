@@ -158,8 +158,10 @@ for you:
    manager in the ⚙ menu: open / delete / import / export).
 3. **Run**: each plan opens in its own **window** (like a session window —
    drag / resize / close, and the ⚙ menu lists all open plans). The DAG is
-   shown in the window; **Run** launches each task in its own session window
-   (click a node to open it), respecting dependencies and parallelism
+   shown in the window; **Run** launches each task in its own session window.
+   **Clicking a node opens its session** (focusing it, or automatically
+   resuming it from disk if it was closed / after a restart — bindings are
+   persisted in `<plan>.run.json`), respecting dependencies and parallelism
    (`concurrency`, default 2). Tasks run under their node-level `preset` /
    `tools` (see below) with tool confirmation auto-approved.
 4. **Retry**: failed tasks record the failure reason and attempt number

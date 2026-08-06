@@ -723,6 +723,7 @@ update msg model =
                 , sessionOrder = List.filter (\k -> k /= id) model.sessionOrder
                 , sessionNums = Dict.remove id model.sessionNums
                 , windowPositions = Dict.remove id model.windowPositions
+                , planNodeSessions = Dict.remove id model.planNodeSessions
                 , activeId =
                     if model.activeId == Just id then
                         List.head (List.reverse (List.filter (\k -> k /= id) model.sessionOrder))
@@ -1743,15 +1744,16 @@ update msg model =
                 Err _ ->
                     ( model, Cmd.none )
 
-        -- Text file read result: Plan Mode open/import (target set by
-        -- PlanManagerOpen/Import) or resume (target.isResume = True,
-        -- set by PlanResume).
+        -- Text file read result: Plan Mode open/import (target.isResume =
+        -- False), Load run (isResume=True + continueRun=True) or a silent
+        -- best-effort run-state restore when a plan window opens
+        -- (isResume=True + continueRun=False).
         FsReadResult raw ->
             case model.planReadTarget of
                 Just target ->
                     if target.isResume then
-                        -- Resume: read <plan>.run.json → restore run state
-                        -- in the target plan window and continue.
+                        -- Read <plan>.run.json → restore run state in the
+                        -- target plan window (and optionally continue).
                         case D.decodeValue fsReadOkDecoder raw of
                             Ok { ok, content, error } ->
                                 if ok then
@@ -1766,8 +1768,16 @@ update msg model =
                                                 baseRun =
                                                     PT.applyRunStateOverlay overlay (PT.emptyRunState "resume" plan)
 
+                                                -- Load run: unfinished nodes
+                                                -- re-run; silent restore: keep
+                                                -- the persisted snapshot as-is
+                                                -- (session bindings intact).
                                                 run =
-                                                    R.resumeState baseRun
+                                                    if target.continueRun then
+                                                        R.resumeState baseRun
+
+                                                    else
+                                                        baseRun
 
                                                 win1 =
                                                     { win0
@@ -1783,34 +1793,44 @@ update msg model =
                                                         , planWindows = Dict.insert target.planId win1 model.planWindows
                                                     }
                                             in
-                                            runStepIn target.planId 0 R.ContinueRun m1
+                                            if target.continueRun then
+                                                runStepIn target.planId 0 R.ContinueRun m1
+
+                                            else
+                                                ( m1, Cmd.none )
 
                                         ( Ok _, Nothing ) ->
                                             ( { model | planReadTarget = Nothing }, Cmd.none )
 
                                         ( Err err, _ ) ->
-                                            ( { model
-                                                | planReadTarget = Nothing
-                                                , planWindows =
-                                                    Dict.update target.planId
-                                                        (Maybe.map
-                                                            (\w ->
-                                                                let
-                                                                    wv =
-                                                                        w.view
-                                                                in
-                                                                { w
-                                                                    | resumePath = Nothing
-                                                                    , view = { wv | errors = [ "Invalid run state: " ++ D.errorToString err ], saving = False }
-                                                                }
+                                            if target.continueRun then
+                                                ( { model
+                                                    | planReadTarget = Nothing
+                                                    , planWindows =
+                                                        Dict.update target.planId
+                                                            (Maybe.map
+                                                                (\w ->
+                                                                    let
+                                                                        wv =
+                                                                            w.view
+                                                                    in
+                                                                    { w
+                                                                        | resumePath = Nothing
+                                                                        , view = { wv | errors = [ "Invalid run state: " ++ D.errorToString err ], saving = False }
+                                                                    }
+                                                                )
                                                             )
-                                                        )
-                                                        model.planWindows
-                                              }
-                                            , Cmd.none
-                                            )
+                                                            model.planWindows
+                                                  }
+                                                , Cmd.none
+                                                )
 
-                                else
+                                            else
+                                                -- silent restore: ignore a
+                                                -- corrupt run file
+                                                ( { model | planReadTarget = Nothing }, Cmd.none )
+
+                                else if target.continueRun then
                                     let
                                         win0 =
                                             Dict.get target.planId model.planWindows
@@ -1826,12 +1846,17 @@ update msg model =
                                     , Cmd.none
                                     )
 
+                                else
+                                    -- no run file yet: nothing to restore
+                                    ( { model | planReadTarget = Nothing }, Cmd.none )
+
                             Err _ ->
                                 ( { model | planReadTarget = Nothing }, Cmd.none )
 
                     else
                         -- Open/import: parse the plan file and open (or
-                        -- focus) its window.
+                        -- focus) its window; then best-effort restore the
+                        -- saved run state so node→session bindings come back.
                         case D.decodeValue fsReadOkDecoder raw of
                             Ok { ok, content, error } ->
                                 if ok then
@@ -1865,8 +1890,32 @@ update msg model =
                                                         , planManager =
                                                             { pm | show = False, loading = False, importPath = "" }
                                                     }
+
+                                                m2 =
+                                                    addPlanWindow target.planId win1 m1
                                             in
-                                            ( addPlanWindow target.planId win1 m1, Cmd.none )
+                                            if win0.run == Nothing then
+                                                -- Fresh window: chain a silent
+                                                -- read of <plan>.run.json to
+                                                -- restore statuses/bindings.
+                                                let
+                                                    runPath =
+                                                        runPathFor target.path
+                                                in
+                                                ( { m2
+                                                    | planReadTarget =
+                                                        Just
+                                                            { planId = target.planId
+                                                            , path = runPath
+                                                            , isResume = True
+                                                            , continueRun = False
+                                                            }
+                                                  }
+                                                , Ports.fsReadFileText { path = runPath }
+                                                )
+
+                                            else
+                                                ( m2, Cmd.none )
 
                                         Err errs ->
                                             ( setPlanErrors errs { model | planReadTarget = Nothing }
@@ -1985,6 +2034,7 @@ update msg model =
                         { planId = planWinKeyForPath path
                         , path = path
                         , isResume = False
+                        , continueRun = False
                         }
               }
             , Ports.fsReadFileText { path = path }
@@ -2023,6 +2073,7 @@ update msg model =
                             { planId = planWinKeyForPath path
                             , path = path
                             , isResume = False
+                            , continueRun = False
                             }
                   }
                 , Ports.fsReadFileText { path = path }
@@ -2235,8 +2286,16 @@ update msg model =
 
                 ( m2, c2 ) =
                     startNextCreateIn m1
+
+                -- Keep the node→session binding visible: the session bar
+                -- shows "[Plan · planId/nodeId]".
+                m3 =
+                    { m2
+                        | planNodeSessions =
+                            Dict.insert sid (planId ++ "/" ++ nodeId) m2.planNodeSessions
+                    }
             in
-            ( m2, Cmd.batch [ c1, c2 ] )
+            ( m3, Cmd.batch [ c1, c2 ] )
 
         PlanResume ->
             case ( model.planActiveId, getPlanWin model ) of
@@ -2257,6 +2316,7 @@ update msg model =
                                         { planId = pid
                                         , path = runPath
                                         , isResume = True
+                                        , continueRun = True
                                         }
                               }
                             , Ports.fsReadFileText { path = runPath }
@@ -2272,6 +2332,51 @@ update msg model =
             ( updateActivePlanWin model (\w -> { w | selectedNode = Just nodeId })
             , Cmd.none
             )
+
+        PlanOpenNodeSession planId nodeId ->
+            -- Node → session binding: click a node to open its session.
+            -- If the session window is alive, just focus it; if the
+            -- binding points at a dead session (window closed or app
+            -- restarted + Load run), resume it from disk so the history
+            -- comes back.
+            case Dict.get planId model.planWindows of
+                Just win ->
+                    case win.run of
+                        Just run ->
+                            case Dict.get nodeId run.nodes of
+                                Just n ->
+                                    case n.sessionId of
+                                        Just sid ->
+                                            if Dict.member sid model.sessions then
+                                                update (ActivateSession sid) model
+
+                                            else
+                                                ( { model
+                                                    | pendingSwitchOnCreate = True
+                                                    , planResumeOwner = Just planId
+                                                    , planNodeSessions =
+                                                        Dict.insert sid (planId ++ "/" ++ nodeId) model.planNodeSessions
+                                                  }
+                                                , Ports.resumeSession { sessionId = sid }
+                                                )
+
+                                        Nothing ->
+                                            ( updateActivePlanWin model (\w -> { w | selectedNode = Just nodeId })
+                                            , Cmd.none
+                                            )
+
+                                Nothing ->
+                                    ( updateActivePlanWin model (\w -> { w | selectedNode = Just nodeId })
+                                    , Cmd.none
+                                    )
+
+                        Nothing ->
+                            ( updateActivePlanWin model (\w -> { w | selectedNode = Just nodeId })
+                            , Cmd.none
+                            )
+
+                Nothing ->
+                    ( model, Cmd.none )
 
         PlanSetExportPath text ->
             ( updateActivePlanWin model
@@ -2335,7 +2440,11 @@ update msg model =
                 Ok res ->
                     if res.ok && res.kind == "resume" then
                         -- Resume succeeded: reveal the resumed session
-                        ( { model | showSessionManager = False, sessionManagerError = Nothing }
+                        ( { model
+                            | showSessionManager = False
+                            , sessionManagerError = Nothing
+                            , planResumeOwner = Nothing
+                          }
                         , Cmd.none
                         )
 
@@ -2343,7 +2452,25 @@ update msg model =
                         ( { model | sessionManagerError = Nothing }, Cmd.none )
 
                     else
-                        ( { model | sessionManagerError = Just res.error }, Cmd.none )
+                        -- A plan-node session resume failed: surface the
+                        -- error in the owning plan window instead of the
+                        -- (possibly closed) session manager.
+                        case model.planResumeOwner of
+                            Just pid ->
+                                ( setPlanWin pid
+                                    (\w ->
+                                        let
+                                            wv =
+                                                w.view
+                                        in
+                                        { w | view = { wv | errors = [ res.error ] } }
+                                    )
+                                    { model | planResumeOwner = Nothing }
+                                , Cmd.none
+                                )
+
+                            Nothing ->
+                                ( { model | sessionManagerError = Just res.error }, Cmd.none )
 
                 Err _ ->
                     ( model, Cmd.none )
@@ -2366,6 +2493,7 @@ update msg model =
                             , sessionOrder = List.filter (\k -> k /= id) model.sessionOrder
                             , sessionNums = Dict.remove id model.sessionNums
                             , windowPositions = Dict.remove id model.windowPositions
+                            , planNodeSessions = Dict.remove id model.planNodeSessions
                             , activeId =
                                 if model.activeId == Just id then
                                     List.head (List.reverse (List.filter (\k -> k /= id) model.sessionOrder))

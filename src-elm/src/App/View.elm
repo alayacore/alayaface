@@ -144,6 +144,13 @@ viewSessionPanel model id =
                               else
                                 ""
                              )
+                                ++ (case Dict.get id model.planNodeSessions of
+                                        Just lbl ->
+                                            "[Plan · " ++ lbl ++ "] "
+
+                                        Nothing ->
+                                            ""
+                                   )
                                 ++ (if session.activeModelName /= "" then
                                         "Session " ++ String.fromInt idx ++ " — " ++ session.activeModelName
 
@@ -413,23 +420,11 @@ viewPlanPanel model planId =
                         |> Maybe.map .nodes
                         |> Maybe.withDefault Dict.empty
 
+                -- Clicking a node opens its session (activating it if
+                -- alive, resuming it from disk if it was closed); nodes
+                -- without a session fall back to the detail panel.
                 nodeClick nodeId =
-                    case win.run of
-                        Just run ->
-                            case Dict.get nodeId run.nodes of
-                                Just n ->
-                                    case n.sessionId of
-                                        Just sid ->
-                                            ActivateSession sid
-
-                                        Nothing ->
-                                            PlanSelectNode nodeId
-
-                                Nothing ->
-                                    PlanSelectNode nodeId
-
-                        Nothing ->
-                            PlanSelectNode nodeId
+                    PlanOpenNodeSession planId nodeId
 
                 planName =
                     pv.plan |> Maybe.map .name |> Maybe.withDefault planId

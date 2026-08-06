@@ -51,6 +51,24 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P5 Polish (badges/logs/concurrency/export/docs/README) | [x] |
 | P6 Plan Session (menu entry, --system planner prompt, [Plan] title) | [x] |
 | P7 Plan windows (multi-instance, ⚙ menu list) + SendPrompt fix | [x] |
+| P8 Node↔session binding: click node opens/resumes its session | [x] |
+
+## P8 — 节点 ↔ 会话绑定（点击节点打开对应 session）
+
+- [x] 节点点击改为 `PlanOpenNodeSession planId nodeId`：
+      sessionId 存活 → `ActivateSession` 聚焦；已关闭/重启后 → 自动
+      `resume_session` 从磁盘恢复（`pendingSwitchOnCreate` 聚焦，恢复失败
+      错误显示在 plan 窗口顶部，经 `planResumeOwner` 路由）；
+      无 session（Failed/Blocked/Canceled）→ 节点详情面板；
+- [x] 打开/导入 plan 窗口时**静默自动恢复** `<plan>.run.json`
+      （`PlanReadTarget.continueRun=False`，best-effort：无文件/损坏忽略），
+      恢复各节点状态与 `session_id` 绑定 —— 点击任意已运行节点即可重新
+      打开其会话；`Load run`（continueRun=True）保持原语义（恢复后继续执行）；
+- [x] 会话窗口标题显示绑定标记 `[Plan · planId/nodeId]`
+      （`planNodeSessions : Dict String String`，绑定于 PlanBindSession /
+      PlanOpenNodeSession 恢复时，CloseSession/DeleteSession 移除）；
+- [x] 文档同步（docs/plan-mode.md §7.1/§10）；Elm 118 全绿（run-state
+      codec 已断言 sessionId roundtrip）。
 
 ## P7 — Plan windows + runner prompt dispatch fix（评审反馈）
 

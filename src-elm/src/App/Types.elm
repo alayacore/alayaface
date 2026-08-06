@@ -91,6 +91,8 @@ type alias Model =
     , planCreating : Maybe ( String, String )
     , planCreateQueue : List ( String, String )
     , planReadTarget : Maybe PlanReadTarget
+    , planNodeSessions : Dict String String
+    , planResumeOwner : Maybe String
     , planSessionIds : Set String
     , planSessionPending : Bool
     , homeDir : String
@@ -254,6 +256,7 @@ type Msg
     | PlanActivate String
     | PlanClose String
     | PlanSelectNode String
+    | PlanOpenNodeSession String String
     | PlanSetExportPath String
     | PlanExport
       -- Plan runner
@@ -507,11 +510,16 @@ emptyPlanWindow =
 
 
 {-| A pending fs_read_file_text request initiated from Plan Mode:
-which window it belongs to and whether it is a resume read or an
-open/import read.
+which window it belongs to and what to do with the content.
+  - isResume=False → the read is a plan file (open/import)
+  - isResume=True  → the read is a run-state file; continueRun=True
+    means also relaunch scheduling (user clicked Load run), while
+    continueRun=False is a silent best-effort restore (auto-load the
+    saved bindings when a plan window opens).
 -}
 type alias PlanReadTarget =
     { planId : String
     , path : String
     , isResume : Bool
+    , continueRun : Bool
     }
