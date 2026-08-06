@@ -96,3 +96,53 @@ func TestFsDeleteFileParity(t *testing.T) {
 		t.Fatalf("directory parity broken: %q", msg)
 	}
 }
+
+// ─── create_session with preset / builtinTools (P4.5) ──────────────
+
+func TestCreateSessionWithPreset(t *testing.T) {
+	e := newTestEnv(t, "")
+
+	// Unknown preset is rejected with the Rust-parity message.
+	msg := e.rpcErr(t, "create_session", map[string]any{
+		"binaryPath": "", "configPath": "", "toolConfirm": nil,
+		"preset": "nope",
+	})
+	if msg != "Preset not found: nope" {
+		t.Fatalf("preset error parity broken: %q", msg)
+	}
+
+	// Creating with the Safe preset works and returns a session id.
+	body := e.rpcOK(t, "create_session", map[string]any{
+		"binaryPath": "", "configPath": "", "toolConfirm": nil,
+		"preset": "Safe", "builtinTools": "",
+	})
+	var sid string
+	if err := json.Unmarshal(body, &sid); err != nil || sid == "" {
+		t.Fatalf("create with preset failed: body=%s err=%v", body, err)
+	}
+
+	// Session dir must exist and its config must contain model.conf but
+	// NOT settings.conf (Safe's builtin_tools must not leak into sessions).
+	sessionsDir := filepath.Join(os.Getenv("HOME"), ".alayaface", "sessions", sid)
+	if _, err := os.Stat(filepath.Join(sessionsDir, "config", "model.conf")); err != nil {
+		t.Fatalf("session config missing model.conf: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(sessionsDir, "config", "settings.conf")); err == nil {
+		t.Fatal("settings.conf leaked into session config")
+	}
+
+	e.rpcOK(t, "close_session", map[string]any{"sessionId": sid})
+}
+
+func TestCreateSessionExplicitBuiltinTools(t *testing.T) {
+	e := newTestEnv(t, "")
+	body := e.rpcOK(t, "create_session", map[string]any{
+		"binaryPath": "", "configPath": "", "toolConfirm": nil,
+		"builtinTools": "read_file,write_file",
+	})
+	var sid string
+	if err := json.Unmarshal(body, &sid); err != nil || sid == "" {
+		t.Fatalf("create failed: body=%s err=%v", body, err)
+	}
+	e.rpcOK(t, "close_session", map[string]any{"sessionId": sid})
+}

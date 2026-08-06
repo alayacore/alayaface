@@ -78,7 +78,7 @@ init _ =
       , homeDir = ""
       }
     , Cmd.batch
-        [ Ports.createSession { toolConfirm = Nothing }
+        [ Ports.createSession { toolConfirm = Nothing, preset = Nothing, builtinTools = Nothing }
         , Ports.listPresets {}
         , Task.attempt GotContainerSize (Dom.getElement "main-content")
         ]

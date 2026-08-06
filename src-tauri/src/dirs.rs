@@ -130,7 +130,8 @@ pub fn list_preset_names() -> Result<Vec<String>, String> {
 }
 
 /// Ensure `~/.alayaface/` exists with the preset structure.
-/// On first run, seeds a `Default` preset and marks it active.
+/// On first run, seeds the built-in presets (Default/Fast/Deep/Data/Safe)
+/// and marks Default active.
 /// Returns `(active_config_dir, sessions_dir)`.
 pub fn ensure() -> Result<(PathBuf, PathBuf), String> {
     let base = alayaface_dir();
@@ -142,11 +143,15 @@ pub fn ensure() -> Result<(PathBuf, PathBuf), String> {
     std::fs::create_dir_all(&sessions)
         .map_err(|e| format!("Cannot create {:?}: {}", sessions, e))?;
 
-    if !active_preset_file().exists() {
-        let default_dir = presets.join("Default");
-        if !default_dir.exists() {
-            create_preset_defaults(&default_dir)?;
+    // Seed built-in presets on first run (idempotent per preset).
+    for name in SEED_PRESETS {
+        let dir = presets.join(name);
+        if !dir.exists() {
+            create_preset_defaults(&dir, name)?;
         }
+    }
+
+    if !active_preset_file().exists() {
         write_active_preset("Default")?;
     }
 
@@ -155,14 +160,37 @@ pub fn ensure() -> Result<(PathBuf, PathBuf), String> {
     Ok((config, sessions))
 }
 
+/// Built-in presets seeded on first run. Each is a config template
+/// (model/mcp placeholders); users fill keys and can copy/rename.
+pub const SEED_PRESETS: [&str; 5] = ["Default", "Fast", "Deep", "Data", "Safe"];
+
 /// Create a session directory with a copy of the active preset's config.
 /// The session.alaya file itself is created by alayacore when the session starts.
 /// settings.conf is AlayaFace-owned and intentionally NOT copied into sessions.
 pub fn create_session_dir(sessions_dir: &PathBuf, uuid: &str) -> Result<PathBuf, String> {
+    create_session_dir_from(sessions_dir, uuid, "")
+}
+
+/// Create a session directory from a specific preset's config
+/// (`preset` empty = active preset). Used by Plan Mode so different DAG
+/// nodes can run under different presets. settings.conf is excluded.
+pub fn create_session_dir_from(
+    sessions_dir: &PathBuf,
+    uuid: &str,
+    preset: &str,
+) -> Result<PathBuf, String> {
     ensure()?; // guarantee presets exist + active marker set
     let session_dir = sessions_dir.join(uuid);
     let dst_config = session_dir.join("config");
-    let template = active_config_dir()?;
+    let template = if preset.is_empty() {
+        active_config_dir()?
+    } else {
+        let dir = preset_dir(preset);
+        if !dir.exists() {
+            return Err(format!("Preset not found: {preset}"));
+        }
+        dir
+    };
 
     copy_dir_excluding(&template, &dst_config, &["settings.conf"])?;
 
@@ -177,20 +205,29 @@ pub fn clone_preset_dir(src: &std::path::Path, dst: &std::path::Path) -> Result<
     copy_dir(src, dst)
 }
 
-/// Seed a new preset's config with built-in defaults.
-pub fn create_preset_defaults(dir: &std::path::Path) -> Result<(), String> {
+/// Seed a new preset's config with built-in defaults. `name` selects the
+/// template: the Safe preset disables execute_command via settings.conf.
+pub fn create_preset_defaults(dir: &std::path::Path, name: &str) -> Result<(), String> {
     std::fs::create_dir_all(dir)
         .map_err(|e| format!("Cannot create {:?}: {}", dir, e))?;
-    write_defaults(&dir.to_path_buf())
+    write_defaults(&dir.to_path_buf(), name)
 }
 
-fn write_defaults(config: &PathBuf) -> Result<(), String> {
+fn write_defaults(config: &PathBuf, name: &str) -> Result<(), String> {
     std::fs::write(config.join("model.conf"), DEFAULT_MODEL_CONF)
         .map_err(|e| format!("Cannot write model.conf: {e}"))?;
     std::fs::write(config.join("runtime.conf"), "{}")
         .map_err(|e| format!("Cannot write runtime.conf: {e}"))?;
     std::fs::create_dir_all(config.join("themes"))
         .map_err(|e| format!("Cannot create themes dir: {e}"))?;
+    if name == "Safe" {
+        // No execute_command: read/write/edit/search only.
+        std::fs::write(
+            config.join("settings.conf"),
+            "{\n  \"tool_confirm\": \"\",\n  \"builtin_tools\": \"read_file,write_file,edit_file,search_content\"\n}\n",
+        )
+        .map_err(|e| format!("Cannot write settings.conf: {e}"))?;
+    }
     Ok(())
 }
 
@@ -276,6 +313,15 @@ mod tests {
             assert!(config.join("runtime.conf").exists());
             assert!(config.join("themes").is_dir());
             assert_eq!(read_active_preset().unwrap(), "Default");
+
+            // All seed presets exist; Safe disables execute_command.
+            for name in SEED_PRESETS {
+                assert!(preset_dir(name).is_dir(), "missing seed preset {name}");
+            }
+            let safe_settings =
+                std::fs::read_to_string(preset_dir("Safe").join("settings.conf")).unwrap();
+            assert!(safe_settings.contains("read_file,write_file,edit_file,search_content"));
+            assert!(!safe_settings.contains("execute_command"));
         });
     }
 
@@ -289,6 +335,20 @@ mod tests {
             let session_dir = create_session_dir(&sessions, "abc").unwrap();
             assert!(session_dir.join("config").join("model.conf").exists());
             assert!(!session_dir.join("config").join("settings.conf").exists());
+        });
+    }
+
+    #[test]
+    fn create_session_dir_from_specific_preset() {
+        isolated_home(|| {
+            let (_, sessions) = ensure().unwrap();
+            // Safe's settings.conf must not leak into the session config.
+            let dir = create_session_dir_from(&sessions, "xyz", "Safe").unwrap();
+            assert!(dir.join("config").join("model.conf").exists());
+            assert!(!dir.join("config").join("settings.conf").exists());
+
+            // Unknown preset is rejected.
+            assert!(create_session_dir_from(&sessions, "q", "nope").is_err());
         });
     }
 }

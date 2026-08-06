@@ -74,6 +74,9 @@ viewNode onNodeClick runStates tasksById pos =
         preset =
             task |> Maybe.andThen .preset |> Maybe.withDefault "default"
 
+        tools =
+            task |> Maybe.andThen .tools
+
         runState =
             Dict.get pos.id runStates
 
@@ -111,6 +114,13 @@ viewNode onNodeClick runStates tasksById pos =
               else
                 Html.text ""
             ]
+        , case tools of
+            Just t ->
+                Html.div [ Attr.class "plan-node-tools" ]
+                    [ Html.text ("tools: " ++ t) ]
+
+            Nothing ->
+                Html.text ""
         ]
 
 

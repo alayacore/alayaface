@@ -18,6 +18,7 @@
 package dirs
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -154,8 +155,8 @@ func ListPresetNames() ([]string, error) {
 }
 
 // Ensure guarantees ~/.alayaface/ exists with the preset structure.
-// On first run, seeds a `Default` preset and marks it active.
-// Returns (activeConfigDir, sessionsDir).
+// On first run, seeds the built-in presets (Default/Fast/Deep/Data/Safe)
+// and marks Default active. Returns (activeConfigDir, sessionsDir).
 func Ensure() (string, string, error) {
 	base := AlayafaceDir()
 	presets := PresetsRoot()
@@ -167,13 +168,17 @@ func Ensure() (string, string, error) {
 		}
 	}
 
-	if _, err := os.Stat(ActivePresetFile()); err != nil {
-		defaultDir := filepath.Join(presets, "Default")
-		if _, err := os.Stat(defaultDir); err != nil {
-			if err := CreatePresetDefaults(defaultDir); err != nil {
+	// Seed built-in presets on first run (idempotent per preset).
+	for _, name := range SeedPresets {
+		dir := filepath.Join(presets, name)
+		if _, err := os.Stat(dir); err != nil {
+			if err := CreatePresetDefaults(dir, name); err != nil {
 				return "", "", err
 			}
 		}
+	}
+
+	if _, err := os.Stat(ActivePresetFile()); err != nil {
 		if err := WriteActivePreset("Default"); err != nil {
 			return "", "", err
 		}
@@ -186,20 +191,45 @@ func Ensure() (string, string, error) {
 	return PresetDir(active), sessions, nil
 }
 
+// SeedPresets lists the built-in presets seeded on first run. Each is a
+// config template (model/mcp placeholders); users fill keys and can
+// copy/rename them.
+var SeedPresets = []string{"Default", "Fast", "Deep", "Data", "Safe"}
+
 // CreateSessionDir creates a session directory with a copy of the active
 // preset's config. The session.alaya file itself is created by alayacore
 // when the session starts. settings.conf is AlayaFace-owned and
 // intentionally NOT copied into sessions.
 func CreateSessionDir(sessionsDir, uuid string) (string, error) {
+	return CreateSessionDirFrom(sessionsDir, uuid, "")
+}
+
+// CreateSessionDirFrom creates a session directory from a specific
+// preset's config (`preset` empty = active preset). Used by Plan Mode so
+// different DAG nodes can run under different presets. settings.conf is
+// excluded from the copy.
+func CreateSessionDirFrom(sessionsDir, uuid, preset string) (string, error) {
 	if _, _, err := Ensure(); err != nil {
 		return "", err
 	}
 	sessionDir := filepath.Join(sessionsDir, uuid)
 	dstConfig := filepath.Join(sessionDir, "config")
-	template, err := ActiveConfigDir()
-	if err != nil {
-		return "", err
+
+	var template string
+	if preset == "" {
+		active, err := ActiveConfigDir()
+		if err != nil {
+			return "", err
+		}
+		template = active
+	} else {
+		dir := PresetDir(preset)
+		if _, err := os.Stat(dir); err != nil {
+			return "", fmt.Errorf("Preset not found: %s", preset)
+		}
+		template = dir
 	}
+
 	if err := copyDirExcluding(template, dstConfig, []string{"settings.conf"}); err != nil {
 		return "", err
 	}
@@ -212,8 +242,9 @@ func ClonePresetDir(src, dst string) error {
 	return copyDirExcluding(src, dst, nil)
 }
 
-// CreatePresetDefaults seeds a new preset's config with built-in defaults.
-func CreatePresetDefaults(dir string) error {
+// CreatePresetDefaults seeds a new preset's config with built-in
+// defaults. The Safe preset disables execute_command via settings.conf.
+func CreatePresetDefaults(dir, name string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -223,7 +254,15 @@ func CreatePresetDefaults(dir string) error {
 	if err := os.WriteFile(filepath.Join(dir, "runtime.conf"), []byte("{}"), 0o644); err != nil {
 		return err
 	}
-	return os.MkdirAll(filepath.Join(dir, "themes"), 0o755)
+	if err := os.MkdirAll(filepath.Join(dir, "themes"), 0o755); err != nil {
+		return err
+	}
+	if name == "Safe" {
+		// No execute_command: read/write/edit/search only.
+		safe := "{\n  \"tool_confirm\": \"\",\n  \"builtin_tools\": \"read_file,write_file,edit_file,search_content\"\n}\n"
+		return os.WriteFile(filepath.Join(dir, "settings.conf"), []byte(safe), 0o644)
+	}
+	return nil
 }
 
 // copyDirExcluding recursively copies a directory, skipping any files

@@ -191,7 +191,7 @@ applyEffect e ( m, cmds ) =
             -- time; SessionCreated binds it to the pending node.
             if m.planCreating == Nothing then
                 ( { m | planCreating = Just nodeId }
-                , Cmd.batch [ cmds, Ports.createSession { toolConfirm = Just "allow" } ]
+                , Cmd.batch [ cmds, Ports.createSession (nodeSessionArgs m nodeId) ]
                 )
 
             else
@@ -238,11 +238,32 @@ startNextCreate model =
     case ( model.planCreating, model.planCreateQueue ) of
         ( Nothing, next :: rest ) ->
             ( { model | planCreating = Just next, planCreateQueue = rest }
-            , Ports.createSession { toolConfirm = Just "allow" }
+            , Ports.createSession (nodeSessionArgs model next)
             )
 
         _ ->
             ( model, Cmd.none )
+
+
+{-| Session-creation args for a runner node: toolConfirm=allow (auto-
+approve tools so tasks don't stall) plus the node's preset/tools
+overrides (Nothing = preset defaults / all tools).
+-}
+nodeSessionArgs : Model -> String -> { toolConfirm : Maybe String, preset : Maybe String, builtinTools : Maybe String }
+nodeSessionArgs model nodeId =
+    let
+        task =
+            model.planRun
+                |> Maybe.map .plan
+                |> Maybe.map .tasks
+                |> Maybe.withDefault []
+                |> List.filter (\t -> t.id == nodeId)
+                |> List.head
+    in
+    { toolConfirm = Just "allow"
+    , preset = task |> Maybe.andThen .preset
+    , builtinTools = task |> Maybe.andThen .tools
+    }
 
 
 {-| The prompt text for a node-owned session (from the plan).
@@ -362,7 +383,7 @@ update msg model =
         -- Session Lifecycle
         CreateSession ->
             ( { model | pendingSwitchOnCreate = True, showGlobalMenu = False }
-            , Ports.createSession { toolConfirm = Nothing }
+            , Ports.createSession { toolConfirm = Nothing, preset = Nothing, builtinTools = Nothing }
             )
 
         SessionCreated id ->
@@ -2332,6 +2353,21 @@ update msg model =
             , Cmd.none
             )
 
+        SetBuiltinTools val ->
+            let
+                ed =
+                    model.settingsEditor
+            in
+            ( { model
+                | settingsEditor =
+                    { ed
+                        | builtinTools = val
+                        , error = Nothing
+                    }
+              }
+            , Cmd.none
+            )
+
         SettingsSave ->
             let
                 ed =
@@ -2340,7 +2376,11 @@ update msg model =
             ( { model
                 | settingsEditor = { ed | syncing = True, error = Nothing }
               }
-            , Ports.syncGlobalSettings { preset = ed.preset, toolConfirm = ed.toolConfirm }
+            , Ports.syncGlobalSettings
+                { preset = ed.preset
+                , toolConfirm = ed.toolConfirm
+                , builtinTools = ed.builtinTools
+                }
             )
 
         SettingsListResult raw ->
@@ -2356,6 +2396,7 @@ update msg model =
                                 { ed
                                     | loading = False
                                     , toolConfirm = res.toolConfirm
+                                    , builtinTools = res.builtinTools
                                     , error = Nothing
                                 }
                           }
@@ -3357,12 +3398,13 @@ mcpSyncResultDecoder =
         (D.field "error" D.string)
 
 
-settingsListResultDecoder : D.Decoder { ok : Bool, toolConfirm : String, error : String }
+settingsListResultDecoder : D.Decoder { ok : Bool, toolConfirm : String, builtinTools : String, error : String }
 settingsListResultDecoder =
-    D.map3
-        (\ok toolConfirm error -> { ok = ok, toolConfirm = toolConfirm, error = error })
+    D.map4
+        (\ok toolConfirm builtinTools error -> { ok = ok, toolConfirm = toolConfirm, builtinTools = builtinTools, error = error })
         (D.field "ok" D.bool)
         (D.field "tool_confirm" D.string)
+        (D.field "builtin_tools" D.string)
         (D.field "error" D.string)
 
 

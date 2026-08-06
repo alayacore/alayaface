@@ -26,9 +26,11 @@ type SessionDirInfo struct {
 // CreateSession spawns a new alayacore session.
 func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	var args struct {
-		BinaryPath  string  `json:"binaryPath"`
-		ConfigPath  string  `json:"configPath"`
-		ToolConfirm *string `json:"toolConfirm"`
+		BinaryPath   string  `json:"binaryPath"`
+		ConfigPath   string  `json:"configPath"`
+		ToolConfirm  *string `json:"toolConfirm"`
+		Preset       *string `json:"preset"`
+		BuiltinTools *string `json:"builtinTools"`
 	}
 	if err := decodeArgs(r, &args); err != nil {
 		return err
@@ -40,7 +42,11 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	}
 	bin := ResolveBinary(args.BinaryPath)
 	id := uuid.NewString()
-	sessionDir, err := dirs.CreateSessionDir(sessionsDir, id)
+	presetName := ""
+	if args.Preset != nil {
+		presetName = *args.Preset
+	}
+	sessionDir, err := dirs.CreateSessionDirFrom(sessionsDir, id, presetName)
 	if err != nil {
 		return err
 	}
@@ -61,18 +67,35 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 			tc = eff
 		}
 	}
+	bt := ""
+	if args.BuiltinTools != nil {
+		bt = *args.BuiltinTools
+	} else {
+		if eff, err := effectiveBuiltinTools(); err != nil {
+			log.Printf("[settings] builtin-tools unavailable, spawning without it: %v", err)
+		} else {
+			bt = eff
+		}
+	}
 	log.Printf("Spawning: %s --rawio --config-path %s --session %s", bin, effectiveConfig, sessionFile)
 	if tc != "" {
 		log.Printf("  with --tool-confirm=%s", tc)
 	}
+	if bt != "" {
+		log.Printf("  with --builtin-tools=%s", bt)
+	}
+	if presetName != "" {
+		log.Printf("  preset=%s", presetName)
+	}
 
 	s, err := h.Sessions.Create(session.CreateConfig{
-		ID:          id,
-		Binary:      bin,
-		ConfigPath:  effectiveConfig,
-		SessionFile: sessionFile,
-		SessionDir:  sessionDir,
-		ToolConfirm: tc,
+		ID:           id,
+		Binary:       bin,
+		ConfigPath:   effectiveConfig,
+		SessionFile:  sessionFile,
+		SessionDir:   sessionDir,
+		ToolConfirm:  tc,
+		BuiltinTools: bt,
 	}, h.Hub, h.Cache)
 	if err != nil {
 		return err

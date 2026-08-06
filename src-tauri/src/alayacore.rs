@@ -17,8 +17,16 @@ pub struct CoreProcess {
 /// If `config_path` is non-empty, passes `--config-path <config_path>`.
 /// If `session_path` is non-empty, passes `--session <session_path>`.
 /// If `tool_confirm` is non-empty, passes `--tool-confirm=<tool_confirm>`.
+/// If `builtin_tools` is non-empty, passes `--builtin-tools=<list>`
+/// (comma-separated; empty = don't pass the flag = alayacore default: all).
 /// stderr is inherited so alayacore's own logs reach the terminal.
-pub fn spawn(binary_path: &str, config_path: &str, session_path: &str, tool_confirm: &str) -> io::Result<CoreProcess> {
+pub fn spawn(
+    binary_path: &str,
+    config_path: &str,
+    session_path: &str,
+    tool_confirm: &str,
+    builtin_tools: &str,
+) -> io::Result<CoreProcess> {
     let mut cmd = Command::new(binary_path);
     cmd.arg("--rawio");
     if !config_path.is_empty() {
@@ -31,6 +39,9 @@ pub fn spawn(binary_path: &str, config_path: &str, session_path: &str, tool_conf
     }
     if !tool_confirm.is_empty() {
         cmd.arg(format!("--tool-confirm={}", tool_confirm));
+    }
+    if !builtin_tools.is_empty() {
+        cmd.arg(format!("--builtin-tools={}", builtin_tools));
     }
     let mut child = cmd
         .stdin(Stdio::piped())

@@ -1485,10 +1485,12 @@ viewSettingsEditorOverlay model =
         viewOverlay CloseSettingsEditor
             [ Overlay.Settings.view
                 { toolConfirm = ed.toolConfirm
+                , builtinTools = ed.builtinTools
                 , loading = ed.loading
                 , syncing = ed.syncing
                 , error = ed.error
                 , onInput = SetToolConfirm
+                , onBuiltinToolsInput = SetBuiltinTools
                 , onSave = SettingsSave
                 , onCancel = CloseSettingsEditor
                 }

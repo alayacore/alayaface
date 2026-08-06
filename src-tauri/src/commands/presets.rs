@@ -147,17 +147,17 @@ mod tests {
         crate::dirs::isolated_home(|| {
             let rt = tokio::runtime::Runtime::new().unwrap();
 
-            // First run seeds Default and marks it active.
+            // First run seeds the built-in presets and marks Default active.
             let list = rt.block_on(list_presets()).unwrap();
-            assert_eq!(list.len(), 1);
-            assert_eq!(list[0].name, "Default");
-            assert!(list[0].is_active);
+            assert_eq!(list.len(), 5, "expected Default/Fast/Deep/Data/Safe seeds");
+            assert!(list.iter().any(|p| p.name == "Default" && p.is_active));
+            assert!(list.iter().any(|p| p.name == "Safe" && !p.is_active));
 
             // Create a second preset by copying Default.
             rt.block_on(copy_preset("Default".to_string(), "work".to_string()))
                 .unwrap();
             let list = rt.block_on(list_presets()).unwrap();
-            assert_eq!(list.len(), 2);
+            assert_eq!(list.len(), 6, "5 seeds + work");
             assert!(list.iter().any(|p| p.name == "work" && !p.is_active));
 
             // Copying a nonexistent source or an existing target is rejected.
@@ -189,8 +189,8 @@ mod tests {
             // Deleting a non-active preset works.
             rt.block_on(delete_preset("work2".to_string())).unwrap();
             let list = rt.block_on(list_presets()).unwrap();
-            assert_eq!(list.len(), 1);
-            assert_eq!(list[0].name, "Default");
+            assert_eq!(list.len(), 5, "back to the seeds");
+            assert!(list.iter().any(|p| p.name == "Default" && p.is_active));
         });
     }
 

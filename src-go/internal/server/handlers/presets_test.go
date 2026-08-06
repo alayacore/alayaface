@@ -7,21 +7,25 @@ import (
 
 func TestPresetLifecycleRoundtrip(t *testing.T) {
 	isolatedHome(t, func() {
-		// First run seeds Default and marks it active.
+		// First run seeds the built-in presets (Default/Fast/Deep/Data/Safe)
+		// and marks Default active.
 		rr := call(t, ListPresets, map[string]any{})
 		var list []PresetInfo
 		if err := json.Unmarshal(rr.Body.Bytes(), &list); err != nil {
 			t.Fatal(err)
 		}
-		if len(list) != 1 || list[0].Name != "Default" || !list[0].IsActive {
-			t.Fatalf("initial presets = %+v, want [Default active]", list)
+		if len(list) != 5 {
+			t.Fatalf("initial presets = %+v, want 5 seeds", list)
+		}
+		if !presetIn(list, "Default", true) || !presetIn(list, "Safe", false) {
+			t.Fatalf("seed presets wrong: %+v", list)
 		}
 
 		// Create a second preset by copying Default.
 		call(t, CopyPreset, map[string]any{"source": "Default", "name": "work"})
 		list = mustListPresets(t)
-		if len(list) != 2 {
-			t.Fatalf("presets after copy = %+v, want 2", list)
+		if len(list) != 6 {
+			t.Fatalf("presets after copy = %+v, want 6", list)
 		}
 		if !presetIn(list, "work", false) {
 			t.Errorf("work preset missing or wrongly active: %+v", list)
@@ -63,7 +67,7 @@ func TestPresetLifecycleRoundtrip(t *testing.T) {
 		// Deleting a non-active preset works.
 		call(t, DeletePreset, map[string]any{"name": "work2"})
 		list = mustListPresets(t)
-		if len(list) != 1 || list[0].Name != "Default" {
+		if len(list) != 5 || !presetIn(list, "Default", true) {
 			t.Errorf("after delete: %+v", list)
 		}
 	})

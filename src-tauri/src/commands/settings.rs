@@ -15,6 +15,12 @@ pub struct GlobalSettings {
     /// Empty/absent means no pre-confirmation.
     #[serde(default)]
     pub tool_confirm: String,
+
+    /// Comma-separated (no spaces) built-in tool IDs enabled for sessions,
+    /// passed to alayacore as `--builtin-tools=id1,id2,...`.
+    /// Empty/absent means DO NOT pass the flag (alayacore default: all tools).
+    #[serde(default)]
+    pub builtin_tools: String,
 }
 
 /// Read settings from a specific config dir; a missing/empty file yields defaults.
@@ -60,26 +66,41 @@ pub fn effective_tool_confirm() -> Result<String, String> {
     normalize_tool_confirm(&s.tool_confirm)
 }
 
-/// Read a preset's settings (tool-confirm normalized). `preset` empty = active.
+/// The effective global built-in tools list (normalized; may be empty =
+/// don't pass the flag = all tools).
+pub fn effective_builtin_tools() -> Result<String, String> {
+    let s = read_global_settings()?;
+    normalize_tool_confirm(&s.builtin_tools)
+}
+
+/// Read a preset's settings (tool-confirm + builtin-tools normalized).
+/// `preset` empty = active.
 #[tauri::command]
 pub async fn get_global_settings(preset: String) -> Result<serde_json::Value, String> {
     let config_dir = crate::dirs::resolve_config_dir(&preset)?;
     let s = read_settings_from(&config_dir)?;
-    let normalized = normalize_tool_confirm(&s.tool_confirm)?;
-    Ok(serde_json::json!({ "tool_confirm": normalized }))
+    let normalized_tc = normalize_tool_confirm(&s.tool_confirm)?;
+    let normalized_bt = normalize_tool_confirm(&s.builtin_tools)?;
+    Ok(serde_json::json!({
+        "tool_confirm": normalized_tc,
+        "builtin_tools": normalized_bt,
+    }))
 }
 
 /// Replace a preset's settings (`preset` empty = active). Accepts
-/// `{"tool_confirm": "id1,id2"}`; writes atomically (temp file + rename)
-/// like sync_default_mcp.
+/// `{"tool_confirm": "id1,id2", "builtin_tools": "id1,id2"}`; writes
+/// atomically (temp file + rename) like sync_default_mcp.
 #[tauri::command]
 pub async fn sync_global_settings(config: String, preset: String) -> Result<(), String> {
     let value: serde_json::Value = serde_json::from_str(&config)
         .map_err(|e| format!("Invalid settings JSON: {e}"))?;
-    let raw = value.get("tool_confirm").and_then(|v| v.as_str()).unwrap_or("");
-    let normalized = normalize_tool_confirm(raw)?;
+    let raw_tc = value.get("tool_confirm").and_then(|v| v.as_str()).unwrap_or("");
+    let raw_bt = value.get("builtin_tools").and_then(|v| v.as_str()).unwrap_or("");
+    let normalized_tc = normalize_tool_confirm(raw_tc)?;
+    let normalized_bt = normalize_tool_confirm(raw_bt)?;
     let settings = GlobalSettings {
-        tool_confirm: normalized,
+        tool_confirm: normalized_tc,
+        builtin_tools: normalized_bt,
     };
 
     let config_dir = crate::dirs::resolve_config_dir(&preset)?;
@@ -89,7 +110,7 @@ pub async fn sync_global_settings(config: String, preset: String) -> Result<(), 
         .map_err(|e| format!("Failed to serialize settings: {e}"))?;
     std::fs::write(&tmp, &text).map_err(|e| format!("Failed to write settings.conf: {e}"))?;
     std::fs::rename(&tmp, &path).map_err(|e| format!("Failed to replace settings.conf: {e}"))?;
-    log::info!("[settings] Wrote tool_confirm={:?}", settings.tool_confirm);
+    log::info!("[settings] Wrote tool_confirm={:?} builtin_tools={:?}", settings.tool_confirm, settings.builtin_tools);
     Ok(())
 }
 
@@ -140,6 +161,35 @@ mod tests {
                 .is_err());
             let settings = read_global_settings().unwrap();
             assert_eq!(settings.tool_confirm, "execute_command,search_files");
+        });
+    }
+
+    #[test]
+    fn builtin_tools_roundtrips() {
+        crate::dirs::isolated_home(|| {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            // Seed the built-in presets first.
+            let _ = crate::dirs::ensure().unwrap();
+
+            // Safe seed preset already carries builtin_tools.
+            let safe = rt.block_on(get_global_settings("Safe".to_string())).unwrap();
+            assert_eq!(safe["builtin_tools"], "read_file,write_file,edit_file,search_content");
+
+            // Default is empty (all tools).
+            let def = rt.block_on(get_global_settings("".to_string())).unwrap();
+            assert_eq!(def["builtin_tools"], "");
+
+            // Sync a subset and read it back (per-preset).
+            let ok = rt.block_on(sync_global_settings(
+                r#"{"builtin_tools":"read_file,write_file"}"#.to_string(),
+                "Data".to_string(),
+            ));
+            assert!(ok.is_ok());
+            let data = rt.block_on(get_global_settings("Data".to_string())).unwrap();
+            assert_eq!(data["builtin_tools"], "read_file,write_file");
+
+            // effective_builtin_tools reads the active preset (Default → "").
+            assert_eq!(effective_builtin_tools().unwrap(), "");
         });
     }
 }

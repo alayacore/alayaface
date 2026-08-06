@@ -17,6 +17,8 @@ pub async fn create_session(
     binary_path: String,
     config_path: String,
     tool_confirm: Option<String>,
+    preset: Option<String>,
+    builtin_tools: Option<String>,
     sessions: State<'_, SessionMap>,
     model_cache: State<'_, ModelCache>,
 ) -> Result<String, String> {
@@ -24,7 +26,8 @@ pub async fn create_session(
 
     let bin = resolve_binary(&binary_path);
     let session_id = Uuid::new_v4().to_string();
-    let session_dir = dirs::create_session_dir(&sessions_dir, &session_id)?;
+    let preset_name = preset.unwrap_or_default();
+    let session_dir = dirs::create_session_dir_from(&sessions_dir, &session_id, &preset_name)?;
 
     let effective_config = if config_path.is_empty() {
         session_dir.join("config").to_string_lossy().to_string()
@@ -41,9 +44,24 @@ pub async fn create_session(
             String::new()
         }),
     };
+    // Symmetric to tool_confirm: explicit override wins; otherwise use the
+    // active preset's builtin_tools (empty = don't pass flag = all tools).
+    let bt = match builtin_tools {
+        Some(v) => v,
+        None => crate::commands::effective_builtin_tools().unwrap_or_else(|e| {
+            log::warn!("[settings] builtin-tools unavailable, spawning without it: {e}");
+            String::new()
+        }),
+    };
     log::info!("Spawning: {} --rawio --config-path {} --session {}", &bin, &effective_config, &session_file);
     if !tc.is_empty() {
         log::info!("  with --tool-confirm={}", &tc);
+    }
+    if !bt.is_empty() {
+        log::info!("  with --builtin-tools={}", &bt);
+    }
+    if !preset_name.is_empty() {
+        log::info!("  preset={}", &preset_name);
     }
 
     session::create(session::SessionConfig {
@@ -55,6 +73,7 @@ pub async fn create_session(
         sessions: &sessions,
         model_cache: &model_cache,
         tool_confirm: &tc,
+        builtin_tools: &bt,
     }).await
 }
 
@@ -100,6 +119,7 @@ pub async fn resume_session(
         sessions: &sessions,
         model_cache: &model_cache,
         tool_confirm: "",
+        builtin_tools: "",
     }).await
 }
 
@@ -199,5 +219,6 @@ pub async fn fork_session(
         sessions: &sessions,
         model_cache: &model_cache,
         tool_confirm: "",
+        builtin_tools: "",
     }).await
 }

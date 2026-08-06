@@ -148,6 +148,8 @@
       transport.invoke("create_session", {
         binaryPath: "", configPath: "",
         toolConfirm: data.toolConfirm || null,
+        preset: data.preset || null,
+        builtinTools: data.builtinTools || null,
       }).then(function (id) { app.ports.onSessionCreated.send(id); })
         .catch(function (err) { console.error("create_session failed:", err); });
     });
@@ -234,19 +236,26 @@
       transport.invoke("get_global_settings", { preset: (data && data.preset) || "" })
         .then(function (res) {
           app.ports.onGlobalSettingsList.send({
-            ok: true, tool_confirm: (res && res.tool_confirm) || "", error: "",
+            ok: true,
+            tool_confirm: (res && res.tool_confirm) || "",
+            builtin_tools: (res && res.builtin_tools) || "",
+            error: "",
           });
         })
         .catch(function (err) {
           app.ports.onGlobalSettingsList.send({
-            ok: false, tool_confirm: "", error: String((err && err.message) || err),
+            ok: false, tool_confirm: "", builtin_tools: "",
+            error: String((err && err.message) || err),
           });
         });
     });
 
     on("syncGlobalSettings", function (data) {
       transport.invoke("sync_global_settings", {
-        config: JSON.stringify({ tool_confirm: data.toolConfirm || "" }),
+        config: JSON.stringify({
+          tool_confirm: data.toolConfirm || "",
+          builtin_tools: data.builtinTools || "",
+        }),
         preset: (data && data.preset) || "",
       })
         .then(function () {

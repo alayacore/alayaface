@@ -47,7 +47,8 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P2 Create Plan flow + plans dir + Plans manager | [x] |
 | P3 DAG layout + SVG view + node→session click | [x] |
 | P4 Runner state machine + retry + run.json + resume | [x] |
-| P4.5 create_session preset/builtinTools + settings.conf + seed presets | [ ] |
+| P4.5 create_session preset/builtinTools + settings.conf + seed presets | [x] |
+| P5 Polish (badges/logs/concurrency/export/docs/README) | [ ] |
 | P4 Runner state machine + retry + run.json + resume | [ ] |
 | P4.5 create_session preset/builtinTools + settings.conf + seed presets | [ ] |
 | P5 Polish (badges/logs/concurrency/export/docs/README) | [ ] |
@@ -188,27 +189,33 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 
 ## P4.5 — create_session preset/builtinTools + settings.conf + seed presets
 
-- [ ] Rust `alayacore.rs` spawn(): `builtin_tools: &str` arg → `--builtin-tools`
-      when non-empty (alongside --tool-confirm)
-- [ ] Go `core.go` Spawn(): same
-- [ ] Rust `commands/settings.rs` + Go `handlers/settings.go`: GlobalSettings
-      + `builtin_tools` field; get/sync read-write; normalize via existing
-      normalize_tool_confirm; tests both sides + parity
-- [ ] Rust `commands/sessions.rs` create_session: optional `preset` (copy that
-      preset into session_dir/config, exclude settings.conf) + optional
-      `builtinTools` (default = active preset settings.conf; passed to spawn)
-- [ ] Go `handlers/sessions.go`: same
-- [ ] `bridge.js` + `Ports.elm`: createSession carries toolConfirm/preset/
-      builtinTools
-- [ ] `Overlay/Settings.elm`: "Built-in tools" input (per-preset, like tool
-      confirm); View + Update wiring
-- [ ] Seed presets: `dirs.rs`/`dirs.go` create_preset_defaults extended to seed
-      Fast/Deep/Data/Safe (model/mcp placeholders; Safe settings.conf sets
-      builtin_tools without execute_command)
-- [ ] DAG node cards: preset badge + tools badge
-- [ ] Tests: Rust+Go unit (spawn args, settings roundtrip, create_session
-      preset copy/builtinTools, seed presets), parity
-- [ ] `cargo test` + `go test -race` green
+- [x] Rust `alayacore.rs` spawn() + Go `core.go` Spawn(): `builtin_tools`
+      arg → `--builtin-tools=<list>` when non-empty (alongside
+      --tool-confirm; empty = don't pass flag = alayacore all-on)
+- [x] Rust `commands/settings.rs` + Go `handlers/settings.go`:
+      GlobalSettings + `builtin_tools` field; get/sync read-write (per
+      preset); normalize via existing tool-list normalizer; tests both
+      sides + parity (Safe seed carries the no-execute_command list)
+- [x] Rust `commands/sessions.rs` create_session: optional `preset`
+      (dirs::create_session_dir_from copies that preset into
+      session_dir/config, excluding settings.conf) + optional
+      `builtinTools` (explicit override; default = active preset
+      settings.conf; passed to spawn). Go `handlers/sessions.go` same.
+      NOTE: never pass preset dir as configPath (breaks resume)
+- [x] `bridge.js` + `Ports.elm`: createSession carries toolConfirm/preset/
+      builtinTools; syncGlobalSettings carries builtin_tools
+- [x] `Overlay/Settings.elm`: "Built-in tools" input (per-preset, like
+      tool confirm) + SetBuiltinTools msg + SettingsEditor.builtinTools
+- [x] Seed presets: `dirs.rs`/`dirs.go` Ensure() seeds Default/Fast/Deep/
+      Data/Safe (idempotent); Safe's settings.conf sets builtin_tools
+      without execute_command; create_session_dir_from for a named preset
+- [x] DAG node cards: tools badge (when node overrides); preset badge
+      already present; runner createSession passes node preset/tools
+- [x] Tests: Rust (35: spawn chain, settings builtin_tools roundtrip,
+      seed presets, create_session_dir_from) + Go (parity + integration:
+      create_session with Safe preset → config copied w/o settings.conf,
+      unknown preset error parity, explicit builtinTools)
+- [x] `cargo test` (35) + `go test -race` (8 pkgs) + `elm-test` (114) green
 
 ## P5 — Polish
 

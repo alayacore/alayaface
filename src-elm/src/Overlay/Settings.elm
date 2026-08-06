@@ -7,10 +7,12 @@ import Html.Events as Ev
 
 view :
     { toolConfirm : String
+    , builtinTools : String
     , loading : Bool
     , syncing : Bool
     , error : Maybe String
     , onInput : String -> msg
+    , onBuiltinToolsInput : String -> msg
     , onSave : msg
     , onCancel : msg
     }
@@ -47,6 +49,20 @@ view config =
                             []
                         , Html.div [ Attr.class "me-hint" ]
                             [ Html.text "Comma-separated tool IDs (no spaces). Empty = disabled. Passed to AlayaCore as --tool-confirm=id1,id2 on new sessions." ]
+                        ]
+                    , Html.div [ Attr.class "me-field" ]
+                        [ Html.label [ Attr.class "me-field-label" ] [ Html.text "Built-in tools" ]
+                        , Html.input
+                            [ Attr.class "me-field-input"
+                            , Attr.id "settings-builtin-tools"
+                            , Attr.type_ "text"
+                            , Attr.value config.builtinTools
+                            , Attr.placeholder "read_file,write_file,edit_file,execute_command,search_content"
+                            , Ev.onInput config.onBuiltinToolsInput
+                            ]
+                            []
+                        , Html.div [ Attr.class "me-hint" ]
+                            [ Html.text "Comma-separated tool IDs (no spaces). Empty = all tools (AlayaCore default). Passed as --builtin-tools=id1,id2 on new sessions. e.g. Safe preset omits execute_command." ]
                         ]
                     ]
                 , Html.div [ Attr.class "me-actions" ]

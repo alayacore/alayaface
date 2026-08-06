@@ -208,6 +208,7 @@ type Msg
     | EditPresetSettings String
     | CloseSettingsEditor
     | SetToolConfirm String
+    | SetBuiltinTools String
     | SettingsSave
     | SettingsListResult E.Value
     | SettingsSyncResult E.Value
@@ -368,6 +369,7 @@ type alias SettingsEditor =
     , loading : Bool
     , syncing : Bool
     , toolConfirm : String
+    , builtinTools : String
     , error : Maybe String
     , preset : String
     }
@@ -379,6 +381,7 @@ emptySettingsEditor =
     , loading = False
     , syncing = False
     , toolConfirm = ""
+    , builtinTools = ""
     , error = Nothing
     , preset = ""
     }

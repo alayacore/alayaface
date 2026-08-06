@@ -3,6 +3,8 @@ package handlers
 import (
 	"encoding/json"
 	"testing"
+
+	"alayaface/src-go/internal/dirs"
 )
 
 func TestNormalizeTrimsAndDropsEmpty(t *testing.T) {
@@ -88,6 +90,48 @@ func TestGetGlobalSettingsJSONShape(t *testing.T) {
 		}
 		if _, ok := out["tool_confirm"]; !ok {
 			t.Errorf("missing tool_confirm key, got %v", out)
+		}
+	})
+}
+
+func TestBuiltinToolsRoundtrips(t *testing.T) {
+	isolatedHome(t, func() {
+		// Seed the built-in presets first.
+		if _, _, err := dirs.Ensure(); err != nil {
+			t.Fatal(err)
+		}
+		// Safe seed preset carries builtin_tools (parity with Rust).
+		rr := call(t, GetGlobalSettings, map[string]any{"preset": "Safe"})
+		var safe map[string]string
+		if err := json.Unmarshal(rr.Body.Bytes(), &safe); err != nil {
+			t.Fatal(err)
+		}
+		if safe["builtin_tools"] != "read_file,write_file,edit_file,search_content" {
+			t.Fatalf("Safe builtin_tools = %q", safe["builtin_tools"])
+		}
+
+		// Default is empty (all tools).
+		rr = call(t, GetGlobalSettings, map[string]any{"preset": ""})
+		var def map[string]string
+		if err := json.Unmarshal(rr.Body.Bytes(), &def); err != nil {
+			t.Fatal(err)
+		}
+		if def["builtin_tools"] != "" {
+			t.Fatalf("Default builtin_tools = %q, want empty", def["builtin_tools"])
+		}
+
+		// Sync a subset per-preset and read it back.
+		call(t, SyncGlobalSettings, map[string]any{
+			"config": `{"builtin_tools":"read_file,write_file"}`,
+			"preset": "Data",
+		})
+		rr = call(t, GetGlobalSettings, map[string]any{"preset": "Data"})
+		var data map[string]string
+		if err := json.Unmarshal(rr.Body.Bytes(), &data); err != nil {
+			t.Fatal(err)
+		}
+		if data["builtin_tools"] != "read_file,write_file" {
+			t.Fatalf("Data builtin_tools = %q", data["builtin_tools"])
 		}
 	})
 }

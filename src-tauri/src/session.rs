@@ -53,6 +53,7 @@ pub struct SessionConfig<'a> {
     pub sessions: &'a SessionMap,
     pub model_cache: &'a ModelCache,
     pub tool_confirm: &'a str,
+    pub builtin_tools: &'a str,
 }
 
 // ─── Factory ──────────────────────────────────────────────────────────
@@ -61,8 +62,14 @@ pub struct SessionConfig<'a> {
 pub async fn create(cfg: SessionConfig<'_>) -> Result<String, String> {
     let session_id = Uuid::new_v4().to_string();
 
-    let proc = alayacore::spawn(cfg.binary, cfg.config_path, cfg.session_file, cfg.tool_confirm)
-        .map_err(|e| format!("Failed to start alayacore: {e}"))?;
+    let proc = alayacore::spawn(
+        cfg.binary,
+        cfg.config_path,
+        cfg.session_file,
+        cfg.tool_confirm,
+        cfg.builtin_tools,
+    )
+    .map_err(|e| format!("Failed to start alayacore: {e}"))?;
 
     let connected = Arc::new(AtomicBool::new(true));
     let stdin = Arc::new(Mutex::new(proc.stdin));

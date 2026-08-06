@@ -134,12 +134,13 @@ func (m *Manager) CloseAll() {
 
 // CreateConfig configures a new session.
 type CreateConfig struct {
-	ID          string // also names the session dir
-	Binary      string
-	ConfigPath  string
-	SessionFile string
-	SessionDir  string
-	ToolConfirm string
+	ID           string // also names the session dir
+	Binary       string
+	ConfigPath   string
+	SessionFile  string
+	SessionDir   string
+	ToolConfirm  string
+	BuiltinTools string
 }
 
 // Create spawns alayacore, registers the session, and starts the stdout
@@ -147,7 +148,7 @@ type CreateConfig struct {
 // Create returns (same ordering as Rust), so onStatus cannot arrive
 // before onSessionCreated on the client.
 func (m *Manager) Create(cfg CreateConfig, h *hub.Hub, cache *ModelCache) (*Session, error) {
-	proc, err := core.Spawn(cfg.Binary, cfg.ConfigPath, cfg.SessionFile, cfg.ToolConfirm)
+	proc, err := core.Spawn(cfg.Binary, cfg.ConfigPath, cfg.SessionFile, cfg.ToolConfirm, cfg.BuiltinTools)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to start alayacore: %w", err)
 	}

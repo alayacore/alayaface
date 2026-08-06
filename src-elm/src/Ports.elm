@@ -84,7 +84,7 @@ port onStatus : (E.Value -> msg) -> Sub msg
 
 -- Outbound commands (Elm → Tauri via JS bridge)
 
-port createSession : { toolConfirm : Maybe String } -> Cmd msg
+port createSession : { toolConfirm : Maybe String, preset : Maybe String, builtinTools : Maybe String } -> Cmd msg
 port closeSession : { sessionId : String } -> Cmd msg
 port sendPrompt : { sessionId : String, text : String, media : List E.Value } -> Cmd msg
 port cancelTask : { sessionId : String } -> Cmd msg
@@ -99,7 +99,7 @@ port syncDefaultMcp : { preset : String, config : String } -> Cmd msg
 port onDefaultMcpList : (E.Value -> msg) -> Sub msg
 port onDefaultMcpSyncResult : (E.Value -> msg) -> Sub msg
 port listGlobalSettings : { preset : String } -> Cmd msg
-port syncGlobalSettings : { preset : String, toolConfirm : String } -> Cmd msg
+port syncGlobalSettings : { preset : String, toolConfirm : String, builtinTools : String } -> Cmd msg
 port onGlobalSettingsList : (E.Value -> msg) -> Sub msg
 port onGlobalSettingsSyncResult : (E.Value -> msg) -> Sub msg
 port listPresets : {} -> Cmd msg

@@ -19,6 +19,11 @@ type GlobalSettings struct {
 	// pre-approved at session start, passed to alayacore as
 	// --tool-confirm=id1,id2,...
 	ToolConfirm string `json:"tool_confirm"`
+	// BuiltinTools is a comma-separated (no spaces) list of built-in
+	// tool IDs enabled for sessions, passed to alayacore as
+	// --builtin-tools=id1,id2,... Empty = don't pass the flag (alayacore
+	// default: all tools).
+	BuiltinTools string `json:"builtin_tools"`
 }
 
 // readSettingsFrom reads settings from a config dir; a missing/empty
@@ -83,6 +88,16 @@ func effectiveToolConfirm() (string, error) {
 	return NormalizeToolConfirm(s.ToolConfirm)
 }
 
+// effectiveBuiltinTools returns the normalized global builtin-tools list
+// (empty = don't pass the flag = all tools).
+func effectiveBuiltinTools() (string, error) {
+	s, err := readGlobalSettings()
+	if err != nil {
+		return "", err
+	}
+	return NormalizeToolConfirm(s.BuiltinTools)
+}
+
 // GetGlobalSettings reads a preset's settings (`preset` empty = active).
 func GetGlobalSettings(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	var args struct {
@@ -99,15 +114,20 @@ func GetGlobalSettings(h *Handler, w http.ResponseWriter, r *http.Request) error
 	if err != nil {
 		return err
 	}
-	normalized, err := NormalizeToolConfirm(s.ToolConfirm)
+	tc, err := NormalizeToolConfirm(s.ToolConfirm)
 	if err != nil {
 		return err
 	}
-	return writeJSON(w, map[string]string{"tool_confirm": normalized})
+	bt, err := NormalizeToolConfirm(s.BuiltinTools)
+	if err != nil {
+		return err
+	}
+	return writeJSON(w, map[string]string{"tool_confirm": tc, "builtin_tools": bt})
 }
 
 // SyncGlobalSettings replaces a preset's settings (`preset` empty =
-// active). Accepts {"tool_confirm": "id1,id2"}; writes atomically.
+// active). Accepts {"tool_confirm": "id1,id2", "builtin_tools": "..."};
+// writes atomically.
 func SyncGlobalSettings(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	var args struct {
 		Config string `json:"config"`
@@ -120,12 +140,17 @@ func SyncGlobalSettings(h *Handler, w http.ResponseWriter, r *http.Request) erro
 	if err := json.Unmarshal([]byte(args.Config), &value); err != nil {
 		return fmt.Errorf("Invalid settings JSON: %w", err)
 	}
-	raw, _ := value["tool_confirm"].(string)
-	normalized, err := NormalizeToolConfirm(raw)
+	rawTc, _ := value["tool_confirm"].(string)
+	rawBt, _ := value["builtin_tools"].(string)
+	tc, err := NormalizeToolConfirm(rawTc)
 	if err != nil {
 		return err
 	}
-	settings := GlobalSettings{ToolConfirm: normalized}
+	bt, err := NormalizeToolConfirm(rawBt)
+	if err != nil {
+		return err
+	}
+	settings := GlobalSettings{ToolConfirm: tc, BuiltinTools: bt}
 
 	configDir, err := dirs.ResolveConfigDir(args.Preset)
 	if err != nil {
