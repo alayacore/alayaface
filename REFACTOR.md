@@ -201,11 +201,22 @@ plan 完成自动关窗（先回填）。
       节点点击 → resume（成功节点窗口已关）；8b Stop 保留（t3 挂起 → Stop → 窗口关闭）；
       ALL PASS；Elm 183 / Rust 42 / Go -race 全绿
 
-### R5 清理 + E2E 重写 + 文档
+### R5 清理 + 文档 + 真机 bug 修复
+- [x] E2E 全量重写（R4 完成，commit 4bc7456）：fixture（t3 保留 hang-once 供 Stop；E2E
+      开头**预置 t3 hang marker** 使第一次 run 秒成功）；递归、状态条、重跑级联步骤
+- [x] **真机 bug 修复（本会话，commit 待定）**：alayacore 的 **boot task 帧**
+      （`SM task in_progress:false`，会话启动即发、早于任何 prompt）被
+      `planEventFromFrame` 误判为 TaskDone → Runner 把刚绑定的节点标为 Succeeded
+      （output 空）→ `closeAndClear` 立即 `CloseSessionFor` → cancel-first 关闭
+      → 节点"第一条 prompt 后立马 Canceled"、run 毫秒"完成"。修复：
+      1) Model 新增 `planTaskStarted : Set String`，仅对见过 `in_progress:true`
+      （真实任务开始，必在 prompt 之后）的会话派发 TaskDone；boot 帧被忽略；
+      2) fakecore 对齐真实 alayacore 帧序列（boot 带 `in_progress:false` +
+      回复前发 `in_progress:true`），使 E2E 实际覆盖该门控路径（此前 fakecore
+      boot 无 in_progress → 前端默认 true → 永不触发）。
+      真机验证（LLaMA.CPP gemma-4-12B）：修复前 t1/t3 12ms/7ms 秒完 + AT
+      "Canceled"；修复后三节点真实产出、依赖链严格顺序、无 Canceled。
 - [ ] 死代码清理（P22 残余、按钮 CSS）；`Time.every` 订阅删除
-- [ ] E2E 全量重写：fixture（t3 保留 hang-once 供 Stop；E2E 开头**预置 t3 hang marker**
-      使第一次 run 秒成功）；新增递归（节点输出 plan → 子 plan → 回填 → 节点继续）、
-      状态条、重跑级联步骤
 - [ ] 文档：docs/plan-mode.md（§5/§6.7/§7/§8.5 移除超时/§13）、README、
       docs/manual-acceptance.md；TODO.md 勾选
 - [ ] 全量验证：Elm / Rust / Go -race / make e2e 全绿 → 提交 → push 三 remote

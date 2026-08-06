@@ -1086,16 +1086,25 @@ runPathFor planPath =
 
 {-| Extract a runner event from a frame for a node-owned session:
 SM task done (in_progress=false) or SM error.
+
+R5 gate: alayacore emits a boot task frame (in_progress:false, context 0)
+BEFORE any prompt is processed. Without a preceding in_progress:true that
+boot frame is indistinguishable from a real task completion — the runner
+would mark the just-bound node Succeeded (output Nothing) and closeAndClear
+would CANCEL its just-started session ("Canceled" right after the first
+prompt, node done in milliseconds). We therefore track sessions that have
+seen in_progress:true (real task start — always follows the prompt, which
+is only sent after bind) and only dispatch TaskDone for those.
 -}
-planEventFromFrame : Model -> P.FrameEvent -> Maybe R.Event
+planEventFromFrame : Model -> P.FrameEvent -> ( Model, Maybe R.Event )
 planEventFromFrame model ev =
     if ev.tag /= "SM" then
-        Nothing
+        ( model, Nothing )
 
     else
         case findPlanIdBySession model ev.sessionId of
             Nothing ->
-                Nothing
+                ( model, Nothing )
 
             Just _ ->
                 case ev.json of
@@ -1109,17 +1118,34 @@ planEventFromFrame model ev =
                                                 D.decodeValue (D.field "in_progress" D.bool) env.data
                                                     |> Result.toMaybe
                                                     |> Maybe.withDefault True
-
-                                            taskError =
-                                                D.decodeValue (D.field "task_error" D.bool) env.data
-                                                    |> Result.toMaybe
-                                                    |> Maybe.withDefault False
                                         in
                                         if inProgress then
-                                            Nothing
+                                            -- Real task start (prompt in
+                                            -- flight): remember the session
+                                            -- so its task-done counts.
+                                            ( { model | planTaskStarted = Set.insert ev.sessionId model.planTaskStarted }
+                                            , Nothing
+                                            )
+
+                                        else if Set.member ev.sessionId model.planTaskStarted then
+                                            -- Real completion: task started
+                                            -- (in_progress:true seen) then
+                                            -- finished.
+                                            let
+                                                taskError =
+                                                    D.decodeValue (D.field "task_error" D.bool) env.data
+                                                        |> Result.toMaybe
+                                                        |> Maybe.withDefault False
+                                            in
+                                            ( model
+                                            , Just (R.TaskDone ev.sessionId taskError (lastAssistantOutput model ev.sessionId) (lastAssistantIsPlan model ev.sessionId))
+                                            )
 
                                         else
-                                            Just (R.TaskDone ev.sessionId taskError (lastAssistantOutput model ev.sessionId) (lastAssistantIsPlan model ev.sessionId))
+                                            -- Boot frame (in_progress:false
+                                            -- before any task started) — not
+                                            -- a completion. Ignore.
+                                            ( model, Nothing )
 
                                     "error" ->
                                         let
@@ -1128,16 +1154,16 @@ planEventFromFrame model ev =
                                                     |> Result.toMaybe
                                                     |> Maybe.withDefault "Error"
                                         in
-                                        Just (R.SessionError ev.sessionId text)
+                                        ( model, Just (R.SessionError ev.sessionId text) )
 
                                     _ ->
-                                        Nothing
+                                        ( model, Nothing )
 
                             Err _ ->
-                                Nothing
+                                ( model, Nothing )
 
                     Nothing ->
-                        Nothing
+                        ( model, Nothing )
 
 
 {-| The final assistant answer of a session — recorded as the node's
@@ -1465,6 +1491,7 @@ update msg model =
                 , windowPositions = Dict.remove id model.windowPositions
                 , planNodeSessions = Dict.remove id model.planNodeSessions
                 , planResumedFrom = Dict.remove id model.planResumedFrom
+                , planTaskStarted = Set.remove id model.planTaskStarted
                 , nodeConnection =
                     if (model.nodeConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
                         Nothing
@@ -1620,10 +1647,17 @@ update msg model =
 
                                 -- Runner injection: task done / SM error for
                                 -- a node-owned session feeds the state machine.
+                                -- planEventFromFrame also tracks task-start
+                                -- (in_progress:true) so the alayacore boot
+                                -- task frame is not mistaken for a real
+                                -- task completion (R5 fix).
+                                ( updatedModel3, runnerEv ) =
+                                    planEventFromFrame updatedModel2 ev
+
                                 runnerFrameCmd =
-                                    case planEventFromFrame updatedModel2 ev of
-                                        Just runnerEv ->
-                                            Task.perform (\t -> PlanRunFrame (Time.posixToMillis t) runnerEv) Time.now
+                                    case runnerEv of
+                                        Just runnerEvent ->
+                                            Task.perform (\t -> PlanRunFrame (Time.posixToMillis t) runnerEvent) Time.now
 
                                         Nothing ->
                                             Cmd.none
@@ -1633,13 +1667,13 @@ update msg model =
                             case decodeSyncOutcome raw of
                                 Just ( isError, message ) ->
                                     if newSession.modelSelector.page == ModelSelSyncing then
-                                        update (ForSession ev.sessionId (ModelSelectorSyncResult isError message)) updatedModel2
+                                        update (ForSession ev.sessionId (ModelSelectorSyncResult isError message)) updatedModel3
 
                                     else
-                                        ( updatedModel2, Cmd.batch [ cmds, runnerFrameCmd, autoOfferCmd ] )
+                                        ( updatedModel3, Cmd.batch [ cmds, runnerFrameCmd, autoOfferCmd ] )
 
                                 Nothing ->
-                                    ( updatedModel2, Cmd.batch [ cmds, runnerFrameCmd, autoOfferCmd ] )
+                                    ( updatedModel3, Cmd.batch [ cmds, runnerFrameCmd, autoOfferCmd ] )
 
                         Nothing ->
                             bufferPendingEvent model ev.sessionId raw

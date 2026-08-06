@@ -232,10 +232,11 @@ func main() {
 	boot, _ := json.Marshal(map[string]any{
 		"type": "task",
 		"data": map[string]any{
-			"id":               "boot",
-			"title":            "fake core ready",
-			"cwd":              cwd,
-			"builtin_tools":    *builtinToolsFlag,
+			"id":                "boot",
+			"title":             "fake core ready",
+			"cwd":               cwd,
+			"in_progress":       false, // mirrors real alayacore's boot task frame
+			"builtin_tools":     *builtinToolsFlag,
 			"builtin_tools_set": btSet,
 		},
 	})
@@ -258,6 +259,13 @@ func main() {
 			}
 		case "UE":
 			if staged > 0 {
+				// Mirrors real alayacore: processing a prompt starts the
+				// task (in_progress:true) before any reply — even when the
+				// task later hangs. The runner gates TaskDone on having
+				// seen this frame (so the boot in_progress:false is not a
+				// completion), so a hung task can still be aborted by the
+				// cancel-first close below (which emits in_progress:false).
+				writeFrame("SM", `{"type":"task","data":{"in_progress":true,"current_step":1,"context":0}}`)
 				if hanging {
 					// Hung task: swallow the prompt (no reply) — the
 					// runner's timeout would fail the node (removed in
@@ -360,7 +368,6 @@ func failOnceReply() {
 func hangOnceReply() {
 	h := sha256.Sum256([]byte(stagedText))
 	marker := filepath.Join(os.TempDir(), fmt.Sprintf("alayaface-fakecore-hang-once-%x.marker", h[:8]))
-	fmt.Fprintf(os.Stderr, "[fakecore] hang-once staged=%q len=%d hash=%x\n", stagedText, len(stagedText), h[:8])
 	if _, err := os.Stat(marker); os.IsNotExist(err) {
 		_ = os.WriteFile(marker, []byte("hung-once"), 0o644)
 		hanging = true

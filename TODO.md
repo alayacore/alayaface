@@ -216,11 +216,19 @@ C1 安全：`cancelTask` → `activeTask.cancel()` → 任务经 `taskResultCh`
       节点点击 → resume（成功节点窗口已关）；8b Stop 保留（t3 挂起 → Stop → 窗口关闭）；
       ALL PASS；Elm 183 / Rust 42 / Go -race 全绿
 
-### R5 清理 + E2E 重写 + 文档
+### R5 清理 + 文档 + 真机 bug 修复
+- [x] **真机 bug 修复（boot 帧门控）**：alayacore 启动即发 `SM task in_progress:false`
+      （早于任何 prompt）→ `planEventFromFrame` 误判 TaskDone → 节点标 Succeeded（空
+      output）→ closeAndClear 立即 CloseSessionFor（cancel-first）→ "第一条 prompt 后
+      立马 Canceled"、run 毫秒完成。修复：`Model.planTaskStarted : Set String` 门控
+      （仅见过 in_progress:true 的会话派发 TaskDone）；CloseSession 清理；
+      fakecore 对齐帧序列（boot 带 in_progress:false + 回复前发 in_progress:true）
+      使 E2E 覆盖；真机验证（LLaMA.CPP gemma-4-12B）：修复前三节点 12ms/7ms 秒完 +
+      AT "Canceled"，修复后三节点真实产出、链式依赖严格顺序、无 Canceled；
+- [x] E2E 全量重写（R4 完成，commit 4bc7456）：fixture t3 保留 hang-once（供 Stop）；
+      E2E 开头预置 t3 hang marker（第一次 run 秒成功）；递归/回填/状态条/重跑级联步骤；
 - [ ] 死代码清理（P22 残余、plan-offer-btn CSS）；Time.every 订阅删除；
-- [ ] E2E 全量重写：fixture t3 保留 hang-once（供 Stop）；E2E 开头预置 t3 hang marker
-      （第一次 run 秒成功）；新增递归/回填/状态条/重跑级联步骤；
-- [ ] 文档：docs/plan-mode.md（§5/§6.7/§7/§8.5 超时移除/§13）、README、
+- [ ] 文档：docs/plan-mode.md（§5/§6.7/§7/§8.5 超时移除/§13、§6.4 boot 帧门控）、README、
       docs/manual-acceptance.md；
 - [ ] 全量验证：Elm / Rust / Go -race / make e2e 全绿 → 提交 → push 三 remote
 

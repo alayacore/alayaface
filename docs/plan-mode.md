@@ -247,6 +247,17 @@ type Effect
 - `SessionDisconnected sessionId reason`（core-status connected=false；未收到 done 前视为失败）
 - 人工事件：`Stop` / `Pause` / `Resume` / `RetryNode nodeId`（手动重试，attempts 清零重来）
 
+**boot 帧门控（R5 真机修复）**：alayacore 会话启动时先发一条
+`SM task in_progress:false`（context 0，早于任何 prompt）——没有门控时它
+与真实 TaskDone 无法区分，Runner 会把刚绑定的节点标为 Succeeded（output
+空）→ `closeAndClear` 立刻 `CloseSessionFor`（cancel-first 关闭）→ 节点
+"第一条 prompt 后立马 Canceled"、run 毫秒级"完成"（真机必现；fakecore 旧
+boot 帧无 in_progress 字段 → 前端默认 true → E2E 永不触发）。门控：
+`Model.planTaskStarted : Set String` 只对**见过 `in_progress:true`** 的
+会话派发 TaskDone（真实任务必先发 true）；boot 帧被忽略。fakecore 已对齐
+帧序列（boot 带 `in_progress:false` + 回复前发 `in_progress:true`），E2E
+实际覆盖该路径。
+
 ### 6.5 失败与重试（需求③）
 
 - 失败 → 追加 `FailureRecord{attempt, reason, at}`，`attempts += 1`；
