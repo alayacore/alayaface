@@ -63,6 +63,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P22 Plan Session role-lock + no builtin tools + **真模型验证（用户实测完整 run 跑通）** | [x] |
 | P24 Output injection `{{tX.output}}`（TaskDone 记录输出 → run.json 持久化 → 下游 prompt 替换 → 详情面板） | [x] |
 | P25 Close_session cancel-first（Stop/关窗口立即取消任务，不等 drain 跑完；历史保存到取消点） | [x] |
+| P26 plan JSON 顶层 `"type": "alayaface-plan"` 标志（按钮只认显式标志，普通 ```json 不误触发；旧文件兼容） | [x] |
 
 ## P24 — 输出注入（{{tX.output}}）
 
@@ -125,6 +126,28 @@ C1 安全：`cancelTask` → `activeTask.cancel()` → 任务经 `taskResultCh`
       badge Stopped）ALL PASS；
 - [x] 文档：plan-mode.md §8.3（重写为 cancel-first）/§10/§13、README、
       manual-acceptance §5。
+
+## P26 — plan JSON 顶层 type 标志（alayaface-plan）
+
+用户提议：普通消息里出现 ```json 代码块也会触发 Create Plan 按钮（误报），
+加一个顶层标志更保险。
+
+- [x] `Plan.Types.planTypeMarker = "alayaface-plan"` + `Plan.planType : Maybe String`：
+      decode lenient（缺失 → Nothing，旧文件兼容）；validate 拒绝「存在但
+      值错误」；normalize 统一补齐 `Just planTypeMarker`；`encodePlan` 总是
+      写 `"type": "alayaface-plan"`（保存/导出/重新生成都带标志）；
+- [x] `Plan.Detect.hasPlanTypeMarker`：块内容顶层 `type` 解码 == marker；
+      Update 层 AT 检测在 `extractPlanJson` 之后要求 marker == True 才插入
+      `pendingPlanOffers` —— 普通 ```json 代码示例不再出按钮；
+- [x] Plan Session `planSystemPrompt`：JSON 示例加 `"type": "alayaface-plan"`
+      + 规则「顶层必须包含该标志，否则框架不识别」；
+- [x] 测试：PlanTypesTest +3（encode 带标志 / 旧文件无标志可解析并补齐 /
+      错误值拒绝）；PlanDetectTest +5（精确标志 true / 无标志 false /
+      错误值 false / 无效 JSON false / 非对象 false）→ **Elm 180**；
+- [x] E2E：fakecore fixture 带标志 → Create Plan offer 正常出现；Browse
+      导入的 importedPlan **故意不带标志** → 照常打开（兼容路径验证）；
+      ALL PASS；
+- [x] 文档：plan-mode.md §5 schema/字段表、§6.7、§12、§13 已确认。
 
 ## P11 — 第二轮审查：创建队列串行化 + 创建失败恢复
 

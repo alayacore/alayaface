@@ -322,6 +322,39 @@ tests =
                         Err errs ->
                             Expect.fail ("unexpected errors: " ++ String.join "; " errs)
             ]
+        , describe "type marker"
+            [ test "encoded output carries the alayaface-plan marker" <|
+                \_ ->
+                    case P.parsePlan sampleJson of
+                        Ok plan ->
+                            let
+                                encoded =
+                                    E.encode 2 (P.encodePlan plan)
+                            in
+                            Expect.equal True (String.contains "\"type\": \"alayaface-plan\"" encoded)
+
+                        Err errs ->
+                            Expect.fail ("unexpected errors: " ++ String.join "; " errs)
+            , test "legacy plan without the marker still parses" <|
+                \_ ->
+                    -- Files created before the marker existed (e.g. the
+                    -- user's real plans) must keep opening; normalize
+                    -- upgrades them to carry the marker.
+                    case P.parsePlan sampleJson of
+                        Ok plan ->
+                            Expect.equal (Just P.planTypeMarker) plan.planType
+
+                        Err errs ->
+                            Expect.fail ("unexpected errors: " ++ String.join "; " errs)
+            , test "wrong marker value is rejected" <|
+                \_ ->
+                    case P.parsePlan """{ "type": "not-a-plan", "name": "x", "tasks": [] }""" of
+                        Err errs ->
+                            Expect.equal True (List.any (String.contains "type") errs)
+
+                        Ok _ ->
+                            Expect.fail "should have rejected the wrong marker"
+            ]
         , describe "slugify"
             [ test "basic slug" <|
                 \_ -> Expect.equal "monthly-report" (P.slugify "Monthly Report")

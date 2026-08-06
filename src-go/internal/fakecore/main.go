@@ -298,6 +298,7 @@ func main() {
 // a normal reply and the task-done frame.
 func planReply() {
 	const planJSON = `{
+  "type": "alayaface-plan",
   "schema_version": 1,
   "name": "E2E Demo",
   "goal": "Automated end-to-end verification of Plan Mode",

@@ -152,7 +152,9 @@ for you:
 
 1. **Plan**: in any session, ask the model to decompose the task and output
    a fenced ```json block (schema in `docs/plan-mode.md` §5). A **Create
-   Plan** button appears under the message.
+   Plan** button appears under the message — only when the block explicitly
+   carries the top-level `"type": "alayaface-plan"` marker, so ordinary
+   ```json code samples never trigger it.
 2. **Save**: the plan is validated (unique ids, deps exist, no cycles),
    normalized, and written to `~/.alayaface/plans/<name>.json` (Plans
    manager in the ⚙ menu: open / delete / import / export).

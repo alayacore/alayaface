@@ -1,6 +1,7 @@
 module Plan.Types exposing
     ( TaskNode
     , Plan
+    , planTypeMarker
     , defaultConcurrency
     , defaultMaxAttempts
     , schemaVersion
@@ -88,6 +89,19 @@ minConcurrency =
     1
 
 
+{-| Top-level type marker for AlayaFace plan documents. The Create Plan
+offer detector (Plan.Detect.hasPlanTypeMarker) only offers to create a
+plan when an assistant message's ```json block EXPLICITLY carries this
+marker — an ordinary ```json code sample in a normal chat no longer
+triggers the button. Saved/exported plans always carry it (encodePlan);
+files without it (created before the marker existed) still open (the
+decoder is lenient) but a WRONG marker value is rejected.
+-}
+planTypeMarker : String
+planTypeMarker =
+    "alayaface-plan"
+
+
 -- Model
 
 
@@ -115,6 +129,10 @@ type alias Plan =
     -- override via timeout_seconds). Nothing = no timeout (v1 behavior).
     , defaultTimeoutSeconds : Maybe Int
     , tasks : List TaskNode
+    -- The top-level "type" marker. Nothing = legacy file without the
+    -- marker (accepted, normalized to Just planTypeMarker on save);
+    -- Just t where t /= planTypeMarker = rejected by validate.
+    , planType : Maybe String
     }
 
 
@@ -259,7 +277,8 @@ taskDecoder =
 
 planDecoder : D.Decoder Plan
 planDecoder =
-    D.map7 Plan
+    -- map8: planType is lenient (missing → Nothing, wrong value → validate)
+    D.map8 Plan
         (D.oneOf [ D.field "schema_version" D.int, D.succeed schemaVersion ])
         (D.field "name" D.string)
         (D.oneOf [ D.field "goal" D.string, D.succeed "" ])
@@ -267,6 +286,7 @@ planDecoder =
         (D.oneOf [ D.field "default_max_attempts" D.int, D.succeed defaultMaxAttempts ])
         (D.maybe (D.field "default_timeout_seconds" D.int))
         (D.field "tasks" (D.list taskDecoder))
+        (D.maybe (D.field "type" D.string))
 
 
 decodePlan : D.Decoder Plan
@@ -310,6 +330,9 @@ normalize plan =
         , concurrency = clamp minConcurrency maxConcurrency plan.concurrency
         , defaultMaxAttempts = max 1 plan.defaultMaxAttempts
         , tasks = List.map normalizeTask plan.tasks
+        -- every normalized plan carries the marker (legacy files without
+        -- it are upgraded on save/export)
+        , planType = Just planTypeMarker
     }
 
 
@@ -346,6 +369,16 @@ validate plan =
 
           else
             []
+        , case plan.planType of
+            Just t ->
+                if t /= planTypeMarker then
+                    [ "Not an AlayaFace plan: top-level \"type\" is \"" ++ t ++ "\" (expected \"" ++ planTypeMarker ++ "\")" ]
+
+                else
+                    []
+
+            Nothing ->
+                []
         , case plan.defaultTimeoutSeconds of
             Just s ->
                 if s < 1 then
@@ -524,7 +557,8 @@ encodePlan : Plan -> E.Value
 encodePlan p =
     E.object
         (List.filterMap identity
-            [ Just ( "schema_version", E.int p.schemaVersion )
+            [ Just ( "type", E.string planTypeMarker )
+            , Just ( "schema_version", E.int p.schemaVersion )
             , Just ( "name", E.string p.name )
             , Just ( "goal", E.string p.goal )
             , Just ( "concurrency", E.int p.concurrency )

@@ -1,5 +1,6 @@
 module Plan.Detect exposing
     ( extractPlanJson
+    , hasPlanTypeMarker
     )
 
 {-| Detect a plan JSON document inside assistant message text.
@@ -15,6 +16,24 @@ Rules:
   - CRLF is tolerated (trailing \r on the fence line is trimmed);
   - content is trimmed; an empty block returns Nothing.
 -}
+
+import Json.Decode as D
+import Plan.Types as PT
+
+
+{-| Whether the text (the content of a ```json block) explicitly carries
+the AlayaFace plan marker (`"type": "alayaface-plan"`). Only such blocks
+get a Create Plan offer — an ordinary ```json code sample in a normal
+chat (no marker) never triggers the button.
+-}
+hasPlanTypeMarker : String -> Bool
+hasPlanTypeMarker text =
+    case D.decodeString (D.field "type" D.string) text of
+        Ok t ->
+            t == PT.planTypeMarker
+
+        Err _ ->
+            False
 
 extractPlanJson : String -> Maybe String
 extractPlanJson text =

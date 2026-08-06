@@ -527,6 +527,7 @@ planSystemPrompt =
 
 计划格式（唯一一个 ```json 代码块）：
 {
+  "type": "alayaface-plan",
   "schema_version": 1,
   "name": "计划名称",
   "goal": "目标描述",
@@ -537,6 +538,7 @@ planSystemPrompt =
   ]
 }
 规则：
+- 顶层必须包含 "type": "alayaface-plan"（这是计划文档的标识，缺少它框架不会识别为计划）
 - id 全局唯一；prompt 默认自包含；如果下游任务需要上游任务的产出，在 prompt 中用 {{t1.output}} 引用该任务的输出（框架会在该上游任务完成后把它的最终输出替换进下游 prompt；只能引用已声明依赖的任务，不要引用依赖关系之外的任务）
 - 能并行执行的任务之间不要互相依赖
 - 需要特定环境的任务用 preset 指定（Default/Fast/Deep/Data/Safe）
@@ -1287,7 +1289,14 @@ update msg model =
                                                 if m.role == T.Assistant && not (Dict.member m.id updatedModel.pendingPlanOffers) then
                                                     case Plan.Detect.extractPlanJson m.content of
                                                         Just offerRaw ->
-                                                            { updatedModel | pendingPlanOffers = Dict.insert m.id offerRaw updatedModel.pendingPlanOffers }
+                                                            -- Only offer when the block EXPLICITLY carries the
+                                                            -- "type": "alayaface-plan" marker — an ordinary ```json
+                                                            -- code sample in a normal chat never triggers the button.
+                                                            if Plan.Detect.hasPlanTypeMarker offerRaw then
+                                                                { updatedModel | pendingPlanOffers = Dict.insert m.id offerRaw updatedModel.pendingPlanOffers }
+
+                                                            else
+                                                                updatedModel
 
                                                         Nothing ->
                                                             updatedModel
