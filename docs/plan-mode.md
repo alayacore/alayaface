@@ -1,7 +1,8 @@
 # Plan Mode 设计文档（AlayaFace）
 
-> 状态：**设计中（待实现）**。开发进度见根目录 `TODO.md`（必须先读）。
+> 状态：**已实现（P0–P4.5 完成；P5 打磨中）**。开发进度见根目录 `TODO.md`（必须先读）。
 > 本文档是 Plan Mode 功能的唯一权威设计依据；任务中断后，先读本文 + `TODO.md` 再继续。
+> 实现与设计的偏差已标注（如 NodeStatus 增加 `Waiting`、会话创建串行化）。
 
 ---
 
@@ -155,10 +156,15 @@ src/Plan/
 ```
 Pending → Starting → Running → Succeeded
               ↓          ↓
-           (会话创建失败) Failed（attempts < maxAttempts → 回到 Pending 自动重试；否则 Failed 终态）
+           (会话创建失败) Failed（attempts < maxAttempts → Waiting 自动重试 → Pending；否则 Failed 终态）
 Blocked   ← 任一依赖 Failed 终态（继承显示"被 xx 阻塞"）
 Canceled  ← 用户 Stop / Pause 时未完成的节点
 ```
+
+> 实现偏差：自动重试退避期间引入 `Waiting` 状态（已加入 NodeStatus），
+> `ScheduleRetry`（默认 2000ms）结束后 `RetryNode` 事件把节点送回 `Pending`。
+> `TaskDone`/`SessionError` 只对 `Running` 节点生效（Starting 期间的空闲
+> SM task 帧会被忽略，避免误判任务完成）。
 
 ### 6.2 运行时数据结构
 
@@ -324,15 +330,20 @@ type Effect
 
 ## 12. 分阶段实施计划（进度以 TODO.md 为准）
 
-| 阶段 | 内容 | 验收 |
+| 阶段 | 内容 | 状态 |
 |---|---|---|
-| P0 | `Plan/Types` + `Plan/Detect` + 全部单测 | elm-test 绿 |
-| P1 | `fs_write_file_text` / `fs_read_file_text`（Rust+Go+bridge+Ports）+ 单测 | cargo test / go test 绿 |
-| P2 | "Create Plan" 按钮 + 自动保存 plans 目录 + Plans 管理器（列出/打开/删除/导入） | 手工可用 |
-| P3 | `Plan/Layout` + `Plan/View` SVG DAG + 节点点击打开会话窗口 | 可视化验收 |
-| P4 | `Plan/Runner` 状态机 + Run/Pause/Stop/Retry + 失败重试与原因记录 + run.json 持久化 + Resume | 全流程 E2E |
-| P4.5 | `create_session` 加 `preset`/`builtinTools` 参数（Rust+Go+bridge+Ports）+ settings.conf `builtin_tools` + 种子 preset 播种 + DAG 节点 preset/工具徽标 | 双后端测试绿 |
-| P5 | 打磨（角标/日志/并发选择/导出/文档/README） | 完整验收 |
+| P0 | `Plan/Types` + `Plan/Detect` + 全部单测 | ✅ 完成 |
+| P1 | `fs_write_file_text` / `fs_read_file_text`（Rust+Go+bridge+Ports）+ 单测 | ✅ 完成 |
+| P2 | "Create Plan" 按钮 + 自动保存 plans 目录 + Plans 管理器（列出/打开/删除/导入） | ✅ 完成 |
+| P3 | `Plan/Layout` + DAG 视图（HTML/CSS，非 SVG）+ 节点详情面板 | ✅ 完成 |
+| P4 | `Plan/Runner` 状态机 + Run/Pause/Stop/Retry + 失败重试与原因记录 + run.json 持久化 + Resume | ✅ 完成 |
+| P4.5 | `create_session` 加 `preset`/`builtinTools` 参数 + settings.conf `builtin_tools` + 种子 preset 播种 | ✅ 完成 |
+| P5 | 打磨（运行日志/文档/README 等） | 进行中 |
+
+> 实现偏差：DAG 渲染用纯 HTML/CSS（div 绝对定位 + 正交连线），因为
+> elm/svg 不在离线包缓存中；效果与 SVG 等价。会话创建采用**串行化**
+> （一次一个 in-flight create，`planCreating`/`planCreateQueue`），
+> `SessionCreated` 经 `PlanBindSession` 绑定到节点。
 
 ---
 

@@ -145,6 +145,43 @@ alayaface-server --addr 0.0.0.0:8765 --static ../src-elm [--token <token>]
 - See `docs/go-backend.md` for the full API mapping and design; `TODO.md`
   tracks implementation status.
 
+## Plan Mode (DAG task planning & execution)
+
+Plan Mode turns a big task into a dependency graph that AlayaFace executes
+for you:
+
+1. **Plan**: in any session, ask the model to decompose the task and output
+   a fenced ```json block (schema in `docs/plan-mode.md` §5). A **Create
+   Plan** button appears under the message.
+2. **Save**: the plan is validated (unique ids, deps exist, no cycles),
+   normalized, and written to `~/.alayaface/plans/<name>.json` (Plans
+   manager in the ⚙ menu: open / delete / import / export).
+3. **Run**: the Plan window shows the DAG. **Run** launches each task in its
+   own session window (click a node to open it), respecting dependencies
+   and parallelism (`concurrency`, default 2). Tasks run under their
+   node-level `preset` / `tools` (see below) with tool confirmation
+   auto-approved.
+4. **Retry**: failed tasks record the failure reason and attempt number
+   (shown on the node and in the detail panel), auto-retry up to
+   `max_attempts` (default 3, 2s backoff), then mark dependents **Blocked**.
+   Failed/canceled nodes can be retried manually. Run state persists to
+   `<plan>.run.json` — **Load run** resumes unfinished tasks after a restart.
+
+### Presets and tool sets
+
+- `~/.alayaface/presets/<name>/` bundles a model list (`model.conf`), MCP
+  servers (`mcp.conf`) and AlayaFace-owned `settings.conf`
+  (`tool_confirm`, `builtin_tools`).
+- Built-in tools are passed to AlayaCore as `--builtin-tools=id1,id2,...`
+  on session start (empty = all tools). Per preset (Settings editor) or
+  per plan node (`tools` field).
+- Seed presets are created on first run: `Default`, `Fast`, `Deep`,
+  `Data`, and `Safe` (no `execute_command`). Copy/rename them in the
+  Presets manager; plan nodes select one via `"preset": "Name"`.
+
+**AlayaCore is never modified** — every capability difference is expressed
+through spawn arguments and preset config files.
+
 ## TLV Protocol
 
 AlayaFace communicates with AlayaCore via TLV (Tag-Length-Value) frames

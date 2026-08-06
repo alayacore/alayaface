@@ -89,6 +89,7 @@ type alias Model =
     , planCreateQueue : List String
     , planRunPath : Maybe String
     , planResumePath : Maybe String
+    , planRunLog : List String
     , homeDir : String
     }
 

@@ -160,6 +160,7 @@ setPlanErrors errs model =
 -- ─── Plan runner wiring (effects ↔ ports) ──────────────────────────
 
 {-| Run one state-machine step with a timestamp, then dispatch effects.
+Appends a log line for every node whose status changed (bounded).
 -}
 runStep : Int -> R.Event -> Model -> ( Model, Cmd Msg )
 runStep now ev model =
@@ -171,11 +172,50 @@ runStep now ev model =
 
                 ( model1, cmds ) =
                     applyEffects model effects
+
+                diff =
+                    runDiffLog run run2
+
+                model2 =
+                    { model1
+                        | planRun = Just run2
+                        , planRunLog = List.take 80 (model1.planRunLog ++ diff)
+                    }
             in
-            ( { model1 | planRun = Just run2 }, cmds )
+            ( model2, cmds )
 
         Nothing ->
             ( model, Cmd.none )
+
+
+{-| One log line per node whose status changed between two snapshots.
+-}
+runDiffLog : PT.RunState -> PT.RunState -> List String
+runDiffLog before after =
+    Dict.foldl
+        (\id n2 acc ->
+            case Dict.get id before.nodes of
+                Just n1 ->
+                    if n1.status /= n2.status then
+                        (id
+                            ++ " ["
+                            ++ String.fromInt n2.attempts
+                            ++ "次] "
+                            ++ PT.nodeStatusToString n1.status
+                            ++ " → "
+                            ++ PT.nodeStatusToString n2.status
+                        )
+                            :: acc
+
+                    else
+                        acc
+
+                Nothing ->
+                    acc
+        )
+        []
+        after.nodes
+        |> List.reverse
 
 
 applyEffects : Model -> List PT.Effect -> ( Model, Cmd Msg )
@@ -1804,6 +1844,7 @@ update msg model =
                                 | planRun = Just (PT.emptyRunState (PT.slugify plan.name ++ "-" ++ String.fromInt ts) plan)
                                 , planRunPath = Maybe.map runPathFor model.planView.path
                                 , planSelectedNode = Nothing
+                                , planRunLog = []
                             }
 
                         _ ->

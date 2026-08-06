@@ -80,7 +80,7 @@ One-way push (server → client), message format:
 
 | Rust command | Go endpoint | Args (camelCase) | Return |
 |--------------|-------------|------------------|--------|
-| `create_session` | `POST /rpc/create_session` | `binaryPath`, `configPath`, `toolConfirm`(nullable) | string sessionId |
+| `create_session` | `POST /rpc/create_session` | `binaryPath`, `configPath`, `toolConfirm`(nullable), `preset`(nullable), `builtinTools`(nullable) | string sessionId |
 | `resume_session` | `POST /rpc/resume_session` | `sessionId`, `binaryPath` | string sessionId |
 | `close_session` | `POST /rpc/close_session` | `sessionId` | — |
 | `list_session_dirs` | `POST /rpc/list_session_dirs` | — | `[{id, has_session_file, created_at}]` |
@@ -98,7 +98,7 @@ One-way push (server → client), message format:
 | `sync_default_models` | `POST /rpc/sync_default_models` | `binaryPath`, `config`, `preset` | CO `output` |
 | `list_default_mcp` | `POST /rpc/list_default_mcp` | `preset` | `[server]` |
 | `sync_default_mcp` | `POST /rpc/sync_default_mcp` | `config`, `preset` | — |
-| `get_global_settings` | `POST /rpc/get_global_settings` | `preset` | `{tool_confirm}` |
+| `get_global_settings` | `POST /rpc/get_global_settings` | `preset` | `{tool_confirm, builtin_tools}` |
 | `sync_global_settings` | `POST /rpc/sync_global_settings` | `config`, `preset` | — |
 | `list_presets` | `POST /rpc/list_presets` | — | `[{name, is_active}]` |
 | `copy_preset` | `POST /rpc/copy_preset` | `source`, `name` | — |
@@ -109,6 +109,9 @@ One-way push (server → client), message format:
 | `fs_home_dir` | `POST /rpc/fs_home_dir` | — | string |
 | `fs_resolve_path` | `POST /rpc/fs_resolve_path` | `path` | `{resolved, exists, isDir}` |
 | `fs_read_file_data_uri` | `POST /rpc/fs_read_file_data_uri` | `path` | string data URI |
+| `fs_write_file_text` | `POST /rpc/fs_write_file_text` | `path`, `content`, `createParents` | — |
+| `fs_read_file_text` | `POST /rpc/fs_read_file_text` | `path` | string |
+| `fs_delete_file` | `POST /rpc/fs_delete_file` | `path` | — |
 | `start_mcp_auth_flow` | `POST /rpc/start_mcp_auth_flow` | `sessionId`, `serverName`, `authUrl` | string filled URL |
 | `fill_mcp_auth_url` | `POST /rpc/fill_mcp_auth_url` | `sessionId`, `serverName`, `authUrl` | string filled URL |
 

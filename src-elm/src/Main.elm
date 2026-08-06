@@ -75,6 +75,7 @@ init _ =
       , planCreateQueue = []
       , planRunPath = Nothing
       , planResumePath = Nothing
+      , planRunLog = []
       , homeDir = ""
       }
     , Cmd.batch

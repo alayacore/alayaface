@@ -2761,3 +2761,25 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.plan-run-log {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #fafafa;
+  max-height: 140px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.plan-run-log-title {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #888;
+}
+.plan-run-log-line {
+  font-size: 0.7rem;
+  font-family: monospace;
+  color: #555;
+}

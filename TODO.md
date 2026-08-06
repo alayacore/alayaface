@@ -48,7 +48,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P3 DAG layout + SVG view + node→session click | [x] |
 | P4 Runner state machine + retry + run.json + resume | [x] |
 | P4.5 create_session preset/builtinTools + settings.conf + seed presets | [x] |
-| P5 Polish (badges/logs/concurrency/export/docs/README) | [ ] |
+| P5 Polish (badges/logs/concurrency/export/docs/README) | [x] |
 | P4 Runner state machine + retry + run.json + resume | [ ] |
 | P4.5 create_session preset/builtinTools + settings.conf + seed presets | [ ] |
 | P5 Polish (badges/logs/concurrency/export/docs/README) | [ ] |
@@ -219,12 +219,19 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 
 ## P5 — Polish
 
-- [ ] Retry badge/tooltips, run log stream, concurrency selector polish
-- [ ] Export JSON button flow (FilePicker)
-- [ ] README section (Plan Mode usage + seed presets)
-- [ ] docs/go-backend.md command table update (fs_write/read, create_session
-      new args)
-- [ ] Full manual acceptance (Tauri + Go browser)
+- [x] Retry badge/tooltips (node attempts badge xN, hover failure reason,
+      detail-panel failure history) — already landed in P3/P4
+- [x] Export JSON button (path input + fs_write_file_text) — landed in P3
+- [x] Run log stream in the Plan view (node status transitions, bounded 80)
+- [x] README section (Plan Mode usage + presets/tool sets + never-modify
+      AlayaCore note)
+- [x] docs/go-backend.md command table update (fs_write/read/delete,
+      create_session preset/builtinTools, get_global_settings builtin_tools)
+- [x] docs/plan-mode.md status + implementation-deviation notes synced
+- [ ] Concurrency selector in the Plan header (edit before run) — deferred
+      to v2; concurrency comes from the plan JSON
+- [ ] Manual GUI acceptance (Tauri + Go browser) — needs GUI env; E2E via
+      fakecore covers backend, runner covered by 114 elm tests
 
 ---
 

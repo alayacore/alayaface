@@ -368,6 +368,7 @@ viewPlanOverlay model =
                             , Html.div [ Attr.class "plan-page-canvas" ]
                                 [ Plan.View.viewDag nodeClick runStates plan ]
                             , viewPlanNodeDetail model plan
+                            , viewPlanRunLog model
                             , viewPlanExport pv
                             ]
 
@@ -636,6 +637,22 @@ statusLabelFor st =
         PT.Failed -> "Failed"
         PT.Blocked -> "Blocked"
         PT.Canceled -> "Canceled"
+
+
+viewPlanRunLog : Model -> Html Msg
+viewPlanRunLog model =
+    if List.isEmpty model.planRunLog then
+        Html.text ""
+
+    else
+        Html.div [ Attr.class "plan-run-log" ]
+            [ Html.div [ Attr.class "plan-run-log-title" ] [ Html.text "Run log" ]
+            , Html.div [ Attr.class "plan-run-log-lines" ]
+                (List.map
+                    (\l -> Html.div [ Attr.class "plan-run-log-line" ] [ Html.text l ])
+                    (List.reverse (List.take 15 model.planRunLog))
+                )
+            ]
 
 
 viewPlanExport : PlanViewState -> Html Msg
