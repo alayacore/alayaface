@@ -592,25 +592,23 @@ update msg model =
                                 -- Plan Mode: when an assistant message completes
                                 -- with a fenced ```json block, offer to turn it
                                 -- into a plan (single offer per message).
+                                -- NOTE: in delta mode the AT frame itself is an
+                                -- empty terminator, so detect on the final
+                                -- message content, not ev.content.
                                 updatedModel2 =
                                     if ev.tag == "AT" then
-                                        case ev.content of
-                                            Just c ->
-                                                case Plan.Detect.extractPlanJson c of
-                                                    Just offerRaw ->
-                                                        case List.head (List.reverse newSession.messages) of
-                                                            Just m ->
-                                                                if m.role == T.Assistant && not (Dict.member m.id updatedModel.pendingPlanOffers) then
-                                                                    { updatedModel | pendingPlanOffers = Dict.insert m.id offerRaw updatedModel.pendingPlanOffers }
+                                        case List.head (List.reverse newSession.messages) of
+                                            Just m ->
+                                                if m.role == T.Assistant && not (Dict.member m.id updatedModel.pendingPlanOffers) then
+                                                    case Plan.Detect.extractPlanJson m.content of
+                                                        Just offerRaw ->
+                                                            { updatedModel | pendingPlanOffers = Dict.insert m.id offerRaw updatedModel.pendingPlanOffers }
 
-                                                                else
-                                                                    updatedModel
+                                                        Nothing ->
+                                                            updatedModel
 
-                                                            Nothing ->
-                                                                updatedModel
-
-                                                    Nothing ->
-                                                        updatedModel
+                                                else
+                                                    updatedModel
 
                                             Nothing ->
                                                 updatedModel
