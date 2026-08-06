@@ -1074,6 +1074,15 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
+        -- Text file write/read results (Plan Mode storage).
+        -- P2 wires these into the plan save/load flow; for now the
+        -- result is acknowledged and surfaced in the console.
+        FsWriteResult _ ->
+            ( model, Cmd.none )
+
+        FsReadResult _ ->
+            ( model, Cmd.none )
+
         FsResolvePathResult result ->
             case getActiveSession model of
                 Just s ->

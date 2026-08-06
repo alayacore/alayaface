@@ -404,6 +404,32 @@
       });
     });
 
+    on("fsWriteFileText", function (data) {
+      transport.invoke("fs_write_file_text", {
+        path: data.path,
+        content: data.content,
+        createParents: !!data.createParents,
+      }).then(function () {
+        app.ports.onFsWriteResult.send({ ok: true, error: "" });
+      }).catch(function (err) {
+        app.ports.onFsWriteResult.send({
+          ok: false, error: String((err && err.message) || err),
+        });
+      });
+    });
+
+    on("fsReadFileText", function (data) {
+      transport.invoke("fs_read_file_text", { path: data.path })
+        .then(function (content) {
+          app.ports.onFsReadResult.send({ ok: true, content: content, error: "" });
+        })
+        .catch(function (err) {
+          app.ports.onFsReadResult.send({
+            ok: false, content: "", error: String((err && err.message) || err),
+          });
+        });
+    });
+
     on("scrollToBottom", function (data) {
       var el = document.querySelector("#msg-input-" + data.sessionId);
       if (el) {

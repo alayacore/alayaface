@@ -178,3 +178,88 @@ pub async fn fs_read_file_data_uri(path: String) -> Result<String, String> {
     let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
     Ok(format!("data:{};base64,{}", mime, b64))
 }
+
+/// Write a UTF-8 text file. `create_parents` (default false) creates the
+/// parent directory chain first. Used by Plan Mode to save plan/run JSON.
+#[command]
+pub async fn fs_write_file_text(
+    path: String,
+    content: String,
+    create_parents: Option<bool>,
+) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if create_parents.unwrap_or(false) {
+        if let Some(parent) = p.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("Cannot write file: {}", e))?;
+            }
+        }
+    }
+    std::fs::write(p, content).map_err(|e| format!("Cannot write file: {}", e))
+}
+
+/// Read a UTF-8 text file. Used by Plan Mode to load plan/run JSON.
+#[command]
+pub async fn fs_read_file_text(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| format!("Cannot read file: {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_path(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "alayaface-fs-test-{}-{}",
+            std::process::id(),
+            name
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn write_read_roundtrip() {
+        let dir = temp_path("roundtrip");
+        let file = dir.join("a.txt");
+        let path = file.to_string_lossy().to_string();
+        fs_write_file_text(path.clone(), "hello 世界".to_string(), Some(false)).await.unwrap();
+        let out = fs_read_file_text(path).await.unwrap();
+        assert_eq!(out, "hello 世界");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn create_parents_creates_directories() {
+        let dir = temp_path("parents");
+        let file = dir.join("deep").join("nested").join("b.txt");
+        let path = file.to_string_lossy().to_string();
+        fs_write_file_text(path.clone(), "x".to_string(), Some(true)).await.unwrap();
+        assert!(file.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn write_without_parents_fails_cleanly() {
+        let dir = temp_path("noparents");
+        let file = dir.join("missing").join("c.txt");
+        let path = file.to_string_lossy().to_string();
+        let err = fs_write_file_text(path.clone(), "x".to_string(), Some(false))
+            .await
+            .unwrap_err();
+        assert!(err.starts_with("Cannot write file:"), "got: {err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn read_missing_file_fails_cleanly() {
+        let dir = temp_path("missingread");
+        let file = dir.join("nope.txt");
+        let path = file.to_string_lossy().to_string();
+        let err = fs_read_file_text(path).await.unwrap_err();
+        assert!(err.starts_with("Cannot read file:"), "got: {err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

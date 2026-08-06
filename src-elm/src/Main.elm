@@ -107,6 +107,8 @@ subscriptions model =
         , Ports.onFsListDir (\entries -> FsListDirResult entries)
         , Ports.onFsHomeDir (\home -> FsHomeDirResult home)
         , Ports.onFsReadFileDataUri (\uri -> FsReadFileResult uri)
+        , Ports.onFsWriteResult (\raw -> FsWriteResult raw)
+        , Ports.onFsReadResult (\raw -> FsReadResult raw)
         , Ports.onFsResolvePath (\result -> FsResolvePathResult result)
         , Ports.onWindowMaximized (\v -> WindowMaximized v)
         , Evts.onResize (\_ _ -> RequerySize)

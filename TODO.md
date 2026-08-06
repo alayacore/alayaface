@@ -43,7 +43,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | Phase | Status |
 |-------|--------|
 | P0 Plan data model + detection (pure Elm) | [x] |
-| P1 fs_write_file_text / fs_read_file_text (Rust+Go+bridge+Ports) | [ ] |
+| P1 fs_write_file_text / fs_read_file_text (Rust+Go+bridge+Ports) | [x] |
 | P2 Create Plan flow + plans dir + Plans manager | [ ] |
 | P3 DAG layout + SVG view + node→session click | [ ] |
 | P4 Runner state machine + retry + run.json + resume | [ ] |
@@ -83,19 +83,21 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 
 ## P1 — fs_write_file_text / fs_read_file_text (dual backend)
 
-- [ ] Rust `src-tauri/src/commands/fs.rs`: `fs_write_file_text(path, content,
+- [x] Rust `src-tauri/src/commands/fs.rs`: `fs_write_file_text(path, content,
       createParents)` + `fs_read_file_text(path)`; errors
       `Cannot write file: ...` / `Cannot read file: ...`; register in
       `lib.rs generate_handler!`
-- [ ] Go `src-go/internal/server/handlers/fs.go`: same commands + register in
+- [x] Go `src-go/internal/server/handlers/fs.go`: same commands + register in
       RPC dispatcher; error-message parity with Rust
-- [ ] `src-elm/src/Ports.elm`: `fsWriteFileText` / `fsReadFileText` ports +
+- [x] `src-elm/src/Ports.elm`: `fsWriteFileText` / `fsReadFileText` ports +
       `onFsWriteResult` / `onFsReadResult` subs
-- [ ] `src-elm/bridge.js`: wire both ports (invoke + result ports)
-- [ ] `src-elm/src/Main.elm`: subscriptions for result ports; new Msg(s) in
-      App/Types + App/Update handlers
-- [ ] Tests: Rust fs roundtrip + createParents + errors; Go same + parity
-- [ ] `cargo test` + `go test -race` green
+- [x] `src-elm/bridge.js`: wire both ports (invoke + result ports)
+- [x] `src-elm/src/Main.elm`: subscriptions for result ports; new Msg(s) in
+      App/Types + App/Update handlers (FsWriteResult/FsReadResult — NoOp
+      until P2 wires them into plan save/load)
+- [x] Tests: Rust fs roundtrip + createParents + errors; Go same + parity
+      (server/fs_test.go via testEnv, full HTTP path)
+- [x] `cargo test` (30) + `go test -race` + `elm-test` (87) green
 
 ## P2 — Create Plan flow + plans dir + Plans manager
 

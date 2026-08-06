@@ -222,3 +222,45 @@ func FsReadFileDataUri(h *Handler, w http.ResponseWriter, r *http.Request) error
 	uri := fmt.Sprintf("data:%s;base64,%s", mime, base64.StdEncoding.EncodeToString(data))
 	return writeResult(w, uri)
 }
+
+// FsWriteFileText writes a UTF-8 text file. CreateParents (default
+// false) creates the parent directory chain first. Used by Plan Mode to
+// save plan/run JSON. Mirrors Rust fs_write_file_text exactly.
+func FsWriteFileText(h *Handler, w http.ResponseWriter, r *http.Request) error {
+	var args struct {
+		Path          string `json:"path"`
+		Content       string `json:"content"`
+		CreateParents bool   `json:"createParents"`
+	}
+	if err := decodeArgs(r, &args); err != nil {
+		return err
+	}
+	if args.CreateParents {
+		parent := filepath.Dir(args.Path)
+		if parent != "" && parent != "." {
+			if err := os.MkdirAll(parent, 0o755); err != nil {
+				return fmt.Errorf("Cannot write file: %w", err)
+			}
+		}
+	}
+	if err := os.WriteFile(args.Path, []byte(args.Content), 0o644); err != nil {
+		return fmt.Errorf("Cannot write file: %w", err)
+	}
+	return writeResult(w, nil)
+}
+
+// FsReadFileText reads a UTF-8 text file. Used by Plan Mode to load
+// plan/run JSON. Mirrors Rust fs_read_file_text exactly.
+func FsReadFileText(h *Handler, w http.ResponseWriter, r *http.Request) error {
+	var args struct {
+		Path string `json:"path"`
+	}
+	if err := decodeArgs(r, &args); err != nil {
+		return err
+	}
+	text, err := os.ReadFile(args.Path)
+	if err != nil {
+		return fmt.Errorf("Cannot read file: %w", err)
+	}
+	return writeResult(w, string(text))
+}

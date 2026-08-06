@@ -115,6 +115,8 @@ type Msg
     | FsHomeDirResult String
     | FsReadFileResult String
     | FsResolvePathResult E.Value
+    | FsWriteResult E.Value
+    | FsReadResult E.Value
       -- Session manager
     | OpenSessionManager
     | CloseSessionManager

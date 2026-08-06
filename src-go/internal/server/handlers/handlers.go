@@ -63,6 +63,8 @@ func Registry() map[string]Command {
 		"fs_home_dir":           FsHomeDir,
 		"fs_resolve_path":       FsResolvePath,
 		"fs_read_file_data_uri": FsReadFileDataUri,
+		"fs_write_file_text":    FsWriteFileText,
+		"fs_read_file_text":     FsReadFileText,
 		// mcp auth
 		"start_mcp_auth_flow": StartMcpAuthFlow,
 		"fill_mcp_auth_url":   FillMcpAuthUrl,
