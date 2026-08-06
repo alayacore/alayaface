@@ -1117,7 +1117,7 @@ viewPlanStatusBar model messageId =
                         Nothing ->
                             planId
 
-                ( statusLabel, statusClass ) =
+                ( statusLabel, statusClass, canRestart ) =
                     planStatusFor model planId
             in
             Html.div [ Attr.class "plan-offer" ]
@@ -1127,6 +1127,16 @@ viewPlanStatusBar model messageId =
                     , Attr.title ("打开计划 " ++ planId)
                     ]
                     [ Html.text ("[Plan: " ++ planId ++ "] " ++ name ++ " · " ++ statusLabel) ]
+                , if canRestart then
+                    Html.button
+                        [ Attr.class "plan-offer-btn plan-restart-btn"
+                        , Ev.onClick (PlanRunRestart planId)
+                        , Attr.title "重新执行：跳过已成功节点，重跑未完成节点（含子计划）"
+                        ]
+                        [ Html.text "重新执行" ]
+
+                  else
+                    Html.text ""
                 ]
 
         Nothing ->
@@ -1159,26 +1169,38 @@ planMetaForMessage model messageId =
         model.planMetas
 
 
-planStatusFor : Model -> String -> ( String, String )
+planStatusFor : Model -> String -> ( String, String, Bool )
 planStatusFor model planId =
     case Dict.get planId model.planWindows of
         Just win ->
             case win.run of
                 Just run ->
                     case run.status of
-                        PT.NotStarted -> ( "Created", "created" )
-                        PT.InProgress -> ( "Running…", "running" )
-                        PT.Paused -> ( "Paused", "paused" )
-                        PT.Completed -> ( "Completed", "completed" )
-                        PT.FailedRun -> ( "Failed", "failed" )
-                        PT.Stopped -> ( "Stopped", "stopped" )
+                        PT.NotStarted -> ( "Created", "created", False )
+                        PT.InProgress -> ( "Running…", "running", False )
+                        PT.Paused -> ( "Paused", "paused", True )
+                        PT.Completed -> ( "Completed", "completed", False )
+                        PT.FailedRun -> ( "Failed", "failed", True )
+                        PT.Stopped -> ( "Stopped", "stopped", True )
 
                 Nothing ->
-                    ( "Created", "created" )
+                    ( "Created", "created", False )
 
         Nothing ->
-            -- Window not open (restart): read nothing, show a neutral state.
-            ( "Open", "created" )
+            -- Window closed (auto-close on completion, or never opened):
+            -- fall back to the last known run status kept in memory.
+            case Dict.get planId model.planRunStatuses of
+                Just st ->
+                    case st of
+                        PT.NotStarted -> ( "Created", "created", False )
+                        PT.InProgress -> ( "Running…", "running", False )
+                        PT.Paused -> ( "Paused", "paused", True )
+                        PT.Completed -> ( "Completed", "completed", False )
+                        PT.FailedRun -> ( "Failed", "failed", True )
+                        PT.Stopped -> ( "Stopped", "stopped", True )
+
+                Nothing ->
+                    ( "Open", "created", False )
 
 
 -- Header row of a message window: role label, optional tool info, and a

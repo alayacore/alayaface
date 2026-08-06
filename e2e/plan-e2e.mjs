@@ -15,7 +15,7 @@
 import puppeteer from 'puppeteer-core';
 import { execSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
@@ -206,12 +206,18 @@ try {
   await page.type('.plan-header-concurrency', '1', { delay: 5 });
   assert(await clickByText('button.plan-header-btn', 'Run'), 'Run button');
 
-  // Wait for the run to complete: t2 fails once → auto-retry → all ok.
-  await waitFor('.plan-run-badge-completed', E2E_TIMEOUT);
+  // R4: the run completes → succeeded node windows close AND the plan
+  // window auto-closes (D10/D11, feedback queued first). So wait for the
+  // STATUS BAR to flip to Completed instead of the plan window badge.
+  await page.waitForFunction(() => {
+    return [...document.querySelectorAll('.plan-offer-btn')].some(e => e.textContent.includes('Completed'));
+  }, { timeout: E2E_TIMEOUT });
+  await sleep(500);
   await shot(page, '03-completed.png');
-  const succ = await page.$$eval('.plan-node-succeeded', els => els.map(e => e.querySelector('.plan-node-id')?.textContent));
-  assert(succ.length === 3, 'all 3 nodes Succeeded, got: ' + JSON.stringify(succ));
-  console.log('PASS: run completed, nodes succeeded:', JSON.stringify(succ));
+  // Plan window is gone after auto-close.
+  const planGone = await page.$$eval('.plan-page', els => els.length);
+  assert(planGone === 0, 'Completed plan window auto-closed, got: ' + planGone);
+  console.log('PASS: run completed, nodes succeeded, plan window auto-closed');
 
   // ── 5b. R3: feedback + status bar ────────────────────────────────
   // The completed plan feeds its results back to the origin (plain)
@@ -236,45 +242,50 @@ try {
   console.log('PASS: plan work dir isolated:', workDirs[0]);
 
   // ── 6. Retry evidence: t2 failed once and auto-retried ─────────────
-  // (Succeeded nodes open their session on click — the detail panel with
-  // failure history is for nodes without a live/restorable session — so
-  // the retry trace is asserted via the run log instead.)
-  await page.click('.plan-bar');
-  await sleep(300);
-  const logText = await page.$eval('.plan-run-log', el => el.textContent).catch(() => '');
-  console.log('RUN LOG FULL:\n' + logText);
-  assert(logText.includes('t2'), 'run log mentions t2, got: ' + logText.slice(0, 300));
-  assert(logText.includes('waiting'), 'run log shows the backoff (waiting) after the t2 failure, got: ' + logText.slice(0, 400));
-  // attempts counts FAILURES: t2 shows [1] (failed once, then retried ok).
-  assert(logText.includes('t2 [1'), 'run log shows attempt 1 for t2 (auto-retry), got: ' + logText.slice(0, 400));
-  await shot(page, '04-run-log.png');
-  console.log('PASS: t2 failed once → auto-retry (run log):', logText.split('\n').filter(Boolean).join(' | '));
+  // (The plan window auto-closed on completion — reopen it via the
+  // status bar [Plan: …] button, which also exercises PlanStatusOpen.
+  // The in-memory run log is not persisted, so the retry evidence is
+  // asserted from run.json on disk: t2 has attempts=1.)
+  await page.evaluate(() => {
+    const btns = [...document.querySelectorAll('.plan-offer-btn')];
+    const b = btns.find(x => x.textContent.includes('[Plan: e2e-demo-'));
+    if (b) b.click();
+  });
+  await waitFor('.plan-page', 10000);
+  await sleep(500);
+  const runJson = readdirSync(plansRoot)
+    .filter(n => n.startsWith('e2e-demo-') && n.endsWith('.run.json'))
+    .map(n => path.join(plansRoot, n))
+    .filter(existsSync)
+    .map(f => JSON.parse(readFileSync(f, 'utf8')))[0];
+  assert(runJson, 'run.json exists for the e2e plan');
+  console.log('run.json status:', runJson.status, 'concurrency:', runJson.concurrency);
+  const t2n = runJson.nodes && runJson.nodes.t2;
+  assert(t2n && t2n.attempts === 1, 'run.json: t2 attempted once (auto-retry), got: ' + JSON.stringify(t2n));
+  assert(t2n.status === 'succeeded', 'run.json: t2 succeeded after retry, got: ' + t2n.status);
+  assert(runJson.nodes.t1.status === 'succeeded' && runJson.nodes.t3.status === 'succeeded',
+    'run.json: t1/t3 succeeded, got: ' + JSON.stringify([runJson.nodes.t1 && runJson.nodes.t1.status, runJson.nodes.t3 && runJson.nodes.t3.status]));
+  console.log('PASS: t2 failed once → auto-retry (run.json attempts=1):', JSON.stringify(t2n));
 
-  // ── 7. Click t1 node → its session window activates with the reply ─
-  // DOM click (not pixel-coordinate click): overlapping session windows
-  // would otherwise intercept the mouse at the node's screen position.
+  // ── 7. Click t1 node → its session window resumes ─────────────────
+  // R4: succeeded node windows are closed — clicking the node RESUMES
+  // its on-disk session (history is kept by real alayacore; fakecore
+  // does not replay history, so we assert the resume succeeded: window
+  // with the /t1 badge and no plan error — not message content).
   await clickNode(page, 't1');
-  await sleep(800);
+  await sleep(1000);
   const active = await page.evaluate(() => {
     const p = document.querySelector('.session-panel.session-panel-active .session-bar-title');
     return p ? p.textContent : '';
   });
-  assert(active.includes('/t1'), 't1 session activated, got: ' + active);
-  const texts = await page.evaluate(() => {
-    const p = document.querySelector('.session-panel.session-panel-active');
-    return p ? [...p.querySelectorAll('.message-content')].map(e => e.textContent) : [];
-  });
-  if (!texts.some(t => t.includes('Hello'))) {
-    // Debug dump: what does the active session window actually contain?
-    const html = await page.evaluate(() => {
-      const p = document.querySelector('.session-panel.session-panel-active');
-      return p ? p.innerHTML.slice(0, 2500) : '(no active panel)';
-    });
-    console.log('ACTIVE PANEL HTML:\n' + html);
-  }
-  assert(texts.some(t => t.includes('Hello')), 't1 session shows the assistant reply, got: ' + JSON.stringify(texts));
+  assert(active.includes('/t1'), 't1 session activated (resumed), got: ' + active);
+  const planErrorCount = async () => {
+    const errs = await page.$$eval('.plan-page .sel-page-status-error', els => els.map(e => e.textContent));
+    return errs.filter(t => t && t.length > 0).length;
+  };
+  assert((await planErrorCount()) === 0, 'resume produced no plan error');
   await shot(page, '05-t1-session.png');
-  console.log('PASS: t1 node opened its session (activated, reply visible)');
+  console.log('PASS: t1 node opened its session (resumed, no error)');
 
   // ── 7b. Node ↔ session connection curve ───────────────────────────
   // Focusing a plan-node session raises the plan window to the SECOND
@@ -305,49 +316,14 @@ try {
   await shot(page, '05a-node-connection.png');
 
   // ── 7c. Output injection: {{t1.output}} → t1's recorded output ────
-  // t2's prompt references {{t1.output}}; when t2's session was created
-  // the runner replaced it with t1's recorded output (t1's final AT,
-  // which fakecore echoes as "Received prompt: <t1 prompt>"). Click t2
-  // and verify its received prompt + reply contain the injected text
-  // and that no raw template leaked into the model.
-  await clickNode(page, 't2');
-  await page.waitForFunction(() => {
-    const t = document.querySelector('.session-panel.session-panel-active .session-bar-title')?.textContent || '';
-    return t.includes('/t2');
-  }, { timeout: 30000 });
-  await sleep(600);
-  const t2Texts = await page.evaluate(() => {
-    const p = document.querySelector('.session-panel.session-panel-active');
-    return p ? [...p.querySelectorAll('.message-content')].map(e => e.textContent) : [];
-  });
-  const t2Joined = t2Texts.join('\n');
-  assert(t2Texts.some(t => t.includes('参考上游任务输出')), 't2 prompt carries the injection label, got: ' + JSON.stringify(t2Texts));
-  assert(t2Joined.includes('research the topic and summarize findings'), 't2 prompt contains t1\'s recorded output, got: ' + JSON.stringify(t2Texts));
-  assert(!t2Joined.includes('{{t1.output}}'), 'raw template fully replaced, got: ' + JSON.stringify(t2Texts));
-  await shot(page, '05b-output-injection.png');
+  // t2's prompt references {{t1.output}}; the runner replaced it with
+  // t1's recorded output before sending. fakecore echoes the received
+  // prompt as its reply, so the injected text is IN t2's output in
+  // run.json (session messages are not replayed by fakecore on resume).
+  assert(t2n.output && t2n.output.includes('参考上游任务输出'), 't2 output carries the injection label, got: ' + JSON.stringify(t2n.output));
+  assert(t2n.output.includes('research the topic and summarize findings'), 't2 output contains t1\'s recorded output');
+  assert(!t2n.output.includes('{{t1.output}}'), 'raw template fully replaced');
   console.log('PASS: {{t1.output}} injected t1\'s recorded output into t2\'s prompt (no raw template)');
-
-  // Restore state for step 8: close t2's session (the connection curve
-  // now belongs to t2, so step 8's close-t1 → curve-hidden check needs
-  // t2's window gone first).
-  await page.evaluate(() => {
-    const panels = [...document.querySelectorAll('.session-panel')];
-    for (const p of panels) {
-      const t = p.querySelector('.session-bar-title')?.textContent || '';
-      if (t.includes('/t2]')) {
-        const btn = p.querySelector('.session-bar-close');
-        if (btn) btn.click();
-        break;
-      }
-    }
-  });
-  await sleep(500);
-  const hiddenAfterT2Close = await page.evaluate(() => {
-    const svg = document.querySelector('.node-connection-overlay');
-    return svg ? getComputedStyle(svg).display === 'none' : true;
-  });
-  assert(hiddenAfterT2Close, 'connection curve hidden after t2 closes');
-  console.log('PASS: connection curve hidden after closing t2');
 
   // ── 8. Close/reopen node session (resume regression) ───────────────
   // The node stays bound to the ON-DISK dir id; resume_session hands out
@@ -355,10 +331,6 @@ try {
   // not exist → "Session directory not found" on the next click). Close
   // the t1 session, click the node again → a NEW session window with the
   // /t1 badge appears and the plan window shows NO error. Do it twice.
-  const planErrorCount = async () => {
-    const errs = await page.$$eval('.plan-page .sel-page-status-error', els => els.map(e => e.textContent));
-    return errs.filter(t => t && t.length > 0).length;
-  };
   const closeT1Session = async () => {
     await page.evaluate(() => {
       const panels = [...document.querySelectorAll('.session-panel')];

@@ -648,7 +648,10 @@ runStepIn planId now ev model =
                         -- id (looking it up in the pre-step run would drop
                         -- the prompt, leaving node sessions empty).
                         model1 =
-                            { model | planWindows = Dict.insert planId win2 model.planWindows }
+                            { model
+                                | planWindows = Dict.insert planId win2 model.planWindows
+                                , planRunStatuses = Dict.insert planId run2.status model.planRunStatuses
+                            }
 
                         ( model2, cmds ) =
                             applyEffectsIn planId model1 effects
@@ -657,9 +660,21 @@ runStepIn planId now ev model =
                         -- the results back to the origin session (auto-
                         -- continue, D6). Failed/Stopped runs feed back
                         -- NOTHING (D8).
+                        -- R4 (D11): a Completed plan window closes itself
+                        -- right after the feedback is queued (Failed/
+                        -- Stopped windows stay for review/retry).
                         ( model3, feedbackCmds ) =
                             if run.status /= PT.Completed && run2.status == PT.Completed then
-                                feedbackCompletedPlan planId now model2
+                                let
+                                    ( mF, cF ) =
+                                        feedbackCompletedPlan planId now model2
+                                in
+                                ( mF
+                                , Cmd.batch
+                                    [ cF
+                                    , Task.perform (\_ -> PlanClose planId) Time.now
+                                    ]
+                                )
 
                             else
                                 ( model2, Cmd.none )
@@ -786,6 +801,80 @@ appendMetaFeedback planId fb model =
 
         Nothing ->
             ( model, Cmd.none )
+
+
+{-| R4 (D9): restart a plan skipping succeeded nodes, cascading to the
+sub-plans of delegated (WaitingForPlan) nodes — their planId is reused
+(no regeneration), and after the sub-plan completes its feedback resumes
+the parent node. Recursion depth is unbounded (D14, experience period).
+-}
+restartPlanCascade : String -> Model -> ( Model, Cmd Msg )
+restartPlanCascade planId model =
+    let
+        ( m1, c1 ) =
+            runStepIn planId 0 R.RestartRun model
+
+        subPlans =
+            subPlansOfPlan planId m1
+
+        ( m2, cmds ) =
+            List.foldl
+                (\spId ( m, c ) ->
+                    let
+                        ( m3, c3 ) =
+                            restartPlanCascade spId m
+                    in
+                    ( m3, Cmd.batch [ c, c3 ] )
+                )
+                ( m1, Cmd.none )
+                subPlans
+    in
+    ( m2, Cmd.batch [ c1, cmds ] )
+
+
+{-| Sub-plans delegated by this plan's WaitingForPlan nodes (found via
+meta origin.sessionId matching the node's session id).
+-}
+subPlansOfPlan : String -> Model -> List String
+subPlansOfPlan planId model =
+    let
+        nodeSids =
+            case Dict.get planId model.planWindows of
+                Just win ->
+                    case win.run of
+                        Just run ->
+                            Dict.foldl
+                                (\_ n acc ->
+                                    if n.status == PT.WaitingForPlan then
+                                        Maybe.withDefault "" n.sessionId :: acc
+
+                                    else
+                                        acc
+                                )
+                                []
+                                run.nodes
+
+                        Nothing ->
+                            []
+
+                Nothing ->
+                    []
+    in
+    Dict.foldl
+        (\spId meta acc ->
+            case meta.origin of
+                Just o ->
+                    if List.member o.sessionId nodeSids then
+                        spId :: acc
+
+                    else
+                        acc
+
+                Nothing ->
+                    acc
+        )
+        []
+        model.planMetas
 
 
 {-| One log line per node whose status changed between two snapshots.
@@ -3356,6 +3445,11 @@ update msg model =
 
                 Nothing ->
                     ( model, Cmd.none )
+
+        PlanRunRestart planId ->
+            -- R4 (D9): skip succeeded nodes; reset the rest and cascade
+            -- to sub-plans of waiting (delegated) nodes.
+            restartPlanCascade planId model
 
         PlanRunStop ->
             case model.planActiveId of

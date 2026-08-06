@@ -727,6 +727,17 @@ decodeRunStateOverlay =
         (D.field "finished_at" (D.nullable D.int))
         (D.field "nodes"
             (D.keyValuePairs nodeRunStateDecoder
+                -- run.json encodes nodes keyed by node id but the per-node
+                -- value omits node_id; restore it from the dict key so
+                -- schedule/allDepsSucceeded work after a restart.
+                |> D.map
+                    (List.map
+                        (\pair ->
+                            case pair of
+                                ( k, n ) ->
+                                    ( k, { n | nodeId = k } )
+                        )
+                    )
                 |> D.map Dict.fromList
             )
         )

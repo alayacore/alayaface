@@ -266,6 +266,12 @@ func main() {
 					stagedText = ""
 				} else {
 					switch {
+					case strings.HasPrefix(stagedText, "[Plan 结果]"):
+						// R3: the plan-feedback continuation prompt may
+						// contain arbitrary node outputs (including words
+						// like "hang-once" that trigger marker scenarios) —
+						// it must ALWAYS get a normal reply.
+						streamReply()
 					case planMode && firstPrompt && strings.Contains(stagedText, "plan"):
 						// R2: EVERY session now carries the planner hint
 						// (--system). The fake answers with a fenced plan
@@ -354,6 +360,7 @@ func failOnceReply() {
 func hangOnceReply() {
 	h := sha256.Sum256([]byte(stagedText))
 	marker := filepath.Join(os.TempDir(), fmt.Sprintf("alayaface-fakecore-hang-once-%x.marker", h[:8]))
+	fmt.Fprintf(os.Stderr, "[fakecore] hang-once staged=%q len=%d hash=%x\n", stagedText, len(stagedText), h[:8])
 	if _, err := os.Stat(marker); os.IsNotExist(err) {
 		_ = os.WriteFile(marker, []byte("hung-once"), 0o644)
 		hanging = true

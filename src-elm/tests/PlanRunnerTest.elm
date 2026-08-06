@@ -286,7 +286,12 @@ tests =
                     in
                     Expect.all
                         [ \r -> Expect.equal P.Succeeded (nodeState "a" r).status
-                        , \r -> Expect.equal (Just "s1") (nodeState "a" r).sessionId
+                        -- R4: a succeeded node's session window closes (the
+                        -- runner closes it), so the live binding is cleared
+                        -- and the on-disk session stays reachable via
+                        -- lastSessionId (clicking the node resumes it).
+                        , \r -> Expect.equal Nothing (nodeState "a" r).sessionId
+                        , \r -> Expect.equal (Just "s1") (nodeState "a" r).lastSessionId
                         ]
                         run3
             , test "TaskDone error triggers retry (Waiting + ScheduleRetry)" <|

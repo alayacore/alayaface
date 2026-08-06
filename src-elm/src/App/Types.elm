@@ -99,6 +99,10 @@ type alias Model =
     -- chain); planMetaReadQueue holds the remaining paths.
     , planMetaReading : Maybe String
     , planMetaReadQueue : List String
+    -- Last known run status per plan (survives the auto-close of a
+    -- Completed plan window — the status bar needs it). Updated on every
+    -- runStepIn; not persisted (rebuilt when the window reopens).
+    , planRunStatuses : Dict String PT.RunStatus
     , planOrder : List String
     , planActiveId : Maybe String
     , planManager : PlanManagerState
@@ -302,6 +306,9 @@ type Msg
     | PlanRunPause
     | PlanRunResume
     | PlanRunStop
+    -- R4 (D9): re-run skipping succeeded nodes; waiting nodes cascade to
+    -- their sub-plans (planId unchanged).
+    | PlanRunRestart String
     | PlanRunRetryNode String
     | PlanRunnerTick String String
     | PlanRunFrame Int R.Event

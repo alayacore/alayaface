@@ -200,11 +200,21 @@ C1 安全：`cancelTask` → `activeTask.cancel()` → 任务经 `taskResultCh`
       E2E ALL PASS
 
 ### R4 关闭规则 + 重跑级联
-- [ ] closeAndClear：Succeeded 也关节点窗口（保留绑定）；WaitingForPlan 不关；
-- [ ] Plan Completed → 先回填 → 自动关 Plan 窗口；Failed/Stopped 保留；
-- [ ] 重跑（PlanRunRestart）：跳过 Succeeded + 未完成节点分类
-      （普通重跑 / WaitingForPlan → 重跑子 plan，planId 不变）；Blocked 重置可调度；
-- [ ] E2E 8/8b 重写（成功节点窗口已关 → 点击 resume；Stop 场景保留）
+- [x] closeAndClear：Succeeded 也关节点窗口（保留 lastSessionId 绑定，点击 resume 回看）；
+      WaitingForPlan 不关（等子 plan）；
+- [x] Plan Completed → 先回填 → 自动关 Plan 窗口（Task.perform PlanClose）；Failed/Stopped
+      保留；planRunStatuses（内存缓存 run 状态，窗口关后状态条仍显示真实状态）；
+- [x] 重跑（RestartRun 事件 + PlanRunRestart Msg + restartPlanCascade）：跳过 Succeeded；
+      未完成节点重置（Blocked → Pending 可再调度）；WaitingForPlan 节点不重置 →
+      subPlansOfPlan（meta origin 反查）级联重跑子 plan（planId 不变，无限下钻）；
+      状态条 [重新执行]（Failed/Stopped/Paused 时显示）；
+- [x] 顺带修复潜伏 bug：run.json 恢复的节点 nodeId=""（encode 未写 node_id）→
+      allDepsSucceeded 失效 → 恢复的 run 无法调度（Load run 续跑也受影响）——
+      decode 时用 dict key 补 nodeId；
+- [x] fakecore：[Plan 结果] 前缀总是正常回复（回填含节点输出关键词不误判 marker 场景）；
+- [x] E2E 重写：run 完成判定用状态条（plan 窗口自动关）；run.json 断言重试证据；
+      节点点击 → resume（成功节点窗口已关）；8b Stop 保留（t3 挂起 → Stop → 窗口关闭）；
+      ALL PASS；Elm 183 / Rust 42 / Go -race 全绿
 
 ### R5 清理 + E2E 重写 + 文档
 - [ ] 死代码清理（P22 残余、plan-offer-btn CSS）；Time.every 订阅删除；

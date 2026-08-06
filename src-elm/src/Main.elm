@@ -72,6 +72,7 @@ init _ =
       , planMetaLoading = False
       , planMetaReading = Nothing
       , planMetaReadQueue = []
+      , planRunStatuses = Dict.empty
       , planOrder = []
       , planActiveId = Nothing
       , planManager = emptyPlanManager

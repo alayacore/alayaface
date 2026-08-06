@@ -45,6 +45,12 @@ type Event
     | PauseRun
     | ResumeRun
     | StopRun
+    -- R4 (D9): re-run skipping succeeded nodes. Unfinished nodes
+    -- (Pending/Starting/Running/Waiting/Failed/Canceled/Blocked) reset
+    -- for a clean re-run; WaitingForPlan nodes are NOT reset here — their
+    -- sub-plan is restarted instead (Update-level cascade) and the node
+    -- waits for its feedback again.
+    | RestartRun
     | SessionCreatedFor String String
     | SessionCreateFailed String String
     -- TaskDone sid isError output delegated: `delegated` is true when the
@@ -91,6 +97,9 @@ step now ev run =
 
                 StopRun ->
                     ( stopRun run, [] )
+
+                RestartRun ->
+                    ( restartRun run, [] )
 
                 SessionCreatedFor nodeId sid ->
                     -- Sending the node prompt is the direct consequence of
@@ -185,6 +194,43 @@ stopRun run =
                 run.nodes
     in
     { run | status = PT.Stopped, nodes = nodes }
+
+
+{-| R4 (D9): re-run skipping succeeded nodes. Succeeded nodes keep
+everything (session binding, output, sub-plan linkage). WaitingForPlan
+nodes are untouched — the Update layer restarts their sub-plan instead
+(cascade) and the node waits for feedback again. All other nodes reset
+for a clean re-run (Blocked → Pending so it re-schedules once its deps
+succeed).
+-}
+restartRun : PT.RunState -> PT.RunState
+restartRun run =
+    let
+        nodes =
+            Dict.map
+                (\_ n ->
+                    case n.status of
+                        PT.Succeeded ->
+                            n
+
+                        PT.WaitingForPlan ->
+                            n
+
+                        _ ->
+                            { n
+                                | status = PT.Pending
+                                , attempts = 0
+                                , sessionId = Nothing
+                                , lastSessionId = Nothing
+                                , failures = []
+                                , startedAt = Nothing
+                                , finishedAt = Nothing
+                                , output = Nothing
+                            }
+                )
+                run.nodes
+    in
+    { run | status = PT.InProgress, nodes = nodes, finishedAt = Nothing }
 
 
 bindSession : String -> String -> PT.RunState -> ( PT.RunState, List PT.Effect )
@@ -495,7 +541,12 @@ closeAndClear run =
         (\_ n ( r, acc ) ->
             case n.sessionId of
                 Just sid ->
-                    if n.status == PT.Waiting || n.status == PT.Failed || n.status == PT.Canceled then
+                    -- R4 (D10): SUCCEEDED node windows close too — a
+                    -- finished node's session window is gone (history
+                    -- stays on disk; clicking the node resumes it).
+                    -- WaitingForPlan nodes keep their window (they are
+                    -- waiting for a sub-plan, not done).
+                    if n.status == PT.Waiting || n.status == PT.Failed || n.status == PT.Canceled || n.status == PT.Succeeded then
                         ( { r | nodes = Dict.insert n.nodeId { n | sessionId = Nothing, lastSessionId = Just sid } r.nodes }
                         , PT.CloseSessionFor sid n.nodeId :: acc
                         )
