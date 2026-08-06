@@ -36,6 +36,35 @@ context_limit: 128000
 max_tokens: 4096
 `
 
+// DefaultRuntimeConf is the runtime.conf seed. IMPORTANT: alayacore
+// parses this file as `key: value` lines (NOT JSON) — an empty object
+// `{}` (seeded by early versions) makes alayacore emit a parse error on
+// every startup:
+//
+//	runtime.conf: key "{}": cannot parse value "": line without ':'
+//
+// Comment lines are skipped by alayacore's parser, so a bare comment is
+// the safe "empty" seed; alayacore manages the real keys itself.
+const DefaultRuntimeConf = "# auto-managed by alayacore: active_model / active_theme selections\n"
+
+// RepairBrokenRuntimeConf heals runtime.conf files left over from
+// installs seeded before the format fix: alayacore parses runtime.conf
+// as `key: value` lines and a literal `{}` makes it emit "cannot parse
+// value" on every session start. Idempotent: only rewrites files whose
+// content is exactly "{}".
+func RepairBrokenRuntimeConf(path string) error {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil // missing file is fine (alayacore creates it)
+	}
+	if strings.TrimSpace(string(content)) == "{}" {
+		if err := os.WriteFile(path, []byte(DefaultRuntimeConf), 0o644); err != nil {
+			return fmt.Errorf("Cannot repair runtime.conf %s: %w", path, err)
+		}
+	}
+	return nil
+}
+
 // AlayafaceDir returns the base directory (~/.alayaface).
 func AlayafaceDir() string {
 	home := os.Getenv("HOME")
@@ -182,6 +211,25 @@ func Ensure() (string, string, error) {
 		}
 	}
 
+	// Heal installs seeded before the runtime.conf format fix: presets
+	// AND existing session config copies may still hold a literal "{}".
+	presetEntries, err := os.ReadDir(presets)
+	if err == nil {
+		for _, e := range presetEntries {
+			if err := RepairBrokenRuntimeConf(filepath.Join(presets, e.Name(), "runtime.conf")); err != nil {
+				return "", "", err
+			}
+		}
+	}
+	sessionEntries, err := os.ReadDir(sessions)
+	if err == nil {
+		for _, e := range sessionEntries {
+			if err := RepairBrokenRuntimeConf(filepath.Join(sessions, e.Name(), "config", "runtime.conf")); err != nil {
+				return "", "", err
+			}
+		}
+	}
+
 	if _, err := os.Stat(ActivePresetFile()); err != nil {
 		if err := WriteActivePreset("Default"); err != nil {
 			return "", "", err
@@ -255,7 +303,7 @@ func CreatePresetDefaults(dir, name string) error {
 	if err := os.WriteFile(filepath.Join(dir, "model.conf"), []byte(DefaultModelConf), 0o644); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "runtime.conf"), []byte("{}"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "runtime.conf"), []byte(DefaultRuntimeConf), 0o644); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Join(dir, "themes"), 0o755); err != nil {

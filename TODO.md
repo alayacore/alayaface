@@ -640,6 +640,39 @@ session window edge to the node card.
 
 ---
 
+## P20 — runtime.conf seeding fix (alayacore key:value format, not JSON)
+
+Bug report: EVERY session window shows
+`runtime.conf: key "{}": cannot parse value "": line without ':' separator (missing colon?)`
+(plus `API key is required` when the unconfigured Placeholder model is used).
+
+Root cause: alayacore parses runtime.conf as `key: value` lines (see
+alayacore docs/configuration.md + internal/config/parser.go — comment
+lines are skipped); AlayaFace seeded a JSON empty object `{}` into it,
+so every spawned alayacore emitted an SM error frame on startup, which
+the UI renders as an Error message in every session window.
+
+Verified against the real binary: `{}` → 1 error frame; empty or `#`
+comment → 0 error frames.
+
+- [x] Seed `runtime.conf` with a `#` comment (empty semantics) instead
+      of `{}` — Rust dirs.rs `DEFAULT_RUNTIME_CONF` + Go dirs.go
+      `DefaultRuntimeConf`
+- [x] Heal existing installs: `dirs::ensure` / `Ensure()` scans
+      `presets/*/runtime.conf` AND `sessions/*/config/runtime.conf`
+      (session config copies) and rewrites any file whose content is
+      exactly `{}` (alayacore never writes `{}` itself, so this is a
+      unique sentinel)
+- [x] Tests: Rust `heals_broken_runtime_conf` + seed assertion (41);
+      Go `TestHealsBrokenRuntimeConf` + seed assertion; full suites green
+- [ ] Note: `API key is required` is alayacore's response when a prompt
+      is sent with the active model's api_key empty (seeded Placeholder
+      model). Expected until a real model is configured; optional UX
+      improvement: fail plan runs fast with a clear message when the
+      active model has no api_key (v2, not implemented)
+
+---
+
 ## Known pitfalls
 
 - Never edit `../alayacore` — tool set = spawn params only.

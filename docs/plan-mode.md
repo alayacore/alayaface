@@ -42,7 +42,11 @@
 - **preset 结构**（`~/.alayaface/presets/<name>/`）：
   - `model.conf` — 模型列表（能力来源）；
   - `mcp.conf` — MCP 服务器（外部工具来源）；
-  - `runtime.conf` — 仅 active_model/active_theme（alayacore 管理，勿当配置用）；
+  - `runtime.conf` — 仅 active_model/active_theme（alayacore 管理，勿当配置用）。
+    **注意：alayacore 按 `key: value` 行格式解析，不是 JSON** —— 种子内容为
+    `#` 注释行（空文件语义），绝不能写 `{}`（早期版本写过，alayacore 每条
+    会话启动都报 `cannot parse value "": line without ':' separator`）；
+    `dirs::ensure` 启动时自动修复残留的 `{}`（presets + 旧会话 config 拷贝）；
   - `settings.conf` — **AlayaFace-owned，按 preset 存储**，`{"tool_confirm": "id1,id2"}`；不复制进会话目录；`get_global_settings(preset)` / `sync_global_settings(config, preset)` 已支持按 preset 读写；
   - `themes/`。
 - **create_session 命令**：已支持 `configPath`（非空 = 直接用指定目录当会话配置）；`toolConfirm` 缺省 = active preset settings.conf 的 tool_confirm；**新建会话目录时把 active preset 复制进 `session_dir/config`**（`dirs::create_session_dir`，排除 settings.conf）。

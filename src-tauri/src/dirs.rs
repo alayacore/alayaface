@@ -27,6 +27,28 @@ context_limit: 128000
 max_tokens: 4096
 "##;
 
+/// Default runtime.conf. IMPORTANT: alayacore parses this file as
+/// `key: value` lines (NOT JSON) — an empty object `{}` (seeded by
+/// early versions) makes alayacore emit a parse error on every startup:
+///   runtime.conf: key "{}": cannot parse value "": line without ':'
+/// Comment lines are skipped by alayacore's parser, so a bare comment
+/// is the safe "empty" seed; alayacore manages the real keys itself.
+const DEFAULT_RUNTIME_CONF: &str = "# auto-managed by alayacore: active_model / active_theme selections\n";
+
+/// Heal runtime.conf files left over from installs seeded before the
+/// format fix: alayacore parses runtime.conf as `key: value` lines and
+/// a literal `{}` makes it emit "cannot parse value" on every session
+/// start. Idempotent: only rewrites files whose content is exactly "{}".
+pub fn repair_broken_runtime_conf(path: &std::path::Path) -> Result<(), String> {
+    if let Ok(content) = std::fs::read_to_string(path) {
+        if content.trim() == "{}" {
+            std::fs::write(path, DEFAULT_RUNTIME_CONF)
+                .map_err(|e| format!("Cannot repair runtime.conf {:?}: {}", path, e))?;
+        }
+    }
+    Ok(())
+}
+
 /// Get alayaface's base directory (~/.alayaface).
 pub fn alayaface_dir() -> PathBuf {
     let home = std::env::var("HOME")
@@ -158,6 +180,19 @@ pub fn ensure() -> Result<(PathBuf, PathBuf), String> {
         }
     }
 
+    // Heal installs seeded before the runtime.conf format fix: presets
+    // AND existing session config copies may still hold a literal "{}".
+    if let Ok(preset_entries) = std::fs::read_dir(&presets) {
+        for entry in preset_entries.flatten() {
+            repair_broken_runtime_conf(&entry.path().join("runtime.conf"))?;
+        }
+    }
+    if let Ok(session_entries) = std::fs::read_dir(&sessions) {
+        for entry in session_entries.flatten() {
+            repair_broken_runtime_conf(&entry.path().join("config").join("runtime.conf"))?;
+        }
+    }
+
     if !active_preset_file().exists() {
         write_active_preset("Default")?;
     }
@@ -223,7 +258,7 @@ pub fn create_preset_defaults(dir: &std::path::Path, name: &str) -> Result<(), S
 fn write_defaults(config: &PathBuf, name: &str) -> Result<(), String> {
     std::fs::write(config.join("model.conf"), DEFAULT_MODEL_CONF)
         .map_err(|e| format!("Cannot write model.conf: {e}"))?;
-    std::fs::write(config.join("runtime.conf"), "{}")
+    std::fs::write(config.join("runtime.conf"), DEFAULT_RUNTIME_CONF)
         .map_err(|e| format!("Cannot write runtime.conf: {e}"))?;
     std::fs::create_dir_all(config.join("themes"))
         .map_err(|e| format!("Cannot create themes dir: {e}"))?;
@@ -318,6 +353,11 @@ mod tests {
             let (config, _) = ensure().unwrap();
             assert!(config.join("model.conf").exists());
             assert!(config.join("runtime.conf").exists());
+            // runtime.conf must be alayacore key:value format (comment
+            // lines are skipped), never a JSON "{}" — alayacore emits a
+            // parse error on every startup for the latter.
+            let runtime = std::fs::read_to_string(config.join("runtime.conf")).unwrap();
+            assert_ne!(runtime.trim(), "{}", "runtime.conf must not be a JSON empty object");
             assert!(config.join("themes").is_dir());
             assert_eq!(read_active_preset().unwrap(), "Default");
 
@@ -329,6 +369,28 @@ mod tests {
                 std::fs::read_to_string(preset_dir("Safe").join("settings.conf")).unwrap();
             assert!(safe_settings.contains("read_file,write_file,edit_file,search_content"));
             assert!(!safe_settings.contains("execute_command"));
+        });
+    }
+
+    #[test]
+    fn heals_broken_runtime_conf() {
+        isolated_home(|| {
+            // Simulate an install seeded before the format fix: the
+            // active preset and an existing session's config copy both
+            // hold a literal "{}". ensure() must heal both.
+            let (config, sessions) = ensure().unwrap();
+            std::fs::write(config.join("runtime.conf"), "{}").unwrap();
+            let sconf = sessions.join("sess-1").join("config");
+            std::fs::create_dir_all(&sconf).unwrap();
+            std::fs::write(sconf.join("runtime.conf"), "{}").unwrap();
+
+            ensure().unwrap();
+
+            let preset_conf = std::fs::read_to_string(config.join("runtime.conf")).unwrap();
+            assert_ne!(preset_conf.trim(), "{}", "preset runtime.conf repaired");
+            assert!(preset_conf.trim_start().starts_with('#'), "preset runtime.conf is a comment");
+            let sess_conf = std::fs::read_to_string(sconf.join("runtime.conf")).unwrap();
+            assert_ne!(sess_conf.trim(), "{}", "session runtime.conf healed");
         });
     }
 
