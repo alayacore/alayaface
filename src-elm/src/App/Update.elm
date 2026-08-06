@@ -284,6 +284,56 @@ setPlanErrors errs model =
                 model
 
 
+{-| R2: inject a visible error message into the session whose history
+contains the given message id (the plan JSON message that failed to
+parse during auto-create). The user sees the error inline next to the
+plan message instead of a broken window.
+-}
+injectPlanErrorIntoSession : List String -> String -> Model -> Model
+injectPlanErrorIntoSession errs messageId model =
+    let
+        findSid =
+            Dict.foldl
+                (\sid s acc ->
+                    case acc of
+                        Just _ ->
+                            acc
+
+                        Nothing ->
+                            if List.any (\m -> m.id == messageId) s.messages then
+                                Just sid
+
+                            else
+                                Nothing
+                )
+                Nothing
+                model.sessions
+    in
+    case findSid of
+        Just sid ->
+            case Dict.get sid model.sessions of
+                Just s ->
+                    let
+                        errMsg =
+                            { id = "plan-error-" ++ messageId
+                            , role = T.Error
+                            , content = "Plan 解析失败：" ++ String.join "；" errs
+                            , toolId = Nothing
+                            , toolName = Nothing
+                            , isError = True
+                            , historyId = Nothing
+                            , media = Nothing
+                            }
+                    in
+                    { model | sessions = Dict.insert sid { s | messages = s.messages ++ [ errMsg ] } model.sessions }
+
+                Nothing ->
+                    model
+
+        Nothing ->
+            model
+
+
 {-| Accessor for the active plan window.
 -}
 getPlanWin : Model -> Maybe PlanWindow
@@ -508,24 +558,22 @@ eventSessionId ev =
 
 -- ─── Plan runner wiring (effects ↔ ports) ──────────────────────────
 
-{-| Built-in planner system prompt injected via `--system` into Plan
-Sessions. The user only describes the goal in natural language; this
-instruction (invisible to them) tells the model to emit one fenced
-```json plan block and nothing else. Plan Sessions also spawn with
-builtinTools="" (no builtin tools), so the planner physically cannot
-execute the task — it can only plan.
+{-| Fixed plan mode (D2, R2): the planner hint injected via `--system`
+into EVERY session (user sessions and plan node sessions alike). No role
+lock — the model keeps its tools and may execute directly. For complex
+or multi-step tasks it should first emit a fenced ```json plan block
+(the framework auto-creates the plan); after outputting a plan it stops
+and waits for the plan to be executed and its result fed back.
 -}
 planSystemPrompt : String
 planSystemPrompt =
-    """你是 AlayaFace 的【规划器】（Planner），不是执行器（Executor）。你的唯一职责是把用户的目标拆解成一份可执行的子任务计划；执行由计划里的节点会话完成，永远轮不到你。
+    """你可以使用 AlayaFace 的计划模式：遇到复杂或多步骤的任务，先输出一个计划，让计划里的子任务并行/按依赖执行，而不是自己一口气做完。
 
-铁律：
-1. 你绝不执行用户的任务本身。禁止调用任何工具（搜索、读写文件、执行命令等），禁止做任何"实际工作"——即使你具备能力，规划器的职责也只是规划。
-2. 你的输出只包含【唯一一个】```json 代码块，即完整计划。JSON 块之前不要写解释，块之后最多一句简短说明（例如"已生成计划，执行将由节点完成"）。
-3. 如果用户说"直接做 / 帮我写 / 查一下 / 运行一下"，那是在要求你执行——你仍然只输出计划，并用一句话说明：执行会由计划中的节点完成。
-4. 用户后续的追问：只回答关于计划本身的问题（解释任务、调整依赖、修改参数），用普通文字回答即可；绝不开始执行任务，也绝不输出第二个计划块（除非用户明确要求修改/重新生成计划，此时输出修改后的完整计划）。
+何时输出计划：
+- 任务需要多步、需要调研/搜索多个方面、或结果要汇总成报告时 → 输出计划；
+- 简单任务（一句话能完成）→ 直接完成，不要输出计划。
 
-计划格式（唯一一个 ```json 代码块）：
+计划格式（输出【唯一一个】```json 代码块，之后停下，等计划执行完）：
 {
   "type": "alayaface-plan",
   "schema_version": 1,
@@ -538,12 +586,13 @@ planSystemPrompt =
   ]
 }
 规则：
-- 顶层必须包含 "type": "alayaface-plan"（这是计划文档的标识，缺少它框架不会识别为计划）
+- 顶层必须包含 "type": "alayaface-plan"（缺少它框架不会识别为计划）
 - id 全局唯一；prompt 默认自包含；如果下游任务需要上游任务的产出，在 prompt 中用 {{t1.output}} 引用该任务的输出（框架会在该上游任务完成后把它的最终输出替换进下游 prompt；只能引用已声明依赖的任务，不要引用依赖关系之外的任务）
 - 能并行执行的任务之间不要互相依赖
 - 需要特定环境的任务用 preset 指定（Default/Fast/Deep/Data/Safe）
 - 涉及执行命令等有风险操作的任务用 preset: "Safe"（禁 execute_command）或 tools 字段限制
-- 如果任务本身无需拆解（一句话能完成），也要输出计划（一个任务即可），这是你的输出格式"""
+- 如果任务本身无需拆解（一句话能完成），也要输出计划（一个任务即可），这是你的输出格式
+- 输出计划后：停止，等待计划执行完成并收到结果，再基于结果继续回答"""
 
 {-| Run one state-machine step for a specific plan window, with a
 timestamp, then dispatch effects. Appends a log line for every node
@@ -693,26 +742,17 @@ startNextCreateIn model =
                 RunnerCreate planId nodeId ->
                     ( m1, Ports.createSession (nodeSessionArgsIn planId nodeId model) )
 
-                UserCreate "plan" ->
-                    ( { m1 | planSessionPending = True, pendingSwitchOnCreate = True }
-                    , Ports.createSession
-                        { toolConfirm = Nothing
-                        , preset = Nothing
-                        -- NO builtin tools: the planner must only output
-                        -- the plan JSON, never execute the task itself.
-                        , builtinTools = Just ""
-                        , systemPrompt = Just planSystemPrompt
-                        , workDir = Nothing
-                        }
-                    )
-
                 UserCreate _ ->
+                    -- Fixed plan mode (D2): every user session gets the
+                    -- planner hint via --system — "complex tasks → output
+                    -- a plan JSON first". No role lock; the model keeps
+                    -- its tools and may still execute directly.
                     ( { m1 | pendingSwitchOnCreate = True }
                     , Ports.createSession
                         { toolConfirm = Nothing
                         , preset = Nothing
                         , builtinTools = Nothing
-                        , systemPrompt = Nothing
+                        , systemPrompt = Just planSystemPrompt
                         , workDir = Nothing
                         }
                     )
@@ -747,7 +787,9 @@ nodeSessionArgsIn planId nodeId model =
     { toolConfirm = Just "allow"
     , preset = task |> Maybe.andThen .preset
     , builtinTools = task |> Maybe.andThen .tools
-    , systemPrompt = Nothing
+    -- Fixed plan mode (D2): node sessions also get the planner hint, so
+    -- a node model may itself delegate to a sub-plan (recursion).
+    , systemPrompt = Just planSystemPrompt
     , workDir = planWorkDir planId model
     }
 
@@ -927,35 +969,7 @@ update msg model =
 
                 Nothing ->
                     ( { model | pendingSwitchOnCreate = True, showGlobalMenu = False }
-                    , Ports.createSession { toolConfirm = Nothing, preset = Nothing, builtinTools = Nothing, systemPrompt = Nothing, workDir = Nothing }
-                    )
-
-        CreatePlanSession ->
-            -- A Plan Session is a normal session whose alayacore process
-            -- gets the planner system prompt via --system. The user only
-            -- describes the goal; the model emits the plan JSON, and the
-            -- existing Create Plan flow takes over.
-            case model.planCreating of
-                Just _ ->
-                    ( { model | planCreateQueue = model.planCreateQueue ++ [ UserCreate "plan" ], showGlobalMenu = False }
-                    , Cmd.none
-                    )
-
-                Nothing ->
-                    ( { model
-                        | planSessionPending = True
-                        , pendingSwitchOnCreate = True
-                        , showGlobalMenu = False
-                      }
-                    , Ports.createSession
-                        { toolConfirm = Nothing
-                        , preset = Nothing
-                        -- NO builtin tools: the planner must only output
-                        -- the plan JSON, never execute the task itself.
-                        , builtinTools = Just ""
-                        , systemPrompt = Just planSystemPrompt
-                        , workDir = Nothing
-                        }
+                    , Ports.createSession { toolConfirm = Nothing, preset = Nothing, builtinTools = Nothing, systemPrompt = Just planSystemPrompt, workDir = Nothing }
                     )
 
         SessionCreated id ->
@@ -1006,13 +1020,6 @@ update msg model =
                         , sessionOrder = model.sessionOrder ++ [ id ]
                         , sessionNums = Dict.insert id model.nextSessionNum model.sessionNums
                         , nextSessionNum = model.nextSessionNum + 1
-                        , planSessionIds =
-                            if model.planSessionPending then
-                                Set.insert id model.planSessionIds
-
-                            else
-                                model.planSessionIds
-                        , planSessionPending = False
                         , windowPositions =
                             if Dict.member id model.windowPositions then
                                 model.windowPositions
@@ -1308,12 +1315,41 @@ update msg model =
                                         | sessions = Dict.insert ev.sessionId { newSession | prevMsgCount = List.length newSession.messages } model.sessions
                                     }
 
-                                -- Plan Mode: when an assistant message completes
-                                -- with a fenced ```json block, offer to turn it
-                                -- into a plan (single offer per message).
-                                -- NOTE: in delta mode the AT frame itself is an
-                                -- empty terminator, so detect on the final
-                                -- message content, not ev.content.
+                                -- Plan Mode (R2): when an assistant message
+                                -- completes with a fenced ```json block
+                                -- carrying the alayaface-plan marker, AUTO-
+                                -- CREATE the plan (no button). The offer
+                                -- entry is still recorded keyed by message
+                                -- id so replay cannot create duplicates;
+                                -- PlanCreateOffer consumes it.
+                                -- NOTE: in delta mode the AT frame itself is
+                                -- an empty terminator, so detect on the
+                                -- final message content, not ev.content.
+                                autoOfferCmd =
+                                    if ev.tag == "AT" then
+                                        case List.head (List.reverse newSession.messages) of
+                                            Just m ->
+                                                if m.role == T.Assistant && not (Dict.member m.id updatedModel.pendingPlanOffers) then
+                                                    case Plan.Detect.extractPlanJson m.content of
+                                                        Just offerRaw ->
+                                                            if Plan.Detect.hasPlanTypeMarker offerRaw then
+                                                                Task.perform (\_ -> PlanCreateOffer m.id) Time.now
+
+                                                            else
+                                                                Cmd.none
+
+                                                        Nothing ->
+                                                            Cmd.none
+
+                                                else
+                                                    Cmd.none
+
+                                            Nothing ->
+                                                Cmd.none
+
+                                    else
+                                        Cmd.none
+
                                 updatedModel2 =
                                     if ev.tag == "AT" then
                                         case List.head (List.reverse newSession.messages) of
@@ -1321,9 +1357,6 @@ update msg model =
                                                 if m.role == T.Assistant && not (Dict.member m.id updatedModel.pendingPlanOffers) then
                                                     case Plan.Detect.extractPlanJson m.content of
                                                         Just offerRaw ->
-                                                            -- Only offer when the block EXPLICITLY carries the
-                                                            -- "type": "alayaface-plan" marker — an ordinary ```json
-                                                            -- code sample in a normal chat never triggers the button.
                                                             if Plan.Detect.hasPlanTypeMarker offerRaw then
                                                                 { updatedModel | pendingPlanOffers = Dict.insert m.id offerRaw updatedModel.pendingPlanOffers }
 
@@ -1360,10 +1393,10 @@ update msg model =
                                         update (ForSession ev.sessionId (ModelSelectorSyncResult isError message)) updatedModel2
 
                                     else
-                                        ( updatedModel2, Cmd.batch [ cmds, runnerFrameCmd ] )
+                                        ( updatedModel2, Cmd.batch [ cmds, runnerFrameCmd, autoOfferCmd ] )
 
                                 Nothing ->
-                                    ( updatedModel2, Cmd.batch [ cmds, runnerFrameCmd ] )
+                                    ( updatedModel2, Cmd.batch [ cmds, runnerFrameCmd, autoOfferCmd ] )
 
                         Nothing ->
                             bufferPendingEvent model ev.sessionId raw
@@ -2860,7 +2893,9 @@ update msg model =
                             )
 
                         Err errs ->
-                            ( setPlanErrors errs model2, Cmd.none )
+                            -- R2: invalid detected plan — report inline in
+                            -- the originating session (no window is created).
+                            ( injectPlanErrorIntoSession errs messageId model2, Cmd.none )
 
                 Nothing ->
                     ( model, Cmd.none )

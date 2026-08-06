@@ -111,8 +111,6 @@ type alias Model =
     -- the second layer and a bezier curve connects the two windows
     -- (drawn by bridge.js; Elm only tracks which pair is connected).
     , nodeConnection : Maybe NC.NodeConnection
-    , planSessionIds : Set String
-    , planSessionPending : Bool
     , homeDir : String
     }
 
@@ -122,7 +120,6 @@ type alias Model =
 type Msg
     = -- Session lifecycle
       CreateSession
-    | CreatePlanSession
     | SessionCreated String
     | SessionCreateError String
     | CloseSession String

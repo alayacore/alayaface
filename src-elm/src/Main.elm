@@ -80,8 +80,6 @@ init _ =
       , planResumeFrom = Nothing
       , planResumedFrom = Dict.empty
       , nodeConnection = Nothing
-      , planSessionIds = Set.empty
-      , planSessionPending = False
       , homeDir = ""
       }
     , Cmd.batch

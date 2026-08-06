@@ -253,16 +253,18 @@ func main() {
 			if staged > 0 {
 				if hanging {
 					// Hung task: swallow the prompt (no reply) — the
-					// runner's timeout will fail the node, and a
-					// cancel-first close can still abort us via CI.
+					// runner's timeout would fail the node (removed in
+					// R1) and a cancel-first close can still abort us.
 					staged = 0
 					stagedText = ""
 				} else {
 					switch {
-					case planMode && firstPrompt:
-						// Plan Session: answer with a fenced plan JSON (full
-						// AT frame — the UI detects the offer from the final
-						// assistant text), then a normal reply.
+					case planMode && firstPrompt && strings.Contains(stagedText, "plan"):
+						// R2: EVERY session now carries the planner hint
+						// (--system). The fake answers with a fenced plan
+						// JSON only when the user prompt actually asks for
+						// planning — node task prompts (fixture) do NOT
+						// contain "plan", so nodes complete normally.
 						planReply()
 						firstPrompt = false
 					case strings.Contains(stagedText, "hang-once"):

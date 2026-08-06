@@ -152,16 +152,22 @@ plan 完成自动关窗（先回填）。
       Elm 180 全绿；Rust 42 / Go -race 8 包不受影响
 
 ### R2 检测与自动创建
-- [ ] `App/Update.elm`：pendingPlanOffers 改造为**自动创建**（检测即 PlanSaveReady 流程，
-      不弹按钮）；重放路径跳过检测（重放 flag 或已绑定判定）；解析失败错误内联到原消息
-- [ ] `planSystemPrompt` 重写（去角色锁，建议性："复杂任务先输出 plan JSON，输出后停止等待"）
-      + 所有 session 创建注入（普通会话 create_session 传 systemPrompt；节点会话同样注入
+- [x] `App/Update.elm`：pendingPlanOffers 改造为**自动创建**（检测即 PlanSaveReady 流程，
+      不弹按钮：FrameEvent 检测 → autoOfferCmd → PlanCreateOffer 消费）；解析失败错误
+      内联到原 session 消息（injectPlanErrorIntoSession）
+- [x] `planSystemPrompt` 重写（去角色锁，建议性："复杂任务先输出 plan JSON，输出后停止等待"）
+      + 所有 session 创建注入（普通会话 UserCreate + 节点会话 nodeSessionArgsIn
       = 递归入口）
-- [ ] 删除 Plan Session：菜单入口、`CreatePlanSession` Msg、`planSessionPending`、
-      `planSessionIds`、`[Plan]` 标题、Plan Session 的 builtinTools=""
-- [ ] 测试 + E2E 改造：Create Plan offer 断言 → 自动创建断言
+- [x] 删除 Plan Session：菜单入口、`CreatePlanSession` Msg、`planSessionPending`、
+      `planSessionIds`、`[Plan]` 标题、Plan Session 的 builtinTools=""、Create Plan 按钮
+- [x] fakecore：planMode 触发改为 prompt 含 "plan" 关键词（否则节点会话也会回 plan）；
+      E2E：New Session 流程 + 自动创建断言 + t3 hang marker 预置（R1 移除超时后
+      第一次 run 不能挂起）+ 删 t3 超时重试断言；E2E ALL PASS
+- [ ] **重放跳过检测**（防重复自动创建）——依赖 meta.json 绑定（R3 做）
 
 ### R3 回填 + 状态条 + 持久化
+- [ ] **重放跳过检测**（R2 遗留）：检测时查 messageId → planId 绑定，已绑定只恢复
+      状态条不重复创建（与 meta.json 索引一起实现）
 - [ ] `meta.json` codec（origin/feedbacks）+ 自动创建时写 origin
 - [ ] 状态条组件（View）：消息下 plan 绑定（名称/状态/打开/重新执行）+ CSS
 - [ ] 回填：plan Completed 事件 → 构造汇总 prompt（节点 output 汇总 + `[Plan: xxx]`）→

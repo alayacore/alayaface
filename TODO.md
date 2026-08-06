@@ -175,15 +175,19 @@ C1 安全：`cancelTask` → `activeTask.cancel()` → 任务经 `taskResultCh`
       + codec roundtrip 1 例；Elm 180 全绿；Rust 42 / Go -race 8 包不受影响
 
 ### R2 检测与自动创建
-- [ ] App/Update.elm：pendingPlanOffers 改造为自动创建（检测即创建，不弹按钮）；
-      重放路径跳过检测（防重复创建）；解析失败错误内联到原消息；
-- [ ] planSystemPrompt 重写（去角色锁，建议性）+ 所有 session 创建注入
+- [x] App/Update.elm：pendingPlanOffers 改造为自动创建（检测即创建，不弹按钮）；
+      解析失败错误内联到原消息（injectPlanErrorIntoSession）；
+- [x] planSystemPrompt 重写（去角色锁，建议性）+ 所有 session 创建注入
       （普通会话 + 节点会话 = 递归入口）；
-- [ ] 删除 Plan Session：菜单入口、CreatePlanSession Msg、planSessionPending、
+- [x] 删除 Plan Session：菜单入口、CreatePlanSession Msg、planSessionPending、
       planSessionIds、[Plan] 标题、Plan Session 的 builtinTools=""；
-- [ ] 测试 + E2E：offer 断言 → 自动创建断言
+- [x] fakecore：planMode 触发改为 prompt 含 "plan" 关键词；E2E：New Session 流程 +
+      自动创建断言 + t3 hang marker 预置（超时移除后第一次 run 不挂起）+ 删 t3
+      超时断言；E2E ALL PASS；
+- [ ] 重放跳过检测（防重复创建）→ R3 随 meta.json 绑定实现
 
 ### R3 回填 + 状态条 + 持久化
+- [ ] **重放跳过检测**（R2 遗留）：messageId → planId 绑定查重（随 meta.json 索引实现）；
 - [ ] meta.json codec（origin/feedbacks）+ 自动创建时写 origin；
 - [ ] 状态条组件（View + CSS）：消息下 plan 绑定（名称/状态/打开/重新执行）；
 - [ ] 回填：plan Completed → 构造汇总 prompt（节点 output 汇总 + `[Plan: xxx]`）→

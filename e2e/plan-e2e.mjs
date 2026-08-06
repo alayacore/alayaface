@@ -14,6 +14,7 @@
 
 import puppeteer from 'puppeteer-core';
 import { execSync, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -63,6 +64,15 @@ execSync(`mkdir -p "${artifacts}" "${home}"`);
 // fail-once markers are shared under os.TempDir (keyed by prompt hash);
 // clean them so a fresh run exercises the failure path again.
 execSync('rm -f /tmp/alayaface-fakecore-fail-once-*.marker /tmp/alayaface-fakecore-hang-once-*.marker');
+// R1 removed task timeouts, so t3's hang-once can no longer be recovered
+// by a timeout on the FIRST run. Pre-seed t3's hang marker (keyed by its
+// prompt hash, same scheme as fakecore) → the first run succeeds
+// instantly; step 8b rm's the markers so the re-run hangs again.
+{
+  const t3Prompt = 'review the draft and fix any issues (hang-once marker)';
+  const h = createHash('sha256').update(t3Prompt).digest('hex').slice(0, 16);
+  writeFileSync(path.join(tmpdir(), `alayaface-fakecore-hang-once-${h}.marker`), 'hung-once');
+}
 console.log('artifacts:', tmp);
 
 // ── 1. build binaries ───────────────────────────────────────────────
@@ -127,35 +137,46 @@ try {
   await waitFor('.global-menu-btn');
   await page.click('.global-menu-btn');
   await waitFor('.global-menu-panel');
-  assert(await clickByText('.global-menu-item', 'New Plan Session'), 'New Plan Session menu item');
+  // R2: no "New Plan Session" — every session is plan-capable.
+  assert(await clickByText('.global-menu-item', 'New Session'), 'New Session menu item');
 
-  // Session window with [Plan] title appears.
+  // A plain session window appears (no [Plan] prefix anymore).
   await waitFor('.session-panel');
   await sleep(600);
-  const planTitles = await page.$$eval('.session-bar-title', els => els.map(e => e.textContent));
-  assert(planTitles.some(t => t.includes('[Plan]')), 'plan session title prefix, got: ' + JSON.stringify(planTitles));
 
-  // Send the user prompt INTO the [Plan] session window (the app also
-  // auto-creates a plain session at startup, so there are two windows).
+  // Send the user prompt into the NEWEST session (the one we just
+  // created; the app also auto-creates a plain session at startup).
   const planPanel = await page.$$eval('.session-panel', panels => {
+    let best = null;
+    let bestN = -1;
     for (const p of panels) {
       const t = p.querySelector('.session-bar-title')?.textContent || '';
-      if (t.includes('[Plan]')) {
-        const ta = p.querySelector('textarea.input-text');
-        const btn = p.querySelector('.send-btn');
-        return { has: true, title: t, ta: !!ta, btn: !!btn };
+      const m = t.match(/Session (\d+)/);
+      const n = m ? parseInt(m[1], 10) : -1;
+      if (n > bestN) {
+        bestN = n;
+        best = { has: true, title: t, ta: !!p.querySelector('textarea.input-text'), btn: !!p.querySelector('.send-btn') };
       }
     }
-    return { has: false };
+    return best || { has: false };
   });
   console.log('plan panel:', JSON.stringify(planPanel));
-  assert(planPanel.has, 'plan session window not found');
+  assert(planPanel.has, 'new session window not found');
 
   await page.evaluate(() => {
     const panels = [...document.querySelectorAll('.session-panel')];
+    let bestN = -1;
     for (const p of panels) {
       const t = p.querySelector('.session-bar-title')?.textContent || '';
-      if (!t.includes('[Plan]')) continue;
+      const m = t.match(/Session (\d+)/);
+      const n = m ? parseInt(m[1], 10) : -1;
+      if (n > bestN) bestN = n;
+    }
+    for (const p of panels) {
+      const t = p.querySelector('.session-bar-title')?.textContent || '';
+      const m = t.match(/Session (\d+)/);
+      const n = m ? parseInt(m[1], 10) : -1;
+      if (n !== bestN) continue;
       const ta = p.querySelector('textarea.input-text');
       if (ta) {
         ta.value = 'Create a demo plan for e2e';
@@ -168,16 +189,14 @@ try {
   await sleep(800);
   await shot(page, '00-after-send.png');
 
-  // fakecore answers with the fenced plan JSON → Create Plan offer.
-  await waitFor('.plan-offer-btn', 30000);
-  await shot(page, '01-create-plan-offer.png');
-  console.log('PASS: Create Plan offer appeared');
-
-  // ── 5. Create Plan → Plan window → Run ────────────────────────────
-  await page.click('.plan-offer-btn');
+  // fakecore answers with the fenced plan JSON → R2 AUTO-CREATES the
+  // plan window (no button).
   await waitFor('.plan-page', 30000);
   await sleep(800);
-  await shot(page, '02-plan-window.png');
+  await shot(page, '01-auto-created-plan.png');
+  console.log('PASS: plan auto-created (no button)');
+
+  // ── 5. Plan window → Run ──────────────────────────────────────────
   const nodeIds = await page.$$eval('.plan-node-id', els => els.map(e => e.textContent));
   assert(nodeIds.includes('t1') && nodeIds.includes('t2') && nodeIds.includes('t3'),
     'DAG nodes t1/t2/t3, got: ' + JSON.stringify(nodeIds));
@@ -216,10 +235,6 @@ try {
   assert(logText.includes('waiting'), 'run log shows the backoff (waiting) after the t2 failure, got: ' + logText.slice(0, 400));
   // attempts counts FAILURES: t2 shows [1] (failed once, then retried ok).
   assert(logText.includes('t2 [1'), 'run log shows attempt 1 for t2 (auto-retry), got: ' + logText.slice(0, 400));
-  // t3 HUNG on its first attempt: the 5s task timeout failed it and the
-  // auto-retry succeeded (attempts [1] again, waiting appears for t3).
-  assert(logText.includes('t3 [1'), 'run log shows attempt 1 for t3 (timeout → auto-retry), got: ' + logText.slice(0, 400));
-  assert((logText.match(/t3 \[1[^]*?waiting/g) || []).length >= 1, 'run log shows t3 waiting after timeout, got: ' + logText.slice(0, 500));
   await shot(page, '04-run-log.png');
   console.log('PASS: t2 failed once → auto-retry (run log):', logText.split('\n').filter(Boolean).join(' | '));
 

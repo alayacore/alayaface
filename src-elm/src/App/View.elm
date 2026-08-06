@@ -140,19 +140,13 @@ viewSessionPanel model id =
                     ]
                     [ Html.span [ Attr.class "session-bar-title" ]
                         [ Html.text
-                            ((if Set.member id model.planSessionIds then
-                                "[Plan] "
+                            ((case Dict.get id model.planNodeSessions of
+                                Just lbl ->
+                                    "[Plan · " ++ lbl ++ "] "
 
-                              else
-                                ""
+                                Nothing ->
+                                    ""
                              )
-                                ++ (case Dict.get id model.planNodeSessions of
-                                        Just lbl ->
-                                            "[Plan · " ++ lbl ++ "] "
-
-                                        Nothing ->
-                                            ""
-                                   )
                                 ++ (if session.activeModelName /= "" then
                                         "Session " ++ String.fromInt idx ++ " — " ++ session.activeModelName
 
@@ -208,13 +202,6 @@ viewGlobalMenu model =
                 ]
                 [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "+" ]
                 , Html.text " New Session"
-                ]
-            , Html.div
-                [ Attr.class "global-menu-item"
-                , Ev.onClick CreatePlanSession
-                ]
-                [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "⧉" ]
-                , Html.text " New Plan Session"
                 ]
             , Html.div
                 [ Attr.class "global-menu-item"
@@ -1106,18 +1093,6 @@ viewMessage model session msg =
 
           else
             viewMsgBody session.id msg
-        , if msg.role == T.Assistant && Dict.member msg.id model.pendingPlanOffers then
-            Html.div [ Attr.class "plan-offer" ]
-                [ Html.button
-                    [ Attr.class "plan-offer-btn"
-                    , Ev.onClick (PlanCreateOffer msg.id)
-                    , Attr.title "Detected a ```json plan block in this message"
-                    ]
-                    [ Html.text "Create Plan" ]
-                ]
-
-          else
-            Html.text ""
         ]
 
 
