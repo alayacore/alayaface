@@ -27,6 +27,7 @@ module Plan.Types exposing
     , decodeRunStateOverlay
     , applyRunStateOverlay
     , nodeRunStateDecoderPublic
+    , parseConcurrency
     )
 
 {-| Plan Mode data model: DAG plan schema, JSON codecs, normalization
@@ -495,6 +496,20 @@ encodeTask t =
             , Just ( "max_attempts", E.int t.maxAttempts )
             ]
         )
+
+
+{-| Parse a concurrency override from the plan header input.
+Empty/invalid input → Nothing (fall back to the plan's own concurrency).
+Valid integers are clamped to the supported 1..8 range (schema §5).
+-}
+parseConcurrency : String -> Maybe Int
+parseConcurrency raw =
+    case String.toInt (String.trim raw) of
+        Just n ->
+            Just (clamp 1 8 n)
+
+        Nothing ->
+            Nothing
 
 
 {-| Filesystem-safe slug from a plan name (lowercase, non-alphanumeric

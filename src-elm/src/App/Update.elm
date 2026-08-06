@@ -2436,21 +2436,43 @@ update msg model =
                 m1 =
                     case ( model.planActiveId, getPlanWin model ) of
                         ( Just pid, Just win ) ->
-                            case ( win.run, win.view.plan ) of
-                                ( Nothing, Just plan ) ->
-                                    { model
-                                        | planWindows =
-                                            Dict.insert pid
-                                                { win
-                                                    | run = Just (PT.emptyRunState (PT.slugify plan.name ++ "-" ++ String.fromInt ts) plan)
-                                                    , runPath = Maybe.map runPathFor win.view.path
-                                                    , selectedNode = Nothing
-                                                    , runLog = []
-                                                }
-                                                model.planWindows
-                                    }
+                            case win.view.plan of
+                                Just plan ->
+                                    let
+                                        -- Fresh run state on first Run; for a
+                                        -- re-run keep the existing state (its
+                                        -- node statuses are reset by StartRun).
+                                        baseRun =
+                                            Maybe.withDefault
+                                                (PT.emptyRunState (PT.slugify plan.name ++ "-" ++ String.fromInt ts) plan)
+                                                win.run
 
-                                _ ->
+                                        -- Header concurrency override wins over
+                                        -- the plan JSON (empty/invalid → plan).
+                                        run =
+                                            case PT.parseConcurrency win.view.concurrencyInput of
+                                                Just c ->
+                                                    { baseRun | concurrency = c }
+
+                                                Nothing ->
+                                                    baseRun
+
+                                        win2 =
+                                            case win.run of
+                                                Just _ ->
+                                                    { win | run = Just run }
+
+                                                Nothing ->
+                                                    { win
+                                                        | run = Just run
+                                                        , runPath = Maybe.map runPathFor win.view.path
+                                                        , selectedNode = Nothing
+                                                        , runLog = []
+                                                    }
+                                    in
+                                    { model | planWindows = Dict.insert pid win2 model.planWindows }
+
+                                Nothing ->
                                     model
 
                         _ ->
@@ -2695,6 +2717,18 @@ update msg model =
                   }
                 , Ports.resumeSession { sessionId = sid }
                 )
+
+        PlanSetConcurrency text ->
+            ( updateActivePlanWin model
+                (\w ->
+                    let
+                        wv =
+                            w.view
+                    in
+                    { w | view = { wv | concurrencyInput = text } }
+                )
+            , Cmd.none
+            )
 
         PlanSetExportPath text ->
             ( updateActivePlanWin model

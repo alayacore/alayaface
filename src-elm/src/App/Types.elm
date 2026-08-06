@@ -261,6 +261,7 @@ type Msg
     | PlanSelectNode String
     | PlanOpenNodeSession String String
     | PlanOpenAttemptSession String String String
+    | PlanSetConcurrency String
     | PlanSetExportPath String
     | PlanExport
       -- Plan runner
@@ -451,6 +452,9 @@ type alias PlanViewState =
     , errors : List String
     , saving : Bool
     , exportPath : String
+    -- Concurrency override from the plan header (empty = use the plan's
+    -- own concurrency). Applied when a run starts.
+    , concurrencyInput : String
     }
 
 
@@ -461,6 +465,7 @@ emptyPlanView =
     , errors = []
     , saving = False
     , exportPath = ""
+    , concurrencyInput = ""
     }
 
 

@@ -334,6 +334,20 @@ tests =
             , test "keeps digits" <|
                 \_ -> Expect.equal "report-2025" (P.slugify "Report 2025")
             ]
+        , describe "parseConcurrency"
+            [ test "valid integer in range" <|
+                \_ -> Expect.equal (Just 4) (P.parseConcurrency "4")
+            , test "whitespace trimmed" <|
+                \_ -> Expect.equal (Just 5) (P.parseConcurrency " 5 ")
+            , test "empty input falls back (Nothing)" <|
+                \_ -> Expect.equal Nothing (P.parseConcurrency "")
+            , test "garbage falls back (Nothing)" <|
+                \_ -> Expect.equal Nothing (P.parseConcurrency "abc")
+            , test "zero clamps to 1" <|
+                \_ -> Expect.equal (Just 1) (P.parseConcurrency "0")
+            , test "too large clamps to 8" <|
+                \_ -> Expect.equal (Just 8) (P.parseConcurrency "99")
+            ]
         , describe "run state codec"
             [ test "encode then decode overlay roundtrips" <|
                 \_ ->

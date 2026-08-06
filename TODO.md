@@ -57,6 +57,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P11 Review pass 2: create-queue serialization + create-failure recovery | [x] |
 | P12 Graceful close (save+EOF+grace) + dead-code cleanup + acceptance doc | [x] |
 | P13 Attempt-session history (attempt_session_ids + detail-panel list) | [x] |
+| P14 Concurrency selector in the plan header | [x] |
 
 ## P11 — 第二轮审查：创建队列串行化 + 创建失败恢复
 
@@ -141,6 +142,21 @@ P9 遗留：重试后 `lastSessionId` 被新会话替换，失败那次尝试的
       （缺字段 → []）；Elm 131 全绿；
 - [x] 文档同步：docs/plan-mode.md §10（三字段持久化）；TODO 进度表；
       docs/manual-acceptance.md 增补历史会话验收项。
+
+## P14 — Plan 头部并发度选择器
+
+- [x] `PlanViewState.concurrencyInput`（留空 = 用 plan JSON 的 concurrency）；
+      头部控件行新增数字输入框（1–8，title 提示默认值）；
+- [x] 纯函数 `Plan.Types.parseConcurrency : String -> Maybe Int`：trim、
+      无效/空 → Nothing（回退 plan 默认），有效整数 clamp 1–8（0→1，
+      99→8）；导出 + 6 例单测；
+- [x] `PlanRunStartAt` 两条路径（首次 Run / 完成后重 Run）都应用覆盖：
+      `{ baseRun | concurrency = c }`（重 Run 保留旧 run 状态，节点状态
+      由 StartRun 复位，仅替换 concurrency）；`PlanSetConcurrency` Msg
+      经 updateActivePlanWin 写回；
+- [x] 文档同步：TODO 进度表（P5 遗留项销项）；docs/manual-acceptance.md
+      增补并发输入验收项；
+- [x] 测试：Elm 137（+6 parseConcurrency）全绿。
 
 ## P10 — 全面审查修复（评审轮）
 
@@ -422,8 +438,8 @@ P9 遗留：重试后 `lastSessionId` 被新会话替换，失败那次尝试的
 - [x] docs/go-backend.md command table update (fs_write/read/delete,
       create_session preset/builtinTools, get_global_settings builtin_tools)
 - [x] docs/plan-mode.md status + implementation-deviation notes synced
-- [ ] Concurrency selector in the Plan header (edit before run) — deferred
-      to v2; concurrency comes from the plan JSON
+- [x] Concurrency selector in the Plan header (edit before run) — P14;
+      empty = plan JSON concurrency
 - [ ] Manual GUI acceptance (Tauri + Go browser) — GUI env; checklist in
       docs/manual-acceptance.md; E2E via fakecore covers backend, runner
       covered by 128 elm tests

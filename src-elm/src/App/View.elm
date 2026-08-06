@@ -580,7 +580,18 @@ viewPlanHeader win plan =
                 ]
             ]
         , Html.div [ Attr.class "plan-header-controls" ]
-            [ Html.button
+            [ Html.input
+                [ Attr.class "plan-header-concurrency"
+                , Attr.type_ "number"
+                , Attr.min "1"
+                , Attr.max "8"
+                , Attr.placeholder "并发"
+                , Attr.title ("并发度 1-8（留空 = 计划默认 " ++ String.fromInt plan.concurrency ++ "）")
+                , Attr.value win.view.concurrencyInput
+                , Ev.onInput PlanSetConcurrency
+                ]
+                []
+            , Html.button
                 [ Attr.class "confirm-page-btn confirm-page-btn-allow plan-header-btn"
                 , Attr.disabled (not canRun)
                 , Ev.onClick PlanRunStart

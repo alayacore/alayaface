@@ -462,7 +462,8 @@ SIGKILL——此时 `save` 帧已先行落盘，至少保留任务开始前的�
 - Plan 只读展示（节点编辑 v2）；
 - 种子 preset：Default / Fast / Deep / Data / Safe；
 - 优雅关闭（§8.3）：close_session = save CI → EOF → 5s 宽限 → SIGKILL；
-  kill_child/KillChild = EOF → 3s 宽限 → SIGKILL。
+  kill_child/KillChild = EOF → 3s 宽限 → SIGKILL；
+- Plan 头部可覆盖并发度（1–8，留空 = plan JSON 的 concurrency；P14 已实现）。
 
 ### 待定（v2，不阻塞）
 - 节点 `outputs` 字段（产出物描述，先存不用）；
