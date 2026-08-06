@@ -742,6 +742,35 @@ Fix (two layers):
 
 ---
 
+## P23 — Plan Stop closes the run's node session windows too
+
+Question: "点击 Stop，是不是所有 session 都应该停止？" — design answer:
+Stop stops every in-flight node session OWNED BY THIS plan's run (kill
+the alayacore process AND close its window); it does NOT stop succeeded
+nodes' sessions (keep them viewable), other plans' sessions, plain chat
+sessions, or the Plan planner session.
+
+Current state before P23: StopRun already marked nodes Canceled and
+closeAndClear emitted CloseSessionFor (process kill, verified by the
+existing runner test 'close:s1'), BUT the effect only sent
+Ports.closeSession — the session WINDOWS stayed open as stale dead
+windows, making Stop look like it didn't stop anything.
+
+- [x] `applyEffectIn` `CloseSessionFor` now delegates to the full
+      `update (CloseSession sid)` — kills the process AND removes the
+      window (equivalent to the user closing it; history stays on disk
+      and is restored on node click). Applies uniformly to runner-closed
+      sessions (Stop / failure / cancel).
+- [x] E2E step 8b: re-run (t3 hangs again after clearing the hang
+      marker) → wait for t3's window → Stop → badge Stopped + t3 window
+      gone; DOM clicks for Run/Stop (overlapping windows would
+      intercept coordinate clicks)
+- [x] Tests: elm 156 / Rust 42 / Go -race all pkgs / make e2e ALL PASS
+- [ ] Manual GUI: Stop mid-run → all running node windows close, plan
+      badge Stopped (docs/manual-acceptance.md)
+
+---
+
 ## Known pitfalls
 
 - Never edit `../alayacore` — tool set = spawn params only.

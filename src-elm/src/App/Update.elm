@@ -650,7 +650,16 @@ applyEffectIn planId e ( m, cmds ) =
                 )
 
         PT.CloseSessionFor sid _ ->
-            ( m, Cmd.batch [ cmds, Ports.closeSession { sessionId = sid } ] )
+            -- The runner closed this node's session (Stop / failure /
+            -- cancel): kill the process AND remove its window — the user
+            -- clicked Stop and expects the session to be gone, not a
+            -- stale dead window. History stays on disk (~/.alayaface/
+            -- sessions/<sid>) and is restored on node click.
+            let
+                ( m2, c2 ) =
+                    update (CloseSession sid) m
+            in
+            ( m2, Cmd.batch [ cmds, c2 ] )
 
         PT.ScheduleRetry nodeId delayMs ->
             ( m

@@ -330,6 +330,50 @@ try {
   await waitT1Active('close→click #2 (resume again)');
   await shot(page, '05c-t1-resumed-2.png');
 
+  // ── 8b. Plan Stop closes the run's node session windows ───────────
+  // Re-run the plan with t3 hung again (remove the hang marker; t1/t2
+  // succeed instantly thanks to the persistent fail-once marker). Once
+  // t3's session window is up (Running, sleeping 30s), click Stop: the
+  // run badge flips to Stopped and t3's window is CLOSED (process was
+  // already killed; the window must go too — no stale dead windows).
+  execSync('rm -f /tmp/alayaface-fakecore-hang-once-*.marker');
+  // Close the FIRST run's leftover t3 window so the wait below can only
+  // match the re-run's fresh t3 session (the re-run itself is async).
+  await page.evaluate(() => {
+    const panels = [...document.querySelectorAll('.session-panel')];
+    for (const p of panels) {
+      const t = p.querySelector('.session-bar-title')?.textContent || '';
+      if (t.includes('/t3]')) {
+        const btn = p.querySelector('.session-bar-close');
+        if (btn) btn.click();
+      }
+    }
+  });
+  await sleep(400);
+  // DOM clicks (not coordinate): overlapping session windows would
+  // intercept the mouse at the plan header's button positions.
+  const clickPlanHeaderBtn = (label) => page.evaluate((lbl) => {
+    const btns = [...document.querySelectorAll('button.plan-header-btn')];
+    const b = btns.find(x => (x.textContent || '').includes(lbl));
+    if (b && !b.disabled) { b.click(); return true; }
+    return false;
+  }, label);
+  assert(await clickPlanHeaderBtn('Run'), 're-Run button');
+  await page.waitForFunction(() => {
+    return [...document.querySelectorAll('.session-panel')].some(p =>
+      (p.querySelector('.session-bar-title')?.textContent || '').includes('/t3]'));
+  }, { timeout: 30000 });
+  await sleep(400);
+  await shot(page, '05d-stop-before.png');
+  assert(await clickPlanHeaderBtn('Stop'), 'Stop button');
+  await page.waitForFunction(() => !!document.querySelector('.plan-run-badge-stopped'), { timeout: 10000 });
+  await sleep(500);
+  const t3Windows = await page.$$eval('.session-panel', panels =>
+    panels.filter(p => (p.querySelector('.session-bar-title')?.textContent || '').includes('/t3]')).length);
+  assert(t3Windows === 0, 't3 session window closed after Stop, got: ' + t3Windows);
+  await shot(page, '05e-stop-after.png');
+  console.log("PASS: Plan Stop closed the run's node session windows (badge Stopped)");
+
   // ── 9. Plans manager: Saved fuzzy filter + Browse-tab file import ──
   // Write a plan JSON at the fake home root (the Browse tab starts there).
   const importedName = 'imported-via-browse';
