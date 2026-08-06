@@ -1,7 +1,6 @@
 module Plan.Runner exposing
     ( Event(..)
     , step
-    , isTerminal
     , nodeBySessionId
     , resumeState
     )
@@ -50,6 +49,7 @@ type Event
     | SessionError String String
     | SessionDisconnected String String
     | RetryNode String
+    | RetryTick String
 
 
 step : Int -> Event -> PT.RunState -> ( PT.RunState, List PT.Effect )
@@ -95,12 +95,18 @@ step now ev run =
                 SessionDisconnected sid reason ->
                     ( sessionDisconnected now sid reason run, [] )
 
+                -- Automatic backoff tick (Waiting → Pending only; never
+                -- revives Canceled/Failed — a Stop during backoff sticks).
+                RetryTick nodeId ->
+                    ( retryTick nodeId run, [] )
+
+                -- Manual retry from the node detail panel.
                 RetryNode nodeId ->
                     ( retryNode nodeId run, [] )
     in
     let
         ( runFinal, effects ) =
-            finishStep now updated
+            finishStep now run updated
     in
     ( runFinal, preEffects ++ effects )
 
@@ -275,6 +281,25 @@ retryNode nodeId run =
         run1
 
 
+{-| Automatic backoff tick: Waiting → Pending only. Unlike manual
+RetryNode it does NOT revive Failed/Canceled nodes and does NOT
+reactivate a stopped run — so pressing Stop during a retry backoff
+stays stopped (the late tick is a no-op).
+-}
+retryTick : String -> PT.RunState -> PT.RunState
+retryTick nodeId run =
+    updateNode nodeId
+        (\n ->
+            case n.status of
+                PT.Waiting ->
+                    { n | status = PT.Pending }
+
+                _ ->
+                    n
+        )
+        run
+
+
 failNode : Int -> String -> PT.NodeRunState -> PT.NodeRunState
 failNode now reason node =
     let
@@ -304,8 +329,8 @@ failNode now reason node =
 -- ─── Post-step processing ──────────────────────────────────────────
 
 
-finishStep : Int -> PT.RunState -> ( PT.RunState, List PT.Effect )
-finishStep now run =
+finishStep : Int -> PT.RunState -> PT.RunState -> ( PT.RunState, List PT.Effect )
+finishStep now before run =
     let
         run1 =
             blockedPropagation run
@@ -320,10 +345,26 @@ finishStep now run =
             schedule run3
 
         retryEffects =
+            -- Schedule the backoff timer only when a node newly entered
+            -- Waiting in THIS step (compare against the pre-event state;
+            -- re-emitting on every step would stack duplicate timers).
             Dict.foldl
                 (\_ n acc ->
                     if n.status == PT.Waiting then
-                        PT.ScheduleRetry n.nodeId retryDelayMs :: acc
+                        let
+                            wasWaiting =
+                                case Dict.get n.nodeId before.nodes of
+                                    Just old ->
+                                        old.status == PT.Waiting
+
+                                    Nothing ->
+                                        False
+                        in
+                        if wasWaiting then
+                            acc
+
+                        else
+                            PT.ScheduleRetry n.nodeId retryDelayMs :: acc
 
                     else
                         acc
@@ -557,11 +598,6 @@ nodeBySessionId sid run =
         )
         Nothing
         run.nodes
-
-
-isTerminal : PT.NodeStatus -> Bool
-isTerminal s =
-    List.member s [ PT.Succeeded, PT.Failed, PT.Blocked, PT.Canceled ]
 
 
 {-| Prepare a restored RunState (from run.json) for continuation: nodes

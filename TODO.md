@@ -53,6 +53,35 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P7 Plan windows (multi-instance, ⚙ menu list) + SendPrompt fix | [x] |
 | P8 Node↔session binding: click node opens/resumes its session | [x] |
 | P9 Keep failed/canceled sessions reopenable (lastSessionId) | [x] |
+| P10 Review pass: runner race fixes + orphan cleanup | [x] |
+
+## P10 — 全面审查修复（评审轮）
+
+- [x] **Stop + 退避计时器 bug**：Stop 后迟到的自动重试会复活 Canceled 节点并
+      重新激活 Stopped run → 新增 `RetryTick`（自动 tick 只 Waiting→Pending，
+      不复活/不激活）与 `RetryNode`（手动重试，可复活）分离；
+- [x] **ScheduleRetry 重复计时器**：原每个 step 对每个 Waiting 节点都发
+      一次 → 改为仅节点**刚进入** Waiting 时发一次（与 step 输入态比较，
+      修正 finishStep 拿到事件后状态导致去重失效的问题）；
+- [x] **孤儿会话泄漏**：Stop/关闭 plan 窗口与 in-flight create 竞争时，
+      创建的会话无人绑定、窗口/进程泄漏 → `PlanBindSession` 检测绑定失败
+      （节点非 Running）即关闭该会话（窗口+进程）；
+- [x] **Stop/PlanClose 未清创建队列** → 现在按 planId 过滤
+      `planCreateQueue`；
+- [x] **resume 失败未清 planResumeNode** → 后续任意 SessionCreated 会把
+      无关会话错误绑定到该节点 → 成功/失败路径都清理
+      `planResumeOwner`/`planResumeNode`；
+- [x] **静默自动恢复覆盖新 run 竞态**：打开 plan 后立刻点 Run，迟到的
+      run.json 恢复会覆盖新 run → 仅当窗口尚无 run 时才静默恢复；
+- [x] **open/import 失败 UX**：错误显示在 Plans 管理器（而不是创建一个
+      错误窗口）；
+- [x] 清理死代码（Runner.isTerminal 未使用）；`toolConfirm="allow"` 语义
+      加注释（alayacore 的 --tool-confirm 是「需确认的工具名列表」，
+      "allow" 匹配不到任何工具 = 全部自动放行；有安全提示）；
+- [x] 验证过无问题的项：session id(UUID) vs plan key 无冲突；fs 命令双后端
+      parity；run.json 双字段 roundtrip；重放渲染完整性（HandlersTest）；
+- [x] 测试：Elm 125（新增 stop+tick 不复活、手动 Retry 复活、单次重试
+      计时器、Canceled 绑定不发 prompt）；Rust 35；Go 全绿。
 
 ## P9 — 失败/停止节点的会话不再丢失（lastSessionId）
 

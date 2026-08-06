@@ -502,6 +502,12 @@ startNextCreateIn model =
 approve tools so tasks don't stall) plus the node's preset/tools
 overrides (Nothing = preset defaults / all tools). No planner system
 prompt — runner sessions execute tasks, not plans.
+
+NOTE: alayacore's --tool-confirm is a list of tool names that REQUIRE
+confirmation; "allow" matches no real tool, so nothing is confirmed →
+every tool auto-runs. That is exactly the runner's intent (unattended
+execution), but it means a plan task CAN auto-run risky tools — use the
+Safe preset / tools field to restrict per node.
 -}
 nodeSessionArgsIn : String -> String -> Model -> { toolConfirm : Maybe String, preset : Maybe String, builtinTools : Maybe String, systemPrompt : Maybe String }
 nodeSessionArgsIn planId nodeId model =
@@ -1810,40 +1816,60 @@ update msg model =
                                     in
                                     case ( D.decodeString PT.decodeRunStateOverlay content, win0.view.plan ) of
                                         ( Ok overlay, Just plan ) ->
-                                            let
-                                                baseRun =
-                                                    PT.applyRunStateOverlay overlay (PT.emptyRunState "resume" plan)
-
+                                            if target.continueRun then
                                                 -- Load run: unfinished nodes
-                                                -- re-run; silent restore: keep
-                                                -- the persisted snapshot as-is
-                                                -- (session bindings intact).
-                                                run =
-                                                    if target.continueRun then
+                                                -- re-run; restore then continue.
+                                                let
+                                                    baseRun =
+                                                        PT.applyRunStateOverlay overlay (PT.emptyRunState "resume" plan)
+
+                                                    run =
                                                         R.resumeState baseRun
 
-                                                    else
-                                                        baseRun
+                                                    win1 =
+                                                        { win0
+                                                            | run = Just run
+                                                            , runPath = Just target.path
+                                                            , resumePath = Nothing
+                                                            , selectedNode = Nothing
+                                                        }
 
-                                                win1 =
-                                                    { win0
-                                                        | run = Just run
-                                                        , runPath = Just target.path
-                                                        , resumePath = Nothing
-                                                        , selectedNode = Nothing
-                                                    }
-
-                                                m1 =
-                                                    { model
-                                                        | planReadTarget = Nothing
-                                                        , planWindows = Dict.insert target.planId win1 model.planWindows
-                                                    }
-                                            in
-                                            if target.continueRun then
+                                                    m1 =
+                                                        { model
+                                                            | planReadTarget = Nothing
+                                                            , planWindows = Dict.insert target.planId win1 model.planWindows
+                                                        }
+                                                in
                                                 runStepIn target.planId 0 R.ContinueRun m1
 
                                             else
-                                                ( m1, Cmd.none )
+                                                -- Silent restore: only when
+                                                -- the window has no run yet
+                                                -- (a Run clicked in between
+                                                -- must not be overwritten).
+                                                if win0.run == Nothing then
+                                                    let
+                                                        run =
+                                                            PT.applyRunStateOverlay overlay (PT.emptyRunState "resume" plan)
+
+                                                        win1 =
+                                                            { win0
+                                                                | run = Just run
+                                                                , runPath = Just target.path
+                                                                , resumePath = Nothing
+                                                                , selectedNode = Nothing
+                                                            }
+
+                                                        m1 =
+                                                            { model
+                                                                | planReadTarget = Nothing
+                                                                , planWindows = Dict.insert target.planId win1 model.planWindows
+                                                            }
+                                                    in
+                                                    ( m1, Cmd.none )
+
+                                                else
+                                                    ( { model | planReadTarget = Nothing }, Cmd.none )
 
                                         ( Ok _, Nothing ) ->
                                             ( { model | planReadTarget = Nothing }, Cmd.none )
@@ -1964,12 +1990,38 @@ update msg model =
                                                 ( m2, Cmd.none )
 
                                         Err errs ->
-                                            ( setPlanErrors errs { model | planReadTarget = Nothing }
+                                            -- Invalid plan file: report in
+                                            -- the Plans manager (not a window)
+                                            let
+                                                pm =
+                                                    model.planManager
+                                            in
+                                            ( { model
+                                                | planReadTarget = Nothing
+                                                , planManager =
+                                                    { pm
+                                                        | show = True
+                                                        , loading = False
+                                                        , error = Just (String.join "\n" errs)
+                                                    }
+                                              }
                                             , Cmd.none
                                             )
 
                                 else
-                                    ( setPlanErrors [ error ] { model | planReadTarget = Nothing }
+                                    let
+                                        pm =
+                                            model.planManager
+                                    in
+                                    ( { model
+                                        | planReadTarget = Nothing
+                                        , planManager =
+                                            { pm
+                                                | show = True
+                                                , loading = False
+                                                , error = Just error
+                                            }
+                                      }
                                     , Cmd.none
                                     )
 
@@ -2199,10 +2251,14 @@ update msg model =
                 )
 
         PlanClose planId ->
+            -- Drop queued creates for this plan too: their sessions would
+            -- only be created and immediately orphan-closed.
             ( { model
                 | planWindows = Dict.remove planId model.planWindows
                 , planOrder = List.filter (\k -> k /= planId) model.planOrder
                 , windowPositions = Dict.remove planId model.windowPositions
+                , planCreateQueue =
+                    List.filter (\( qpid, _ ) -> qpid /= planId) model.planCreateQueue
                 , planActiveId =
                     if model.planActiveId == Just planId then
                         List.head (List.reverse (List.filter (\k -> k /= planId) model.planOrder))
@@ -2293,7 +2349,19 @@ update msg model =
         PlanRunStop ->
             case model.planActiveId of
                 Just pid ->
-                    runStepIn pid 0 R.StopRun model
+                    let
+                        ( m1, c1 ) =
+                            runStepIn pid 0 R.StopRun model
+                    in
+                    -- Cancel queued creates for this plan: their nodes are
+                    -- Canceled now, so creating the sessions would only
+                    -- produce orphans (closed right after by PlanBindSession).
+                    ( { m1
+                        | planCreateQueue =
+                            List.filter (\( qpid, _ ) -> qpid /= pid) m1.planCreateQueue
+                      }
+                    , c1
+                    )
 
                 Nothing ->
                     ( model, Cmd.none )
@@ -2307,7 +2375,7 @@ update msg model =
                     ( model, Cmd.none )
 
         PlanRunnerTick planId nodeId ->
-            runStepIn planId 0 (R.RetryNode nodeId) model
+            runStepIn planId 0 (R.RetryTick nodeId) model
 
         PlanRunFrame ts ev ->
             case eventSessionId ev of
@@ -2340,8 +2408,34 @@ update msg model =
                         | planNodeSessions =
                             Dict.insert sid (planId ++ "/" ++ nodeId) m2.planNodeSessions
                     }
+
+                -- Orphan cleanup: if the bind did NOT take (node no longer
+                -- Starting — e.g. Stop/close raced the create, or the plan
+                -- window is gone), the just-created session is unwanted:
+                -- close its window and process.
+                ( m4, c3 ) =
+                    case Dict.get planId m3.planWindows of
+                        Just win ->
+                            case win.run of
+                                Just run ->
+                                    case Dict.get nodeId run.nodes of
+                                        Just n ->
+                                            if n.status == PT.Running && n.sessionId == Just sid then
+                                                ( m3, Cmd.none )
+
+                                            else
+                                                update (CloseSession sid) m3
+
+                                        Nothing ->
+                                            update (CloseSession sid) m3
+
+                                Nothing ->
+                                    update (CloseSession sid) m3
+
+                        Nothing ->
+                            update (CloseSession sid) m3
             in
-            ( m3, Cmd.batch [ c1, c2 ] )
+            ( m4, Cmd.batch [ c1, c2, c3 ] )
 
         PlanResume ->
             case ( model.planActiveId, getPlanWin model ) of
@@ -2507,6 +2601,7 @@ update msg model =
                             | showSessionManager = False
                             , sessionManagerError = Nothing
                             , planResumeOwner = Nothing
+                            , planResumeNode = Nothing
                           }
                         , Cmd.none
                         )
@@ -2517,7 +2612,9 @@ update msg model =
                     else
                         -- A plan-node session resume failed: surface the
                         -- error in the owning plan window instead of the
-                        -- (possibly closed) session manager.
+                        -- (possibly closed) session manager. Also clear
+                        -- planResumeNode so a later SessionCreated does
+                        -- not rebind some unrelated session to the node.
                         case model.planResumeOwner of
                             Just pid ->
                                 ( setPlanWin pid
@@ -2528,7 +2625,7 @@ update msg model =
                                         in
                                         { w | view = { wv | errors = [ res.error ] } }
                                     )
-                                    { model | planResumeOwner = Nothing }
+                                    { model | planResumeOwner = Nothing, planResumeNode = Nothing }
                                 , Cmd.none
                                 )
 

@@ -272,11 +272,105 @@ tests =
                             R.step 3000 (R.TaskDone "s1" True) run2
 
                         ( run4, es ) =
-                            R.step 4000 (R.RetryNode "a") run3
+                            R.step 4000 (R.RetryTick "a") run3
                     in
                     Expect.all
                         [ \_ -> Expect.equal P.Starting (nodeState "a" run4).status
                         , \_ -> Expect.equal True (List.member "create:a" (effects es))
+                        ]
+                        ()
+            , test "stop during retry backoff: late tick is a no-op (no revival)" <|
+                \_ ->
+                    let
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan singlePlan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        ( run3, _ ) =
+                            R.step 3000 (R.TaskDone "s1" True) run2
+
+                        -- user presses Stop while the node waits for backoff
+                        ( run4, _ ) =
+                            R.step 3500 R.StopRun run3
+
+                        -- the scheduled timer fires late: must NOT revive
+                        ( run5, es ) =
+                            R.step 4000 (R.RetryTick "a") run4
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal P.Canceled (nodeState "a" run5).status
+                        , \_ -> Expect.equal P.Stopped run5.status
+                        , \_ -> Expect.equal 0 (List.length (List.filter (\e -> String.startsWith "create:" (effectName e)) es))
+                        ]
+                        ()
+            , test "manual RetryNode after stop relaunches only that node" <|
+                \_ ->
+                    let
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan parallelPlan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        ( run3, _ ) =
+                            R.step 3000 (R.TaskDone "s1" True) run2
+
+                        ( run4, _ ) =
+                            R.step 3500 R.StopRun run3
+
+                        ( run5, es ) =
+                            R.step 4000 (R.RetryNode "a") run4
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal P.Starting (nodeState "a" run5).status
+                        , \_ -> Expect.equal P.InProgress run5.status
+                        , \_ -> Expect.equal True (List.member "create:a" (effects es))
+                        -- b was Canceled by Stop and stays Canceled
+                        , \_ -> Expect.equal P.Canceled (nodeState "b" run5).status
+                        ]
+                        ()
+            , test "ScheduleRetry is emitted once per Waiting entry (no stacked timers)" <|
+                \_ ->
+                    let
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan singlePlan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        ( run3, es1 ) =
+                            R.step 3000 (R.TaskDone "s1" True) run2
+
+                        -- another unrelated event while a stays Waiting must
+                        -- NOT schedule a second retry timer
+                        ( run4, es2 ) =
+                            R.step 3500 R.PauseRun run3
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal 1 (List.length (List.filter (\e -> String.startsWith "retry:a" e) (effects es1)))
+                        , \_ -> Expect.equal 0 (List.length (List.filter (\e -> String.startsWith "retry:a" e) (effects es2)))
+                        , \_ -> Expect.equal P.Waiting (nodeState "a" run4).status
+                        ]
+                        ()
+            , test "SessionCreatedFor on a Canceled node does not bind or prompt" <|
+                \_ ->
+                    let
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan singlePlan)
+
+                        -- Stop while the create is in flight (node Starting)
+                        ( run2, _ ) =
+                            R.step 1500 R.StopRun run1
+
+                        ( run3, es ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run2
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal P.Canceled (nodeState "a" run3).status
+                        , \_ -> Expect.equal Nothing (nodeState "a" run3).sessionId
+                        , \_ -> Expect.equal 0 (List.length (List.filter (\e -> String.startsWith "prompt:" e) (effects es)))
                         ]
                         ()
             , test "exhausts max attempts then Failed, downstream Blocked" <|
