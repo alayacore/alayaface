@@ -187,14 +187,17 @@ C1 安全：`cancelTask` → `activeTask.cancel()` → 任务经 `taskResultCh`
 - [ ] 重放跳过检测（防重复创建）→ R3 随 meta.json 绑定实现
 
 ### R3 回填 + 状态条 + 持久化
-- [ ] **重放跳过检测**（R2 遗留）：messageId → planId 绑定查重（随 meta.json 索引实现）；
-- [ ] meta.json codec（origin/feedbacks）+ 自动创建时写 origin；
-- [ ] 状态条组件（View + CSS）：消息下 plan 绑定（名称/状态/打开/重新执行）；
-- [ ] 回填：plan Completed → 构造汇总 prompt（节点 output 汇总 + `[Plan: xxx]`）→
-      发 origin 会话（已关则 resume）→ 自动继续；Failed/Stopped 零回填；写 feedbacks；
-- [ ] `[Plan: xxx]` 链接渲染（扫描消息文本 → clickable → openPlanFile）；
-- [ ] 重启恢复：打开会话时扫描 plans 目录重建 messageId → planId 索引；重放渲染状态条；
-- [ ] 测试 + E2E
+- [x] **重放跳过检测**（R2 遗留）：messageBoundToPlan（meta origin 绑定查重）；
+- [x] meta.json codec（Plan/Meta.elm：origin/feedbacks/created_at）+ 自动创建写 origin；
+- [x] 状态条组件（View + CSS + PlanStatusOpen）：消息下 plan 绑定（名称/状态/打开）；
+- [x] 回填：feedbackCompletedPlan（Completed → 节点 output 汇总 + [Plan: xxx] →
+      发 origin 会话自动继续；节点会话 → ResumeDelegatedNode；Failed/Stopped 零回填；
+      写 feedbacks）；
+- [x] [Plan: xxx] 链接渲染（viewTextWithPlanLinks → PlanStatusOpen）；
+- [x] 重启恢复：fsHomeDir 扫描 meta.json 队列读取 → planMetas；fs_list_dir 缺失目录
+      返回空（Rust+Go）；fakecore msgSeq 递增 echo id；
+- [x] 测试：PlanMetaTest +3；E2E 回填/状态条断言；Elm 183 / Rust 42 / Go -race /
+      E2E ALL PASS
 
 ### R4 关闭规则 + 重跑级联
 - [ ] closeAndClear：Succeeded 也关节点窗口（保留绑定）；WaitingForPlan 不关；

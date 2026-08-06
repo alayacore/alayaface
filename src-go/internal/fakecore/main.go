@@ -58,6 +58,12 @@ var stagedText string
 // hung task instead of waiting for the grace-period SIGKILL).
 var hanging bool
 
+// msgSeq numbers user messages (echo history ids): real alayacore gives
+// every message a unique history id — the client dedupes echoes by it,
+// so a constant id would drop the SECOND user message (e.g. the plan
+// feedback prompt).
+var msgSeq int
+
 const historyID = "hist-1"
 
 type cmdMsg struct {
@@ -71,8 +77,9 @@ func writeFrame(tag, value string) {
 }
 
 // echo replies with a NUL-delimited history-ID prefix, like alayacore.
+// Each USER MESSAGE gets its own id (msgSeq, incremented per UE flush).
 func echo(tag, content string) {
-	writeFrame(tag, "\x00"+historyID+"\x00"+content)
+	writeFrame(tag, "\x00"+fmt.Sprintf("hist-%d", msgSeq)+"\x00"+content)
 }
 
 // echoID is echo with an explicit history id. Real alayacore gives every
@@ -277,6 +284,7 @@ func main() {
 					staged = 0
 					stagedText = ""
 				}
+				msgSeq++
 			}
 		case "CI":
 			if hanging && strings.Contains(frame.Value, `"name":"cancel"`) {

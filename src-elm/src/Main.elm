@@ -68,6 +68,10 @@ init _ =
       , appWidth = 1400
       , appHeight = 900
       , planWindows = Dict.empty
+      , planMetas = Dict.empty
+      , planMetaLoading = False
+      , planMetaReading = Nothing
+      , planMetaReadQueue = []
       , planOrder = []
       , planActiveId = Nothing
       , planManager = emptyPlanManager
@@ -83,7 +87,7 @@ init _ =
       , homeDir = ""
       }
     , Cmd.batch
-        [ Ports.createSession { toolConfirm = Nothing, preset = Nothing, builtinTools = Nothing, systemPrompt = Nothing, workDir = Nothing }
+        [ Ports.createSession { toolConfirm = Nothing, preset = Nothing, builtinTools = Nothing, systemPrompt = Just App.Update.planSystemPrompt, workDir = Nothing }
         , Ports.listPresets {}
         , Ports.fsHomeDir {}
         , Task.attempt GotContainerSize (Dom.getElement "main-content")

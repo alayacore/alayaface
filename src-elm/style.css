@@ -2508,6 +2508,18 @@ body {
 }
 .plan-offer-btn:hover { background: #4f52e0; }
 
+/* R3: plan status bar colors (bound to the message that auto-created it) */
+.plan-status-running { background: #d97706; }
+.plan-status-running:hover { background: #b45309; }
+.plan-status-completed { background: #16a34a; }
+.plan-status-completed:hover { background: #15803d; }
+.plan-status-failed { background: #dc2626; }
+.plan-status-failed:hover { background: #b91c1c; }
+.plan-status-stopped { background: #64748b; }
+.plan-status-stopped:hover { background: #475569; }
+.plan-status-paused { background: #64748b; }
+.plan-status-paused:hover { background: #475569; }
+
 .plan-page {
   min-width: 520px;
   max-width: 720px;
@@ -2965,3 +2977,4 @@ body {
   font-family: monospace;
   color: #555;
 }
+.plan-link { background: none; border: none; color: #6366f1; cursor: pointer; font-size: 0.78rem; padding: 0; text-decoration: underline; }

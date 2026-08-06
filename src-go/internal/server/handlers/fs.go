@@ -28,7 +28,12 @@ func FsListDir(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	fi, err := os.Stat(args.Path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("Path does not exist: %s", args.Path)
+			// A missing directory is an EMPTY list, not an error: the
+			// plans dir may not exist until the first plan is created,
+			// and callers (plan meta index rebuild, manager, browser)
+			// treat a missing directory as "nothing here". Mirrors the
+			// Rust backend.
+			return writeJSON(w, []DirEntry{})
 		}
 		return err
 	}

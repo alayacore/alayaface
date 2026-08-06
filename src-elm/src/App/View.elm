@@ -23,6 +23,7 @@ import Session.Selector as Sel exposing (Page(..))
 import Session.FilePicker as FP
 import Fuzzy
 import Plan.Types as PT
+import Plan.Meta as PM
 import Plan.View
 import Overlay.ConfirmTool
 import Overlay.Settings
@@ -1092,8 +1093,92 @@ viewMessage model session msg =
             Html.text ""
 
           else
-            viewMsgBody session.id msg
+            viewMsgBody model session.id msg
+        , viewPlanStatusBar model msg.id
         ]
+
+
+{-| R3: the plan status bar under the assistant message that auto-created
+a plan — bound via meta.json origin (messageId → planId). Shows the plan
+name + run status; [Open] focuses the window (or opens from disk after a
+restart). Failed/Stopped plans show the status too; the [重新执行] action
+arrives with the R4 re-run cascade.
+-}
+viewPlanStatusBar : Model -> String -> Html Msg
+viewPlanStatusBar model messageId =
+    case planMetaForMessage model messageId of
+        Just ( planId, _ ) ->
+            let
+                name =
+                    case Dict.get planId model.planWindows of
+                        Just win ->
+                            Maybe.withDefault planId (Maybe.map .name win.view.plan)
+
+                        Nothing ->
+                            planId
+
+                ( statusLabel, statusClass ) =
+                    planStatusFor model planId
+            in
+            Html.div [ Attr.class "plan-offer" ]
+                [ Html.button
+                    [ Attr.class ("plan-offer-btn plan-status-" ++ statusClass)
+                    , Ev.onClick (PlanStatusOpen planId)
+                    , Attr.title ("打开计划 " ++ planId)
+                    ]
+                    [ Html.text ("[Plan: " ++ planId ++ "] " ++ name ++ " · " ++ statusLabel) ]
+                ]
+
+        Nothing ->
+            Html.text ""
+
+
+{-| The meta whose origin.messageId matches (the plan bound to a message).
+-}
+planMetaForMessage : Model -> String -> Maybe ( String, PM.PlanMeta )
+planMetaForMessage model messageId =
+    Dict.foldl
+        (\planId meta acc ->
+            case acc of
+                Just _ ->
+                    acc
+
+                Nothing ->
+                    case meta.origin of
+                        Just o ->
+                            if o.messageId == messageId then
+                                Just ( planId, meta )
+
+                            else
+                                Nothing
+
+                        Nothing ->
+                            Nothing
+        )
+        Nothing
+        model.planMetas
+
+
+planStatusFor : Model -> String -> ( String, String )
+planStatusFor model planId =
+    case Dict.get planId model.planWindows of
+        Just win ->
+            case win.run of
+                Just run ->
+                    case run.status of
+                        PT.NotStarted -> ( "Created", "created" )
+                        PT.InProgress -> ( "Running…", "running" )
+                        PT.Paused -> ( "Paused", "paused" )
+                        PT.Completed -> ( "Completed", "completed" )
+                        PT.FailedRun -> ( "Failed", "failed" )
+                        PT.Stopped -> ( "Stopped", "stopped" )
+
+                Nothing ->
+                    ( "Created", "created" )
+
+        Nothing ->
+            -- Window not open (restart): read nothing, show a neutral state.
+            ( "Open", "created" )
 
 
 -- Header row of a message window: role label, optional tool info, and a
@@ -1165,8 +1250,8 @@ previewText msg =
         first
 
 
-viewMsgBody : String -> T.Message -> Html Msg
-viewMsgBody sid msg =
+viewMsgBody : Model -> String -> T.Message -> Html Msg
+viewMsgBody model sid msg =
     case msg.role of
         T.Assistant ->
             Html.div [ Attr.class "msg-body" ]
@@ -1202,13 +1287,13 @@ viewMsgBody sid msg =
                     Nothing ->
                         Html.text ""
                 , Html.div [ Attr.class "message-content" ]
-                    [ Html.text msg.content ]
+                    (viewTextWithPlanLinks model msg.content)
                 ]
 
         T.System ->
             Html.div [ Attr.class "msg-body" ]
                 [ Html.div [ Attr.class "message-content" ]
-                    (List.map (\line -> Html.span [] [ Html.text line ]) (String.lines msg.content))
+                    (viewTextWithPlanLinks model msg.content)
                 ]
 
         T.Notify ->
@@ -1222,6 +1307,52 @@ viewMsgBody sid msg =
                 [ Html.div [ Attr.class "message-content" ]
                     [ Html.text msg.content ]
                 ]
+
+
+{-| Render text with `[Plan: <planId>]` markers as clickable buttons —
+the second entry point into a plan (the first is the status bar). Used
+for feedback messages so the link survives restarts (it lives in the
+message text, which persists in session.alaya).
+-}
+viewTextWithPlanLinks : Model -> String -> List (Html Msg)
+viewTextWithPlanLinks model text =
+    let
+        go rest acc =
+            case String.indexes "[Plan: " rest |> List.head of
+                Nothing ->
+                    List.reverse (Html.text rest :: acc)
+
+                Just idx ->
+                    let
+                        before =
+                            String.left idx rest
+
+                        after =
+                            String.dropLeft (idx + 7) rest
+                    in
+                    case String.indexes "]" after |> List.head of
+                        Nothing ->
+                            List.reverse (Html.text rest :: acc)
+
+                        Just endIdx ->
+                            let
+                                planId =
+                                    String.left endIdx after
+
+                                rest2 =
+                                    String.dropLeft (endIdx + 1) after
+
+                                link =
+                                    Html.button
+                                        [ Attr.class "plan-link"
+                                        , Ev.onClick (PlanStatusOpen planId)
+                                        , Attr.title ("打开计划 " ++ planId)
+                                        ]
+                                        [ Html.text ("[Plan: " ++ planId ++ "]") ]
+                            in
+                            go rest2 (link :: Html.text before :: acc)
+    in
+    go text []
 
 
 viewInputBar : Model -> T.SessionState -> Html Msg

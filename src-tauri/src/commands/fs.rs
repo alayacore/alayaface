@@ -13,12 +13,15 @@ pub struct DirEntry {
     pub is_dir: bool,
 }
 
-/// List the contents of a directory.
+/// List the contents of a directory. A non-existent directory returns an
+/// EMPTY list (not an error): the plans dir may not exist until the first
+/// plan is auto-created, and callers (plan meta index rebuild, manager,
+/// browser) treat a missing directory as "nothing here".
 #[command]
 pub async fn fs_list_dir(path: String) -> Result<Vec<DirEntry>, String> {
     let dir = std::path::Path::new(&path);
     if !dir.exists() {
-        return Err(format!("Path does not exist: {}", path));
+        return Ok(vec![]);
     }
     if !dir.is_dir() {
         return Err(format!("Not a directory: {}", path));

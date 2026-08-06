@@ -166,17 +166,23 @@ plan 完成自动关窗（先回填）。
 - [ ] **重放跳过检测**（防重复自动创建）——依赖 meta.json 绑定（R3 做）
 
 ### R3 回填 + 状态条 + 持久化
-- [ ] **重放跳过检测**（R2 遗留）：检测时查 messageId → planId 绑定，已绑定只恢复
-      状态条不重复创建（与 meta.json 索引一起实现）
-- [ ] `meta.json` codec（origin/feedbacks）+ 自动创建时写 origin
-- [ ] 状态条组件（View）：消息下 plan 绑定（名称/状态/打开/重新执行）+ CSS
-- [ ] 回填：plan Completed 事件 → 构造汇总 prompt（节点 output 汇总 + `[Plan: xxx]`）→
-      发 origin 会话（已关则 resume）→ 自动继续；Failed/Stopped 零回填；
-      回填写 feedbacks
-- [ ] `[Plan: xxx]` 链接渲染（消息文本扫描 → clickable → openPlanFile）
-- [ ] 重启恢复：扫描 plans 目录重建 messageId → planId 索引（打开会话时）；
-      重放消息渲染状态条
-- [ ] 测试 + E2E（回填/状态条/链接）
+- [x] **重放跳过检测**（R2 遗留）：`messageBoundToPlan`（检测时查 meta origin 绑定，
+      已绑定只恢复状态条不重复创建）
+- [x] `meta.json` codec（`Plan/Meta.elm`：origin/feedbacks/created_at）+ 自动创建时写
+      origin（PlanSaveReady）；lenient decode
+- [x] 状态条组件（View + CSS + `PlanStatusOpen`）：消息下 plan 绑定
+      （planId + 名称 + 状态色 + [打开]）；planMetaForMessage 查绑定
+- [x] 回填：`feedbackCompletedPlan`（run 刚变 Completed → 节点 output 汇总 +
+      `[Plan: xxx]` 前缀 `[Plan 结果]` → 发 origin 会话自动继续；origin 是节点会话 →
+      `ResumeDelegatedNode`；Failed/Stopped 零回填；写 feedbacks 到 meta.json）
+- [x] `[Plan: xxx]` 链接渲染（viewTextWithPlanLinks：消息文本扫描 → 按钮 →
+      PlanStatusOpen）
+- [x] 重启恢复：fsHomeDir 后扫描 plans 目录 *.meta.json → 队列读取 → planMetas 索引；
+      **fs_list_dir 对不存在目录返回空列表**（Rust+Go 对称——plans 目录首次可能不存在）；
+      fakecore msgSeq：UT echo history id 逐消息递增（回填第二条 user 消息不被前端
+      processedEchoIds 丢弃）
+- [x] 测试：PlanMetaTest +3（roundtrip/lenient/path）；E2E 新断言（回填 [Plan 结果] +
+      链接 + 状态条 Completed）；Elm 183 / Rust 42 / Go -race / E2E ALL PASS
 
 ### R4 关闭规则 + 重跑级联
 - [ ] `closeAndClear`：Succeeded 也关节点窗口（保留绑定）；WaitingForPlan 不关

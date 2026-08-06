@@ -40,6 +40,7 @@ import Json.Encode as E
 import Set exposing (Set)
 import Plan.Types as PT
 import Plan.Runner as R
+import Plan.Meta as PM
 import Session.Selector as Sel
 import Session.Types as T
 import App.NodeConnection as NC
@@ -87,6 +88,17 @@ type alias Model =
     , appHeight : Int
       -- Plan Mode
     , planWindows : Dict String PlanWindow
+    -- Runtime metadata (plans/<planId>.meta.json): origin session/message
+    -- binding + feedbacks. Keyed by planId; used for the message status
+    -- bar and feedback routing. Rebuilt from disk on session open (R3).
+    , planMetas : Dict String PM.PlanMeta
+    -- Loading state for planMetas: a dedicated fs_list_dir/fs_read chain
+    -- that bypasses planReadTarget (single-slot) and the manager UI.
+    , planMetaLoading : Bool
+    -- The meta.json path currently being read (head of the rebuild
+    -- chain); planMetaReadQueue holds the remaining paths.
+    , planMetaReading : Maybe String
+    , planMetaReadQueue : List String
     , planOrder : List String
     , planActiveId : Maybe String
     , planManager : PlanManagerState
@@ -273,7 +285,9 @@ type Msg
     | PlanManagerBrowserConfirm
     | PlanManagerBrowserPick Int
     | PlanCreateOffer String
-    | PlanSaveReady PT.Plan Int
+    | PlanSaveReady PT.Plan (Maybe PM.Origin) Int
+    -- Status-bar "Open" click on a message-bound plan (R3).
+    | PlanStatusOpen String
     | PlanActivate String
     | PlanClose String
     | PlanSelectNode String

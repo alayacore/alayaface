@@ -213,6 +213,18 @@ try {
   assert(succ.length === 3, 'all 3 nodes Succeeded, got: ' + JSON.stringify(succ));
   console.log('PASS: run completed, nodes succeeded:', JSON.stringify(succ));
 
+  // ── 5b. R3: feedback + status bar ────────────────────────────────
+  // The completed plan feeds its results back to the origin (plain)
+  // session as a "[Plan 结果]" prompt carrying a [Plan: <planId>] link,
+  // and the plan JSON message gets a status bar (bound via meta.json).
+  await sleep(600);
+  const fbTexts = await page.$$eval('.message-content', els => els.map(e => e.textContent));
+  assert(fbTexts.some(t => t.includes('[Plan 结果]')), 'feedback sent to the origin session, got: ' + JSON.stringify(fbTexts.slice(-3)));
+  assert(fbTexts.some(t => t.includes('[Plan: e2e-demo-')), 'feedback carries the plan link, got: ' + JSON.stringify(fbTexts.slice(-3)));
+  const statusBars = await page.$$eval('.plan-offer-btn', els => els.map(e => e.textContent));
+  assert(statusBars.some(t => t.includes('Completed')), 'status bar shows Completed, got: ' + JSON.stringify(statusBars));
+  console.log('PASS: R3 feedback sent to origin session + plan status bar shows Completed');
+
   // Per-plan working directory: node sessions were spawned with
   // ~/.alayaface/plans/<planId>/work as their cwd (created by backend).
   const plansRoot = path.join(home, '.alayaface', 'plans');
