@@ -32,6 +32,7 @@ The session-level types live in Session/Types.elm.
 import Browser.Dom as Dom
 import Dict exposing (Dict)
 import Json.Encode as E
+import Set exposing (Set)
 import Plan.Types as PT
 import Plan.Runner as R
 import Session.Selector as Sel
@@ -90,6 +91,8 @@ type alias Model =
     , planRunPath : Maybe String
     , planResumePath : Maybe String
     , planRunLog : List String
+    , planSessionIds : Set String
+    , planSessionPending : Bool
     , homeDir : String
     }
 
@@ -99,6 +102,7 @@ type alias Model =
 type Msg
     = -- Session lifecycle
       CreateSession
+    | CreatePlanSession
     | SessionCreated String
     | CloseSession String
       -- Transport events

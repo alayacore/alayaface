@@ -138,10 +138,18 @@ viewSessionPanel model id =
                     ]
                     [ Html.span [ Attr.class "session-bar-title" ]
                         [ Html.text
-                            (if session.activeModelName /= "" then
-                                "Session " ++ String.fromInt idx ++ " — " ++ session.activeModelName
-                             else
-                                "Session " ++ String.fromInt idx
+                            ((if Set.member id model.planSessionIds then
+                                "[Plan] "
+
+                              else
+                                ""
+                             )
+                                ++ (if session.activeModelName /= "" then
+                                        "Session " ++ String.fromInt idx ++ " — " ++ session.activeModelName
+
+                                    else
+                                        "Session " ++ String.fromInt idx
+                                   )
                             )
                         ]
                     , Html.button
@@ -191,6 +199,13 @@ viewGlobalMenu model =
                 ]
                 [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "+" ]
                 , Html.text " New Session"
+                ]
+            , Html.div
+                [ Attr.class "global-menu-item"
+                , Ev.onClick CreatePlanSession
+                ]
+                [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "⧉" ]
+                , Html.text " New Plan Session"
                 ]
             , Html.div
                 [ Attr.class "global-menu-item"

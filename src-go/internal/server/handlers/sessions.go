@@ -31,6 +31,7 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		ToolConfirm  *string `json:"toolConfirm"`
 		Preset       *string `json:"preset"`
 		BuiltinTools *string `json:"builtinTools"`
+		SystemPrompt *string `json:"systemPrompt"`
 	}
 	if err := decodeArgs(r, &args); err != nil {
 		return err
@@ -77,12 +78,19 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 			bt = eff
 		}
 	}
+	sp := ""
+	if args.SystemPrompt != nil {
+		sp = *args.SystemPrompt
+	}
 	log.Printf("Spawning: %s --rawio --config-path %s --session %s", bin, effectiveConfig, sessionFile)
 	if tc != "" {
 		log.Printf("  with --tool-confirm=%s", tc)
 	}
 	if bt != "" {
 		log.Printf("  with --builtin-tools=%s", bt)
+	}
+	if sp != "" {
+		log.Printf("  with --system (%d chars)", len(sp))
 	}
 	if presetName != "" {
 		log.Printf("  preset=%s", presetName)
@@ -96,6 +104,7 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		SessionDir:   sessionDir,
 		ToolConfirm:  tc,
 		BuiltinTools: bt,
+		SystemPrompt: sp,
 	}, h.Hub, h.Cache)
 	if err != nil {
 		return err

@@ -159,6 +159,31 @@ setPlanErrors errs model =
 
 -- ─── Plan runner wiring (effects ↔ ports) ──────────────────────────
 
+{-| Built-in planner system prompt injected via `--system` into Plan
+Sessions. The user only describes the goal in natural language; this
+instruction (invisible to them) tells the model to emit one fenced
+```json plan block, then answer normally afterwards.
+-}
+planSystemPrompt : String
+planSystemPrompt =
+    """你是 AlayaFace 的任务规划助手。用户会描述一个目标，你需要把它拆解为可并行执行的子任务，并输出唯一一个 ```json 代码块（不要输出其他内容）。格式如下：
+{
+  "schema_version": 1,
+  "name": "计划名称",
+  "goal": "目标描述",
+  "concurrency": 2,
+  "default_max_attempts": 3,
+  "tasks": [
+    { "id": "t1", "title": "子任务标题", "prompt": "完整且自包含的执行指令", "depends_on": [], "preset": "Default", "max_attempts": 3 }
+  ]
+}
+规则：
+- id 全局唯一；prompt 必须自包含（不要引用其他任务的输出）
+- 能并行执行的任务之间不要互相依赖
+- 需要特定环境的任务用 preset 指定（Default/Fast/Deep/Data/Safe）
+- 涉及执行命令等有风险操作的任务用 preset: "Safe"（禁 execute_command）或 tools 字段限制
+- 首次输出计划之后，如果用户继续对话，请正常回答，不要再输出计划代码块"""
+
 {-| Run one state-machine step with a timestamp, then dispatch effects.
 Appends a log line for every node whose status changed (bounded).
 -}
@@ -287,9 +312,10 @@ startNextCreate model =
 
 {-| Session-creation args for a runner node: toolConfirm=allow (auto-
 approve tools so tasks don't stall) plus the node's preset/tools
-overrides (Nothing = preset defaults / all tools).
+overrides (Nothing = preset defaults / all tools). No planner system
+prompt — runner sessions execute tasks, not plans.
 -}
-nodeSessionArgs : Model -> String -> { toolConfirm : Maybe String, preset : Maybe String, builtinTools : Maybe String }
+nodeSessionArgs : Model -> String -> { toolConfirm : Maybe String, preset : Maybe String, builtinTools : Maybe String, systemPrompt : Maybe String }
 nodeSessionArgs model nodeId =
     let
         task =
@@ -303,6 +329,7 @@ nodeSessionArgs model nodeId =
     { toolConfirm = Just "allow"
     , preset = task |> Maybe.andThen .preset
     , builtinTools = task |> Maybe.andThen .tools
+    , systemPrompt = Nothing
     }
 
 
@@ -423,7 +450,25 @@ update msg model =
         -- Session Lifecycle
         CreateSession ->
             ( { model | pendingSwitchOnCreate = True, showGlobalMenu = False }
-            , Ports.createSession { toolConfirm = Nothing, preset = Nothing, builtinTools = Nothing }
+            , Ports.createSession { toolConfirm = Nothing, preset = Nothing, builtinTools = Nothing, systemPrompt = Nothing }
+            )
+
+        CreatePlanSession ->
+            -- A Plan Session is a normal session whose alayacore process
+            -- gets the planner system prompt via --system. The user only
+            -- describes the goal; the model emits the plan JSON, and the
+            -- existing Create Plan flow takes over.
+            ( { model
+                | planSessionPending = True
+                , pendingSwitchOnCreate = True
+                , showGlobalMenu = False
+              }
+            , Ports.createSession
+                { toolConfirm = Nothing
+                , preset = Nothing
+                , builtinTools = Nothing
+                , systemPrompt = Just planSystemPrompt
+                }
             )
 
         SessionCreated id ->
@@ -462,6 +507,13 @@ update msg model =
                 , sessionOrder = model.sessionOrder ++ [ id ]
                 , sessionNums = Dict.insert id model.nextSessionNum model.sessionNums
                 , nextSessionNum = model.nextSessionNum + 1
+                , planSessionIds =
+                    if model.planSessionPending then
+                        Set.insert id model.planSessionIds
+
+                    else
+                        model.planSessionIds
+                , planSessionPending = False
                 , windowPositions =
                     if Dict.member id model.windowPositions then
                         model.windowPositions

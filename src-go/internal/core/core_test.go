@@ -48,7 +48,7 @@ func TestSpawnArgsAndCommunication(t *testing.T) {
 	sessionFile := filepath.Join(dir, "session.alaya")
 	configDir := filepath.Join(dir, "config")
 
-	proc, err := Spawn(fakeCorePath, configDir, sessionFile, "tool1,tool2", "")
+	proc, err := Spawn(fakeCorePath, configDir, sessionFile, "tool1,tool2", "", "")
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestSpawnArgsAndCommunication(t *testing.T) {
 }
 
 func TestSpawnError(t *testing.T) {
-	if _, err := Spawn("/nonexistent/alayacore", "", "", "", ""); err == nil {
+	if _, err := Spawn("/nonexistent/alayacore", "", "", "", "", ""); err == nil {
 		t.Fatal("Spawn with missing binary should error")
 	}
 }

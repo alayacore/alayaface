@@ -150,6 +150,7 @@
         toolConfirm: data.toolConfirm || null,
         preset: data.preset || null,
         builtinTools: data.builtinTools || null,
+        systemPrompt: data.systemPrompt || null,
       }).then(function (id) { app.ports.onSessionCreated.send(id); })
         .catch(function (err) { console.error("create_session failed:", err); });
     });

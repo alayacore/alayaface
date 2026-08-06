@@ -84,7 +84,7 @@ port onStatus : (E.Value -> msg) -> Sub msg
 
 -- Outbound commands (Elm → Tauri via JS bridge)
 
-port createSession : { toolConfirm : Maybe String, preset : Maybe String, builtinTools : Maybe String } -> Cmd msg
+port createSession : { toolConfirm : Maybe String, preset : Maybe String, builtinTools : Maybe String, systemPrompt : Maybe String } -> Cmd msg
 port closeSession : { sessionId : String } -> Cmd msg
 port sendPrompt : { sessionId : String, text : String, media : List E.Value } -> Cmd msg
 port cancelTask : { sessionId : String } -> Cmd msg

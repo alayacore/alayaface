@@ -55,8 +55,8 @@
 ## 4. 总体架构与数据流
 
 ```
-[Planner Session] 模型生成 DAG JSON
-        │  (a) AT 消息里输出 ```json 代码块（主路径）
+[Planner Session] 模型生成 DAG JSON        ← 推荐入口：⚙ 菜单 → New Plan Session
+        │  (a) AT 消息里输出 ```json 代码块（主路径）   （普通会话也可，需用户自述格式）
         │  (b) write_file 写入 ~/.alayaface/plans/*.json（Plans 管理器列出）
         ▼
 Plan.Detect 提取 → 助手消息下方出现 "Create Plan" 按钮
@@ -76,6 +76,20 @@ Plan.Types.decode + normalize + validate（id 唯一/依赖存在/无环）
         ▼
 节点成功 → 解锁下游 → 并行调度（≤ concurrency 上限）
 ```
+
+### Plan Session（P6）
+
+用户不需要知道任何实现细节（schema / fenced JSON / preset）：
+
+1. ⚙ 菜单 → **New Plan Session** → 创建普通会话，但 spawn 时通过
+   `--system` 注入内置的**规划器指令**（`planSystemPrompt`，App/Update.elm
+   常量：身份 + 一次性输出 ```json 计划块 + schema + 质量规则 + "之后正常回答"）；
+2. 用户只用自然语言描述目标；
+3. 模型输出计划块 → 现有 Create Plan 流程接管（检测/校验/保存/Run 零改动）；
+4. 会话窗口标题带 `[Plan]` 前缀（`planSessionIds : Set String`）。
+
+链路：`create_session {systemPrompt}` → `spawn --system=<text>`（alayacore
+默认 system prompt 之后追加）。resume/fork 会话不传。
 
 ---
 
@@ -338,7 +352,8 @@ type Effect
 | P3 | `Plan/Layout` + DAG 视图（HTML/CSS，非 SVG）+ 节点详情面板 | ✅ 完成 |
 | P4 | `Plan/Runner` 状态机 + Run/Pause/Stop/Retry + 失败重试与原因记录 + run.json 持久化 + Resume | ✅ 完成 |
 | P4.5 | `create_session` 加 `preset`/`builtinTools` 参数 + settings.conf `builtin_tools` + 种子 preset 播种 | ✅ 完成 |
-| P5 | 打磨（运行日志/文档/README 等） | 进行中 |
+| P5 | 打磨（运行日志/文档/README 等） | ✅ 完成 |
+| P6 | Plan Session（菜单入口 + `--system` 规划器指令 + `[Plan]` 标题） | ✅ 完成 |
 
 > 实现偏差：DAG 渲染用纯 HTML/CSS（div 绝对定位 + 正交连线），因为
 > elm/svg 不在离线包缓存中；效果与 SVG 等价。会话创建采用**串行化**
@@ -352,7 +367,8 @@ type Effect
 ### 已确认（用户明确指示）
 - **不改 AlayaCore**（约束 C1）；
 - 内置工具集与工具确认一样**通过 spawn 参数指定**（`--builtin-tools`），配置放 settings.conf（per-preset，对称 tool_confirm）；
-- 设计写入本文档 + 用 TODO.md 管理后续开发（中断后先读本文 + TODO.md）。
+- 设计写入本文档 + 用 TODO.md 管理后续开发（中断后先读本文 + TODO.md）；
+- **Plan Session 入口**：用户只需描述需求，不应知道 schema/格式细节；菜单创建带规划器 system prompt 的会话（`--system`），标题带 `[Plan]` 前缀。
 
 ### 默认值（未显式确认，实现时按此执行，可在评审时调整）
 - `concurrency` 默认 2（1–8 可调）；

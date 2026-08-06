@@ -9,6 +9,7 @@ import Browser
 import Browser.Dom as Dom
 import Browser.Events as Evts
 import Dict exposing (Dict)
+import Set exposing (Set)
 import Html exposing (Html)
 import Json.Decode as D
 import Task
@@ -76,10 +77,12 @@ init _ =
       , planRunPath = Nothing
       , planResumePath = Nothing
       , planRunLog = []
+      , planSessionIds = Set.empty
+      , planSessionPending = False
       , homeDir = ""
       }
     , Cmd.batch
-        [ Ports.createSession { toolConfirm = Nothing, preset = Nothing, builtinTools = Nothing }
+        [ Ports.createSession { toolConfirm = Nothing, preset = Nothing, builtinTools = Nothing, systemPrompt = Nothing }
         , Ports.listPresets {}
         , Task.attempt GotContainerSize (Dom.getElement "main-content")
         ]

@@ -146,3 +146,25 @@ func TestCreateSessionExplicitBuiltinTools(t *testing.T) {
 	}
 	e.rpcOK(t, "close_session", map[string]any{"sessionId": sid})
 }
+
+// ─── create_session with systemPrompt (Plan Sessions, P6) ──────────
+
+func TestCreateSessionWithSystemPrompt(t *testing.T) {
+	e := newTestEnv(t, "")
+	body := e.rpcOK(t, "create_session", map[string]any{
+		"binaryPath":   "",
+		"configPath":   "",
+		"toolConfirm":  nil,
+		"systemPrompt": "你是任务规划助手，输出 ```json 计划块。",
+	})
+	var sid string
+	if err := json.Unmarshal(body, &sid); err != nil || sid == "" {
+		t.Fatalf("create with systemPrompt failed: body=%s err=%v", body, err)
+	}
+
+	// Session works (fakecore answers prompts regardless of --system).
+	e.rpcOK(t, "alayacore_send_prompt", map[string]any{
+		"sessionId": sid, "text": "hello", "media": []any{},
+	})
+	e.rpcOK(t, "close_session", map[string]any{"sessionId": sid})
+}

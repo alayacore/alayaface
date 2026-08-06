@@ -54,6 +54,7 @@ pub struct SessionConfig<'a> {
     pub model_cache: &'a ModelCache,
     pub tool_confirm: &'a str,
     pub builtin_tools: &'a str,
+    pub system_prompt: &'a str,
 }
 
 // ─── Factory ──────────────────────────────────────────────────────────
@@ -68,6 +69,7 @@ pub async fn create(cfg: SessionConfig<'_>) -> Result<String, String> {
         cfg.session_file,
         cfg.tool_confirm,
         cfg.builtin_tools,
+        cfg.system_prompt,
     )
     .map_err(|e| format!("Failed to start alayacore: {e}"))?;
 

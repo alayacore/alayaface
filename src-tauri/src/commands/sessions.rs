@@ -19,6 +19,7 @@ pub async fn create_session(
     tool_confirm: Option<String>,
     preset: Option<String>,
     builtin_tools: Option<String>,
+    system_prompt: Option<String>,
     sessions: State<'_, SessionMap>,
     model_cache: State<'_, ModelCache>,
 ) -> Result<String, String> {
@@ -53,12 +54,18 @@ pub async fn create_session(
             String::new()
         }),
     };
+    // Optional extra system prompt (Plan Sessions inject the planner
+    // instructions here; empty = don't pass --system).
+    let sp = system_prompt.unwrap_or_default();
     log::info!("Spawning: {} --rawio --config-path {} --session {}", &bin, &effective_config, &session_file);
     if !tc.is_empty() {
         log::info!("  with --tool-confirm={}", &tc);
     }
     if !bt.is_empty() {
         log::info!("  with --builtin-tools={}", &bt);
+    }
+    if !sp.is_empty() {
+        log::info!("  with --system ({} chars)", &sp.len());
     }
     if !preset_name.is_empty() {
         log::info!("  preset={}", &preset_name);
@@ -74,6 +81,7 @@ pub async fn create_session(
         model_cache: &model_cache,
         tool_confirm: &tc,
         builtin_tools: &bt,
+        system_prompt: &sp,
     }).await
 }
 
@@ -120,6 +128,7 @@ pub async fn resume_session(
         model_cache: &model_cache,
         tool_confirm: "",
         builtin_tools: "",
+        system_prompt: "",
     }).await
 }
 
@@ -220,5 +229,6 @@ pub async fn fork_session(
         model_cache: &model_cache,
         tool_confirm: "",
         builtin_tools: "",
+        system_prompt: "",
     }).await
 }

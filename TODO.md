@@ -49,6 +49,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P4 Runner state machine + retry + run.json + resume | [x] |
 | P4.5 create_session preset/builtinTools + settings.conf + seed presets | [x] |
 | P5 Polish (badges/logs/concurrency/export/docs/README) | [x] |
+| P6 Plan Session (menu entry, --system planner prompt, [Plan] title) | [x] |
 | P4 Runner state machine + retry + run.json + resume | [ ] |
 | P4.5 create_session preset/builtinTools + settings.conf + seed presets | [ ] |
 | P5 Polish (badges/logs/concurrency/export/docs/README) | [ ] |
@@ -232,6 +233,28 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
       to v2; concurrency comes from the plan JSON
 - [ ] Manual GUI acceptance (Tauri + Go browser) — needs GUI env; E2E via
       fakecore covers backend, runner covered by 114 elm tests
+
+## P6 — Plan Session (menu entry + --system planner prompt + [Plan] title)
+
+User-facing flow: ⚙ menu → **New Plan Session** → describe the goal in
+plain language → model emits the plan JSON → existing Create Plan flow.
+No implementation details exposed to the user.
+
+- [x] spawn()/Spawn() gain `system_prompt` → `--system=<text>` when
+      non-empty (appended to alayacore's default system prompt; AlayaCore
+      untouched) — Rust alayacore.rs + Go core.go
+- [x] create_session gains optional `systemPrompt` (Rust+Go) + SessionConfig/
+      CreateConfig fields; resume/fork pass empty
+- [x] Ports.createSession carries systemPrompt; bridge.js passes it
+- [x] App: `CreatePlanSession` Msg → createSession with the built-in
+      `planSystemPrompt` (planner instructions: emit ONE ```json block,
+      schema + quality rules, then answer normally); `planSessionPending`
+      marks the next SessionCreated; `planSessionIds : Set String`
+- [x] View: ⚙ menu "New Plan Session" (⧉) next to New Session; session
+      window title gets a "[Plan] " prefix for plan sessions
+- [x] Tests: Go integration (create_session with systemPrompt works,
+      fakecore answers prompts); Rust 35 / Go 8 pkgs / Elm 114 all green
+- [ ] Manual GUI smoke (needs GUI env)
 
 ---
 

@@ -26,8 +26,10 @@ type CoreProcess struct {
 // If toolConfirm is non-empty, passes --tool-confirm=<toolConfirm>.
 // If builtinTools is non-empty, passes --builtin-tools=<list> (empty =
 // don't pass the flag = alayacore default: all tools).
+// If systemPrompt is non-empty, passes --system=<text> (appended to the
+// default system prompt; used by Plan Sessions).
 // stderr is inherited so alayacore's own logs reach the terminal.
-func Spawn(binaryPath, configPath, sessionPath, toolConfirm, builtinTools string) (*CoreProcess, error) {
+func Spawn(binaryPath, configPath, sessionPath, toolConfirm, builtinTools, systemPrompt string) (*CoreProcess, error) {
 	args := []string{"--rawio"}
 	if configPath != "" {
 		args = append(args, "--config-path", configPath)
@@ -40,6 +42,9 @@ func Spawn(binaryPath, configPath, sessionPath, toolConfirm, builtinTools string
 	}
 	if builtinTools != "" {
 		args = append(args, "--builtin-tools="+builtinTools)
+	}
+	if systemPrompt != "" {
+		args = append(args, "--system="+systemPrompt)
 	}
 
 	cmd := exec.Command(binaryPath, args...)
