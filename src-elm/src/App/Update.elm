@@ -18,6 +18,7 @@ import Set exposing (Set)
 import Json.Decode as D
 import Json.Encode as E
 import Task
+import Time
 import App.Types exposing (..)
 import App.SelectorKit as Kit
 import Session.Types as T
@@ -25,6 +26,8 @@ import Session.Protocol as P
 import Session.Handlers as H
 import Session.Selector as Sel exposing (Page(..))
 import Session.FilePicker as FP
+import Plan.Types as PT
+import Plan.Detect
 import Overlay.HelpWindow exposing (HelpItem, filterHelpItems)
 import Ports
 
@@ -98,6 +101,52 @@ bufferPendingEvent model sessionId raw =
     ( { model | pendingEvents = Dict.insert sessionId (existing ++ [ raw ]) model.pendingEvents }
     , Cmd.none
     )
+
+
+-- PLAN MODE HELPERS
+
+plansDir : String -> String
+plansDir home =
+    home ++ "/.alayaface/plans"
+
+
+planDirEntryDecoder : D.Decoder { name : String, isDir : Bool }
+planDirEntryDecoder =
+    D.map2 (\n d -> { name = n, isDir = d })
+        (D.field "name" D.string)
+        (D.field "isDir" D.bool)
+
+
+fsOkDecoder : D.Decoder { ok : Bool, error : String }
+fsOkDecoder =
+    D.map2 (\ok err -> { ok = ok, error = err })
+        (D.field "ok" D.bool)
+        (D.field "error" D.string)
+
+
+fsReadOkDecoder : D.Decoder { ok : Bool, content : String, error : String }
+fsReadOkDecoder =
+    D.map3 (\ok content err -> { ok = ok, content = content, error = err })
+        (D.field "ok" D.bool)
+        (D.field "content" D.string)
+        (D.field "error" D.string)
+
+
+refreshPlanList : Model -> Cmd Msg
+refreshPlanList model =
+    if model.homeDir == "" then
+        Ports.fsHomeDir {}
+
+    else
+        Ports.fsListDir { path = plansDir model.homeDir }
+
+
+setPlanErrors : List String -> Model -> Model
+setPlanErrors errs model =
+    { model
+        | showPlanView = True
+        , planView = { plan = Nothing, path = Nothing, errors = errs, saving = False }
+    }
 
 
 -- UPDATE
@@ -263,19 +312,48 @@ update msg model =
                                     { model
                                         | sessions = Dict.insert ev.sessionId { newSession | prevMsgCount = List.length newSession.messages } model.sessions
                                     }
+
+                                -- Plan Mode: when an assistant message completes
+                                -- with a fenced ```json block, offer to turn it
+                                -- into a plan (single offer per message).
+                                updatedModel2 =
+                                    if ev.tag == "AT" then
+                                        case ev.content of
+                                            Just c ->
+                                                case Plan.Detect.extractPlanJson c of
+                                                    Just offerRaw ->
+                                                        case List.head (List.reverse newSession.messages) of
+                                                            Just m ->
+                                                                if m.role == T.Assistant && not (Dict.member m.id updatedModel.pendingPlanOffers) then
+                                                                    { updatedModel | pendingPlanOffers = Dict.insert m.id offerRaw updatedModel.pendingPlanOffers }
+
+                                                                else
+                                                                    updatedModel
+
+                                                            Nothing ->
+                                                                updatedModel
+
+                                                    Nothing ->
+                                                        updatedModel
+
+                                            Nothing ->
+                                                updatedModel
+
+                                    else
+                                        updatedModel
                             in
                             -- model_sync completes asynchronously via CO:
                             -- success closes the overlay, failure keeps it open
                             case decodeSyncOutcome raw of
                                 Just ( isError, message ) ->
                                     if newSession.modelSelector.page == ModelSelSyncing then
-                                        update (ForSession ev.sessionId (ModelSelectorSyncResult isError message)) updatedModel
+                                        update (ForSession ev.sessionId (ModelSelectorSyncResult isError message)) updatedModel2
 
                                     else
-                                        ( updatedModel, cmds )
+                                        ( updatedModel2, cmds )
 
                                 Nothing ->
-                                    ( updatedModel, cmds )
+                                    ( updatedModel2, cmds )
 
                         Nothing ->
                             bufferPendingEvent model ev.sessionId raw
@@ -989,28 +1067,61 @@ update msg model =
                     ( model, Cmd.none )
 
         FsListDirResult entries ->
-            let
-                parsed =
-                    List.filterMap FP.decodeDirEntry entries
-
-                -- Filter out ".." (parent directory entry) — not useful in UI
-                noDotDot =
-                    List.filter (\e -> e.name /= "..") parsed
-            in
-            ( updateActiveSession model (\s ->
+            if model.planManager.show then
+                -- Plan manager is listing ~/.alayaface/plans: keep only
+                -- *.json files (skip *.run.json run-state files).
                 let
-                    fp =
-                        s.filePicker
+                    parsed =
+                        List.filterMap (\v -> D.decodeValue planDirEntryDecoder v |> Result.toMaybe) entries
+                            |> List.filter (\e -> not e.isDir)
+                            |> List.map .name
+                            |> List.filter (\n -> String.endsWith ".json" n && not (String.endsWith ".run.json" n))
+                            |> List.sort
+
+                    files =
+                        List.map
+                            (\n -> { name = n, path = plansDir model.homeDir ++ "/" ++ n })
+                            parsed
                 in
-                { s
-                    | filePicker = { fp | entries = noDotDot, loading = False, error = Nothing }
-                }
-              )
-            , Cmd.none
-            )
+                ( { model
+                    | planManager =
+                        { show = True
+                        , loading = False
+                        , plans = files
+                        , error = Nothing
+                        , importPath = model.planManager.importPath
+                        }
+                  }
+                , Cmd.none
+                )
+
+            else
+                let
+                    parsed =
+                        List.filterMap FP.decodeDirEntry entries
+
+                    -- Filter out ".." (parent directory entry) — not useful in UI
+                    noDotDot =
+                        List.filter (\e -> e.name /= "..") parsed
+                in
+                ( updateActiveSession model (\s ->
+                    let
+                        fp =
+                            s.filePicker
+                    in
+                    { s
+                        | filePicker = { fp | entries = noDotDot, loading = False, error = Nothing }
+                    }
+                  )
+                , Cmd.none
+                )
 
         FsHomeDirResult home ->
-            ( updateActiveSession model (\s ->
+            let
+                model2 =
+                    { model | homeDir = home }
+            in
+            ( updateActiveSession model2 (\s ->
                 let
                     fp =
                         s.filePicker
@@ -1026,15 +1137,23 @@ update msg model =
                         }
                 }
               )
-            , case model.activeId of
-                Just sid ->
-                    Cmd.batch
-                        [ Ports.fsListDir { path = home }
-                        , focusAfterDelay ("fp-page-input-" ++ sid)
-                        , Ports.setCursorPos ("fp-page-input-" ++ sid)
-                        ]
-                Nothing ->
-                    Ports.fsListDir { path = home }
+            , Cmd.batch
+                [ Ports.fsListDir { path = home }
+                , if model2.planManager.show then
+                    Ports.fsListDir { path = plansDir home }
+
+                  else
+                    Cmd.none
+                , case model.activeId of
+                    Just sid ->
+                        Cmd.batch
+                            [ focusAfterDelay ("fp-page-input-" ++ sid)
+                            , Ports.setCursorPos ("fp-page-input-" ++ sid)
+                            ]
+
+                    Nothing ->
+                        Cmd.none
+                ]
             )
 
         FsReadFileResult uri ->
@@ -1074,14 +1193,92 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
-        -- Text file write/read results (Plan Mode storage).
-        -- P2 wires these into the plan save/load flow; for now the
-        -- result is acknowledged and surfaced in the console.
-        FsWriteResult _ ->
-            ( model, Cmd.none )
+        -- Text file write result: Plan Mode plan save (only writer so far).
+        FsWriteResult raw ->
+            case D.decodeValue fsOkDecoder raw of
+                Ok { ok, error } ->
+                    if ok then
+                        let
+                            model2 =
+                                { model
+                                    | planView =
+                                        { plan = model.planView.plan
+                                        , path = model.planView.path
+                                        , errors = model.planView.errors
+                                        , saving = False
+                                        }
+                                    , planManager =
+                                        { show = model.planManager.show
+                                        , loading = False
+                                        , plans = model.planManager.plans
+                                        , error = Nothing
+                                        , importPath = model.planManager.importPath
+                                        }
+                                }
+                        in
+                        ( model2
+                        , refreshPlanList model2
+                        )
 
-        FsReadResult _ ->
-            ( model, Cmd.none )
+                    else
+                        ( setPlanErrors [ error ] model, Cmd.none )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        -- Text file read result: Plan Mode open/import.
+        FsReadResult raw ->
+            case D.decodeValue fsReadOkDecoder raw of
+                Ok { ok, content, error } ->
+                    if ok then
+                        case PT.parsePlan content of
+                            Ok plan ->
+                                ( { model
+                                    | showPlanView = True
+                                    , planView = { plan = Just plan, path = Nothing, errors = [], saving = False }
+                                    , planManager =
+                                        { show = False
+                                        , loading = False
+                                        , plans = model.planManager.plans
+                                        , error = Nothing
+                                        , importPath = ""
+                                        }
+                                  }
+                                , Cmd.none
+                                )
+
+                            Err errs ->
+                                ( setPlanErrors errs model, Cmd.none )
+
+                    else
+                        ( setPlanErrors [ error ] model, Cmd.none )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        FsDeleteResult raw ->
+            case D.decodeValue fsOkDecoder raw of
+                Ok { ok, error } ->
+                    if ok then
+                        let
+                            pm =
+                                model.planManager
+                        in
+                        ( { model | planManager = { pm | error = Nothing } }
+                        , refreshPlanList model
+                        )
+
+                    else
+                        let
+                            pm =
+                                model.planManager
+                        in
+                        ( { model | planManager = { pm | error = Just error } }
+                        , Cmd.none
+                        )
+
+                Err _ ->
+                    ( model, Cmd.none )
 
         FsResolvePathResult result ->
             case getActiveSession model of
@@ -1126,6 +1323,105 @@ update msg model =
             ( { model | showSessionManager = False }
             , focusInput model
             )
+
+        -- Plan Mode
+        OpenPlanManager ->
+            let
+                pm =
+                    model.planManager
+            in
+            ( { model
+                | showGlobalMenu = False
+                , planManager = { pm | show = True, loading = True, error = Nothing }
+              }
+            , if model.homeDir == "" then
+                Ports.fsHomeDir {}
+
+              else
+                Ports.fsListDir { path = plansDir model.homeDir }
+            )
+
+        ClosePlanManager ->
+            let
+                pm =
+                    model.planManager
+            in
+            ( { model | planManager = { pm | show = False, importPath = "" } }
+            , Cmd.none
+            )
+
+        PlanManagerOpen path ->
+            ( model, Ports.fsReadFileText { path = path } )
+
+        PlanManagerDelete path ->
+            ( model, Ports.fsDeleteFile { path = path } )
+
+        PlanManagerSetImport text ->
+            let
+                pm =
+                    model.planManager
+            in
+            ( { model | planManager = { pm | importPath = text } }
+            , Cmd.none
+            )
+
+        PlanManagerImport ->
+            let
+                path =
+                    String.trim model.planManager.importPath
+            in
+            if path == "" then
+                let
+                    pm =
+                        model.planManager
+                in
+                ( { model | planManager = { pm | error = Just "Enter a file path to import" } }
+                , Cmd.none
+                )
+
+            else
+                ( model, Ports.fsReadFileText { path = path } )
+
+        PlanCreateOffer messageId ->
+            case Dict.get messageId model.pendingPlanOffers of
+                Just rawJson ->
+                    let
+                        -- consume the offer immediately (single-use)
+                        model2 =
+                            { model | pendingPlanOffers = Dict.remove messageId model.pendingPlanOffers }
+                    in
+                    case PT.parsePlan rawJson of
+                        Ok plan ->
+                            ( model2
+                            , Task.perform (PlanSaveReady plan) (Task.map Time.posixToMillis Time.now)
+                            )
+
+                        Err errs ->
+                            ( setPlanErrors errs model2, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        PlanSaveReady plan timestamp ->
+            let
+                planId =
+                    PT.slugify plan.name ++ "-" ++ String.fromInt timestamp
+
+                path =
+                    plansDir model.homeDir ++ "/" ++ planId ++ ".json"
+
+                content =
+                    E.encode 2 (PT.encodePlan plan)
+            in
+            ( { model
+                | showPlanView = True
+                , planView = { plan = Just plan, path = Just path, errors = [], saving = True }
+              }
+            , Ports.fsWriteFileText { path = path, content = content, createParents = True }
+            )
+
+        ClosePlanView ->
+            ( { model | showPlanView = False }, Cmd.none )
 
         ToggleGlobalMenu ->
             ( { model | showGlobalMenu = not model.showGlobalMenu }, Cmd.none )

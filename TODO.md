@@ -44,7 +44,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 |-------|--------|
 | P0 Plan data model + detection (pure Elm) | [x] |
 | P1 fs_write_file_text / fs_read_file_text (Rust+Go+bridge+Ports) | [x] |
-| P2 Create Plan flow + plans dir + Plans manager | [ ] |
+| P2 Create Plan flow + plans dir + Plans manager | [x] |
 | P3 DAG layout + SVG view + node→session click | [ ] |
 | P4 Runner state machine + retry + run.json + resume | [ ] |
 | P4.5 create_session preset/builtinTools + settings.conf + seed presets | [ ] |
@@ -101,17 +101,26 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 
 ## P2 — Create Plan flow + plans dir + Plans manager
 
-- [ ] App shell integration: `showPlanView`, `plans`, `planManager`,
-      `pendingPlanOffers` in App/Types Model; Msg wiring in Main/Update
-- [ ] "Create Plan" button under assistant message when `pendingPlanOffers`
+- [x] App shell integration: `showPlanView`, `planView`, `planManager`,
+      `pendingPlanOffers`, `homeDir` in App/Types Model; Msg wiring in
+      Main/Update
+- [x] "Create Plan" button under assistant message when `pendingPlanOffers`
       has an entry for it (View)
-- [ ] Create Plan flow: decode→validate→normalize→planId (name slug + ts)→
-      `fs_write_file_text` to `~/.alayaface/plans/<planId>.json` (createParents)→
-      open Plan window; validation errors shown in view
-- [ ] Plans manager overlay: list `~/.alayaface/plans/*.json` (via fs_home_dir +
-      fs_list_dir), Open / Delete / Import from file (reuse FilePicker)
-- [ ] Global menu: add "Plans" entry
-- [ ] Manual smoke (Go backend browser)
+- [x] Create Plan flow: detect ```json in AT frame → offer → decode→validate→
+      normalize→planId (name slug + timestamp)→ `fs_write_file_text` to
+      `~/.alayaface/plans/<planId>.json` (createParents)→ open Plan window;
+      validation errors shown in Plan view
+- [x] Plans manager overlay: list `~/.alayaface/plans/*.json` (via fs_home_dir +
+      fs_list_dir, filters out *.run.json), Open / Delete / Import via path input
+      (added fs_delete_file command Rust+Go+ports+tests)
+- [x] Global menu: "Plans" entry (🕸)
+- [x] Plan view (P2 list form; P3 upgrades to SVG DAG): name/goal/meta/path +
+      task list with id/title/preset/deps
+- [ ] MANUAL smoke (Go backend browser / Tauri) — needs GUI env
+- [x] Note: fs_list_dir results are shared with the file picker; the
+      FsListDirResult branch routes to plan list when planManager.show
+- [x] Note: Elm record-update requires a variable on the left — cannot
+      `{ model.planManager | ... }`; bind `pm = model.planManager` first
 
 ## P3 — DAG layout + SVG view + node→session click
 

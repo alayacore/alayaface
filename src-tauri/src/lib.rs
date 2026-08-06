@@ -58,6 +58,7 @@ pub fn run() {
             commands::fs_read_file_data_uri,
             commands::fs_write_file_text,
             commands::fs_read_file_text,
+            commands::fs_delete_file,
             commands::start_mcp_auth_flow,
             commands::fill_mcp_auth_url,
             commands::list_default_mcp,

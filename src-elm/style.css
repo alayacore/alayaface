@@ -2458,3 +2458,105 @@ body {
   }
   .media-preview-unsupported-text { color: #333; }
 }
+
+/* ─── Plan Mode ─────────────────────────────────────────────────── */
+
+.plan-offer {
+  padding: 4px 12px 10px 12px;
+}
+
+.plan-offer-btn {
+  background: #6366f1;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.plan-offer-btn:hover { background: #4f52e0; }
+
+.plan-page {
+  min-width: 520px;
+  max-width: 720px;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.plan-page-title {
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.plan-page-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+}
+
+.plan-page-name { font-size: 1.1rem; font-weight: 700; }
+.plan-page-goal { color: #888; font-size: 0.85rem; }
+.plan-page-meta { color: #666; font-size: 0.75rem; }
+.plan-page-path { color: #888; font-size: 0.7rem; word-break: break-all; }
+
+.plan-page-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.plan-task {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #fafafa;
+}
+
+.plan-task-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.plan-task-id {
+  font-family: monospace;
+  font-size: 0.75rem;
+  background: #eef;
+  color: #4f52e0;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.plan-task-title { font-size: 0.85rem; font-weight: 600; flex: 1; }
+
+.plan-task-preset {
+  font-size: 0.7rem;
+  color: #666;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.plan-task-deps { font-size: 0.7rem; color: #999; margin-top: 4px; }
+
+.plan-import-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 12px;
+  align-items: center;
+}
+
+.plan-import-input {
+  flex: 1;
+  padding: 5px 8px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  background: transparent;
+  color: inherit;
+}
+.plan-import-input:focus { border-color: #6366f1; outline: none; }

@@ -205,6 +205,19 @@ pub async fn fs_read_file_text(path: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| format!("Cannot read file: {}", e))
 }
 
+/// Delete a file. Used by Plan Mode to remove saved plans.
+#[command]
+pub async fn fs_delete_file(path: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if !p.exists() {
+        return Err("Cannot delete file: Path does not exist".to_string());
+    }
+    if p.is_dir() {
+        return Err("Cannot delete file: Is a directory".to_string());
+    }
+    std::fs::remove_file(p).map_err(|e| format!("Cannot delete file: {}", e))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,6 +273,36 @@ mod tests {
         let path = file.to_string_lossy().to_string();
         let err = fs_read_file_text(path).await.unwrap_err();
         assert!(err.starts_with("Cannot read file:"), "got: {err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn delete_file_roundtrip() {
+        let dir = temp_path("delete");
+        let file = dir.join("d.txt");
+        let path = file.to_string_lossy().to_string();
+        fs_write_file_text(path.clone(), "x".to_string(), Some(false)).await.unwrap();
+        fs_delete_file(path.clone()).await.unwrap();
+        assert!(!file.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn delete_missing_file_fails_cleanly() {
+        let dir = temp_path("deletemissing");
+        let file = dir.join("nope.txt");
+        let path = file.to_string_lossy().to_string();
+        let err = fs_delete_file(path).await.unwrap_err();
+        assert_eq!(err, "Cannot delete file: Path does not exist");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn delete_directory_fails_cleanly() {
+        let dir = temp_path("deletedir");
+        let path = dir.to_string_lossy().to_string();
+        let err = fs_delete_file(path).await.unwrap_err();
+        assert_eq!(err, "Cannot delete file: Is a directory");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

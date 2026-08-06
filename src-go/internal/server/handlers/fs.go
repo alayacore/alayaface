@@ -264,3 +264,28 @@ func FsReadFileText(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	}
 	return writeResult(w, string(text))
 }
+
+// FsDeleteFile deletes a file. Used by Plan Mode to remove saved plans.
+// Mirrors Rust fs_delete_file exactly.
+func FsDeleteFile(h *Handler, w http.ResponseWriter, r *http.Request) error {
+	var args struct {
+		Path string `json:"path"`
+	}
+	if err := decodeArgs(r, &args); err != nil {
+		return err
+	}
+	fi, err := os.Stat(args.Path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("Cannot delete file: Path does not exist")
+		}
+		return fmt.Errorf("Cannot delete file: %w", err)
+	}
+	if fi.IsDir() {
+		return fmt.Errorf("Cannot delete file: Is a directory")
+	}
+	if err := os.Remove(args.Path); err != nil {
+		return fmt.Errorf("Cannot delete file: %w", err)
+	}
+	return writeResult(w, nil)
+}

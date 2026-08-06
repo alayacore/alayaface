@@ -72,3 +72,27 @@ func TestFsReadFileTextMissingParity(t *testing.T) {
 		t.Fatalf("error message parity broken: %q", msg)
 	}
 }
+
+func TestFsDeleteFileParity(t *testing.T) {
+	e := newTestEnv(t, "")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "del.txt")
+
+	// missing → exact parity message
+	if msg := e.rpcErr(t, "fs_delete_file", map[string]any{"path": path}); msg != "Cannot delete file: Path does not exist" {
+		t.Fatalf("missing-file parity broken: %q", msg)
+	}
+
+	// write then delete succeeds
+	e.rpcOK(t, "fs_write_file_text", map[string]any{"path": path, "content": "x"})
+	e.rpcOK(t, "fs_delete_file", map[string]any{"path": path})
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected file removed, err=%v", err)
+	}
+
+	// directory → exact parity message
+	msg := e.rpcErr(t, "fs_delete_file", map[string]any{"path": dir})
+	if msg != "Cannot delete file: Is a directory" {
+		t.Fatalf("directory parity broken: %q", msg)
+	}
+}

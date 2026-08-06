@@ -430,6 +430,18 @@
         });
     });
 
+    on("fsDeleteFile", function (data) {
+      transport.invoke("fs_delete_file", { path: data.path })
+        .then(function () {
+          app.ports.onFsDeleteResult.send({ ok: true, error: "" });
+        })
+        .catch(function (err) {
+          app.ports.onFsDeleteResult.send({
+            ok: false, error: String((err && err.message) || err),
+          });
+        });
+    });
+
     on("scrollToBottom", function (data) {
       var el = document.querySelector("#msg-input-" + data.sessionId);
       if (el) {

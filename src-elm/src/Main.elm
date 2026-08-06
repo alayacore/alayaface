@@ -65,6 +65,11 @@ init _ =
       , ctxSessionId = ""
       , appWidth = 1400
       , appHeight = 900
+      , showPlanView = False
+      , planView = emptyPlanView
+      , planManager = emptyPlanManager
+      , pendingPlanOffers = Dict.empty
+      , homeDir = ""
       }
     , Cmd.batch
         [ Ports.createSession { toolConfirm = Nothing }
@@ -109,6 +114,7 @@ subscriptions model =
         , Ports.onFsReadFileDataUri (\uri -> FsReadFileResult uri)
         , Ports.onFsWriteResult (\raw -> FsWriteResult raw)
         , Ports.onFsReadResult (\raw -> FsReadResult raw)
+        , Ports.onFsDeleteResult (\raw -> FsDeleteResult raw)
         , Ports.onFsResolvePath (\result -> FsResolvePathResult result)
         , Ports.onWindowMaximized (\v -> WindowMaximized v)
         , Evts.onResize (\_ _ -> RequerySize)

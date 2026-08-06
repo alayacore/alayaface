@@ -15,6 +15,11 @@ module App.Types exposing
     , PresetInfo
     , PresetManager
     , emptyPresetManager
+    , PlanFileInfo
+    , PlanViewState
+    , emptyPlanView
+    , PlanManagerState
+    , emptyPlanManager
     )
 
 {-| Application-level model, message, and editor/window types.
@@ -27,6 +32,7 @@ The session-level types live in Session/Types.elm.
 import Browser.Dom as Dom
 import Dict exposing (Dict)
 import Json.Encode as E
+import Plan.Types as PT
 import Session.Selector as Sel
 import Session.Types as T
 
@@ -71,6 +77,12 @@ type alias Model =
     , ctxSessionId : String
     , appWidth : Int
     , appHeight : Int
+      -- Plan Mode
+    , showPlanView : Bool
+    , planView : PlanViewState
+    , planManager : PlanManagerState
+    , pendingPlanOffers : Dict String String
+    , homeDir : String
     }
 
 
@@ -117,6 +129,7 @@ type Msg
     | FsResolvePathResult E.Value
     | FsWriteResult E.Value
     | FsReadResult E.Value
+    | FsDeleteResult E.Value
       -- Session manager
     | OpenSessionManager
     | CloseSessionManager
@@ -216,6 +229,16 @@ type Msg
       -- Media preview (click a multimodal chip)
     | OpenMediaPreview T.MediaItem
     | CloseMediaPreview
+      -- Plan Mode
+    | OpenPlanManager
+    | ClosePlanManager
+    | PlanManagerOpen String
+    | PlanManagerDelete String
+    | PlanManagerSetImport String
+    | PlanManagerImport
+    | PlanCreateOffer String
+    | PlanSaveReady PT.Plan Int
+    | ClosePlanView
       -- Session wrapper
     | ForSession String Msg
       -- Window dragging
@@ -370,4 +393,51 @@ emptyPresetManager =
     , editing = Nothing
     , confirmDelete = Nothing
     , error = Nothing
+    }
+
+
+-- PLAN MODE
+
+-- A saved plan file in ~/.alayaface/plans/.
+type alias PlanFileInfo =
+    { name : String
+    , path : String
+    }
+
+
+-- The currently opened plan (P2: list view; P3: SVG DAG).
+type alias PlanViewState =
+    { plan : Maybe PT.Plan
+    , path : Maybe String
+    , errors : List String
+    , saving : Bool
+    }
+
+
+emptyPlanView : PlanViewState
+emptyPlanView =
+    { plan = Nothing
+    , path = Nothing
+    , errors = []
+    , saving = False
+    }
+
+
+-- Plans manager overlay state.
+type alias PlanManagerState =
+    { show : Bool
+    , loading : Bool
+    , plans : List PlanFileInfo
+    , error : Maybe String
+    , importPath : String
+    }
+
+
+emptyPlanManager : PlanManagerState
+emptyPlanManager =
+    { show = False
+    , loading = False
+    , plans = []
+    , error = Nothing
+    , importPath = ""
     }

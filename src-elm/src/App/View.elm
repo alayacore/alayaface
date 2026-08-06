@@ -21,6 +21,7 @@ import App.Update exposing (SessionDir, decodeSessionDir, helpItems, nextCopyNam
 import Session.Types as T
 import Session.Selector as Sel exposing (Page(..))
 import Session.FilePicker as FP
+import Plan.Types as PT
 import Overlay.ConfirmTool
 import Overlay.Settings
 import Overlay.PresetManager
@@ -67,6 +68,8 @@ view model =
         , viewDefaultModelsEditorOverlay model
         , viewMcpEditorOverlay model
         , viewSettingsEditorOverlay model
+        , viewPlanOverlay model
+        , viewPlanManagerOverlay model
         ]
 
 
@@ -209,6 +212,13 @@ viewGlobalMenu model =
                            )
                     )
                 ]
+            , Html.div
+                [ Attr.class "global-menu-item"
+                , Ev.onClick OpenPlanManager
+                ]
+                [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "🕸" ]
+                , Html.text " Plans"
+                ]
             ]
         , Html.button
             [ Attr.class "global-menu-btn"
@@ -298,6 +308,153 @@ viewSessionManagerOverlay model =
         Html.text ""
 
 
+-- PLAN MODE VIEWS
+
+viewPlanOverlay : Model -> Html Msg
+viewPlanOverlay model =
+    if model.showPlanView then
+        let
+            pv =
+                model.planView
+        in
+        viewOverlay ClosePlanView
+            [ Html.div [ Attr.class "plan-page" ]
+                [ Html.div [ Attr.class "plan-page-title" ] [ Html.text "Plan" ]
+                , case pv.errors of
+                    err :: _ ->
+                        Html.div [ Attr.class "sel-page-status sel-page-status-error" ]
+                            [ Html.text (String.join "\n" pv.errors) ]
+
+                    [] ->
+                        Html.text ""
+                , case pv.plan of
+                    Just plan ->
+                        Html.div [ Attr.class "plan-page-body" ]
+                            [ Html.div [ Attr.class "plan-page-name" ] [ Html.text plan.name ]
+                            , Html.div [ Attr.class "plan-page-goal" ]
+                                [ Html.text (if plan.goal == "" then "" else plan.goal) ]
+                            , Html.div [ Attr.class "plan-page-meta" ]
+                                [ Html.text
+                                    ("Concurrency: "
+                                        ++ String.fromInt plan.concurrency
+                                        ++ "  ·  Max attempts: "
+                                        ++ String.fromInt plan.defaultMaxAttempts
+                                    )
+                                ]
+                            , case pv.path of
+                                Just p ->
+                                    Html.div [ Attr.class "plan-page-path" ]
+                                        [ Html.text ("Saved: " ++ p) ]
+
+                                Nothing ->
+                                    Html.text ""
+                            , Html.div [ Attr.class "plan-page-list" ]
+                                (List.map viewPlanTask plan.tasks)
+                            ]
+
+                    Nothing ->
+                        Html.text ""
+                ]
+            ]
+
+    else
+        Html.text ""
+
+
+viewPlanTask : PT.TaskNode -> Html Msg
+viewPlanTask t =
+    Html.div [ Attr.class "plan-task" ]
+        [ Html.div [ Attr.class "plan-task-head" ]
+            [ Html.span [ Attr.class "plan-task-id" ] [ Html.text t.id ]
+            , Html.span [ Attr.class "plan-task-title" ] [ Html.text t.title ]
+            , Html.span [ Attr.class "plan-task-preset" ]
+                [ Html.text (Maybe.withDefault "default" t.preset) ]
+            ]
+        , Html.div [ Attr.class "plan-task-deps" ]
+            [ Html.text
+                (if List.isEmpty t.dependsOn then
+                    "no dependencies"
+
+                 else
+                    "depends: " ++ String.join ", " t.dependsOn
+                )
+            ]
+        ]
+
+
+viewPlanManagerOverlay : Model -> Html Msg
+viewPlanManagerOverlay model =
+    if model.planManager.show then
+        let
+            pm =
+                model.planManager
+        in
+        viewOverlay ClosePlanManager
+            [ Html.div [ Attr.class "sel-page" ]
+                [ Html.div [ Attr.class "sel-page-title" ] [ Html.text "Plans" ]
+                , case pm.error of
+                    Just err ->
+                        Html.div [ Attr.class "sel-page-status sel-page-status-error" ] [ Html.text err ]
+
+                    Nothing ->
+                        Html.text ""
+                , if pm.loading then
+                    Html.div [ Attr.class "sel-page-status" ] [ Html.text "Loading…" ]
+
+                  else if List.isEmpty pm.plans then
+                    Html.div [ Attr.class "sel-page-status" ]
+                        [ Html.text "No plans yet. Ask a session to output a ```json plan block, or import a file." ]
+
+                  else
+                    Html.div [ Attr.class "sel-page-list" ]
+                        (List.map viewPlanFile pm.plans)
+                , Html.div [ Attr.class "plan-import-row" ]
+                    [ Html.input
+                        [ Attr.class "plan-import-input"
+                        , Attr.placeholder "Path to plan JSON…"
+                        , Attr.value pm.importPath
+                        , Ev.onInput PlanManagerSetImport
+                        ]
+                        []
+                    , Html.button
+                        [ Attr.class "confirm-page-btn confirm-page-btn-allow"
+                        , Ev.onClick PlanManagerImport
+                        , Attr.style "padding" "4px 10px"
+                        , Attr.style "font-size" "0.75rem"
+                        , Attr.style "min-width" "auto"
+                        ]
+                        [ Html.text "Import" ]
+                    ]
+                ]
+            ]
+
+    else
+        Html.text ""
+
+
+viewPlanFile : PlanFileInfo -> Html Msg
+viewPlanFile info =
+    Html.div [ Attr.class "sel-page-item" ]
+        [ Html.span [ Attr.class "sel-page-item-name" ] [ Html.text info.name ]
+        , Html.button
+            [ Attr.class "confirm-page-btn confirm-page-btn-allow"
+            , Ev.onClick (PlanManagerOpen info.path)
+            , Attr.style "padding" "4px 10px"
+            , Attr.style "font-size" "0.75rem"
+            , Attr.style "min-width" "auto"
+            ]
+            [ Html.text "Open" ]
+        , Html.button
+            [ Attr.class "confirm-page-btn confirm-page-btn-deny"
+            , Ev.onClick (PlanManagerDelete info.path)
+            , Attr.style "padding" "4px 10px"
+            , Attr.style "font-size" "0.75rem"
+            , Attr.style "min-width" "auto"
+            ]
+            [ Html.text "Delete" ]
+        ]
+
+
 viewChatArea : Model -> T.SessionState -> Html Msg
 viewChatArea model session =
     let
@@ -311,7 +468,7 @@ viewChatArea model session =
                 [ Attr.class "messages"
                 , Attr.attribute "data-session" session.id
                 ]
-                (List.map (viewMessage model.cursorMsgId session) session.messages
+                (List.map (viewMessage model session) session.messages
 
                     ++ [ Html.div [] [] ]
                 )
@@ -328,11 +485,11 @@ viewChatArea model session =
         ]
 
 
-viewMessage : Maybe String -> T.SessionState -> T.Message -> Html Msg
-viewMessage cursorMsgId session msg =
+viewMessage : Model -> T.SessionState -> T.Message -> Html Msg
+viewMessage model session msg =
     let
         isCursor =
-            case cursorMsgId of
+            case model.cursorMsgId of
                 Just c -> c == msg.id
                 Nothing -> False
 
@@ -386,6 +543,18 @@ viewMessage cursorMsgId session msg =
 
           else
             viewMsgBody session.id msg
+        , if msg.role == T.Assistant && Dict.member msg.id model.pendingPlanOffers then
+            Html.div [ Attr.class "plan-offer" ]
+                [ Html.button
+                    [ Attr.class "plan-offer-btn"
+                    , Ev.onClick (PlanCreateOffer msg.id)
+                    , Attr.title "Detected a ```json plan block in this message"
+                    ]
+                    [ Html.text "Create Plan" ]
+                ]
+
+          else
+            Html.text ""
         ]
 
 
