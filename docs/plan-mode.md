@@ -284,6 +284,16 @@ type Effect
   `<plan>.run.json`（best-effort），恢复各节点状态与 sessionId —— 之后
   点击任意已运行节点即可重新打开其会话；**Load run** 则在恢复后继续执行
   未完成任务；
+- **节点 ↔ 会话连接曲线（P19）**：聚焦某个属于 plan 节点的会话时——
+  - 该 plan 窗口自动提到**第二层**（session z = plan z + 1）；
+  - bridge.js 在 `<body>` 上绘制一条**贝塞尔曲线**（rAF 每帧量 DOM
+    `getBoundingClientRect`，拖动/缩放/滚动自动跟随），从会话窗口最靠近
+    节点的那条边中点连到节点卡片中心，z-index 取 plan 窗口值（同值 +
+    后插入 body → 在 plan 之上、session 之下）；
+  - 纯逻辑在 `App/NodeConnection.elm`（`planNodeSessions` 标签 + P18 的
+    `planResumedFrom` 解析 resume 出的 live id；node id 可含 `/`）；
+  - 消失时机：聚焦非节点会话 / plan 窗口、关闭或删除该会话或 plan 窗口；
+    节点被滚出画布可视区时 JS 自动隐藏；
 - 底部：运行日志流（每节点启动/成功/失败/重试事件）；
 - 关闭 plan 窗口不会停止正在运行的节点会话（run.json 持续落盘，可 Load run
   恢复）；手动关闭某节点会话窗口会向 runner 注入断连事件 → 该节点按失败重试。

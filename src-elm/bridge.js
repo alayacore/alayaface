@@ -500,6 +500,117 @@
       if (el) { el.scrollIntoView({ block: "nearest" }); }
     });
 
+    // ── Node ↔ session connection curve (P19) ───────────────────────
+    // Elm raises the plan window to the second layer when its node's
+    // session is focused; this overlay draws a bezier from the session
+    // window edge to the node card. Lives on <body> (outside Elm's vdom)
+    // with the plan window's z-index: same value + later DOM position →
+    // above the plan window; the session is planZ + 1 → above the curve.
+    var nodeConnection = null;
+    var connSvg = null;
+    var connPath = null;
+    var connRaf = 0;
+
+    function ensureConnSvg() {
+      if (connSvg) return connSvg;
+      var ns = "http://www.w3.org/2000/svg";
+      connSvg = document.createElementNS(ns, "svg");
+      connSvg.setAttribute("class", "node-connection-overlay");
+      connSvg.style.display = "none";
+      connPath = document.createElementNS(ns, "path");
+      connPath.setAttribute("class", "node-connection-curve");
+      connSvg.appendChild(connPath);
+      document.body.appendChild(connSvg);
+      return connSvg;
+    }
+
+    function connSessionPanel(sid) {
+      var panels = document.querySelectorAll(".session-panel");
+      for (var i = 0; i < panels.length; i++) {
+        if (panels[i].dataset.session === sid) return panels[i];
+      }
+      return null;
+    }
+
+    function connPlanPanel(planId) {
+      var panels = document.querySelectorAll(".plan-panel");
+      for (var i = 0; i < panels.length; i++) {
+        if (panels[i].dataset.plan === planId) return panels[i];
+      }
+      return null;
+    }
+
+    function connNodeEl(planPanel, nodeId) {
+      if (!planPanel) return null;
+      var nodes = planPanel.querySelectorAll(".plan-node");
+      for (var i = 0; i < nodes.length; i++) {
+        var idEl = nodes[i].querySelector(".plan-node-id");
+        if (idEl && idEl.textContent === nodeId) return nodes[i];
+      }
+      return null;
+    }
+
+    function drawNodeConnection() {
+      if (!nodeConnection) {
+        if (connSvg) connSvg.style.display = "none";
+        return;
+      }
+      var s = connSessionPanel(nodeConnection.sessionId);
+      var plan = connPlanPanel(nodeConnection.planId);
+      var n = connNodeEl(plan, nodeConnection.nodeId);
+      if (!s || !plan || !n) {
+        if (connSvg) connSvg.style.display = "none";
+        return;
+      }
+      var sr = s.getBoundingClientRect();
+      var nr = n.getBoundingClientRect();
+      var pr = plan.getBoundingClientRect();
+      // Node scrolled out of the plan window's visible area → hide.
+      if (nr.right < pr.left || nr.left > pr.right ||
+          nr.bottom < pr.top || nr.top > pr.bottom) {
+        if (connSvg) connSvg.style.display = "none";
+        return;
+      }
+      var svg = ensureConnSvg();
+      // Anchor on the session edge nearest the node center.
+      var nx = nr.left + nr.width / 2;
+      var ny = nr.top + nr.height / 2;
+      var from;
+      if (nx < sr.left) from = { x: sr.left, y: sr.top + sr.height / 2 };
+      else if (nx > sr.right) from = { x: sr.right, y: sr.top + sr.height / 2 };
+      else if (ny < sr.top) from = { x: sr.left + sr.width / 2, y: sr.top };
+      else from = { x: sr.left + sr.width / 2, y: sr.bottom };
+      var to = { x: nx, y: ny };
+      var dx = to.x - from.x, dy = to.y - from.y;
+      var dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      var bow = Math.max(10, Math.min(48, dist * 0.12));
+      var bx = (-dy / dist) * bow, by = (dx / dist) * bow;
+      var d = "M " + from.x.toFixed(1) + " " + from.y.toFixed(1)
+        + " C " + (from.x + dx * 0.33 + bx).toFixed(1) + " " + (from.y + dy * 0.33 + by).toFixed(1)
+        + " " + (from.x + dx * 0.66 + bx).toFixed(1) + " " + (from.y + dy * 0.66 + by).toFixed(1)
+        + " " + to.x.toFixed(1) + " " + to.y.toFixed(1);
+      connPath.setAttribute("d", d);
+      svg.setAttribute("width", String(window.innerWidth));
+      svg.setAttribute("height", String(window.innerHeight));
+      // Match the plan window's z-index: above it (same z, later in
+      // <body>), below the session (session z = planZ + 1).
+      var planZ = parseInt(getComputedStyle(plan).zIndex, 10) || 0;
+      svg.style.zIndex = String(planZ);
+      svg.style.display = "block";
+    }
+
+    on("setNodeConnection", function (data) {
+      nodeConnection = data || null;
+      if (nodeConnection && !connRaf) {
+        connRaf = requestAnimationFrame(function tick() {
+          drawNodeConnection();
+          connRaf = nodeConnection ? requestAnimationFrame(tick) : 0;
+        });
+      } else if (!nodeConnection) {
+        drawNodeConnection(); // hides
+      }
+    });
+
     // 3. Register backend event listeners (Tauri events / WS messages)
     Promise.all([
       transport.onEvent("tlv-delta", function (payload) { app.ports.onDelta.send(payload); }),

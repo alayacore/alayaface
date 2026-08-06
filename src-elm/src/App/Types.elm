@@ -42,6 +42,7 @@ import Plan.Types as PT
 import Plan.Runner as R
 import Session.Selector as Sel
 import Session.Types as T
+import App.NodeConnection as NC
 
 
 type alias Flags =
@@ -105,6 +106,11 @@ type alias Model =
     -- this app run. Lets a node click find the live resumed session and
     -- lets CloseSession attribute the window back to its plan node.
     , planResumedFrom : Dict String String
+    -- Active node↔session connection: when the user focuses a session
+    -- that belongs to a plan node, the node's plan window is raised to
+    -- the second layer and a bezier curve connects the two windows
+    -- (drawn by bridge.js; Elm only tracks which pair is connected).
+    , nodeConnection : Maybe NC.NodeConnection
     , planSessionIds : Set String
     , planSessionPending : Bool
     , homeDir : String

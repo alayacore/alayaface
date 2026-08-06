@@ -41,6 +41,7 @@ port module Ports exposing
     , resumeSession
     , listSessionDirs
     , deleteSessionDir
+    , setNodeConnection
     , onSessionCreated
     , onSessionCreateError
     , onSessionDirs
@@ -74,6 +75,7 @@ port module Ports exposing
 
 import Json.Decode as D
 import Json.Encode as E
+import App.NodeConnection
 
 
 -- Inbound events (Tauri → Elm via JS bridge, use E.Value for custom decoding)
@@ -117,6 +119,11 @@ port forkSession : { sourceSessionId : String, historyId : String } -> Cmd msg
 port resumeSession : { sessionId : String, workDir : Maybe String } -> Cmd msg
 port listSessionDirs : {} -> Cmd msg
 port deleteSessionDir : { sessionId : String } -> Cmd msg
+
+-- Node↔session connection curve (P19): Elm tells bridge.js which pair to
+-- connect (Nothing = hide). bridge.js measures the DOM and draws a bezier.
+port setNodeConnection : Maybe App.NodeConnection.NodeConnection -> Cmd msg
+
 port fsListDir : { path : String } -> Cmd msg
 port fsReadFileDataUri : { path : String } -> Cmd msg
 port fsResolvePath : { path : String } -> Cmd msg

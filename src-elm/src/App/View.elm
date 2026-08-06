@@ -112,6 +112,7 @@ viewSessionPanel model id =
             in
             Html.div
                 ([ Attr.class panelClasses
+                 , Attr.attribute "data-session" id
                  , Ev.onClick (SwitchSession id)
                  , Ev.on "mousedown" (D.succeed (ActivateSession id))
                  ]
@@ -435,6 +436,7 @@ viewPlanPanel model planId =
                     ("session-panel plan-panel"
                         ++ (if isActive then " session-panel-active" else "")
                     )
+                 , Attr.attribute "data-plan" planId
                  , Ev.onClick (PlanActivate planId)
                  , Ev.on "mousedown" (D.succeed (PlanActivate planId))
                  ]

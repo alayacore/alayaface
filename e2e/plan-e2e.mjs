@@ -249,6 +249,34 @@ try {
   await shot(page, '05-t1-session.png');
   console.log('PASS: t1 node opened its session (activated, reply visible)');
 
+  // ── 7b. Node ↔ session connection curve ───────────────────────────
+  // Focusing a plan-node session raises the plan window to the SECOND
+  // layer (session z = plan z + 1) and bridge.js draws a bezier overlay.
+  const connState = async () => {
+    const st = await page.evaluate(() => {
+      const svg = document.querySelector('.node-connection-overlay');
+      const active = document.querySelector('.session-panel.session-panel-active');
+      const plan = [...document.querySelectorAll('.plan-panel')]
+        .find(p => [...p.querySelectorAll('.plan-node-id')].some(e => e.textContent === 't1'));
+      return {
+        svgVisible: svg ? getComputedStyle(svg).display !== 'none' : false,
+        pathD: svg ? (svg.querySelector('path')?.getAttribute('d') || '') : '',
+        sessionZ: active ? parseInt(getComputedStyle(active).zIndex, 10) : -1,
+        planZ: plan ? parseInt(getComputedStyle(plan).zIndex, 10) : -1,
+      };
+    });
+    return st;
+  };
+  const assertConnection = async (label) => {
+    const st = await connState();
+    assert(st.svgVisible, label + ': connection overlay visible, got: ' + JSON.stringify(st));
+    assert(st.pathD.length > 10, label + ': connection curve has a path, got: ' + JSON.stringify(st));
+    assert(st.sessionZ === st.planZ + 1, label + ': plan window is one layer below the session, got: ' + JSON.stringify(st));
+    console.log('PASS: ' + label + ' (session z=' + st.sessionZ + ', plan z=' + st.planZ + ')');
+  };
+  await assertConnection('node↔session connection (plan second layer + bezier)');
+  await shot(page, '05a-node-connection.png');
+
   // ── 8. Close/reopen node session (resume regression) ───────────────
   // The node stays bound to the ON-DISK dir id; resume_session hands out
   // a FRESH id that must NOT become the persistent binding (its dir does
@@ -282,10 +310,16 @@ try {
     const errCount = await planErrorCount();
     assert(errCount === 0, label + ': plan window has no resume error, got: ' + errCount);
     console.log('PASS: ' + label + ' — session reopened (' + activeTitle + '), no error');
+    await assertConnection(label + ' — curve back after resume');
   };
 
   await closeT1Session();
   await sleep(500);
+  const hiddenAfterClose = await page.evaluate(() => {
+    const svg = document.querySelector('.node-connection-overlay');
+    return svg ? getComputedStyle(svg).display === 'none' : true;
+  });
+  assert(hiddenAfterClose, 'connection curve hidden after the session window closes');
   await clickNode(page, 't1');
   await waitT1Active('close→click #1 (resume from disk)');
   await shot(page, '05b-t1-resumed-1.png');

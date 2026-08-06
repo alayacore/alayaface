@@ -606,6 +606,40 @@ Fix:
 
 ---
 
+## P19 — Node ↔ session connection curve (focus → plan second layer + bezier)
+
+When the user focuses a session that belongs to a plan node, raise the
+node's plan window to the SECOND layer and draw a bezier curve from the
+session window edge to the node card.
+
+- [x] `App/NodeConnection.elm` (pure): `nodeLabelFor` (resolves resumed
+      fresh ids via planResumedFrom), `parseNodeConnection` (node id may
+      contain "/"), `nodeConnectionFor`
+- [x] Model: `nodeConnection : Maybe NodeConnection`; `setNodeConnection`
+      port (Maybe → bridge.js shows/hides)
+- [x] `activateSessionModel`: focus session → session z = nextZIndex+1,
+      plan z = nextZIndex (second layer), port sends the pair; non-node
+      sessions clear; `ActivateSession` already-focused branch re-asserts
+- [x] `SwitchSession` shares the same helper; `SessionCreated` resume
+      branch sets the connection + z-pairing when the resumed session
+      becomes active (node click → resume → curve immediately)
+- [x] Clear sites: CloseSession / DeleteSession / PlanClose / PlanActivate
+- [x] View: `data-session` / `data-plan` attributes for JS lookup
+- [x] bridge.js: fixed SVG overlay on `<body>` (outside Elm vdom), rAF
+      loop measuring `.session-panel` + `.plan-node` rects, bezier with
+      perpendicular bow, anchor on session edge nearest the node, hides
+      when the node is scrolled out of the plan window; z-index matches
+      the plan window (above plan via DOM order, below session = planZ+1)
+- [x] Tests: NodeConnectionTest (11) — labels, resumed resolution, slash
+      node ids, unbound/unknown; elm-test 156 green
+- [x] E2E: connection overlay visible + session z = plan z + 1 after
+      focusing t1; curve hidden after close; curve back after both
+      resumes; ALL PASS
+- [ ] Manual GUI smoke: drag/resize windows while connected → curve
+      follows (docs/manual-acceptance.md)
+
+---
+
 ## Known pitfalls
 
 - Never edit `../alayacore` — tool set = spawn params only.

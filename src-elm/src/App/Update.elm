@@ -21,6 +21,7 @@ import Process
 import Task
 import Time
 import App.Types exposing (..)
+import App.NodeConnection as NC
 import App.SelectorKit as Kit
 import Session.Types as T
 import Session.Protocol as P
@@ -333,6 +334,58 @@ findResumedLive origId model =
         )
         Nothing
         model.planResumedFrom
+
+
+{-| Build the active node↔session connection for a session id. Nothing
+for sessions not bound to a plan node (plain chats, unattached runner
+sessions, …).
+-}
+connectionForSession : String -> Model -> Maybe NC.NodeConnection
+connectionForSession sid model =
+    NC.nodeConnectionFor model.planNodeSessions model.planResumedFrom sid
+
+
+{-| Focus a session: raise it above everything else. If it belongs to a
+plan node, also raise that plan window to the SECOND layer (directly
+below the session) and tell bridge.js to draw the connection curve;
+otherwise hide any curve.
+-}
+activateSessionModel : Model -> String -> ( Model, Cmd Msg )
+activateSessionModel model id =
+    case connectionForSession id model of
+        Just conn ->
+            let
+                newPositions =
+                    model.windowPositions
+                        |> Dict.update id
+                            (Maybe.map (\pos -> { pos | z = model.nextZIndex + 1 }))
+                        |> Dict.update conn.planId
+                            (Maybe.map (\pos -> { pos | z = model.nextZIndex }))
+            in
+            ( { model
+                | activeId = Just id
+                , windowPositions = newPositions
+                , nextZIndex = model.nextZIndex + 2
+                , nodeConnection = Just conn
+              }
+            , Ports.setNodeConnection (Just conn)
+            )
+
+        Nothing ->
+            let
+                newPositions =
+                    Dict.update id
+                        (Maybe.map (\pos -> { pos | z = model.nextZIndex }))
+                        model.windowPositions
+            in
+            ( { model
+                | activeId = Just id
+                , windowPositions = newPositions
+                , nextZIndex = model.nextZIndex + 1
+                , nodeConnection = Nothing
+              }
+            , Ports.setNodeConnection Nothing
+            )
 
 
 {-| Insert (or update) a plan window, activate it, assign a default
@@ -928,17 +981,58 @@ update msg model =
                 -- this live window and CloseSession can attribute it back
                 -- to the plan node. Never consumed by a runner-created
                 -- session.
+                resumedConn =
+                    case ( model.planResumeFrom, isRunnerCreate ) of
+                        ( Just origId, False ) ->
+                            Dict.get origId baseModel.planNodeSessions
+                                |> Maybe.andThen NC.parseNodeConnection
+                                |> Maybe.map
+                                    (\( planId, nodeId ) ->
+                                        { sessionId = id, planId = planId, nodeId = nodeId }
+                                    )
+
+                        _ ->
+                            Nothing
+
                 resumedModel =
                     case ( model.planResumeFrom, isRunnerCreate ) of
                         ( Just origId, False ) ->
                             let
                                 label =
                                     Dict.get origId baseModel.planNodeSessions
+
+                                -- The new session is focused; pair the z
+                                -- order like activateSessionModel does
+                                -- (session top, plan window second layer).
+                                zRaised =
+                                    case resumedConn of
+                                        Just c ->
+                                            baseModel.windowPositions
+                                                |> Dict.update id
+                                                    (Maybe.map (\pos -> { pos | z = baseModel.nextZIndex + 1 }))
+                                                |> Dict.update c.planId
+                                                    (Maybe.map (\pos -> { pos | z = baseModel.nextZIndex }))
+
+                                        Nothing ->
+                                            Dict.update id
+                                                (Maybe.map (\pos -> { pos | z = baseModel.nextZIndex }))
+                                                baseModel.windowPositions
+
+                                zBump =
+                                    case resumedConn of
+                                        Just _ ->
+                                            2
+
+                                        Nothing ->
+                                            1
                             in
                             { baseModel
                                 | planResumeFrom = Nothing
                                 , planResumeOwner = Nothing
                                 , planResumedFrom = Dict.insert id origId baseModel.planResumedFrom
+                                , nodeConnection = resumedConn
+                                , windowPositions = zRaised
+                                , nextZIndex = baseModel.nextZIndex + zBump
                                 , planNodeSessions =
                                     case label of
                                         Just l ->
@@ -974,6 +1068,7 @@ update msg model =
             , Cmd.batch
                 [ cmds
                 , drainCmd
+                , Ports.setNodeConnection resumedConn
                 , case model.planCreating of
                     -- A runner-created session: bind it to its node
                     -- (PlanBindSession also starts the next queued create).
@@ -1041,13 +1136,27 @@ update msg model =
                 , windowPositions = Dict.remove id model.windowPositions
                 , planNodeSessions = Dict.remove id model.planNodeSessions
                 , planResumedFrom = Dict.remove id model.planResumedFrom
+                , nodeConnection =
+                    if (model.nodeConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
+                        Nothing
+
+                    else
+                        model.nodeConnection
                 , activeId =
                     if model.activeId == Just id then
                         List.head (List.reverse (List.filter (\k -> k /= id) model.sessionOrder))
                     else
                         model.activeId
               }
-            , Cmd.batch [ Ports.closeSession { sessionId = id }, runnerFailCmd ]
+            , Cmd.batch
+                [ Ports.closeSession { sessionId = id }
+                , runnerFailCmd
+                , if (model.nodeConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
+                    Ports.setNodeConnection Nothing
+
+                  else
+                    Cmd.none
+                ]
             )
 
         -- Transport Events
@@ -1545,17 +1654,14 @@ update msg model =
                 )
             else
                 let
-                    newPositions =
-                        Dict.update id
-                            (Maybe.map (\pos -> { pos | z = model.nextZIndex }))
-                            model.windowPositions
+                    ( m, c ) =
+                        activateSessionModel model id
                 in
-                ( { model
-                    | activeId = Just id
-                    , windowPositions = newPositions
-                    , nextZIndex = model.nextZIndex + 1
-                  }
-                , Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ id))
+                ( m
+                , Cmd.batch
+                    [ c
+                    , Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ id))
+                    ]
                 )
 
         -- File Picker
@@ -2722,8 +2828,9 @@ update msg model =
                     , windowPositions = newPositions
                     , nextZIndex = model.nextZIndex + 1
                     , showGlobalMenu = False
+                    , nodeConnection = Nothing
                   }
-                , Cmd.none
+                , Ports.setNodeConnection Nothing
                 )
 
         PlanClose planId ->
@@ -2750,8 +2857,18 @@ update msg model =
 
                     else
                         model.planActiveId
+                , nodeConnection =
+                    if (model.nodeConnection |> Maybe.map (\c -> c.planId)) == Just planId then
+                        Nothing
+
+                    else
+                        model.nodeConnection
               }
-            , Cmd.none
+            , if (model.nodeConnection |> Maybe.map (\c -> c.planId)) == Just planId then
+                Ports.setNodeConnection Nothing
+
+              else
+                Cmd.none
             )
 
         -- ─── Plan runner ────────────────────────────────────────────
@@ -3253,6 +3370,12 @@ update msg model =
                             , windowPositions = Dict.remove id model.windowPositions
                             , planNodeSessions = Dict.remove id model.planNodeSessions
                             , planResumedFrom = Dict.remove id model.planResumedFrom
+                            , nodeConnection =
+                                if (model.nodeConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
+                                    Nothing
+
+                                else
+                                    model.nodeConnection
                             , activeId =
                                 if model.activeId == Just id then
                                     List.head (List.reverse (List.filter (\k -> k /= id) model.sessionOrder))
@@ -3263,7 +3386,14 @@ update msg model =
                         model
             in
             ( { cleaned | sessionManagerError = Nothing }
-            , Ports.deleteSessionDir { sessionId = id }
+            , Cmd.batch
+                [ Ports.deleteSessionDir { sessionId = id }
+                , if (model.nodeConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
+                    Ports.setNodeConnection Nothing
+
+                  else
+                    Cmd.none
+                ]
             )
 
         -- Window
@@ -4280,21 +4410,18 @@ update msg model =
 
         ActivateSession id ->
             if model.activeId == Just id then
-                ( model, Cmd.none )
-            else
+                -- Already focused: (re)assert the connection — it may have
+                -- been cleared by focusing the plan window in between.
                 let
-                    newPositions =
-                        Dict.update id
-                            (Maybe.map (\pos -> { pos | z = model.nextZIndex }))
-                            model.windowPositions
+                    conn =
+                        connectionForSession id model
                 in
-                ( { model
-                    | activeId = Just id
-                    , windowPositions = newPositions
-                    , nextZIndex = model.nextZIndex + 1
-                  }
-                , Cmd.none
+                ( { model | nodeConnection = conn }
+                , Ports.setNodeConnection conn
                 )
+
+            else
+                activateSessionModel model id
 
         NoOp ->
             ( model, Cmd.none )

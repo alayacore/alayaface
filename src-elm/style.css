@@ -2649,6 +2649,23 @@ body {
 
 .plan-filter-row { margin-bottom: 10px; }
 
+/* Node ↔ session connection curve (P19): fixed SVG overlay on <body>,
+   z-index matched to the plan window by bridge.js (session is planZ+1). */
+.node-connection-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+.node-connection-curve {
+  fill: none;
+  stroke: #6366f1;
+  stroke-width: 2;
+  stroke-dasharray: 7 5;
+  opacity: 0.85;
+}
+
 /* ─── Plan DAG view (P3) ─────────────────────────────────────────── */
 
 .plan-header {
