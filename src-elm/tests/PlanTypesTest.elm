@@ -21,6 +21,7 @@ nodeState id run =
 sampleJson : String
 sampleJson =
     """{
+  "type": "alayaface-plan",
   "schema_version": 1,
   "name": "Monthly Report",
   "goal": "Generate the June sales report",
@@ -58,7 +59,7 @@ tests =
                 \_ ->
                     let
                         json =
-                            """{ "name": "Min", "tasks": [ { "id": "a", "title": "A", "prompt": "do a" } ] }"""
+                            """{ "type": "alayaface-plan", "name": "Min", "tasks": [ { "id": "a", "title": "A", "prompt": "do a" } ] }"""
                     in
                     case P.parsePlan json of
                         Ok plan ->
@@ -113,7 +114,7 @@ tests =
                 \_ ->
                     let
                         json =
-                            """{ "name": "x", "tasks": [] }"""
+                            """{ "type": "alayaface-plan", "name": "x", "tasks": [] }"""
                     in
                     case P.parsePlan json of
                         Err errs ->
@@ -133,7 +134,7 @@ tests =
                 \_ ->
                     let
                         json =
-                            """{ "name": "x", "concurrency": 99, "tasks": [ { "id": "a", "title": "A", "prompt": "do a" } ] }"""
+                            """{ "type": "alayaface-plan", "name": "x", "concurrency": 99, "tasks": [ { "id": "a", "title": "A", "prompt": "do a" } ] }"""
                     in
                     case P.parsePlan json of
                         Err errs ->
@@ -145,7 +146,7 @@ tests =
                 \_ ->
                     let
                         json =
-                            """{ "name": "x", "tasks": [ { "id": "a", "title": "A", "prompt": "do a", "max_attempts": 0 } ] }"""
+                            """{ "type": "alayaface-plan", "name": "x", "tasks": [ { "id": "a", "title": "A", "prompt": "do a", "max_attempts": 0 } ] }"""
                     in
                     case P.parsePlan json of
                         Err errs ->
@@ -157,7 +158,7 @@ tests =
                 \_ ->
                     let
                         json =
-                            """{ "name": "x", "tasks": [ { "id": "a", "title": "  ", "prompt": "do a" }, { "id": "b", "title": "B", "prompt": "" } ] }"""
+                            """{ "type": "alayaface-plan", "name": "x", "tasks": [ { "id": "a", "title": "  ", "prompt": "do a" }, { "id": "b", "title": "B", "prompt": "" } ] }"""
                     in
                     case P.parsePlan json of
                         Err errs ->
@@ -173,7 +174,7 @@ tests =
                 \_ ->
                     let
                         json =
-                            """{ "name": "x", "tasks": [ { "id": "a", "title": "A", "prompt": "do a", "depends_on": ["ghost"] } ] }"""
+                            """{ "type": "alayaface-plan", "name": "x", "tasks": [ { "id": "a", "title": "A", "prompt": "do a", "depends_on": ["ghost"] } ] }"""
                     in
                     case P.parsePlan json of
                         Err errs ->
@@ -185,7 +186,7 @@ tests =
                 \_ ->
                     let
                         json =
-                            """{ "name": "x", "tasks": [ { "id": "a", "title": "A", "prompt": "do a", "depends_on": ["a"] } ] }"""
+                            """{ "type": "alayaface-plan", "name": "x", "tasks": [ { "id": "a", "title": "A", "prompt": "do a", "depends_on": ["a"] } ] }"""
                     in
                     case P.parsePlan json of
                         Err errs ->
@@ -197,7 +198,7 @@ tests =
                 \_ ->
                     let
                         json =
-                            """{ "name": "x", "tasks": [ { "id": "a", "title": "A", "prompt": "do a" }, { "id": "a", "title": "A2", "prompt": "do a2" } ] }"""
+                            """{ "type": "alayaface-plan", "name": "x", "tasks": [ { "id": "a", "title": "A", "prompt": "do a" }, { "id": "a", "title": "A2", "prompt": "do a2" } ] }"""
                     in
                     case P.parsePlan json of
                         Err errs ->
@@ -209,7 +210,7 @@ tests =
                 \_ ->
                     let
                         json =
-                            """{ "name": "x", "tasks": [ { "id": "a", "title": "A", "prompt": "do a", "depends_on": ["b"] }, { "id": "b", "title": "B", "prompt": "do b", "depends_on": ["a"] } ] }"""
+                            """{ "type": "alayaface-plan", "name": "x", "tasks": [ { "id": "a", "title": "A", "prompt": "do a", "depends_on": ["b"] }, { "id": "b", "title": "B", "prompt": "do b", "depends_on": ["a"] } ] }"""
                     in
                     case P.parsePlan json of
                         Err errs ->
@@ -226,7 +227,7 @@ tests =
                 \_ ->
                     let
                         json =
-                            """{ "name": "x", "tasks": [
+                            """{ "type": "alayaface-plan", "name": "x", "tasks": [
                                  { "id": "a", "title": "A", "prompt": "do a", "depends_on": ["d"] },
                                  { "id": "b", "title": "B", "prompt": "do b", "depends_on": ["a"] },
                                  { "id": "c", "title": "C", "prompt": "do c", "depends_on": ["b"] },
@@ -243,7 +244,7 @@ tests =
                 \_ ->
                     let
                         json =
-                            """{ "name": "x", "tasks": [
+                            """{ "type": "alayaface-plan", "name": "x", "tasks": [
                                  { "id": "a", "title": "A", "prompt": "do a" },
                                  { "id": "b", "title": "B", "prompt": "do b", "depends_on": ["a"] },
                                  { "id": "c", "title": "C", "prompt": "do c", "depends_on": ["a"] },
@@ -260,7 +261,7 @@ tests =
                 \_ ->
                     let
                         json =
-                            """{ "name": "x", "tasks": [
+                            """{ "type": "alayaface-plan", "name": "x", "tasks": [
                                  { "id": "a", "title": "A", "prompt": "do a" },
                                  { "id": "b", "title": "B", "prompt": "do b" },
                                  { "id": "c", "title": "C", "prompt": "do c" }
@@ -278,7 +279,7 @@ tests =
                     -- validation rejects it; here we check valid 1 and 8 pass.
                     let
                         okJson n =
-                            """{ "name": "x", "concurrency": """ ++ String.fromInt n ++ """, "tasks": [ { "id": "a", "title": "A", "prompt": "do a" } ] }"""
+                            """{ "type": "alayaface-plan", "name": "x", "concurrency": """ ++ String.fromInt n ++ """, "tasks": [ { "id": "a", "title": "A", "prompt": "do a" } ] }"""
                     in
                     Expect.all
                         [ \_ -> Expect.equal (Ok ()) (Result.map (always ()) (P.parsePlan (okJson 1)))
@@ -335,17 +336,16 @@ tests =
 
                         Err errs ->
                             Expect.fail ("unexpected errors: " ++ String.join "; " errs)
-            , test "legacy plan without the marker still parses" <|
+            , test "missing marker is rejected (no backward compatibility)" <|
                 \_ ->
-                    -- Files created before the marker existed (e.g. the
-                    -- user's real plans) must keep opening; normalize
-                    -- upgrades them to carry the marker.
-                    case P.parsePlan sampleJson of
-                        Ok plan ->
-                            Expect.equal (Just P.planTypeMarker) plan.planType
-
+                    -- Per user decision: the top-level type marker is
+                    -- REQUIRED — a document without it is an error.
+                    case P.parsePlan """{ "schema_version": 1, "name": "x", "tasks": [] }""" of
                         Err errs ->
-                            Expect.fail ("unexpected errors: " ++ String.join "; " errs)
+                            Expect.equal True (List.any (\e -> String.contains "type" e || String.contains "Missing" e) errs)
+
+                        Ok _ ->
+                            Expect.fail "should have rejected the missing marker"
             , test "wrong marker value is rejected" <|
                 \_ ->
                     case P.parsePlan """{ "type": "not-a-plan", "name": "x", "tasks": [] }""" of
@@ -386,7 +386,7 @@ tests =
                 \_ ->
                     let
                         plan =
-                            P.parsePlan """{ "name": "t", "concurrency": 2, "default_timeout_seconds": 30, "tasks": [
+                            P.parsePlan """{ "type": "alayaface-plan", "name": "t", "concurrency": 2, "default_timeout_seconds": 30, "tasks": [
                                 { "id": "a", "title": "A", "prompt": "p", "timeout_seconds": 5 },
                                 { "id": "b", "title": "B", "prompt": "q" }
                             ] }"""
@@ -406,7 +406,7 @@ tests =
                 \_ ->
                     let
                         plan =
-                            case P.parsePlan """{ "name": "t", "default_timeout_seconds": 45, "tasks": [
+                            case P.parsePlan """{ "type": "alayaface-plan", "name": "t", "default_timeout_seconds": 45, "tasks": [
                                 { "id": "a", "title": "A", "prompt": "p", "timeout_seconds": 7 }
                             ] }""" of
                                 Ok p -> p
@@ -434,8 +434,8 @@ tests =
                                 Ok _ -> False
                     in
                     Expect.all
-                        [ \_ -> Expect.equal True (isErr (P.parsePlan """{ "name": "t", "default_timeout_seconds": 0, "tasks": [{ "id": "a", "title": "A", "prompt": "p" }] }"""))
-                        , \_ -> Expect.equal True (isErr (P.parsePlan """{ "name": "t", "tasks": [{ "id": "a", "title": "A", "prompt": "p", "timeout_seconds": -1 }] }"""))
+                        [ \_ -> Expect.equal True (isErr (P.parsePlan """{ "type": "alayaface-plan", "name": "t", "default_timeout_seconds": 0, "tasks": [{ "id": "a", "title": "A", "prompt": "p" }] }"""))
+                        , \_ -> Expect.equal True (isErr (P.parsePlan """{ "type": "alayaface-plan", "name": "t", "tasks": [{ "id": "a", "title": "A", "prompt": "p", "timeout_seconds": -1 }] }"""))
                         ]
                         ()
             ]

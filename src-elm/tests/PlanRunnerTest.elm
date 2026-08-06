@@ -56,7 +56,7 @@ effectName e =
 -- three parallel tasks, concurrency 2
 parallelPlan : P.Plan
 parallelPlan =
-    planFromJson """{ "name": "x", "concurrency": 2, "tasks": [
+    planFromJson """{ "type": "alayaface-plan", "name": "x", "concurrency": 2, "tasks": [
       { "id": "a", "title": "A", "prompt": "a" },
       { "id": "b", "title": "B", "prompt": "b" },
       { "id": "c", "title": "C", "prompt": "c" }
@@ -65,7 +65,7 @@ parallelPlan =
 
 chainPlan : P.Plan
 chainPlan =
-    planFromJson """{ "name": "x", "concurrency": 2, "tasks": [
+    planFromJson """{ "type": "alayaface-plan", "name": "x", "concurrency": 2, "tasks": [
       { "id": "a", "title": "A", "prompt": "a" },
       { "id": "b", "title": "B", "prompt": "b", "depends_on": ["a"] },
       { "id": "c", "title": "C", "prompt": "c", "depends_on": ["b"] }
@@ -74,7 +74,7 @@ chainPlan =
 
 singlePlan : P.Plan
 singlePlan =
-    planFromJson """{ "name": "x", "tasks": [
+    planFromJson """{ "type": "alayaface-plan", "name": "x", "tasks": [
       { "id": "a", "title": "A", "prompt": "a" }
     ] }"""
 
@@ -179,7 +179,7 @@ tests =
                 \_ ->
                     let
                         plan =
-                            planFromJson """{ "name": "x", "concurrency": 3, "tasks": [
+                            planFromJson """{ "type": "alayaface-plan", "name": "x", "concurrency": 3, "tasks": [
                               { "id": "a", "title": "A", "prompt": "do task A now" },
                               { "id": "b", "title": "B", "prompt": "do task B now" }
                             ] }"""
@@ -276,7 +276,7 @@ tests =
                 \_ ->
                     let
                         plan =
-                            planFromJson """{ "name": "x", "concurrency": 3, "default_timeout_seconds": 5, "tasks": [
+                            planFromJson """{ "type": "alayaface-plan", "name": "x", "concurrency": 3, "default_timeout_seconds": 5, "tasks": [
                                 { "id": "a", "title": "A", "prompt": "do A" }
                             ] }"""
 
@@ -310,7 +310,7 @@ tests =
                 \_ ->
                     let
                         plan =
-                            planFromJson """{ "name": "x", "concurrency": 3, "default_timeout_seconds": 30, "tasks": [
+                            planFromJson """{ "type": "alayaface-plan", "name": "x", "concurrency": 3, "default_timeout_seconds": 30, "tasks": [
                                 { "id": "a", "title": "A", "prompt": "do A" }
                             ] }"""
 
@@ -351,7 +351,7 @@ tests =
                 \_ ->
                     let
                         plan =
-                            planFromJson """{ "name": "x", "concurrency": 3, "default_timeout_seconds": 60, "tasks": [
+                            planFromJson """{ "type": "alayaface-plan", "name": "x", "concurrency": 3, "default_timeout_seconds": 60, "tasks": [
                                 { "id": "a", "title": "A", "prompt": "do A", "timeout_seconds": 2 }
                             ] }"""
 
@@ -370,7 +370,7 @@ tests =
                 \_ ->
                     let
                         plan =
-                            planFromJson """{ "name": "x", "concurrency": 3, "default_timeout_seconds": 5, "tasks": [
+                            planFromJson """{ "type": "alayaface-plan", "name": "x", "concurrency": 3, "default_timeout_seconds": 5, "tasks": [
                                 { "id": "a", "title": "A", "prompt": "do A" }
                             ] }"""
 
@@ -602,7 +602,7 @@ tests =
                 \_ ->
                     let
                         plan =
-                            planFromJson """{ "name": "x", "tasks": [
+                            planFromJson """{ "type": "alayaface-plan", "name": "x", "tasks": [
                               { "id": "a", "title": "A", "prompt": "a", "max_attempts": 1 }
                             ] }"""
 
@@ -624,7 +624,7 @@ tests =
                 \_ ->
                     let
                         plan =
-                            planFromJson """{ "name": "x", "tasks": [
+                            planFromJson """{ "type": "alayaface-plan", "name": "x", "tasks": [
                               { "id": "a", "title": "A", "prompt": "a", "max_attempts": 2 },
                               { "id": "b", "title": "B", "prompt": "b", "depends_on": ["a"] }
                             ] }"""
@@ -665,7 +665,7 @@ tests =
                 \_ ->
                     let
                         plan =
-                            planFromJson """{ "name": "x", "tasks": [
+                            planFromJson """{ "type": "alayaface-plan", "name": "x", "tasks": [
                               { "id": "a", "title": "A", "prompt": "a", "max_attempts": 1 }
                             ] }"""
 
@@ -692,7 +692,7 @@ tests =
                 \_ ->
                     let
                         plan =
-                            planFromJson """{ "name": "x", "tasks": [
+                            planFromJson """{ "type": "alayaface-plan", "name": "x", "tasks": [
                               { "id": "a", "title": "A", "prompt": "a", "max_attempts": 1 }
                             ] }"""
 
@@ -874,7 +874,7 @@ tests =
                 \_ ->
                     let
                         plan =
-                            planFromJson """{ "name": "x", "tasks": [
+                            planFromJson """{ "type": "alayaface-plan", "name": "x", "tasks": [
                               { "id": "a", "title": "A", "prompt": "a", "max_attempts": 1 }
                             ] }"""
 
@@ -941,7 +941,7 @@ tests =
                 \_ ->
                     let
                         plan =
-                            planFromJson """{ "name": "x", "tasks": [
+                            planFromJson """{ "type": "alayaface-plan", "name": "x", "tasks": [
                               { "id": "a", "title": "A", "prompt": "a" },
                               { "id": "b", "title": "B", "prompt": "use {{a.output}} now", "depends_on": ["a"] }
                             ] }"""
@@ -967,7 +967,7 @@ tests =
                 \_ ->
                     let
                         plan =
-                            planFromJson """{ "name": "x", "tasks": [
+                            planFromJson """{ "type": "alayaface-plan", "name": "x", "tasks": [
                               { "id": "a", "title": "A", "prompt": "a" },
                               { "id": "b", "title": "B", "prompt": "use {{a.output}} now", "depends_on": ["a"] }
                             ] }"""
@@ -1002,7 +1002,7 @@ tests =
                 \_ ->
                     let
                         plan =
-                            planFromJson """{ "name": "x", "tasks": [
+                            planFromJson """{ "type": "alayaface-plan", "name": "x", "tasks": [
                               { "id": "a", "title": "A", "prompt": "use {{z.output}}" }
                             ] }"""
 

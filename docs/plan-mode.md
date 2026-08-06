@@ -152,7 +152,7 @@ Plan.Types.decode + normalize + validate（id 唯一/依赖存在/无环）
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| `type` | 否* | 顶层标识 `"alayaface-plan"`（P26）。*检测（Create Plan 按钮）要求**显式**存在；保存/导出总是写入；旧文件缺失 → 打开时自动补齐；存在但值错误 → 校验拒绝 |
+| `type` | 是 | 顶层标识 `"alayaface-plan"`（P26，**必填**，无向后兼容）：缺失 → 校验错误 `Missing top-level "type": ...`；值错误 → `Not an AlayaFace plan: ...`；保存/导出总是写入 |
 | `schema_version` | 是 | 固定 1 |
 | `name` | 是 | 计划名（用于文件命名 slug） |
 | `goal` | 否 | 总体目标，DAG 视图头部展示 |
@@ -269,8 +269,8 @@ type Effect
   hasPlanTypeMarker == True** 才命中（普通 ```json 代码示例——无标志——
   不再触发按钮）→ `Model.pendingPlanOffers` 记 `messageId → rawJson` →
   消息下方渲染 **Create Plan** 按钮；
-- 点击 → decode/validate（type 缺失兼容 / 值错误拒绝）→ 归一化（自动
-  补齐 type 标志）→ 生成 planId → `fs_write_file_text` 写
+- 点击 → decode/validate（`type` **必填**：缺失或值错误都拒绝，无向后
+  兼容）→ 归一化 → 生成 planId → `fs_write_file_text` 写
   `~/.alayaface/plans/<planId>.json` → 打开 Plan 窗口。
 
 ---
@@ -578,7 +578,7 @@ t1/t2/t3 结果但拿不到）。
 | P17–P23 | Plans 管理器 Browse 导入 / 节点会话 resume 目录 id / 节点↔会话连接曲线 / config 空壳 / Plan Session 角色锁+无工具 / Stop 关节点窗口（详见 TODO.md） | ✅ 完成 |
 | P24 | 输出注入 `{{tX.output}}`（§8.6：TaskDone 记录 output → run.json 持久化 → 下游 SendPrompt 替换 → 详情面板展示） | ✅ 完成 |
 | P25 | close_session cancel-first（§8.3：Stop/关窗口立即取消任务，历史保存到取消点） | ✅ 完成 |
-| P26 | plan JSON 顶层 `"type": "alayaface-plan"` 标志（§5/§6.7：按钮只认显式标志；旧文件兼容） | ✅ 完成 |
+| P26 | plan JSON 顶层 `"type": "alayaface-plan"` 标志（§5/§6.7：按钮只认显式标志；**必填无兼容**——缺失/错误值直接报错） | ✅ 完成 |
 
 > 实现偏差：DAG 渲染用纯 HTML/CSS（div 绝对定位 + 正交连线），因为
 > elm/svg 不在离线包缓存中；效果与 SVG 等价。会话创建采用**串行化**
@@ -603,7 +603,9 @@ t1/t2/t3 结果但拿不到）。
 - **Plan Session 入口**：用户只需描述需求，不应知道 schema/格式细节；菜单创建带规划器 system prompt 的会话（`--system`），标题带 `[Plan]` 前缀。
 - **plan JSON 顶层加 `"type": "alayaface-plan"` 标志（P26，用户指示）**：
   Create Plan 按钮只对**显式带标志**的 ```json 块出现（普通代码示例不误触发）；
-  旧文件缺失标志仍可打开（兼容），保存/导出总是写入；值错误拒绝。
+  保存/导出总是写入；**必填、无向后兼容**——缺失或值错误直接报错
+  （`Missing top-level "type": "alayaface-plan" marker` /
+  `Not an AlayaFace plan: ...`）。
 
 ### 默认值（未显式确认，实现时按此执行，可在评审时调整）
 - `concurrency` 默认 2（1–8 可调）；

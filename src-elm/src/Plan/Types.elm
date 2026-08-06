@@ -93,9 +93,9 @@ minConcurrency =
 offer detector (Plan.Detect.hasPlanTypeMarker) only offers to create a
 plan when an assistant message's ```json block EXPLICITLY carries this
 marker — an ordinary ```json code sample in a normal chat no longer
-triggers the button. Saved/exported plans always carry it (encodePlan);
-files without it (created before the marker existed) still open (the
-decoder is lenient) but a WRONG marker value is rejected.
+triggers the button. REQUIRED (no backward compatibility, per user):
+`validate` rejects documents without it or with a wrong value; saved /
+exported plans always carry it (encodePlan).
 -}
 planTypeMarker : String
 planTypeMarker =
@@ -129,9 +129,10 @@ type alias Plan =
     -- override via timeout_seconds). Nothing = no timeout (v1 behavior).
     , defaultTimeoutSeconds : Maybe Int
     , tasks : List TaskNode
-    -- The top-level "type" marker. Nothing = legacy file without the
-    -- marker (accepted, normalized to Just planTypeMarker on save);
-    -- Just t where t /= planTypeMarker = rejected by validate.
+    -- The top-level "type" marker. REQUIRED (P26, user: no backward
+    -- compatibility): missing or wrong values are rejected by validate
+    -- ("Missing top-level ... marker" / "Not an AlayaFace plan: ...").
+    -- normalize keeps Just planTypeMarker so encodePlan always writes it.
     , planType : Maybe String
     }
 
@@ -378,7 +379,7 @@ validate plan =
                     []
 
             Nothing ->
-                []
+                [ "Missing top-level \"type\": \"" ++ planTypeMarker ++ "\" marker" ]
         , case plan.defaultTimeoutSeconds of
             Just s ->
                 if s < 1 then

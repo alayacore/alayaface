@@ -420,9 +420,13 @@ try {
   console.log("PASS: Plan Stop closed the run's node session windows (badge Stopped)");
 
   // ── 9. Plans manager: Saved fuzzy filter + Browse-tab file import ──
-  // Write a plan JSON at the fake home root (the Browse tab starts there).
+  // Write plan JSONs at the fake home root (the Browse tab starts there):
+  // one WITH the type marker (imports fine), one WITHOUT it (P26: no
+  // backward compatibility — must be rejected with an error in the
+  // manager, no window opens).
   const importedName = 'imported-via-browse';
   const importedPlan = {
+    type: 'alayaface-plan',
     schema_version: 1,
     name: 'Imported Via Browse',
     goal: 'Plan imported from a file via the Browse tab',
@@ -431,6 +435,16 @@ try {
     tasks: [{ id: 'n1', title: 'Only Task', prompt: 'do the thing', depends_on: [], max_attempts: 2 }]
   };
   writeFileSync(path.join(home, importedName + '.json'), JSON.stringify(importedPlan, null, 2));
+  const legacyName = 'legacy-no-marker';
+  const legacyPlan = {
+    schema_version: 1,
+    name: 'Legacy No Marker',
+    goal: 'must be rejected',
+    concurrency: 1,
+    default_max_attempts: 2,
+    tasks: [{ id: 'n1', title: 'Only Task', prompt: 'do the thing', depends_on: [], max_attempts: 2 }]
+  };
+  writeFileSync(path.join(home, legacyName + '.json'), JSON.stringify(legacyPlan, null, 2));
 
   // Open ⚙ → Plans (Saved tab default).
   await page.click('.global-menu-btn');
@@ -476,7 +490,21 @@ try {
   });
   await sleep(250);
 
-  // Click the plan file → imported → a NEW plan window with node n1 opens.
+  // ── 9b. A plan file WITHOUT the type marker is rejected (P26: no
+  // backward compatibility) — the error shows in the Plans manager and
+  // no plan window opens.
+  await page.evaluate((name) => {
+    const items = [...document.querySelectorAll('.fp-page-item')];
+    const it = items.find(el => el.querySelector('.fp-page-item-name')?.textContent === name + '.json');
+    if (it) it.click();
+  }, legacyName);
+  await sleep(700);
+  const legacyErr = await page.$$eval('.sel-page-status-error', els => els.map(e => e.textContent));
+  assert(legacyErr.some(t => t.includes('type')), 'legacy file without the marker rejected in the manager, got: ' + JSON.stringify(legacyErr));
+  console.log('PASS: plan file without the type marker is rejected (no backward compat):', JSON.stringify(legacyErr));
+
+  // Click the plan file (WITH marker) → imported → a NEW plan window with
+  // node n1 opens.
   await page.evaluate((name) => {
     const items = [...document.querySelectorAll('.fp-page-item')];
     const it = items.find(el => el.querySelector('.fp-page-item-name')?.textContent === name + '.json');

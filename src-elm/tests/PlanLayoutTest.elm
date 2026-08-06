@@ -25,7 +25,7 @@ tests =
                 \_ ->
                     let
                         plan =
-                            planFromJson """{ "name": "x", "tasks": [
+                            planFromJson """{ "type": "alayaface-plan", "name": "x", "tasks": [
                               { "id": "a", "title": "A", "prompt": "a" },
                               { "id": "b", "title": "B", "prompt": "b", "depends_on": ["a"] },
                               { "id": "c", "title": "C", "prompt": "c", "depends_on": ["b"] }
@@ -47,7 +47,7 @@ tests =
                 \_ ->
                     let
                         plan =
-                            planFromJson """{ "name": "x", "tasks": [
+                            planFromJson """{ "type": "alayaface-plan", "name": "x", "tasks": [
                               { "id": "a", "title": "A", "prompt": "a" },
                               { "id": "b", "title": "B", "prompt": "b", "depends_on": ["a"] },
                               { "id": "c", "title": "C", "prompt": "c", "depends_on": ["a"] },
@@ -71,7 +71,7 @@ tests =
                 \_ ->
                     let
                         plan =
-                            planFromJson """{ "name": "x", "tasks": [
+                            planFromJson """{ "type": "alayaface-plan", "name": "x", "tasks": [
                               { "id": "a", "title": "A", "prompt": "a" },
                               { "id": "b", "title": "B", "prompt": "b" },
                               { "id": "c", "title": "C", "prompt": "c" }
@@ -90,7 +90,7 @@ tests =
                 \_ ->
                     let
                         plan =
-                            planFromJson """{ "name": "x", "tasks": [
+                            planFromJson """{ "type": "alayaface-plan", "name": "x", "tasks": [
                               { "id": "a", "title": "A", "prompt": "a" },
                               { "id": "b", "title": "B", "prompt": "b", "depends_on": ["a"] },
                               { "id": "c", "title": "C", "prompt": "c", "depends_on": ["a"] }
@@ -121,7 +121,7 @@ tests =
                 \_ ->
                     let
                         plan =
-                            planFromJson """{ "name": "x", "tasks": [
+                            planFromJson """{ "type": "alayaface-plan", "name": "x", "tasks": [
                               { "id": "a", "title": "A", "prompt": "a" },
                               { "id": "b", "title": "B", "prompt": "b", "depends_on": ["a"] }
                             ] }"""
@@ -152,7 +152,7 @@ tests =
                 \_ ->
                     let
                         plan =
-                            planFromJson """{ "name": "x", "tasks": [
+                            planFromJson """{ "type": "alayaface-plan", "name": "x", "tasks": [
                               { "id": "a", "title": "A", "prompt": "a" },
                               { "id": "b", "title": "B", "prompt": "b", "depends_on": ["a"] },
                               { "id": "c", "title": "C", "prompt": "c", "depends_on": ["a"] },
@@ -195,7 +195,7 @@ tests =
                     -- still have non-negative w/h.
                     let
                         plan =
-                            planFromJson """{ "name": "x", "tasks": [
+                            planFromJson """{ "type": "alayaface-plan", "name": "x", "tasks": [
                               { "id": "a", "title": "A", "prompt": "a" },
                               { "id": "b", "title": "B", "prompt": "b", "depends_on": ["a"] },
                               { "id": "c", "title": "C", "prompt": "c", "depends_on": ["a"] },
@@ -217,7 +217,7 @@ tests =
                 \_ ->
                     let
                         plan =
-                            planFromJson """{ "name": "x", "tasks": [
+                            planFromJson """{ "type": "alayaface-plan", "name": "x", "tasks": [
                               { "id": "a", "title": "A", "prompt": "a" },
                               { "id": "b", "title": "B", "prompt": "b", "depends_on": ["a"] },
                               { "id": "c", "title": "C", "prompt": "c", "depends_on": ["a"] },
