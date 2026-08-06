@@ -33,6 +33,7 @@ import Plan.Types as PT
 import Plan.Runner as R
 import Plan.Meta as PM
 import Plan.Detect
+import Plan.Frames
 import Overlay.HelpWindow exposing (HelpItem, filterHelpItems)
 import Ports
 
@@ -1118,34 +1119,23 @@ planEventFromFrame model ev =
                                                 D.decodeValue (D.field "in_progress" D.bool) env.data
                                                     |> Result.toMaybe
                                                     |> Maybe.withDefault True
+
+                                            taskError =
+                                                D.decodeValue (D.field "task_error" D.bool) env.data
+                                                    |> Result.toMaybe
+                                                    |> Maybe.withDefault False
+
+                                            ( started, maybeDone ) =
+                                                Plan.Frames.taskEvent model.planTaskStarted ev.sessionId inProgress taskError
                                         in
-                                        if inProgress then
-                                            -- Real task start (prompt in
-                                            -- flight): remember the session
-                                            -- so its task-done counts.
-                                            ( { model | planTaskStarted = Set.insert ev.sessionId model.planTaskStarted }
-                                            , Nothing
-                                            )
+                                        case maybeDone of
+                                            Just ( sid, err ) ->
+                                                ( { model | planTaskStarted = started }
+                                                , Just (R.TaskDone sid err (lastAssistantOutput model ev.sessionId) (lastAssistantIsPlan model ev.sessionId))
+                                                )
 
-                                        else if Set.member ev.sessionId model.planTaskStarted then
-                                            -- Real completion: task started
-                                            -- (in_progress:true seen) then
-                                            -- finished.
-                                            let
-                                                taskError =
-                                                    D.decodeValue (D.field "task_error" D.bool) env.data
-                                                        |> Result.toMaybe
-                                                        |> Maybe.withDefault False
-                                            in
-                                            ( model
-                                            , Just (R.TaskDone ev.sessionId taskError (lastAssistantOutput model ev.sessionId) (lastAssistantIsPlan model ev.sessionId))
-                                            )
-
-                                        else
-                                            -- Boot frame (in_progress:false
-                                            -- before any task started) — not
-                                            -- a completion. Ignore.
-                                            ( model, Nothing )
+                                            Nothing ->
+                                                ( { model | planTaskStarted = started }, Nothing )
 
                                     "error" ->
                                         let

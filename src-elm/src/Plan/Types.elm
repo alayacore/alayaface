@@ -7,7 +7,6 @@ module Plan.Types exposing
     , schemaVersion
     , decodePlan
     , parsePlan
-    , normalizeAndValidate
     , encodePlan
     , slugify
       -- Runner types (state machine logic lives in Plan.Runner)

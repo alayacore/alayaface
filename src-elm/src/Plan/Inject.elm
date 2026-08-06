@@ -1,4 +1,4 @@
-module Plan.Inject exposing (injectOutputs, missingOutputMarker)
+module Plan.Inject exposing (injectOutputs)
 
 {-| Output injection for node prompts.
 

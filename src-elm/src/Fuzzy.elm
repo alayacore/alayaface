@@ -1,4 +1,4 @@
-module Fuzzy exposing (fuzzyMatch, fuzzyScore)
+module Fuzzy exposing (fuzzyMatch)
 
 {-| Fuzzy string matching ported from alayacore's terminal adapter.
 Checks if all characters in the search term appear in order
@@ -43,54 +43,3 @@ fuzzyMatchHelp search target =
                     else
                         fuzzyMatchHelp search restTarget
 
-
-fuzzyScore : String -> String -> Int
-fuzzyScore search target =
-    if String.isEmpty search then
-        100
-
-    else if String.length search > String.length target then
-        0
-
-    else
-        let
-            searchChars =
-                String.toList search
-
-            targetChars =
-                String.toList target
-        in
-        let
-            ( scoreVal, _, _ ) =
-                fuzzyScoreHelp searchChars targetChars 0 0
-        in
-        scoreVal
-
-
-fuzzyScoreHelp : List Char -> List Char -> Int -> Int -> ( Int, List Char, List Char )
-fuzzyScoreHelp search target score consecutive =
-    case search of
-        [] ->
-            ( score, [], target )
-
-        s :: restSearch ->
-            case target of
-                [] ->
-                    ( 0, search, [] )
-
-                t :: restTarget ->
-                    if s == t then
-                        let
-                            newConsecutive =
-                                consecutive + 1
-
-                            bonus =
-                                if newConsecutive > 1 then
-                                    10 * newConsecutive
-                                else
-                                    1
-                        in
-                        fuzzyScoreHelp restSearch restTarget (score + bonus) newConsecutive
-
-                    else
-                        fuzzyScoreHelp search restTarget score 0

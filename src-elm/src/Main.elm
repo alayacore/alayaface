@@ -13,7 +13,6 @@ import Set exposing (Set)
 import Html exposing (Html)
 import Json.Decode as D
 import Task
-import Time
 import App.Types exposing (..)
 import App.Update
 import App.View

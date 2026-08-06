@@ -73,7 +73,6 @@ port module Ports exposing
     , onWindowMaximized
     )
 
-import Json.Decode as D
 import Json.Encode as E
 import App.NodeConnection
 

@@ -190,10 +190,9 @@ through spawn arguments and preset config files.
 **Plan node sessions are isolated**: every node of a plan runs with cwd
 `~/.alayaface/plans/<planId>/work/` (created by the backend on spawn), so
 tasks exchange files within the plan while plans stay isolated from each
-other and from the backend's directory. **Task timeouts**: a plan may set
-`default_timeout_seconds` / per-node `timeout_seconds` (no timeout by
-default); a node that hangs past its timeout fails and auto-retries like
-any other failure — this also covers a hanging `create_session`.
+other and from the backend's directory. **No task timeouts** (removed in
+the R-series refactor): a hung node stays Running until the user stops
+it or the session disconnects.
 
 **Output injection**: a downstream node prompt may reference an upstream
 task's result with `{{<taskId>.output}}` (e.g. `{{t1.output}}`); when the
@@ -218,11 +217,13 @@ SIGKILL only after a 5s grace period. (AlayaCore itself is untouched;
 - builds `fakecore` (scriptable alayacore stand-in) + the Go backend,
   launches system Chrome headless via `puppeteer-core` (install once:
   `cd e2e && npm install`)
-- walks the real UI: ⚙ → New Plan Session → prompt → fakecore answers
-  with a fenced plan JSON → **Create Plan** offer → Plan window DAG →
-  concurrency override → **Run** → nodes succeed (t2 fails once via a
-  marker, then auto-retries) → run log shows the retry → clicking a node
-  activates its session with the assistant reply
+- walks the real UI: New Session → prompt → fakecore answers with a
+  fenced plan JSON → the Plan window **auto-creates** (R2, no button) →
+  Plan window DAG → concurrency override → **Run** → nodes succeed (t2
+  fails once via a marker, then auto-retries) → run completes → status
+  bar shows Completed → clicking a node activates its session with the
+  assistant reply; Stop / resume / Browse-import / marker-rejection paths
+  are covered too
 - asserts via DOM selectors, saves screenshots to a temp artifact dir,
   and cleans up the server/Chrome
 

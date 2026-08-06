@@ -1,6 +1,5 @@
 module Session.Protocol exposing
-    ( userEchoTags
-    , isUserEchoTag
+    ( isUserEchoTag
     , DeltaEvent
     , FrameEvent
     , StatusEvent
@@ -12,7 +11,6 @@ module Session.Protocol exposing
     )
 
 import Json.Decode as D
-import Json.Encode as E
 
 
 -- User echo tags (UT/UI/UV/UA/UD appear on stdout as echoes)

@@ -1051,4 +1051,170 @@ tests =
                     in
                     Expect.equal P.WaitingForPlan (nodeState "a" run4).status
             ]
+        , describe "restart (R4: skip succeeded, reset the rest)"
+            [ test "RestartRun keeps Succeeded nodes (binding + output) and resets the rest" <|
+                \_ ->
+                    let
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan chainPlan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        ( run3, _ ) =
+                            R.step 3000 (R.TaskDone "s1" False (Just "a-output") False) run2
+
+                        run4 =
+                            Tuple.first (R.step 4000 R.RestartRun run3)
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal P.Succeeded (nodeState "a" run4).status |> Expect.onFail "succeeded node keeps Succeeded"
+                        -- R4 close-and-clear: a finished node's live binding
+                        -- is dropped (window closed); lastSessionId keeps the
+                        -- session reachable, and output survives the restart.
+                        , \_ -> Expect.equal Nothing (nodeState "a" run4).sessionId |> Expect.onFail "succeeded live binding closed"
+                        , \_ -> Expect.equal (Just "s1") (nodeState "a" run4).lastSessionId |> Expect.onFail "lastSessionId kept"
+                        , \_ -> Expect.equal (Just "a-output") (nodeState "a" run4).output |> Expect.onFail "succeeded output survives"
+                        ]
+                        ()
+            , test "RestartRun resets unfinished nodes to Pending (attempts/session/failures cleared)" <|
+                \_ ->
+                    let
+                        -- a succeeded, b failed once (Waiting), c untouched Pending
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan chainPlan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        ( run3, _ ) =
+                            R.step 3000 (R.TaskDone "s1" False (Just "out") False) run2
+
+                        -- b runs and fails once → Waiting
+                        ( run4, _ ) =
+                            R.step 4000 (R.SessionCreatedFor "b" "s2") run3
+
+                        ( run5, _ ) =
+                            R.step 5000 (R.TaskDone "s2" True Nothing False) run4
+
+                        run6 =
+                            Tuple.first (R.step 6000 R.RestartRun run5)
+                    in
+                    -- b was reset by the restart, and since a is Succeeded it
+                    -- is immediately relaunched (Starting) in the same step.
+                    Expect.all
+                        [ \_ -> Expect.equal P.Starting (nodeState "b" run6).status |> Expect.onFail "failed node resets and relaunches (Starting)"
+                        , \_ -> Expect.equal 0 (nodeState "b" run6).attempts
+                        , \_ -> Expect.equal Nothing (nodeState "b" run6).sessionId
+                        , \_ -> Expect.equal [] (nodeState "b" run6).failures
+                        , \_ -> Expect.equal P.Pending (nodeState "c" run6).status
+                        , \_ -> Expect.equal P.InProgress run6.status
+                        ]
+                        ()
+            , test "RestartRun leaves WaitingForPlan nodes untouched (sub-plan cascade is Update-level)" <|
+                \_ ->
+                    let
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan singlePlan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        run3 =
+                            Tuple.first (R.step 3000 (R.TaskDone "s1" False Nothing True) run2)
+
+                        run4 =
+                            Tuple.first (R.step 4000 R.RestartRun run3)
+                    in
+                    Expect.equal P.WaitingForPlan (nodeState "a" run4).status
+                        |> Expect.onFail "WaitingForPlan node is not reset"
+            , test "RestartRun re-schedules downstream after the reset (fresh create effects)" <|
+                \_ ->
+                    let
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan chainPlan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        ( run3, _ ) =
+                            R.step 3000 (R.TaskDone "s1" False (Just "out") False) run2
+
+                        ( run4, createEffects ) =
+                            R.step 4000 R.RestartRun run3
+                    in
+                    -- b was reset to Pending and a is Succeeded → b is
+                    -- relaunched with a fresh create effect (persist is the
+                    -- always-present trailing effect).
+                    Expect.equal True (List.member "create:b" (effects createEffects))
+                        |> Expect.onFail ("expected create:b among effects, got " ++ String.join "," (effects createEffects))
+            ]
+        , describe "resumeState (Load run / reopen: unfinished nodes re-run)"
+            [ test "Running/Starting nodes go back to Pending with session binding dropped" <|
+                \_ ->
+                    let
+                        base =
+                            runFromPlan chainPlan
+
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun base
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        -- a is Running (bound), b/c untouched Pending
+                        restored =
+                            R.resumeState run2
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal P.Pending (nodeState "a" restored).status |> Expect.onFail "Running node → Pending"
+                        , \_ -> Expect.equal Nothing (nodeState "a" restored).sessionId |> Expect.onFail "stale session binding dropped"
+                        , \_ -> Expect.equal P.InProgress restored.status |> Expect.onFail "run with pending work is InProgress"
+                        ]
+                        ()
+            , test "resumeState keeps Succeeded/Failed nodes terminal" <|
+                \_ ->
+                    let
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan chainPlan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        ( run3, _ ) =
+                            R.step 3000 (R.TaskDone "s1" False (Just "out") False) run2
+
+                        ( run4, _ ) =
+                            R.step 4000 (R.SessionCreatedFor "b" "s2") run3
+
+                        ( run5, _ ) =
+                            R.step 5000 (R.TaskDone "s2" True Nothing False) run4
+
+                        -- b exhausted? no — one failure → Waiting; restore: Waiting → Pending
+                        restored =
+                            R.resumeState run5
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal P.Succeeded (nodeState "a" restored).status |> Expect.onFail "Succeeded stays"
+                        , \_ -> Expect.equal P.Pending (nodeState "b" restored).status |> Expect.onFail "Waiting (failed once) → Pending for retry"
+                        ]
+                        ()
+            , test "resumeState on a fully-terminal run keeps its status (no spurious InProgress)" <|
+                \_ ->
+                    let
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan singlePlan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        ( run3, _ ) =
+                            R.step 3000 (R.TaskDone "s1" False (Just "out") False) run2
+
+                        restored =
+                            R.resumeState run3
+                    in
+                    Expect.equal P.Completed restored.status
+                        |> Expect.onFail "terminal run keeps its status"
+            ]
         ]

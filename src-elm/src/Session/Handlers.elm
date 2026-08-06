@@ -1,7 +1,6 @@
 module Session.Handlers exposing
     ( handleDeltaEvent
     , handleFrameEvent
-    , handleSystemMsg
     , modelInfoDecoder
     )
 

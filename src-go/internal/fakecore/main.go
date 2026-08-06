@@ -328,7 +328,6 @@ func planReply() {
   "goal": "Automated end-to-end verification of Plan Mode",
   "concurrency": 2,
   "default_max_attempts": 3,
-  "default_timeout_seconds": 5,
   "tasks": [
     { "id": "t1", "title": "Research", "prompt": "research the topic and summarize findings", "depends_on": [], "max_attempts": 3 },
     { "id": "t2", "title": "Draft", "prompt": "draft the report from the research (fail-once marker). 参考上游任务输出: {{t1.output}}", "depends_on": ["t1"], "max_attempts": 3 },

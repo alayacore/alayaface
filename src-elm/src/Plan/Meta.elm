@@ -2,7 +2,6 @@ module Plan.Meta exposing
     ( Origin
     , PlanMeta
     , Feedback
-    , emptyMeta
     , encodeMeta
     , decodeMeta
     , metaPathFor
@@ -54,14 +53,6 @@ type alias PlanMeta =
     { origin : Maybe Origin
     , feedbacks : List Feedback
     , createdAt : Int
-    }
-
-
-emptyMeta : PlanMeta
-emptyMeta =
-    { origin = Nothing
-    , feedbacks = []
-    , createdAt = 0
     }
 
 

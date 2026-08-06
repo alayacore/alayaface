@@ -10,9 +10,7 @@ them to app state and messages.
 import Html exposing (Html, Attribute)
 import Html.Attributes as Attr
 import Html.Events as Ev
-import Html.Keyed as Keyed
 import Json.Decode as D
-import Json.Encode as E
 import Dict exposing (Dict)
 import Set exposing (Set)
 import Markdown

@@ -32,7 +32,6 @@ module Session.Types exposing
 
 import Dict exposing (Dict)
 import Set exposing (Set)
-import Json.Decode as D
 import Json.Encode as E
 import Session.Selector
 

@@ -73,7 +73,7 @@ Add **Plan Mode** to AlayaFace: let the model decompose a large task into a
         │  (a) ```json code block in the AT message (main path)   (normal sessions work too, user describes the format)
         │  (b) write_file into ~/.alayaface/plans/*.json (listed by the Plans manager)
         ▼
-Plan.Detect extracts → "Create Plan" button appears below the assistant message
+Plan.Detect extracts → plan window AUTO-CREATES (R2, no button)
         ▼
 Plan.Types decode + normalize + validate (unique ids / deps exist / acyclic)
         ▼
@@ -91,26 +91,25 @@ User clicks Run ──► Plan.Runner (pure Elm state machine)
 Node succeeds → unlocks downstream → parallel scheduling (≤ concurrency cap)
 ```
 
-### Plan Session (P6 + P22)
+### Plan Session (P6 + P22 — REMOVED in R2: fixed plan mode)
 
-The user doesn't need to know any implementation details (schema / fenced JSON / preset):
+**Status: removed.** The R-series refactor (R2) dropped the dedicated
+"New Plan Session" entry, the `[Plan]` title prefix (`planSessionIds`),
+the `builtinTools=""` planner spawn, and the role-locked planner prompt.
+Every session is now plan-capable: the planner hint
+(`planSystemPrompt`, a constant in App/Update.elm) is injected via
+`--system` on ALL user-created sessions — it is advisory ("complex tasks
+→ output a plan JSON first"), with no role lock; the model keeps its
+tools and may still execute directly. Plan detection (below) works in any
+session, and plan-node sessions are unaffected (no planner hint).
 
-1. ⚙ menu → **New Plan Session** → creates a normal session, but spawn injects the built-in **planner instructions** via `--system` (`planSystemPrompt`, a constant in App/Update.elm: role locked to "planner, not executor" + tools/execution forbidden + output a single ```json plan block + schema + quality rules + afterwards only answer plan follow-ups);
-2. **Also spawned with `builtinTools=""` (explicit empty string = alayacore has no built-in tools)** — the planner **physically cannot execute tasks** (can't search/write/run), it can only output a plan; runner node sessions are unaffected (flag not passed = all tools);
-3. The user only describes the goal in natural language;
-4. The model outputs the plan block → the existing Create Plan flow takes over (detect/validate/save/Run unchanged);
-5. Session window title carries a `[Plan]` prefix (`planSessionIds : Set String`).
-
-Chain: `create_session {systemPrompt, builtinTools:""}` → `spawn --system=<text>
---builtin-tools=` (appended after alayacore's default system prompt; explicit
-empty flag = no tools). resume/fork sessions don't pass it.
-
-> **P22 background**: the root cause of the model "forgetting its role and doing
-> the work" = the default system prompt comes first ("execute tasks"), our
-> planner instructions come after, and tools are fully enabled. Fix: role-lock
-> in the prompt + disabled tools as a double safety. The backend `builtin_tools`
-> argument now supports three states: `null` (preset default / all), `"a,b"`
-> (subset), `""` (**no tools** — the v2 semantics left over from P6).
+> Historical design (no longer implemented): a dedicated menu entry
+> created a session with `--system` role-locked to "planner, not
+> executor" + `builtinTools=""` (no built-in tools) so the planner could
+> physically not execute tasks; its title carried a `[Plan]` prefix.
+> P22 background: the model "forgetting its role" was caused by the
+> default system prompt ("execute tasks") coming first, planner
+> instructions after, and tools fully enabled.
 
 ---
 
@@ -160,7 +159,6 @@ empty flag = no tools). resume/fork sessions don't pass it.
 | `goal` | no | Overall goal, shown in the DAG view header |
 | `concurrency` | no | Parallel cap, default 2 (range 1–8) |
 | `default_max_attempts` | no | Node default retry cap, default 3 |
-| `default_timeout_seconds` | no | Node default timeout (seconds); absent = no timeout (v1 behavior); nodes can override via `timeout_seconds` |
 | `tasks[].id` | yes | Globally unique, non-empty |
 | `tasks[].title` | yes | Node title |
 | `tasks[].prompt` | yes | Full prompt sent to the node's session; may reference upstream output via `{{<taskId>.output}}` (P24: replaced at runtime with that task's final answer; can only reference tasks already declared in `depends_on`) |
@@ -168,13 +166,11 @@ empty flag = no tools). resume/fork sessions don't pass it.
 | `tasks[].preset` | no | Preset name the node runs under; default = active preset |
 | `tasks[].tools` | no | Node-level built-in tool set override (comma list); default = preset settings.conf builtin_tools (then default = all) |
 | `tasks[].max_attempts` | no | Node-level retry cap; default = default_max_attempts |
-| `tasks[].timeout_seconds` | no | Node-level timeout (seconds); default = default_timeout_seconds (then default = no timeout) |
 
 ### Validation Rules (pure Elm, after decode normalize)
 
 - ids unique & non-empty; title/prompt non-empty;
 - depends_on references exist, no self-dependency; **Kahn topological sort detects cycles**;
-- timeout values (`default_timeout_seconds` / `timeout_seconds`) must be ≥ 1 if given;
 - normalize: fill defaults, `schema_version` fixed to 1, output **normalized JSON** (that is what is saved to the file);
 - validation failure → readable errors listed at the top of the DAG view (e.g. `t2 depends on nonexistent node x`, `cycle detected: t1→t2→t1`).
 
@@ -282,8 +278,9 @@ E2E covers the gate.
 
 - `extractPlanJson : String -> Maybe String`: extract the first ```json … ``` block (unescape, strip fences);
 - `hasPlanTypeMarker : String -> Bool`: whether the block's top-level `"type"` == `"alayaface-plan"` (P26);
-- called on the latest assistant message at AT frame completion: **first extractPlanJson, then require hasPlanTypeMarker == True** to match (plain ```json code examples — without the marker — no longer trigger the button) → `Model.pendingPlanOffers` records `messageId → rawJson` → **Create Plan** button renders below the message;
-- click → decode/validate (`type` **required**: missing or wrong value rejected, no backward compat) → normalize → generate planId → `fs_write_file_text` writes `~/.alayaface/plans/<planId>.json` → opens the Plan window.
+- called on the latest assistant message at AT frame completion: **first extractPlanJson, then require hasPlanTypeMarker == True** to match (plain ```json code examples — without the marker — are ignored);
+- **R2 auto-create (no button)**: a match stores `messageId → rawJson` in `Model.pendingPlanOffers` and immediately issues `PlanCreateOffer` — the Plan window opens automatically, without user confirmation. `messageBoundToPlan` (meta origin) prevents replay duplicates; a parse failure is inlined back into the session as an error message.
+- decode/validate (`type` **required**: missing or wrong value rejected, no backward compat) → normalize → generate planId → `fs_write_file_text` writes `~/.alayaface/plans/<planId>.json` → opens the Plan window.
 
 ---
 
@@ -441,27 +438,19 @@ backend cwd, backward compatible).
 - Plan Mode node sessions derive `planWorkDir planId model` in Elm (when homeDir is known) and pass it on both create and resume;
 - Tests: Go integration (create/resume with workDir → fakecore boot frame reports `cwd`, asserted to match; without → backend cwd) + Rust mechanism-level (current_dir applies) + E2E (after Run, assert `plans/<planId>/work` exists).
 
-### 8.5 Task Timeout (P16)
+### 8.5 Task Timeout (P16 — REMOVED in R1)
 
-**Problem**: the Runner is event-driven with no heartbeat — when a real model
-API hangs / a tool deadlocks / MCP stalls, the node stays Running forever and
-the run hangs forever.
+**Status: removed.** The R-series refactor (R1) deleted task timeouts
+entirely: the `default_timeout_seconds` / `timeout_seconds` schema fields,
+the `Time.every` tick subscription, and the `Tick` event are gone. Nodes
+have no timeout — a hung task stays Running until the user Stops it
+(cancel-first close, §8.3) or the session disconnects. Hung nodes are an
+accepted experience-period limitation (see REFACTOR.md §8).
 
-**Solution**: `default_timeout_seconds` (plan-level) + `timeout_seconds`
-(node-level, overrides), default no timeout (v1 compatible). The app subscribes
-`Time.every 1000ms` → `PlanTick` → feeds `Tick now` to every InProgress plan
-window → the runner checks `Starting/Running` nodes: `now - startedAt >=
-timeout*1000` → `failNode "Timeout after Ns"` (reuses the failure path: close
-session + auto-retry / exhausted → Failed + downstream Blocked). Timing starts
-when the node enters Starting (schedule sets startedAt) — **covers hanging
-create_session** (a late-returning session is closed by orphan cleanup).
-
-- one tick serves all parallel plans (no-op when no run);
-- Tests: Elm runner 5 cases (timeout→Waiting+close+retry effects / before
-  timeout no-op / no timeout never / node overrides plan default /
-  timeout→retry→success loop) + schema 3 cases (decode/roundtrip/invalid) +
-  E2E (fakecore `hang-once` hangs → 5s timeout → auto-retry succeeds, runLog
-  asserts t3 waiting).
+Historical design (for reference, no longer implemented): `Time.every
+1000ms` → `PlanTick` → `Tick now` → `failNode "Timeout after Ns"` for
+`Starting/Running` nodes past their limit, with the failure path reused
+(close + auto-retry / Failed + downstream Blocked).
 
 ### 8.6 Output Injection (`{{tX.output}}`, P24)
 
@@ -556,7 +545,7 @@ non-empty assistant text in the session):
 |---|---|---|
 | P0 | `Plan/Types` + `Plan/Detect` + all unit tests | ✅ done |
 | P1 | `fs_write_file_text` / `fs_read_file_text` (Rust+Go+bridge+Ports) + unit tests | ✅ done |
-| P2 | "Create Plan" button + auto-save plans dir + Plans manager (list/open/delete/import) | ✅ done |
+| P2 | plan capture + auto-save plans dir + Plans manager (list/open/delete/import); R2: auto-create replaces the button | ✅ done |
 | P3 | `Plan/Layout` + DAG view (HTML/CSS, not SVG) + node detail panel | ✅ done |
 | P4 | `Plan/Runner` state machine + Run/Pause/Stop/Retry + failure retry & reason recording + run.json persistence + Resume | ✅ done |
 | P4.5 | `create_session` gains `preset`/`builtinTools` arguments + settings.conf `builtin_tools` + seed preset seeding | ✅ done |
@@ -591,18 +580,22 @@ non-empty assistant text in the session):
 - **Don't modify AlayaCore** (constraint C1);
 - built-in tool set is specified **via spawn arguments** like tool confirmation (`--builtin-tools`), config lives in settings.conf (per-preset, symmetric with tool_confirm);
 - design is written into this document + TODO.md manages subsequent development (read this + TODO.md first after an interruption);
-- **Plan Session entry**: the user only describes the need and shouldn't know schema/format details; the menu creates a session with the planner system prompt (`--system`), title carries a `[Plan]` prefix.
+- **Plan Session entry (superseded by R2 — fixed plan mode)**: originally the
+  user only describes the need, a dedicated menu entry created a role-locked,
+  tool-less planner session with a `[Plan]` prefix. R2 removed the entry: every
+  session carries the advisory planner hint via `--system`, and plan windows
+  auto-create on detection.
 - **plan JSON top-level `"type": "alayaface-plan"` marker (P26, user instruction)**:
-  the Create Plan button only appears for ```json blocks carrying the explicit
-  marker (plain code examples don't false-trigger); always written on
-  save/export; **required, no backward compat** — missing or wrong value errors
-  out directly (`Missing top-level "type": "alayaface-plan" marker` /
+  only ```json blocks carrying the explicit marker are treated as plans (plain
+  code examples don't false-trigger); always written on save/export;
+  **required, no backward compat** — missing or wrong value errors out directly
+  (`Missing top-level "type": "alayaface-plan" marker` /
   `Not an AlayaFace plan: ...`).
 
 ### Defaults (not explicitly confirmed; implemented as follows, adjustable at review)
 - `concurrency` default 2 (1–8 adjustable);
 - `default_max_attempts` default 3, retry backoff 2s;
-- failure determination: SM task_error / SM error / session disconnect / **task timeout** (`default_timeout_seconds` / `timeout_seconds`, default no timeout; P16 implemented);
+- failure determination: SM task_error / SM error / session disconnect (**task timeouts were removed in R1** — a hung node stays Running until Stop / disconnect);
 - downstream context: prompts support upstream output injection via `{{<taskId>.output}}` (P24 implemented; §8.6); unreferenced downstream prompts stay self-contained;
 - Runner sessions `toolConfirm="allow"`;
 - file location `~/.alayaface/plans/<planId>.json`; Resume v1 = rerun unfinished nodes;
