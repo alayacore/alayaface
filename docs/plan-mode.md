@@ -282,8 +282,13 @@ type Effect
   恢复）；手动关闭某节点会话窗口会向 runner 注入断连事件 → 该节点按失败重试。
 
 ### 7.2 Plans 管理器（overlay，仿 Session Manager）
-- 列出 `~/.alayaface/plans/*.json`：名称、文件、创建时间、最近运行状态；
-- 操作：Open（渲染 DAG）、Resume last run、Delete、Import from file；
+- 两个 tab：
+  - **Saved**：列出 `~/.alayaface/plans/*.json`（过滤 `*.run.json`），带模糊
+    过滤输入框（`Fuzzy.fuzzyMatch`）；操作：Open（渲染 DAG）、Delete；
+  - **Browse**：文件浏览器，**复用多模态文件选择器**（`Overlay.FilePicker.view`
+    + `Session.FilePicker` 纯逻辑 + `Fuzzy.elm`）：目录导航（fs_resolve_path /
+    fs_list_dir）、模糊匹配过滤、点击目录进入、点击/回车 plan JSON 导入
+    （走 `PlanReadTarget` + fs_read_file_text 流程，任意位置均可）；
 - 入口：全局菜单新增 **Plans** 项（现有 `showGlobalMenu` 体系）。
 
 ### 7.3 Runner 会话

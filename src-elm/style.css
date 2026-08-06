@@ -1973,6 +1973,9 @@ body {
   .sel-page-action:hover:not(:disabled) { border-color: #6366f1; color: #6366f1; }
   .sel-page-action-danger { border-color: #fca5a5; color: #dc2626; }
   .sel-page-action-danger:hover:not(:disabled) { background: rgba(220, 38, 38, 0.08); color: #b91c1c; }
+  .plan-tab { border-color: #d0d0d8; color: #555; }
+  .plan-tab:hover { background: rgba(0,0,0,0.03); }
+  .plan-tab-active { background: #6366f1; border-color: #6366f1; color: white; }
 }
 
 /* ─── Model Editor Page ────────────────────────────────────────────── */
@@ -2623,6 +2626,28 @@ body {
   color: inherit;
 }
 .plan-import-input:focus { border-color: #6366f1; outline: none; }
+
+/* Plans manager tabs + saved-list filter (P17) */
+.plan-tabs {
+  display: flex;
+  gap: 6px;
+  margin: 8px 0 12px;
+}
+
+.plan-tab {
+  flex: 1;
+  padding: 6px 10px;
+  font-size: 0.8rem;
+  border: 1px solid #3a3a4e;
+  background: transparent;
+  color: #aaa;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.plan-tab:hover { background: rgba(255,255,255,0.04); }
+.plan-tab-active { background: #6366f1; border-color: #6366f1; color: white; }
+
+.plan-filter-row { margin-bottom: 10px; }
 
 /* ─── Plan DAG view (P3) ─────────────────────────────────────────── */
 

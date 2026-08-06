@@ -249,6 +249,77 @@ try {
   await shot(page, '05-t1-session.png');
   console.log('PASS: t1 node opened its session (activated, reply visible)');
 
+  // ── 8. Plans manager: Saved fuzzy filter + Browse-tab file import ──
+  // Write a plan JSON at the fake home root (the Browse tab starts there).
+  const importedName = 'imported-via-browse';
+  const importedPlan = {
+    schema_version: 1,
+    name: 'Imported Via Browse',
+    goal: 'Plan imported from a file via the Browse tab',
+    concurrency: 1,
+    default_max_attempts: 2,
+    tasks: [{ id: 'n1', title: 'Only Task', prompt: 'do the thing', depends_on: [], max_attempts: 2 }]
+  };
+  writeFileSync(path.join(home, importedName + '.json'), JSON.stringify(importedPlan, null, 2));
+
+  // Open ⚙ → Plans (Saved tab default).
+  await page.click('.global-menu-btn');
+  await waitFor('.global-menu-panel');
+  assert(await clickByText('.global-menu-item', 'Plans'), 'Plans menu item');
+  await waitFor('.plan-tab', 10000);
+  await sleep(500);
+  await shot(page, '06-plans-manager-saved.png');
+
+  // Saved tab: the plan created earlier via Create Plan must be listed.
+  const savedNames = await page.$$eval('.sel-page-item-name', els => els.map(e => e.textContent));
+  assert(savedNames.some(n => n.startsWith('e2e-demo-')), 'Saved tab lists the created plan, got: ' + JSON.stringify(savedNames));
+
+  // Saved fuzzy filter: unmatched term → "No plans match".
+  await page.type('.plan-filter-row input', 'zzz-no-such-plan', { delay: 1 });
+  await sleep(200);
+  const savedStatuses = await page.$$eval('.sel-page-status', els => els.map(e => e.textContent));
+  assert(savedStatuses.some(s => s.includes('No plans match')), 'Saved filter no-match status, got: ' + JSON.stringify(savedStatuses));
+  await page.evaluate(() => {
+    const i = document.querySelector('.plan-filter-row input');
+    if (i) { i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); }
+  });
+  await sleep(200);
+  console.log('PASS: Saved tab lists plans and fuzzy-filters');
+
+  // Switch to Browse tab: file browser rooted at home dir.
+  assert(await clickByText('.plan-tab', 'Browse'), 'Browse tab button');
+  await waitFor('#fp-page-input-plan', 10000);
+  await sleep(700);
+  await shot(page, '07-plans-manager-browse.png');
+  const browseEntries = await page.$$eval('.fp-page-item-name', els => els.map(e => e.textContent));
+  assert(browseEntries.includes(importedName + '.json'), 'Browse tab lists the importable plan, got: ' + JSON.stringify(browseEntries));
+
+  // Browser fuzzy filter: unmatched → "No files found".
+  await page.type('#fp-page-input-plan', 'zzz-nope', { delay: 1 });
+  await sleep(250);
+  const browseStatuses = await page.$$eval('.fp-page-status', els => els.map(e => e.textContent));
+  assert(browseStatuses.some(s => s.includes('No files found')), 'Browse filter no-match status, got: ' + JSON.stringify(browseStatuses));
+  // Clear the filter suffix (back to "<home>/") so all entries show again.
+  await page.evaluate(() => {
+    const i = document.querySelector('#fp-page-input-plan');
+    if (i) { i.value = i.value.slice(0, i.value.length - 8); i.dispatchEvent(new Event('input', { bubbles: true })); }
+  });
+  await sleep(250);
+
+  // Click the plan file → imported → a NEW plan window with node n1 opens.
+  await page.evaluate((name) => {
+    const items = [...document.querySelectorAll('.fp-page-item')];
+    const it = items.find(el => el.querySelector('.fp-page-item-name')?.textContent === name + '.json');
+    if (it) it.click();
+  }, importedName);
+  await page.waitForFunction(() => {
+    const ids = [...document.querySelectorAll('.plan-node-id')].map(e => e.textContent);
+    return ids.includes('n1');
+  }, { timeout: 30000 });
+  await sleep(800);
+  await shot(page, '08-imported-plan-window.png');
+  console.log('PASS: Browse tab imported the plan file (new Plan window with node n1)');
+
   console.log('\nALL PASS ✅');
   console.log('artifacts:', tmp);
   console.log('screenshots:');

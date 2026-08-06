@@ -16,6 +16,8 @@ view :
     , selected : Int
     , mode : T.FileMode
     , loading : Bool
+    , title : String
+    , placeholder : String
     , noOp : msg
     , onInput : String -> msg
     , onConfirm : msg
@@ -31,15 +33,9 @@ view config =
 
         inputId =
             "fp-page-input-" ++ config.sessionId
-
-        placeholder =
-            if isUrlMode then
-                "Paste a URL…"
-            else
-                "Type a path or filter files…"
     in
     Html.div [ Attr.class "fp-page" ]
-        [ Html.div [ Attr.class "sel-page-title" ] [ Html.text "Attach Media" ]
+        [ Html.div [ Attr.class "sel-page-title" ] [ Html.text config.title ]
         , Html.div [ Attr.class "fp-page-input-row" ]
             [ Html.button
                 [ Attr.class "fp-page-prefix"
@@ -53,7 +49,7 @@ view config =
                 , Attr.type_ "text"
                 , Attr.value config.input
                 , Ev.onInput config.onInput
-                , Attr.placeholder placeholder
+                , Attr.placeholder config.placeholder
                 , Ev.preventDefaultOn "keydown" <|
                     D.map2 (\key ctrl ->
                         -- Backspace at root "/": prevent deletion (no parent)

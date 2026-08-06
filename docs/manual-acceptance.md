@@ -26,7 +26,9 @@
 - [ ] 点击 Create Plan → 打开 Plan 窗口（独立窗口，非 overlay），显示
       DAG（节点 + 依赖边）、目标、元信息
 - [ ] `~/.alayaface/plans/<name>-<ts>.json` 已保存（归一化后版本）
-- [ ] ⚙ → Plans 管理器列出该计划，可 Open / Delete / Import
+- [ ] ⚙ → Plans 管理器：**Saved** tab 列出该计划（带模糊过滤），可 Open / Delete
+- [ ] ⚙ → Plans 管理器 → **Browse** tab：文件浏览器（目录导航 + 模糊匹配），
+      点击任意位置的 plan JSON 可导入并打开 Plan 窗口
 
 ## 2. Run + 节点会话内容（P4/P7 修复点）
 

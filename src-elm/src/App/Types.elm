@@ -24,6 +24,7 @@ module App.Types exposing
     , emptyPlanWindow
     , PlanReadTarget
     , CreateTask(..)
+    , PlanManagerTab(..)
     )
 
 {-| Application-level model, message, and editor/window types.
@@ -252,8 +253,13 @@ type Msg
     | ClosePlanManager
     | PlanManagerOpen String
     | PlanManagerDelete String
-    | PlanManagerSetImport String
-    | PlanManagerImport
+    | PlanManagerSetFilter String
+    | PlanManagerSwitchTab PlanManagerTab
+    | PlanManagerBrowserInput String
+    | PlanManagerBrowserNavigate String
+    | PlanManagerBrowserSelect Int
+    | PlanManagerBrowserConfirm
+    | PlanManagerBrowserPick Int
     | PlanCreateOffer String
     | PlanSaveReady PT.Plan Int
     | PlanActivate String
@@ -470,13 +476,25 @@ emptyPlanView =
     }
 
 
+-- Which tab of the Plans manager overlay is shown.
+type PlanManagerTab
+    = PlanTabSaved
+    | PlanTabBrowse
+
+
 -- Plans manager overlay state.
 type alias PlanManagerState =
     { show : Bool
     , loading : Bool
     , plans : List PlanFileInfo
     , error : Maybe String
-    , importPath : String
+    -- Saved-tab fuzzy filter
+    , filter : String
+    , tab : PlanManagerTab
+    -- Browse-tab file browser for importing a plan JSON from anywhere.
+    -- Reuses Session.Types.FilePickerState + Session.FilePicker logic and
+    -- Overlay.FilePicker.view, exactly like the multimodal attach picker.
+    , browser : Maybe T.FilePickerState
     }
 
 
@@ -486,7 +504,9 @@ emptyPlanManager =
     , loading = False
     , plans = []
     , error = Nothing
-    , importPath = ""
+    , filter = ""
+    , tab = PlanTabSaved
+    , browser = Nothing
     }
 
 

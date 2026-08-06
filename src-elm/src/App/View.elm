@@ -21,6 +21,7 @@ import App.Update exposing (SessionDir, decodeSessionDir, helpItems, nextCopyNam
 import Session.Types as T
 import Session.Selector as Sel exposing (Page(..))
 import Session.FilePicker as FP
+import Fuzzy
 import Plan.Types as PT
 import Plan.View
 import Overlay.ConfirmTool
@@ -874,44 +875,109 @@ viewPlanManagerOverlay model =
         viewOverlay ClosePlanManager
             [ Html.div [ Attr.class "sel-page" ]
                 [ Html.div [ Attr.class "sel-page-title" ] [ Html.text "Plans" ]
+                , Html.div [ Attr.class "plan-tabs" ]
+                    [ Html.button
+                        [ Attr.class ("plan-tab" ++ (if pm.tab == PlanTabSaved then " plan-tab-active" else ""))
+                        , Ev.onClick (PlanManagerSwitchTab PlanTabSaved)
+                        ]
+                        [ Html.text "Saved" ]
+                    , Html.button
+                        [ Attr.class ("plan-tab" ++ (if pm.tab == PlanTabBrowse then " plan-tab-active" else ""))
+                        , Ev.onClick (PlanManagerSwitchTab PlanTabBrowse)
+                        ]
+                        [ Html.text "Browse" ]
+                    ]
                 , case pm.error of
                     Just err ->
                         Html.div [ Attr.class "sel-page-status sel-page-status-error" ] [ Html.text err ]
 
                     Nothing ->
                         Html.text ""
-                , if pm.loading then
-                    Html.div [ Attr.class "sel-page-status" ] [ Html.text "Loading…" ]
+                , case pm.tab of
+                    PlanTabSaved ->
+                        viewPlanSavedTab model
 
-                  else if List.isEmpty pm.plans then
-                    Html.div [ Attr.class "sel-page-status" ]
-                        [ Html.text "No plans yet. Ask a session to output a ```json plan block, or import a file." ]
-
-                  else
-                    Html.div [ Attr.class "sel-page-list" ]
-                        (List.map viewPlanFile pm.plans)
-                , Html.div [ Attr.class "plan-import-row" ]
-                    [ Html.input
-                        [ Attr.class "plan-import-input"
-                        , Attr.placeholder "Path to plan JSON…"
-                        , Attr.value pm.importPath
-                        , Ev.onInput PlanManagerSetImport
-                        ]
-                        []
-                    , Html.button
-                        [ Attr.class "confirm-page-btn confirm-page-btn-allow"
-                        , Ev.onClick PlanManagerImport
-                        , Attr.style "padding" "4px 10px"
-                        , Attr.style "font-size" "0.75rem"
-                        , Attr.style "min-width" "auto"
-                        ]
-                        [ Html.text "Import" ]
-                    ]
+                    PlanTabBrowse ->
+                        viewPlanBrowseTab model
                 ]
             ]
 
     else
         Html.text ""
+
+
+viewPlanSavedTab : Model -> Html Msg
+viewPlanSavedTab model =
+    let
+        pm =
+            model.planManager
+
+        term =
+            String.trim pm.filter
+
+        visible =
+            if String.isEmpty term then
+                pm.plans
+
+            else
+                List.filter
+                    (\info -> Fuzzy.fuzzyMatch (String.toLower term) (String.toLower info.name))
+                    pm.plans
+    in
+    Html.div []
+        [ Html.div [ Attr.class "plan-filter-row" ]
+            [ Html.input
+                [ Attr.class "sel-page-input"
+                , Attr.placeholder "Filter saved plans…"
+                , Attr.value pm.filter
+                , Ev.onInput PlanManagerSetFilter
+                ]
+                []
+            ]
+        , if pm.loading then
+            Html.div [ Attr.class "sel-page-status" ] [ Html.text "Loading…" ]
+
+          else if List.isEmpty visible then
+            Html.div [ Attr.class "sel-page-status" ]
+                [ Html.text
+                    (if String.isEmpty term then
+                        "No plans yet. Ask a session to output a ```json plan block, or browse to import a file."
+
+                     else
+                        "No plans match your filter."
+                    )
+                ]
+
+          else
+            Html.div [ Attr.class "sel-page-list" ]
+                (List.map viewPlanFile visible)
+        ]
+
+
+viewPlanBrowseTab : Model -> Html Msg
+viewPlanBrowseTab model =
+    case model.planManager.browser of
+        Just fp ->
+            Overlay.FilePicker.view
+                { sessionId = "plan"
+                , entries = FP.filterEntries fp
+                , input = fp.input
+                , filter = fp.filter
+                , selected = fp.selected
+                , mode = T.Local
+                , loading = fp.loading
+                , title = "Import Plan File"
+                , placeholder = "Type a path or filter files…"
+                , noOp = NoOp
+                , onInput = PlanManagerBrowserInput
+                , onConfirm = PlanManagerBrowserConfirm
+                , onPick = PlanManagerBrowserPick
+                , onUrlConfirm = NoOp
+                , onToggleMode = NoOp
+                }
+
+        Nothing ->
+            Html.div [ Attr.class "sel-page-status" ] [ Html.text "Loading…" ]
 
 
 viewPlanFile : PlanFileInfo -> Html Msg
@@ -1401,6 +1467,8 @@ viewFilePickerOverlay sid session =
                 , selected = session.filePicker.selected
                 , mode = session.filePicker.mode
                 , loading = session.filePicker.loading
+                , title = "Attach Media"
+                , placeholder = "Type a path or filter files…"
                 , noOp = NoOp
                 , onInput = \v -> ForSession sid (SetFilePickerInput v)
                 , onConfirm = ForSession sid FilePickerConfirmItem

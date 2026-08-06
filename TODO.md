@@ -399,8 +399,8 @@ alayacore 替身）+ **系统 Chrome 无头** + Go 后端，跑真实 DOM。
       `~/.alayaface/plans/<planId>.json` (createParents)→ open Plan window;
       validation errors shown in Plan view
 - [x] Plans manager overlay: list `~/.alayaface/plans/*.json` (via fs_home_dir +
-      fs_list_dir, filters out *.run.json), Open / Delete / Import via path input
-      (added fs_delete_file command Rust+Go+ports+tests)
+      fs_list_dir, filters out *.run.json), Open / Delete (added fs_delete_file
+      command Rust+Go+ports+tests); Import moved to Browse tab in P17
 - [x] Global menu: "Plans" entry (🕸)
 - [x] Plan view (P2 list form; P3 upgrades to SVG DAG): name/goal/meta/path +
       task list with id/title/preset/deps
@@ -540,6 +540,35 @@ No implementation details exposed to the user.
 - [x] Tests: Go integration (create_session with systemPrompt works,
       fakecore answers prompts); Rust 35 / Go 8 pkgs / Elm 114 all green
 - [ ] Manual GUI smoke — GUI env; checklist in docs/manual-acceptance.md
+
+---
+
+## P17 — Plans manager Browse tab (file-browser import)
+
+Replace the raw "Path to plan JSON…" input with a real file browser,
+reusing the multimodal picker machinery (file list + fuzzy matching).
+
+- [x] `PlanManagerState`: `importPath` removed; added `filter` (Saved-tab fuzzy
+      filter), `tab : PlanManagerTab (Saved|Browse)`, `browser : Maybe
+      T.FilePickerState` (Browse-tab browser state)
+- [x] Msgs: `PlanManagerSetImport`/`PlanManagerImport` removed; added
+      `PlanManagerSetFilter`, `PlanManagerSwitchTab`, `PlanManagerBrowserInput/
+      Navigate/Select/Confirm/Pick`
+- [x] `Overlay.FilePicker.view` gains `title` + `placeholder` config fields
+      (was hardcoded "Attach Media"); session caller passes originals
+- [x] View: Plans overlay = Saved tab (list + fuzzy filter via
+      `Fuzzy.fuzzyMatch`) | Browse tab (`Overlay.FilePicker.view` rooted at
+      home dir, sessionId "plan"); Export row untouched
+- [x] Update: browser handlers mirror the session file picker (parsePathInput /
+      appendDirToInput / filterEntries / fsResolvePath / fsListDir);
+      confirm/pick on a file → shared `openPlanFile` (PlanReadTarget +
+      fs_read_file_text), on a dir → navigate
+- [x] Routing: `FsListDirResult`/`FsResolvePathResult`/`FsHomeDirResult`
+      dispatch by `planManager.tab`; `refreshPlanList` no-ops while Browse is
+      active (fs_list_dir owned by the browser); tab switch re-requests
+- [x] Tests: elm-test 145 green; cargo/go unchanged (frontend-only change)
+- [ ] Manual GUI smoke: ⚙ → Plans → Browse → navigate/filter → click a plan
+      JSON → opens Plan window (docs/manual-acceptance.md)
 
 ---
 

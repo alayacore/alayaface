@@ -146,8 +146,118 @@ refreshPlanList model =
     if model.homeDir == "" then
         Ports.fsHomeDir {}
 
+    else if model.planManager.tab == PlanTabBrowse then
+        -- The Browse tab owns fs_list_dir while active; a stray plans-dir
+        -- listing would land in its branch of FsListDirResult.
+        Cmd.none
+
     else
         Ports.fsListDir { path = plansDir model.homeDir }
+
+
+-- Initial file-browser state for the Plans manager Browse tab, rooted at
+-- the user's home directory (mirrors the session file picker init).
+initPlanBrowser : String -> T.FilePickerState
+initPlanBrowser home =
+    { show = True
+    , mode = T.Local
+    , input = home ++ "/"
+    , filter = ""
+    , entries = []
+    , dir = home
+    , baseDir = home
+    , selected = 0
+    , loading = True
+    , error = Nothing
+    , savedLocalPath = ""
+    , savedUrlPath = ""
+    , pendingFileName = ""
+    }
+
+
+-- Placeholder browser used before the home dir is known; FsHomeDirResult
+-- fills it in (dir == "" marks "waiting for home dir").
+emptyPlanBrowser : T.FilePickerState
+emptyPlanBrowser =
+    { show = True
+    , mode = T.Local
+    , input = ""
+    , filter = ""
+    , entries = []
+    , dir = ""
+    , baseDir = ""
+    , selected = 0
+    , loading = True
+    , error = Nothing
+    , savedLocalPath = ""
+    , savedUrlPath = ""
+    , pendingFileName = ""
+    }
+
+
+-- Shared open/import: set the read target and read the plan file. Used by
+-- the Saved-tab Open button and the Browse-tab file picker.
+openPlanFile : String -> Model -> ( Model, Cmd Msg )
+openPlanFile path model =
+    ( { model
+        | planReadTarget =
+            Just
+                { planId = planWinKeyForPath path
+                , path = path
+                , isResume = False
+                , continueRun = False
+                }
+      }
+    , Ports.fsReadFileText { path = path }
+    )
+
+
+-- Click/Enter on a Browse-tab entry: directories navigate, files import.
+-- maybeIdx = Just idx → clicked entry; Nothing → keyboard-selected entry.
+planBrowserPick : Model -> Maybe Int -> ( Model, Cmd Msg )
+planBrowserPick model maybeIdx =
+    let
+        pm =
+            model.planManager
+    in
+    case pm.browser of
+        Just fp ->
+            let
+                idx =
+                    Maybe.withDefault fp.selected maybeIdx
+
+                entries =
+                    FP.filterEntries fp
+            in
+            case List.head (List.drop idx entries) of
+                Just entry ->
+                    if entry.isDir then
+                        let
+                            ( newFp, newDir ) =
+                                FP.appendDirToInput fp entry.name
+
+                            newFp2 =
+                                { newFp | selected = idx }
+                        in
+                        ( { model | planManager = { pm | browser = Just newFp2 } }
+                        , Ports.fsResolvePath { path = newDir }
+                        )
+
+                    else
+                        let
+                            fullPath =
+                                if fp.dir == "" then
+                                    entry.name
+                                else
+                                    fp.dir ++ "/" ++ entry.name
+                        in
+                        openPlanFile fullPath model
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        Nothing ->
+            ( model, Cmd.none )
 
 
 setPlanErrors : List String -> Model -> Model
@@ -1776,7 +1886,32 @@ update msg model =
                     ( model, Cmd.none )
 
         FsListDirResult entries ->
-            if model.planManager.show then
+            let
+                pm =
+                    model.planManager
+            in
+            if pm.show && pm.tab == PlanTabBrowse then
+                -- Browse tab: directory listing for plan import.
+                let
+                    parsed =
+                        List.filterMap FP.decodeDirEntry entries
+                            |> List.filter (\e -> e.name /= "..")
+                in
+                case pm.browser of
+                    Just fp ->
+                        ( { model
+                            | planManager =
+                                { pm
+                                    | browser = Just { fp | entries = parsed, loading = False, error = Nothing }
+                                }
+                          }
+                        , Cmd.none
+                        )
+
+                    Nothing ->
+                        ( model, Cmd.none )
+
+            else if pm.show then
                 -- Plan manager is listing ~/.alayaface/plans: keep only
                 -- *.json files (skip *.run.json run-state files).
                 let
@@ -1793,13 +1928,7 @@ update msg model =
                             parsed
                 in
                 ( { model
-                    | planManager =
-                        { show = True
-                        , loading = False
-                        , plans = files
-                        , error = Nothing
-                        , importPath = model.planManager.importPath
-                        }
+                    | planManager = { pm | loading = False, plans = files, error = Nothing }
                   }
                 , Cmd.none
                 )
@@ -1829,8 +1958,30 @@ update msg model =
             let
                 model2 =
                     { model | homeDir = home }
+
+                pm0 =
+                    model2.planManager
+
+                -- If the Plans manager's Browse tab is active and its
+                -- browser is still waiting for a home dir, initialize it.
+                needsBrowserInit =
+                    pm0.show
+                        && pm0.tab == PlanTabBrowse
+                        && (case pm0.browser of
+                                Just fp ->
+                                    fp.dir == ""
+
+                                Nothing ->
+                                    False
+                           )
+
+                model3 =
+                    if needsBrowserInit then
+                        { model2 | planManager = { pm0 | browser = Just (initPlanBrowser home) } }
+                    else
+                        model2
             in
-            ( updateActiveSession model2 (\s ->
+            ( updateActiveSession model3 (\s ->
                 let
                     fp =
                         s.filePicker
@@ -1848,8 +1999,13 @@ update msg model =
               )
             , Cmd.batch
                 [ Ports.fsListDir { path = home }
-                , if model2.planManager.show then
-                    Ports.fsListDir { path = plansDir home }
+                , if model3.planManager.show then
+                    case model3.planManager.tab of
+                        PlanTabSaved ->
+                            Ports.fsListDir { path = plansDir home }
+
+                        PlanTabBrowse ->
+                            Ports.fsListDir { path = home }
 
                   else
                     Cmd.none
@@ -2103,7 +2259,13 @@ update msg model =
                                                     { model
                                                         | planReadTarget = Nothing
                                                         , planManager =
-                                                            { pm | show = False, loading = False, importPath = "" }
+                                                            { pm
+                                                                | show = False
+                                                                , loading = False
+                                                                , filter = ""
+                                                                , tab = PlanTabSaved
+                                                                , browser = Nothing
+                                                            }
                                                     }
 
                                                 m2 =
@@ -2199,37 +2361,74 @@ update msg model =
                     ( model, Cmd.none )
 
         FsResolvePathResult result ->
-            case getActiveSession model of
-                Just s ->
-                    case D.decodeValue resolvePathResultDecoder result of
-                        Ok rp ->
-                            if rp.exists && rp.isDir then
-                                let
-                                    fp =
-                                        s.filePicker
+            let
+                pm =
+                    model.planManager
+            in
+            if pm.show && pm.tab == PlanTabBrowse then
+                -- Plans Browse tab: navigation happens in the import browser.
+                case pm.browser of
+                    Just fp ->
+                        case D.decodeValue resolvePathResultDecoder result of
+                            Ok rp ->
+                                if rp.exists && rp.isDir then
+                                    let
+                                        sameDir =
+                                            rp.resolved == fp.dir
+                                    in
+                                    ( { model
+                                        | planManager =
+                                            { pm
+                                                | browser = Just { fp | dir = rp.resolved, selected = 0 }
+                                            }
+                                      }
+                                    , if sameDir then
+                                        Cmd.none
+                                      else
+                                        Ports.fsListDir { path = rp.resolved }
+                                    )
 
-                                    sameDir =
-                                        rp.resolved == fp.dir
-                                in
-                                ( updateActiveSession model (\sess ->
-                                    { sess
-                                        | filePicker = { fp | dir = rp.resolved, selected = 0 }
-                                    }
-                                  )
-                                , if sameDir then
-                                    Cmd.none
-                                  else
-                                    Ports.fsListDir { path = rp.resolved }
-                                )
+                                else
+                                    ( model, Cmd.none )
 
-                            else
+                            Err _ ->
                                 ( model, Cmd.none )
 
-                        Err _ ->
-                            ( model, Cmd.none )
+                    Nothing ->
+                        ( model, Cmd.none )
 
-                Nothing ->
-                    ( model, Cmd.none )
+            else
+                case getActiveSession model of
+                    Just s ->
+                        case D.decodeValue resolvePathResultDecoder result of
+                            Ok rp ->
+                                if rp.exists && rp.isDir then
+                                    let
+                                        fp =
+                                            s.filePicker
+
+                                        sameDir =
+                                            rp.resolved == fp.dir
+                                    in
+                                    ( updateActiveSession model (\sess ->
+                                        { sess
+                                            | filePicker = { fp | dir = rp.resolved, selected = 0 }
+                                        }
+                                      )
+                                    , if sameDir then
+                                        Cmd.none
+                                      else
+                                        Ports.fsListDir { path = rp.resolved }
+                                    )
+
+                                else
+                                    ( model, Cmd.none )
+
+                            Err _ ->
+                                ( model, Cmd.none )
+
+                    Nothing ->
+                        ( model, Cmd.none )
 
         -- Session Manager
         OpenSessionManager ->
@@ -2250,7 +2449,15 @@ update msg model =
             in
             ( { model
                 | showGlobalMenu = False
-                , planManager = { pm | show = True, loading = True, error = Nothing }
+                , planManager =
+                    { pm
+                        | show = True
+                        , loading = True
+                        , error = Nothing
+                        , filter = ""
+                        , tab = PlanTabSaved
+                        , browser = Nothing
+                    }
               }
             , if model.homeDir == "" then
                 Ports.fsHomeDir {}
@@ -2264,61 +2471,167 @@ update msg model =
                 pm =
                     model.planManager
             in
-            ( { model | planManager = { pm | show = False, importPath = "" } }
+            ( { model
+                | planManager =
+                    { pm
+                        | show = False
+                        , filter = ""
+                        , tab = PlanTabSaved
+                        , browser = Nothing
+                    }
+              }
             , Cmd.none
             )
 
         PlanManagerOpen path ->
-            ( { model
-                | planReadTarget =
-                    Just
-                        { planId = planWinKeyForPath path
-                        , path = path
-                        , isResume = False
-                        , continueRun = False
-                        }
-              }
-            , Ports.fsReadFileText { path = path }
-            )
+            openPlanFile path model
 
         PlanManagerDelete path ->
             ( model, Ports.fsDeleteFile { path = path } )
 
-        PlanManagerSetImport text ->
+        PlanManagerSetFilter text ->
             let
                 pm =
                     model.planManager
             in
-            ( { model | planManager = { pm | importPath = text } }
+            ( { model | planManager = { pm | filter = text } }
             , Cmd.none
             )
 
-        PlanManagerImport ->
+        PlanManagerSwitchTab tab ->
             let
-                path =
-                    String.trim model.planManager.importPath
+                pm =
+                    model.planManager
             in
-            if path == "" then
-                let
-                    pm =
-                        model.planManager
-                in
-                ( { model | planManager = { pm | error = Just "Enter a file path to import" } }
-                , Cmd.none
-                )
+            case tab of
+                PlanTabSaved ->
+                    ( { model | planManager = { pm | tab = PlanTabSaved, browser = Nothing } }
+                    , refreshPlanList model
+                    )
 
-            else
-                ( { model
-                    | planReadTarget =
-                        Just
-                            { planId = planWinKeyForPath path
-                            , path = path
-                            , isResume = False
-                            , continueRun = False
+                PlanTabBrowse ->
+                    case pm.browser of
+                        Just _ ->
+                            ( { model | planManager = { pm | tab = PlanTabBrowse } }
+                            , Cmd.none
+                            )
+
+                        Nothing ->
+                            if model.homeDir == "" then
+                                ( { model
+                                    | planManager =
+                                        { pm | tab = PlanTabBrowse, browser = Just emptyPlanBrowser }
+                                  }
+                                , Ports.fsHomeDir {}
+                                )
+
+                            else
+                                ( { model
+                                    | planManager =
+                                        { pm
+                                            | tab = PlanTabBrowse
+                                            , browser = Just (initPlanBrowser model.homeDir)
+                                        }
+                                  }
+                                , Ports.fsListDir { path = model.homeDir }
+                                )
+
+        PlanManagerBrowserInput val ->
+            let
+                pm =
+                    model.planManager
+            in
+            case pm.browser of
+                Just fp ->
+                    -- Input cleared → restore to current directory path
+                    let
+                        safeVal =
+                            if val == "" then
+                                "/"
+                            else
+                                val
+
+                        ( needsResolve, resolvePath, filterText ) =
+                            FP.parsePathInput safeVal fp.dir fp.baseDir
+
+                        cmd =
+                            if needsResolve then
+                                Ports.fsResolvePath { path = resolvePath }
+                            else
+                                Cmd.none
+
+                        previewFp =
+                            { fp | input = safeVal, filter = filterText }
+
+                        filteredLen =
+                            List.length (FP.filterEntries previewFp)
+
+                        clampedIdx =
+                            if fp.selected >= filteredLen then
+                                max 0 (filteredLen - 1)
+                            else
+                                fp.selected
+                    in
+                    ( { model
+                        | planManager =
+                            { pm
+                                | browser =
+                                    Just { fp | input = safeVal, filter = filterText, selected = clampedIdx }
                             }
-                  }
-                , Ports.fsReadFileText { path = path }
-                )
+                      }
+                    , cmd
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        PlanManagerBrowserNavigate name ->
+            let
+                pm =
+                    model.planManager
+            in
+            case pm.browser of
+                Just fp ->
+                    let
+                        ( newFp, newDir ) =
+                            FP.appendDirToInput fp name
+                    in
+                    ( { model | planManager = { pm | browser = Just newFp } }
+                    , Ports.fsResolvePath { path = newDir }
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        PlanManagerBrowserSelect idx ->
+            let
+                pm =
+                    model.planManager
+
+                scrollCmd =
+                    case pm.browser of
+                        Just fp ->
+                            case List.head (List.drop idx (FP.filterEntries fp)) of
+                                Just e ->
+                                    Ports.scrollIntoView ("fp-item-plan-" ++ e.name)
+
+                                Nothing ->
+                                    Cmd.none
+
+                        Nothing ->
+                            Cmd.none
+            in
+            ( { model
+                | planManager = { pm | browser = Maybe.map (\fp -> { fp | selected = idx }) pm.browser }
+              }
+            , scrollCmd
+            )
+
+        PlanManagerBrowserConfirm ->
+            planBrowserPick model Nothing
+
+        PlanManagerBrowserPick idx ->
+            planBrowserPick model (Just idx)
 
         PlanCreateOffer messageId ->
             case Dict.get messageId model.pendingPlanOffers of
