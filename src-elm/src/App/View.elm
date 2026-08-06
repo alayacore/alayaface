@@ -22,6 +22,7 @@ import Session.Types as T
 import Session.Selector as Sel exposing (Page(..))
 import Session.FilePicker as FP
 import Plan.Types as PT
+import Plan.View
 import Overlay.ConfirmTool
 import Overlay.Settings
 import Overlay.PresetManager
@@ -330,17 +331,7 @@ viewPlanOverlay model =
                 , case pv.plan of
                     Just plan ->
                         Html.div [ Attr.class "plan-page-body" ]
-                            [ Html.div [ Attr.class "plan-page-name" ] [ Html.text plan.name ]
-                            , Html.div [ Attr.class "plan-page-goal" ]
-                                [ Html.text (if plan.goal == "" then "" else plan.goal) ]
-                            , Html.div [ Attr.class "plan-page-meta" ]
-                                [ Html.text
-                                    ("Concurrency: "
-                                        ++ String.fromInt plan.concurrency
-                                        ++ "  ·  Max attempts: "
-                                        ++ String.fromInt plan.defaultMaxAttempts
-                                    )
-                                ]
+                            [ viewPlanHeader pv plan
                             , case pv.path of
                                 Just p ->
                                     Html.div [ Attr.class "plan-page-path" ]
@@ -348,8 +339,10 @@ viewPlanOverlay model =
 
                                 Nothing ->
                                     Html.text ""
-                            , Html.div [ Attr.class "plan-page-list" ]
-                                (List.map viewPlanTask plan.tasks)
+                            , Html.div [ Attr.class "plan-page-canvas" ]
+                                [ Plan.View.viewDag PlanSelectNode Dict.empty plan ]
+                            , viewPlanNodeDetail model plan
+                            , viewPlanExport pv
                             ]
 
                     Nothing ->
@@ -361,24 +354,106 @@ viewPlanOverlay model =
         Html.text ""
 
 
-viewPlanTask : PT.TaskNode -> Html Msg
-viewPlanTask t =
-    Html.div [ Attr.class "plan-task" ]
-        [ Html.div [ Attr.class "plan-task-head" ]
-            [ Html.span [ Attr.class "plan-task-id" ] [ Html.text t.id ]
-            , Html.span [ Attr.class "plan-task-title" ] [ Html.text t.title ]
-            , Html.span [ Attr.class "plan-task-preset" ]
-                [ Html.text (Maybe.withDefault "default" t.preset) ]
+viewPlanHeader : PlanViewState -> PT.Plan -> Html Msg
+viewPlanHeader pv plan =
+    Html.div [ Attr.class "plan-header" ]
+        [ Html.div [ Attr.class "plan-header-text" ]
+            [ Html.div [ Attr.class "plan-page-name" ] [ Html.text plan.name ]
+            , Html.div [ Attr.class "plan-page-goal" ]
+                [ Html.text (if plan.goal == "" then "" else plan.goal) ]
+            , Html.div [ Attr.class "plan-page-meta" ]
+                [ Html.text
+                    ("Concurrency: "
+                        ++ String.fromInt plan.concurrency
+                        ++ "  ·  Max attempts: "
+                        ++ String.fromInt plan.defaultMaxAttempts
+                    )
+                ]
             ]
-        , Html.div [ Attr.class "plan-task-deps" ]
-            [ Html.text
-                (if List.isEmpty t.dependsOn then
-                    "no dependencies"
+        , Html.div [ Attr.class "plan-header-controls" ]
+            [ Html.button
+                [ Attr.class "confirm-page-btn confirm-page-btn-allow"
+                , Attr.disabled True
+                , Attr.title "Runner lands in P4"
+                ]
+                [ Html.text "Run" ]
+            , Html.button
+                [ Attr.class "confirm-page-btn"
+                , Attr.disabled True
+                , Attr.title "Runner lands in P4"
+                ]
+                [ Html.text "Pause" ]
+            , Html.button
+                [ Attr.class "confirm-page-btn confirm-page-btn-deny"
+                , Attr.disabled True
+                , Attr.title "Runner lands in P4"
+                ]
+                [ Html.text "Stop" ]
+            ]
+        ]
 
-                 else
-                    "depends: " ++ String.join ", " t.dependsOn
-                )
+
+viewPlanNodeDetail : Model -> PT.Plan -> Html Msg
+viewPlanNodeDetail model plan =
+    case model.planSelectedNode of
+        Just nodeId ->
+            case List.filter (\t -> t.id == nodeId) plan.tasks |> List.head of
+                Just t ->
+                    Html.div [ Attr.class "plan-node-detail" ]
+                        [ Html.div [ Attr.class "plan-node-detail-head" ]
+                            [ Html.span [ Attr.class "plan-task-id" ] [ Html.text t.id ]
+                            , Html.span [ Attr.class "plan-task-title" ] [ Html.text t.title ]
+                            ]
+                        , Html.div [ Attr.class "plan-node-detail-row" ]
+                            [ Html.text ("preset: " ++ Maybe.withDefault "default" t.preset) ]
+                        , Html.div [ Attr.class "plan-node-detail-row" ]
+                            [ Html.text ("max attempts: " ++ String.fromInt t.maxAttempts) ]
+                        , Html.div [ Attr.class "plan-node-detail-row" ]
+                            [ Html.text
+                                ("depends on: "
+                                    ++ (if List.isEmpty t.dependsOn then
+                                            "—"
+
+                                        else
+                                            String.join ", " t.dependsOn
+                                       )
+                                )
+                            ]
+                        , Html.div [ Attr.class "plan-node-detail-label" ] [ Html.text "Prompt" ]
+                        , Html.div [ Attr.class "plan-node-detail-prompt" ] [ Html.text t.prompt ]
+                        , Html.button
+                            [ Attr.class "confirm-page-btn"
+                            , Attr.disabled True
+                            , Attr.title "Runner lands in P4"
+                            ]
+                            [ Html.text "Retry node" ]
+                        ]
+
+                Nothing ->
+                    Html.text ""
+
+        Nothing ->
+            Html.text ""
+
+
+viewPlanExport : PlanViewState -> Html Msg
+viewPlanExport pv =
+    Html.div [ Attr.class "plan-import-row" ]
+        [ Html.input
+            [ Attr.class "plan-import-input"
+            , Attr.placeholder "Export to path (empty = saved copy in plans dir)…"
+            , Attr.value pv.exportPath
+            , Ev.onInput PlanSetExportPath
             ]
+            []
+        , Html.button
+            [ Attr.class "confirm-page-btn confirm-page-btn-allow"
+            , Ev.onClick PlanExport
+            , Attr.style "padding" "4px 10px"
+            , Attr.style "font-size" "0.75rem"
+            , Attr.style "min-width" "auto"
+            ]
+            [ Html.text "Export" ]
         ]
 
 

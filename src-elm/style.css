@@ -2560,3 +2560,151 @@ body {
   color: inherit;
 }
 .plan-import-input:focus { border-color: #6366f1; outline: none; }
+
+/* ─── Plan DAG view (P3) ─────────────────────────────────────────── */
+
+.plan-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.plan-header-text { display: flex; flex-direction: column; gap: 2px; }
+
+.plan-header-controls {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.plan-page-canvas {
+  overflow: auto;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  background: #fbfbfb;
+  padding: 12px;
+  max-height: 46vh;
+}
+
+.plan-dag {
+  position: relative;
+  min-width: 100%;
+}
+
+.plan-edge-seg {
+  position: absolute;
+  background: #b9b9c9;
+  pointer-events: none;
+  border-radius: 1px;
+}
+
+.plan-node {
+  position: absolute;
+  box-sizing: border-box;
+  border-radius: 8px;
+  border: 2px solid #ccc;
+  background: #fff;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  transition: box-shadow 0.1s ease;
+}
+.plan-node:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.18); }
+
+.plan-node-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.plan-node-id {
+  font-family: monospace;
+  font-size: 0.7rem;
+  background: #eef;
+  color: #4f52e0;
+  border-radius: 4px;
+  padding: 0 5px;
+}
+
+.plan-node-status { font-size: 0.75rem; }
+
+.plan-node-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-node-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+}
+
+.plan-node-preset {
+  font-size: 0.62rem;
+  color: #666;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+.plan-node-attempts {
+  font-size: 0.62rem;
+  color: #b45309;
+  background: #fef3c7;
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+/* status colors */
+.plan-node-pending { border-color: #c7c7d1; }
+.plan-node-starting { border-color: #f59e0b; background: #fffbeb; }
+.plan-node-running { border-color: #3b82f6; background: #eff6ff; }
+.plan-node-succeeded { border-color: #22c55e; background: #f0fdf4; }
+.plan-node-failed { border-color: #ef4444; background: #fef2f2; }
+.plan-node-blocked { border-color: #a1a1aa; background: #f4f4f5; opacity: 0.75; }
+.plan-node-canceled { border-color: #a1a1aa; background: #f4f4f5; opacity: 0.6; }
+
+.plan-node-detail {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: #fafafa;
+}
+
+.plan-node-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.plan-node-detail-row { font-size: 0.75rem; color: #555; }
+
+.plan-node-detail-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #888;
+  margin-top: 6px;
+}
+
+.plan-node-detail-prompt {
+  font-size: 0.78rem;
+  background: #fff;
+  border: 1px solid #eee;
+  border-radius: 6px;
+  padding: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 140px;
+  overflow-y: auto;
+}

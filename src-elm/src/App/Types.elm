@@ -82,6 +82,7 @@ type alias Model =
     , planView : PlanViewState
     , planManager : PlanManagerState
     , pendingPlanOffers : Dict String String
+    , planSelectedNode : Maybe String
     , homeDir : String
     }
 
@@ -239,6 +240,9 @@ type Msg
     | PlanCreateOffer String
     | PlanSaveReady PT.Plan Int
     | ClosePlanView
+    | PlanSelectNode String
+    | PlanSetExportPath String
+    | PlanExport
       -- Session wrapper
     | ForSession String Msg
       -- Window dragging
@@ -405,12 +409,13 @@ type alias PlanFileInfo =
     }
 
 
--- The currently opened plan (P2: list view; P3: SVG DAG).
+-- The currently opened plan (P2: list view; P3+: SVG/HTML DAG).
 type alias PlanViewState =
     { plan : Maybe PT.Plan
     , path : Maybe String
     , errors : List String
     , saving : Bool
+    , exportPath : String
     }
 
 
@@ -420,6 +425,7 @@ emptyPlanView =
     , path = Nothing
     , errors = []
     , saving = False
+    , exportPath = ""
     }
 
 

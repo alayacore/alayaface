@@ -45,7 +45,8 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P0 Plan data model + detection (pure Elm) | [x] |
 | P1 fs_write_file_text / fs_read_file_text (Rust+Go+bridge+Ports) | [x] |
 | P2 Create Plan flow + plans dir + Plans manager | [x] |
-| P3 DAG layout + SVG view + node→session click | [ ] |
+| P3 DAG layout + SVG view + node→session click | [x] |
+| P4 Runner state machine + retry + run.json + resume | [ ] |
 | P4 Runner state machine + retry + run.json + resume | [ ] |
 | P4.5 create_session preset/builtinTools + settings.conf + seed presets | [ ] |
 | P5 Polish (badges/logs/concurrency/export/docs/README) | [ ] |
@@ -124,17 +125,24 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 
 ## P3 — DAG layout + SVG view + node→session click
 
-- [ ] `Plan/Layout.elm`: Kahn longest-path layering → columns; per-node (x,y);
-      edge paths (cubic Bézier); tests: diamond/chain/parallel graphs
-- [ ] `Plan/View.elm`: SVG canvas (viewBox, scroll/zoom v1 simple), node cards
-      (title, status color, retry badge, preset badge, hover failure reason),
-      edges, node click handling
-- [ ] Node click: sessionId exists → `ActivateSession` (bring window to front);
-      else → node detail panel (prompt, deps, failures, Retry/Run buttons)
-- [ ] Plan window header: name/goal/status badge + Run/Pause/Stop/Retry +
-      concurrency select + Export JSON (FilePicker + fs_write_file_text)
-- [ ] CSS (style.css): DAG styles, plan window
-- [ ] Manual visual acceptance
+- [x] `Plan/Layout.elm`: Kahn longest-path layering → columns; per-node (x,y);
+      orthogonal edge routing (same-row: right→left horizontal; diff-row:
+      bottom→top). Tests: diamond/chain/parallel layers + geometry
+      (plan-layout tests, 8 cases)
+- [x] `Plan/View.elm`: HTML/CSS DAG canvas (NO elm/svg — not in offline
+      package cache; pure-div rendering), node cards (title, status color,
+      retry badge, preset badge, hover failure reason), edges, node click
+- [x] Node click → `PlanSelectNode` → detail panel (prompt, deps, preset,
+      maxAttempts, Retry placeholder disabled); session-open wiring lands
+      in P4 (needs node→session association)
+- [x] Plan window header: name/goal/meta + Run/Pause/Stop (disabled
+      placeholders, enabled in P4) + Export JSON (path input +
+      fs_write_file_text; setPlanErrors now preserves the open plan)
+- [x] CSS (style.css): plan-dag/plan-node/edge/detail styles
+- [x] Elm 95 tests green
+- [ ] Manual visual acceptance (needs GUI env)
+- [x] Note: `Expect.lessThan a b` asserts b < a in test 2.2.0 (argument
+      order is expected-first, actual-second) — use `Expect.equal True (a < b)`
 
 ## P4 — Runner state machine + retry + run.json + resume
 

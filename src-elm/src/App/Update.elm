@@ -145,7 +145,13 @@ setPlanErrors : List String -> Model -> Model
 setPlanErrors errs model =
     { model
         | showPlanView = True
-        , planView = { plan = Nothing, path = Nothing, errors = errs, saving = False }
+        , planView =
+            { plan = model.planView.plan
+            , path = model.planView.path
+            , errors = errs
+            , saving = False
+            , exportPath = model.planView.exportPath
+            }
     }
 
 
@@ -1206,6 +1212,7 @@ update msg model =
                                         , path = model.planView.path
                                         , errors = model.planView.errors
                                         , saving = False
+                                        , exportPath = model.planView.exportPath
                                         }
                                     , planManager =
                                         { show = model.planManager.show
@@ -1235,7 +1242,13 @@ update msg model =
                             Ok plan ->
                                 ( { model
                                     | showPlanView = True
-                                    , planView = { plan = Just plan, path = Nothing, errors = [], saving = False }
+                                    , planView =
+                                        { plan = Just plan
+                                        , path = Nothing
+                                        , errors = []
+                                        , saving = False
+                                        , exportPath = ""
+                                        }
                                     , planManager =
                                         { show = False
                                         , loading = False
@@ -1415,13 +1428,57 @@ update msg model =
             in
             ( { model
                 | showPlanView = True
-                , planView = { plan = Just plan, path = Just path, errors = [], saving = True }
+                , planView =
+                    { plan = Just plan
+                    , path = Just path
+                    , errors = []
+                    , saving = True
+                    , exportPath = ""
+                    }
               }
             , Ports.fsWriteFileText { path = path, content = content, createParents = True }
             )
 
         ClosePlanView ->
-            ( { model | showPlanView = False }, Cmd.none )
+            ( { model | showPlanView = False, planSelectedNode = Nothing }, Cmd.none )
+
+        PlanSelectNode nodeId ->
+            ( { model | planSelectedNode = Just nodeId }, Cmd.none )
+
+        PlanSetExportPath text ->
+            let
+                pv =
+                    model.planView
+            in
+            ( { model | planView = { pv | exportPath = text } }, Cmd.none )
+
+        PlanExport ->
+            case model.planView.plan of
+                Just plan ->
+                    let
+                        path =
+                            String.trim model.planView.exportPath
+                    in
+                    if path == "" then
+                        let
+                            pv =
+                                model.planView
+                        in
+                        ( { model | planView = { pv | errors = [ "Enter an export path" ] } }
+                        , Cmd.none
+                        )
+
+                    else
+                        ( model
+                        , Ports.fsWriteFileText
+                            { path = path
+                            , content = E.encode 2 (PT.encodePlan plan)
+                            , createParents = True
+                            }
+                        )
+
+                Nothing ->
+                    ( model, Cmd.none )
 
         ToggleGlobalMenu ->
             ( { model | showGlobalMenu = not model.showGlobalMenu }, Cmd.none )

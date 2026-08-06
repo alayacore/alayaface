@@ -69,6 +69,7 @@ init _ =
       , planView = emptyPlanView
       , planManager = emptyPlanManager
       , pendingPlanOffers = Dict.empty
+      , planSelectedNode = Nothing
       , homeDir = ""
       }
     , Cmd.batch
