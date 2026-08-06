@@ -97,12 +97,17 @@
 - [ ] 重开 app → 打开计划 → 静默恢复后重新 Run 未完成任务 → 下游节点
       仍能注入（上游 Succeeded 不重跑，输出从 run.json 恢复）
 
-## 5. 优雅关闭（v2 本轮新增）
+## 5. 优雅关闭（P25 cancel-first）
 
-- [ ] 关闭一个进行中的节点会话窗口 → 等它把当前轮跑完（≤5s）→ 进程退出
-- [ ] 关闭后 `~/.alayaface/sessions/<id>/session.alaya` 存在且**包含当前
-      对话**（非空、含最近一轮；此前 SIGKILL 会丢进行中内容）
-- [ ] 关闭空闲会话（无任务）→ session.alaya 同样已保存（CI `save` 生效）
+- [ ] 关闭一个进行中的节点会话窗口 → 任务被**取消**（不是等它跑完）→
+      进程快速退出（<3s，cancel → save → EOF 序列）
+- [ ] 关闭后 `~/.alayaface/sessions/<id>/session.alaya` 存在且**包含取消
+      点之前的对话**（cancel 后 alayacore 经 handleTaskDone 自动保存；
+      `save` 帧兜底落盘）
+- [ ] **Stop**：正在 Running 的节点任务被 cancel → 节点 Canceled、进程
+      退出、窗口关闭（不再出现"Stop 后节点还在执行"）
+- [ ] 关闭空闲会话（无任务）→ session.alaya 同样已保存（`save` 生效；
+      cancel 返回 NOTHING_TO_CANCEL 被忽略，无副作用）
 - [ ] 连续快速关闭多个会话 → 无残留 alayacore 进程（`pgrep -f alayacore`）
 
 ## 6. Presets / 工具集（P4.5）

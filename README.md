@@ -200,12 +200,14 @@ task's final answer (recorded on success, persisted in
 `<plan>.run.json`, so it survives restarts). The node detail panel shows
 each node's recorded output.
 
-**Session close is graceful**: `close_session` asks AlayaCore to save (CI
-`save` → `session.alaya`), closes stdin (AlayaCore drains an in-progress
-task, auto-saving at task end, then exits), and only SIGKILLs after a 5s
-grace period — so closing a session window no longer loses the in-progress
-turn. (AlayaCore itself is untouched; rawio's only graceful exit signal is
-stdin EOF.)
+**Session close is cancel-first**: `close_session` now sends CI `cancel`
+(AlayaCore aborts the running task and auto-saves the conversation up to
+the cancel point), then `save`, then closes stdin — the child exits
+immediately instead of draining a long task to completion. This is what
+makes **Stop** actually stop every running node: a running task is
+aborted (history kept up to the cancel point), not allowed to finish.
+SIGKILL only after a 5s grace period. (AlayaCore itself is untouched;
+`cancel` and `save` are its own commands.)
 
 ## Automated E2E (headless browser, no real model)
 

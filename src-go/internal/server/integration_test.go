@@ -2,7 +2,9 @@ package server
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -546,6 +548,51 @@ func TestIntegrationGracefulCloseSavesSession(t *testing.T) {
 	// Double close still fails with the parity message.
 	if msg := e.rpcErr(t, "close_session", map[string]any{"sessionId": sid}); msg != "Session not found" {
 		t.Errorf("second close = %q, want 'Session not found'", msg)
+	}
+}
+
+// ─── Cancel-first close (CI cancel aborts a hung task) ──────────────
+
+func TestIntegrationCloseCancelsHungTask(t *testing.T) {
+	e := newTestEnv(t, "")
+	sid := e.createSession(t)
+
+	// Wait until fakecore finished startup (SM task frame after the
+	// session file is written).
+	e.waitEvent(t, "tlv-frame", func(p map[string]any) bool {
+		js, _ := p["json"].(map[string]any)
+		return p["session_id"] == sid && p["tag"] == "SM" && js != nil && js["type"] == "task"
+	})
+
+	// Send a prompt that triggers fakecore's hang-once: the task hangs
+	// (never answers) but the process keeps reading stdin and serving CI
+	// commands — so a cancel-first close can abort it. Unique text keeps
+	// the shared marker keyed to THIS run.
+	text := "hang-once-" + fmt.Sprintf("%d", time.Now().UnixNano())
+	e.rpcOK(t, "alayacore_send_prompt", map[string]any{"sessionId": sid, "text": text})
+
+	// Wait until the task is actually hung (marker written).
+	h := sha256.Sum256([]byte(text))
+	marker := filepath.Join(os.TempDir(), fmt.Sprintf("alayaface-fakecore-hang-once-%x.marker", h[:8]))
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(marker); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("hang marker never appeared — fakecore did not enter hang mode")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// close_session runs cancel → save → EOF. The CI `cancel` must abort
+	// the hung task so the process exits naturally and quickly. WITHOUT
+	// cancel-first, the close would have to wait out the whole hang (the
+	// old fakecore slept 30s) plus the 5s grace SIGKILL.
+	start := time.Now()
+	e.rpcOK(t, "close_session", map[string]any{"sessionId": sid})
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("close_session took %v — CI cancel did not abort the hung task", elapsed)
 	}
 }
 

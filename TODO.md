@@ -62,6 +62,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P16 Per-plan work dir isolation + task timeouts | [x] |
 | P22 Plan Session role-lock + no builtin tools + **真模型验证（用户实测完整 run 跑通）** | [x] |
 | P24 Output injection `{{tX.output}}`（TaskDone 记录输出 → run.json 持久化 → 下游 prompt 替换 → 详情面板） | [x] |
+| P25 Close_session cancel-first（Stop/关窗口立即取消任务，不等 drain 跑完；历史保存到取消点） | [x] |
 
 ## P24 — 输出注入（{{tX.output}}）
 
@@ -96,6 +97,34 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
       （含新步骤 7c：注入断言 + 关 t2 后曲线隐藏）；
 - [x] 文档：docs/plan-mode.md §5 表、新增 §8.6、§10 持久化、§13 决策、
       §12 进度表。
+
+## P25 — close_session cancel-first（Stop 能真正停掉所有节点）
+
+用户实测反馈：**Stop 无法停止所有 Node**。排查确认：P12 的优雅关闭
+语义是 EOF → alayacore `drainUntilTaskDone()` **把当前任务跑完再保存
+退出**——手动关窗口想保存没问题，但 Stop 是"立刻停"，不该等任务
+跑完（任务 ≤5s 宽限内能跑完就完整跑完，用户看到 Stop 后节点仍在执行）。
+
+用户决策：**不要向后兼容，一定要发 cancel**（alayacore 原生命令，
+C1 安全：`cancelTask` → `activeTask.cancel()` → 任务经 `taskResultCh`
+→ `handleTaskDone` **自动保存到取消点** → 历史不丢太多）。
+
+- [x] Go `closeGracefully`：**cancel → save → EOF → 宽限 → SIGKILL**
+      （cancel 为 fire-and-forget，SendCmd 不阻塞等 CO；错误忽略）；
+      `kill_child` 路径保持 EOF 宽限（无 stdin 句柄，无法发 cancel）；
+- [x] Rust `close_child_gracefully_with_timeout` 对称：同一 stdin mutex
+      锁内先写 cancel 帧再写 save 帧再 EOF；
+- [x] fakecore 挂起模式：hang-once 不再 `sleep(30s)` 阻塞主循环——挂起
+      期间继续读 stdin、吞掉 UE、响应 CI `cancel`（回 task-done 帧 +
+      CO，退出挂起）——模拟真实 alayacore"任务卡住但命令循环活着"
+      （alayacore cancel 走 cancelReqCh，不依赖输入管道）；
+- [x] 测试：Rust 更新（断言 cancel 帧先于 save 帧到达子进程 stdin）；
+      Go 新增 `TestIntegrationCloseCancelsHungTask`（挂起任务 close 后
+      <3s 退出——cancel 中断挂起，而非等 30s+宽限）；Go -race 全绿；
+- [x] E2E：fakecore 挂起模式 + Stop 步骤（t3 挂起 → Stop → 窗口关闭、
+      badge Stopped）ALL PASS；
+- [x] 文档：plan-mode.md §8.3（重写为 cancel-first）/§10/§13、README、
+      manual-acceptance §5。
 
 ## P11 — 第二轮审查：创建队列串行化 + 创建失败恢复
 

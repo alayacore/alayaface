@@ -181,14 +181,14 @@ func (m *Manager) Create(cfg CreateConfig, h *hub.Hub, cache *ModelCache) (*Sess
 }
 
 // gracefulCloseTimeout is how long close_session waits for alayacore to
-// drain an active task (auto-saving at task end) and exit on stdin EOF
-// before SIGKILLing it. Mirrors alayacore::GRACEFUL_CLOSE_TIMEOUT (Rust).
+// exit after the cancel-first sequence (cancel → save → EOF) before
+// SIGKILLing it. Mirrors alayacore::GRACEFUL_CLOSE_TIMEOUT (Rust).
 const gracefulCloseTimeout = 5 * time.Second
 
-// Close removes the session from the map and closes it gracefully:
-// ask alayacore to save (CI "save" → session file), close stdin (EOF →
-// drain + auto-save at task end → exit), then SIGKILL only after a
-// grace period.
+// Close removes the session from the map and closes it cancel-first:
+// CI "cancel" (aborts the running task, auto-saving up to the cancel
+// point) → CI "save" → close stdin (EOF → exits immediately) → SIGKILL
+// only after the grace period.
 func (m *Manager) Close(id string) error {
 	s, ok := m.Remove(id)
 	if !ok {
@@ -199,7 +199,19 @@ func (m *Manager) Close(id string) error {
 	return nil
 }
 
-// closeGracefully runs the graceful shutdown sequence for one session.
+// closeGracefully runs the cancel-first shutdown sequence for one session.
+//
+//  1. CI `cancel` — aborts the running task (alayacore cancels its
+//     per-task context; the task completes through handleTaskDone, which
+//     AUTO-SAVES the conversation up to the cancel point). Best-effort:
+//     nothing to cancel / dead child produce an error that is ignored.
+//  2. CI `save` — persist the conversation (best-effort).
+//  3. EOF: close the stdin pipe. With the task canceled (or none),
+//     alayacore exits immediately — it no longer drains a long-running
+//     task to completion (cancel-first means Stop/closing a window
+//     never waits for a task to finish, and history is kept up to the
+//     cancel point instead of being lost to SIGKILL).
+//  4. Wait for the natural exit, SIGKILL after the grace period.
 //
 // It does NOT call cmd.Wait() itself: reaping is owned by the reader's
 // disconnect path (killOnce → core.KillChild), which fires exactly when
@@ -207,20 +219,21 @@ func (m *Manager) Close(id string) error {
 // we only poll Connected() to learn the child has gone. Calling Wait
 // here would race with that path (os/exec forbids concurrent Waits).
 func (s *Session) closeGracefully() {
-	// 1. Ask alayacore to persist the conversation (best-effort: a dead
+	// 1. Cancel the active task first (fire-and-forget — SendCmd does not
+	//    block for the CO reply; errors are ignored).
+	_, _ = s.SendCmd("cancel", "")
+	// 2. Ask alayacore to persist the conversation (best-effort: a dead
 	//    child produces a write error, which is ignored).
 	_, _ = s.SendCmd("save", "")
-	// 2. EOF: close the stdin pipe. alayacore drains an active task —
-	//    completing it and auto-saving via handleTaskDone — then exits;
-	//    with no active task it exits immediately. (rawio mode has no
-	//    SIGINT handler; EOF is the only graceful exit signal.)
+	// 3. EOF: close the stdin pipe. With no active task (canceled), the
+	//    child exits immediately.
 	_ = s.Stdin.Close()
-	// 3. Wait for the reader to observe the natural exit (stdout EOF →
+	// 4. Wait for the reader to observe the natural exit (stdout EOF →
 	//    disconnect → killOnce reaps the child).
 	deadline := time.Now().Add(gracefulCloseTimeout)
 	for s.Connected() {
 		if time.Now().After(deadline) {
-			// 4. Fallback: SIGKILL (killOnce also reaps; idempotent if
+			// 5. Fallback: SIGKILL (killOnce also reaps; idempotent if
 			//    the reader already killed).
 			s.kill()
 			return

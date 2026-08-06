@@ -39,7 +39,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"alayaface/src-go/internal/tlv"
 )
@@ -51,6 +50,13 @@ var sessionFile string
 // stagedText accumulates user text frames of the current message; the
 // fail-once simulation keys its marker off it.
 var stagedText string
+
+// hanging marks a hung task (hang-once): the task never answers prompts,
+// but the process keeps reading stdin and serving CI commands — mirroring
+// real alayacore, which keeps its command loop alive while a task is
+// stuck (cancel-first close depends on this: CI `cancel` must abort the
+// hung task instead of waiting for the grace-period SIGKILL).
+var hanging bool
 
 const historyID = "hist-1"
 
@@ -245,24 +251,40 @@ func main() {
 			}
 		case "UE":
 			if staged > 0 {
-				switch {
-				case planMode && firstPrompt:
-					// Plan Session: answer with a fenced plan JSON (full
-					// AT frame — the UI detects the offer from the final
-					// assistant text), then a normal reply.
-					planReply()
-					firstPrompt = false
-				case strings.Contains(stagedText, "hang-once"):
-					hangOnceReply()
-			case strings.Contains(stagedText, "fail-once"):
-					failOnceReply()
-				default:
-					streamReply()
+				if hanging {
+					// Hung task: swallow the prompt (no reply) — the
+					// runner's timeout will fail the node, and a
+					// cancel-first close can still abort us via CI.
+					staged = 0
+					stagedText = ""
+				} else {
+					switch {
+					case planMode && firstPrompt:
+						// Plan Session: answer with a fenced plan JSON (full
+						// AT frame — the UI detects the offer from the final
+						// assistant text), then a normal reply.
+						planReply()
+						firstPrompt = false
+					case strings.Contains(stagedText, "hang-once"):
+						hangOnceReply()
+					case strings.Contains(stagedText, "fail-once"):
+						failOnceReply()
+					default:
+						streamReply()
+					}
+					staged = 0
+					stagedText = ""
 				}
-				staged = 0
-				stagedText = ""
 			}
 		case "CI":
+			if hanging && strings.Contains(frame.Value, `"name":"cancel"`) {
+				// Cancel aborts the hung task: emit the task-done frame
+				// (mirrors alayacore's handleTaskDone after cancel) and
+				// leave hang mode; the CO reply to the cancel command is
+				// produced by handleCmd below.
+				hanging = false
+				streamReply()
+			}
 			handleCmd(frame.Value)
 		}
 	}
@@ -312,17 +334,18 @@ func failOnceReply() {
 	streamReply()
 }
 
-// hangOnceReply simulates a task that HANGS (never replies) on its first
-// attempt — the runner's task timeout must fail the node and auto-retry.
-// The retry spawns a fresh fakecore, which sees the marker and succeeds.
-// While hung, the process ignores stdin (sleep) so the graceful close's
-// EOF drain cannot finish it — it gets SIGKILLed after the grace period.
+// hangOnceReply simulates a task that HANGS: the first process writes the
+// shared marker and enters hang mode (no reply to prompts); the retry
+// process sees the marker and succeeds. Unlike a naive sleep, hang mode
+// keeps reading stdin and serving CI commands, so a cancel-first close
+// (CI `cancel`) can abort the hung task immediately — the E2E Stop step
+// closes the hung session without waiting for a 30s sleep + SIGKILL.
 func hangOnceReply() {
 	h := sha256.Sum256([]byte(stagedText))
 	marker := filepath.Join(os.TempDir(), fmt.Sprintf("alayaface-fakecore-hang-once-%x.marker", h[:8]))
 	if _, err := os.Stat(marker); os.IsNotExist(err) {
 		_ = os.WriteFile(marker, []byte("hung-once"), 0o644)
-		time.Sleep(30 * time.Second)
+		hanging = true
 		return
 	}
 	streamReply()

@@ -368,7 +368,7 @@ type Effect
 
 **flag 语义注意**：alayacore `--builtin-tools` 未指定 = 全开；显式空串 = 无内置工具（MCP-only）。v1 只支持两态：**空 = 全开、非空列表 = 子集**；MCP-only 属边角场景，需要时用 `"none"` 特殊值再议。
 
-### 8.3 优雅关闭（close_session 持久化，v2 backlog → 已实现）
+### 8.3 优雅关闭（close_session，P12 演进 → P25 cancel-first）
 
 **问题**：原 `close_session` 直接 SIGKILL 子进程。alayacore 只在
 `handleTaskDone`（任务结束）和 `:save` 命令时把完整会话写入
@@ -378,23 +378,35 @@ type Effect
 
 **alayacore 已核实事实**：
 - `save` CI 命令空参数 = 保存到 `--session` 文件（`session.alaya`）；
+- `cancel` CI 命令 = 取消当前任务（`activeTask.cancel()` 经 per-task
+  context）→ 任务走 `taskResultCh` → `handleTaskDone` **自动保存**到取消
+  点；无任务时返回 `NOTHING_TO_CANCEL`；
 - stdin EOF + 有活动任务 → `drainUntilTaskDone()`：把任务跑完（
   `handleTaskDone` 自动保存）再退出；EOF + 无活动任务 → 直接退出（不保存）；
 - rawio 无 SIGINT 处理（plainio/terseio 才有），EOF 是唯一优雅退出信号。
 
-**AlayaFace 侧实现（双后端对称）**：
+**AlayaFace 侧实现（双后端对称，P25：cancel-first，不做向后兼容）**：
 
 ```
 close_session:
-  1. 发 CI "save"（best-effort，子进程已死则写失败忽略）
-  2. 关闭 stdin → EOF（有任务则 drain+自动保存后退出；无任务立即退出）
-  3. 等 ≤ 5s 自然退出（GRACEFUL_CLOSE_TIMEOUT）
-  4. 仍活着 → SIGKILL 兜底
+  1. 发 CI "cancel"（best-effort，fire-and-forget：取消当前任务 →
+     alayacore 保存到取消点；无任务/子进程已死则错误忽略）
+  2. 发 CI "save"（best-effort，落盘兜底）
+  3. 关闭 stdin → EOF（任务已被取消 → 立即退出，不再 drain 跑完）
+  4. 等 ≤ 5s 自然退出（GRACEFUL_CLOSE_TIMEOUT）
+  5. 仍活着 → SIGKILL 兜底
 ```
 
-- `kill_child` / `KillChild`（Drop / 断连路径）同步改为**先 EOF 宽限 3s
-  再杀**：stdout 断连时子进程已死，立即返回；Drop 路径给 alayacore 3s
-  drain+保存的机会；
+- **为什么 cancel-first**：Stop / 关闭会话窗口的语义是"立刻停"，不是
+  "等任务跑完"。P12 的 drain 语义（EOF 后跑完当前任务）会让 Stop 后
+  Running 节点继续执行最多到任务结束（用户实测：Stop 无法停掉所有
+  节点）。cancel 命令由 alayacore 原生支持（C1 安全）：任务被取消 →
+  `handleTaskDone` 自动保存 → 历史保留到取消点（比 SIGKILL 丢得少，
+  比 drain 等得短）。所有 close_session 一律 cancel-first，不设兼容
+  参数（用户明确要求"不要向后兼容"）；
+- `kill_child` / `KillChild`（Drop / 断连路径）保持**先 EOF 宽限 3s
+  再杀**：该路径只有子进程句柄（无 stdin 管道），无法发 CI cancel；
+  stdout 断连时子进程通常已退出，立即返回；
 - Rust 侧 `SessionHandle.stdin` 改为 `Arc<tokio::sync::Mutex<Option<ChildStdin>>>`：
   优雅关闭时把槽位置 `None` 即关闭管道（不依赖 Arc 引用计数），写方（
   send_prompt / send_raw）对 `None` 返回 "Session is disconnected"；
@@ -403,13 +415,20 @@ close_session:
   断连路径的 `killOnce → KillChild` 负责（`os/exec` 禁止并发 Wait，
   race 检测器实测告警），只轮询 `Connected()` 等到 stdout EOF（= 子进程
   自然退出）或超时后 `kill()`；
-- 测试：Rust 4 例（save 帧到达子进程 stdin / 倔强子进程超时被杀 /
-  kill_child 先宽限自然退出 / 已死子进程不 panic）；Go 集成 1 例
-  （fakecore `save` 写 session.alaya 标记 → close 后文件含 saved 标记）。
+- fakecore 挂起模式：hang-once 不再 `sleep` 阻塞主循环——挂起期间仍
+  读 stdin、吞掉 UE、响应 CI `cancel`（回 task-done 帧 + CO），模拟
+  alayacore"任务卡住但命令循环活着"（真实 alayacore 的 cancel 走
+  cancelReqCh，不依赖输入管道）；
+- 测试：Rust（cancel 帧先于 save 帧到达子进程 stdin / 倔强子进程超时
+  被杀 / kill_child 宽限 / 已死子进程不 panic）；Go 集成（fakecore
+  `save` 写 session.alaya 标记 → close 后文件含 saved 标记；新增
+  `TestIntegrationCloseCancelsHungTask`：挂起任务 close 后 <3s 退出，
+  证明 cancel 中断挂起而非等宽限 SIGKILL）；E2E（Stop 后 t3 挂起会话
+  立即关闭）。
 
-**已知限制**：drain 中的任务若超过宽限期（5s，如长工具链）仍会被
-SIGKILL——此时 `save` 帧已先行落盘，至少保留任务开始前的全部内容；
-真正「杀不死的断点续跑」仍是 v2（resume 子进程）。
+**已知限制**：cancel 后若任务取消本身卡住（极端），仍由 5s 宽限 +
+SIGKILL 兜底——但 `save` 帧已先行落盘，至少保留任务开始前的全部内容；
+「杀不死的断点续跑」仍是 v2（resume 子进程）。
 
 ### 8.4 目录隔离（per-plan 工作目录，P16）
 
@@ -517,10 +536,11 @@ t1/t2/t3 结果但拿不到）。
   不再因重试替换绑定而丢失（节点详情面板「历史会话」列表可直接打开）；
   打开 plan 窗口时自动静默恢复，点击节点可重新打开对应会话；
 - **Resume（v1）**：重开 app → 打开计划 → 从 run.json 恢复，未完成/失败/阻塞节点**从头重新执行**（新建会话，不尝试恢复子进程；真断点续跑为 v2）；
-- **会话关闭即持久化（优雅关闭，§8.3）**：close_session 先发 CI `save`
-  再关 stdin（EOF → drain + 任务结束自动保存）→ 等 ≤5s 自然退出 → SIGKILL
-  兜底；Drop/断连路径经 kill_child 先 EOF 宽限 3s。进行中的那一轮在宽限
-  内跑完即可保存；超时则至少保留任务开始前内容。
+- **会话关闭即持久化（cancel-first 关闭，§8.3）**：close_session 先发
+  CI `cancel`（取消当前任务 → alayacore 经 handleTaskDone **自动保存到
+  取消点**），再发 `save`、关 stdin（EOF → 任务已取消，立即退出）→ 等
+  ≤5s 自然退出 → SIGKILL 兜底；Drop/断连路径经 kill_child 先 EOF 宽限
+  3s。取消点之前的内容完整保留（比 SIGKILL 丢得少，比 drain 等得短）。
 
 ---
 
@@ -583,7 +603,8 @@ t1/t2/t3 结果但拿不到）。
 - 文件位置 `~/.alayaface/plans/<planId>.json`；Resume v1 = 重跑未完成节点；
 - Plan 只读展示（节点编辑 v2）；
 - 种子 preset：Default / Fast / Deep / Data / Safe；
-- 优雅关闭（§8.3）：close_session = save CI → EOF → 5s 宽限 → SIGKILL；
+- 优雅关闭（§8.3）：close_session = **cancel → save → EOF → 5s 宽限 →
+  SIGKILL**（P25 cancel-first：取消任务并保存到取消点，不等任务跑完）；
   kill_child/KillChild = EOF → 3s 宽限 → SIGKILL；
 - Plan 头部可覆盖并发度（1–8，留空 = plan JSON 的 concurrency；P14 已实现）；
 - **per-plan 工作目录**（§8.4）：节点会话 cwd = `plans/<planId>/work/`；
