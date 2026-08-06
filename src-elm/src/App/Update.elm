@@ -1093,7 +1093,7 @@ boot frame is indistinguishable from a real task completion — the runner
 would mark the just-bound node Succeeded (output Nothing) and closeAndClear
 would CANCEL its just-started session ("Canceled" right after the first
 prompt, node done in milliseconds). We therefore track sessions that have
-seen in_progress:true (real task start — always follows the prompt, which
+seen in_progress:true (a real task start — always follows the prompt, which
 is only sent after bind) and only dispatch TaskDone for those.
 -}
 planEventFromFrame : Model -> P.FrameEvent -> ( Model, Maybe R.Event )

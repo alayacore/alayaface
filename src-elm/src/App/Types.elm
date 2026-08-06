@@ -103,11 +103,11 @@ type alias Model =
     -- Completed plan window — the status bar needs it). Updated on every
     -- runStepIn; not persisted (rebuilt when the window reopens).
     , planRunStatuses : Dict String PT.RunStatus
-    -- Sessions that have seen SM task in_progress:true — i.e. a REAL
-    -- task started (the node prompt was sent). alayacore emits a boot
-    -- task frame (in_progress:false) BEFORE any prompt; gating TaskDone
-    -- on this set stops that boot frame from being mistaken for a task
-    -- completion (which marked the node Succeeded and canceled its
+    -- Sessions that have seen an SM task in_progress:true frame — i.e. a
+    -- REAL task started (the node prompt was sent). alayacore emits a
+    -- boot task frame (in_progress:false) BEFORE any prompt; gating
+    -- TaskDone on this set stops that boot frame from being mistaken for
+    -- a task completion (which marked the node Succeeded and canceled its
     -- just-started session — R5 bug fix).
     , planTaskStarted : Set String
     , planOrder : List String

@@ -201,21 +201,27 @@ plan 完成自动关窗（先回填）。
       节点点击 → resume（成功节点窗口已关）；8b Stop 保留（t3 挂起 → Stop → 窗口关闭）；
       ALL PASS；Elm 183 / Rust 42 / Go -race 全绿
 
-### R5 清理 + 文档 + 真机 bug 修复
-- [x] E2E 全量重写（R4 完成，commit 4bc7456）：fixture（t3 保留 hang-once 供 Stop；E2E
-      开头**预置 t3 hang marker** 使第一次 run 秒成功）；递归、状态条、重跑级联步骤
-- [x] **真机 bug 修复（本会话，commit 待定）**：alayacore 的 **boot task 帧**
-      （`SM task in_progress:false`，会话启动即发、早于任何 prompt）被
-      `planEventFromFrame` 误判为 TaskDone → Runner 把刚绑定的节点标为 Succeeded
-      （output 空）→ `closeAndClear` 立即 `CloseSessionFor` → cancel-first 关闭
-      → 节点"第一条 prompt 后立马 Canceled"、run 毫秒"完成"。修复：
-      1) Model 新增 `planTaskStarted : Set String`，仅对见过 `in_progress:true`
-      （真实任务开始，必在 prompt 之后）的会话派发 TaskDone；boot 帧被忽略；
-      2) fakecore 对齐真实 alayacore 帧序列（boot 带 `in_progress:false` +
-      回复前发 `in_progress:true`），使 E2E 实际覆盖该门控路径（此前 fakecore
-      boot 无 in_progress → 前端默认 true → 永不触发）。
-      真机验证（LLaMA.CPP gemma-4-12B）：修复前 t1/t3 12ms/7ms 秒完 + AT
-      "Canceled"；修复后三节点真实产出、依赖链严格顺序、无 Canceled。
+### R5 cleanup + docs + real-core bug fix
+- [x] E2E full rewrite (done in R4, commit 4bc7456): fixture (t3 keeps hang-once
+      for Stop; E2E **pre-seeds the t3 hang marker** so the first run succeeds
+      instantly); recursion, status bar, re-run cascade steps
+- [x] **Real-core bug fix (this session, commit b0a58b8)**: alayacore's **boot
+      task frame** (`SM task in_progress:false`, emitted at session start,
+      before any prompt) was mistaken by `planEventFromFrame` for a TaskDone →
+      the Runner marked the just-bound node Succeeded (empty output) →
+      `closeAndClear` immediately issued `CloseSessionFor` → cancel-first close
+      → node "Canceled right after the first prompt", run "completed" in
+      milliseconds. Fix:
+      1) Model gained `planTaskStarted : Set String` — TaskDone is only
+      dispatched for sessions that have seen `in_progress:true` (a real task
+      start, always after the prompt); the boot frame is ignored;
+      2) fakecore mirrors the real alayacore frame sequence (boot carries
+      `in_progress:false` + emits `in_progress:true` before replying), so E2E
+      actually covers the gate (previously fakecore's boot lacked
+      `in_progress` → frontend defaulted to true → never triggered).
+      Real-core verification (LLaMA.CPP gemma-4-12B): before — t1/t3 finished
+      in 12ms/7ms + AT "Canceled"; after — all three nodes produce real
+      output, strict chain order, no Canceled.
 - [ ] 死代码清理（P22 残余、按钮 CSS）；`Time.every` 订阅删除
 - [ ] 文档：docs/plan-mode.md（§5/§6.7/§7/§8.5 移除超时/§13）、README、
       docs/manual-acceptance.md；TODO.md 勾选

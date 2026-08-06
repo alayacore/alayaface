@@ -247,16 +247,19 @@ type Effect
 - `SessionDisconnected sessionId reason`（core-status connected=false；未收到 done 前视为失败）
 - 人工事件：`Stop` / `Pause` / `Resume` / `RetryNode nodeId`（手动重试，attempts 清零重来）
 
-**boot 帧门控（R5 真机修复）**：alayacore 会话启动时先发一条
-`SM task in_progress:false`（context 0，早于任何 prompt）——没有门控时它
-与真实 TaskDone 无法区分，Runner 会把刚绑定的节点标为 Succeeded（output
-空）→ `closeAndClear` 立刻 `CloseSessionFor`（cancel-first 关闭）→ 节点
-"第一条 prompt 后立马 Canceled"、run 毫秒级"完成"（真机必现；fakecore 旧
-boot 帧无 in_progress 字段 → 前端默认 true → E2E 永不触发）。门控：
-`Model.planTaskStarted : Set String` 只对**见过 `in_progress:true`** 的
-会话派发 TaskDone（真实任务必先发 true）；boot 帧被忽略。fakecore 已对齐
-帧序列（boot 带 `in_progress:false` + 回复前发 `in_progress:true`），E2E
-实际覆盖该路径。
+**Boot-frame gate (R5 real-core fix)**: alayacore emits a `SM task
+in_progress:false` frame at session start (context 0, before any prompt) —
+without a gate it is indistinguishable from a real TaskDone: the Runner
+marks the just-bound node Succeeded (empty output) → `closeAndClear`
+immediately issues `CloseSessionFor` (cancel-first close) → node "Canceled
+right after the first prompt", run "completed" in milliseconds (reproduced
+on real cores; fakecore's old boot frame lacked `in_progress` → frontend
+defaulted to true → E2E never triggered). Gate: `Model.planTaskStarted :
+Set String` — TaskDone is only dispatched for sessions that have seen
+`in_progress:true` (a real task always starts with it, after the prompt);
+the boot frame is ignored. fakecore now mirrors the frame sequence (boot
+carries `in_progress:false` + emits `in_progress:true` before replying), so
+E2E covers the gate.
 
 ### 6.5 失败与重试（需求③）
 
