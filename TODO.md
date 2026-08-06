@@ -42,7 +42,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 
 | Phase | Status |
 |-------|--------|
-| P0 Plan data model + detection (pure Elm) | [ ] |
+| P0 Plan data model + detection (pure Elm) | [x] |
 | P1 fs_write_file_text / fs_read_file_text (Rust+Go+bridge+Ports) | [ ] |
 | P2 Create Plan flow + plans dir + Plans manager | [ ] |
 | P3 DAG layout + SVG view + node→session click | [ ] |
@@ -66,18 +66,20 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 
 ## P0 — Plan data model + detection (pure Elm)
 
-- [ ] `src/Plan/Types.elm`: Plan / TaskNode / NodeStatus / RunState / FailureRecord
+- [x] `src/Plan/Types.elm`: Plan / TaskNode / NodeStatus / RunState / FailureRecord
       types + JSON decoders/encoders (snake_case, matching schema in design §5)
-- [ ] `Plan/Types.elm`: normalize (fill defaults: concurrency=2,
+- [x] `Plan/Types.elm`: normalize (fill defaults: concurrency=2,
       default_max_attempts=3, depends_on=[], max_attempts←default,
       schema_version=1) + validate (id unique/non-empty, title/prompt non-empty,
       deps exist, no self-dep, Kahn cycle detection) → readable error list
-- [ ] `Plan/Detect.elm`: `extractPlanJson : String -> Maybe String` (first
+- [x] `Plan/Detect.elm`: `extractPlanJson : String -> Maybe String` (first
       ```json … ``` fence, unescape)
-- [ ] tests: `tests/PlanTypesTest.elm` (decode ok/err, cycle, unknown dep, dup id,
+- [x] tests: `tests/PlanTypesTest.elm` (decode ok/err, cycle, unknown dep, dup id,
       normalize, roundtrip) + `tests/PlanDetectTest.elm` (fence edges: no fence,
       empty, multiple, ```json vs ```text, CRLF)
-- [ ] `elm-test` green
+- [x] `elm-test` green (87 tests; note: elm-explorations/test 2.2.0 has no
+      Expect.true/false — use Expect.equal True; RunStatus ctors renamed
+      InProgress/FailedRun to avoid NodeStatus ctor clash)
 
 ## P1 — fs_write_file_text / fs_read_file_text (dual backend)
 
