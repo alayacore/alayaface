@@ -46,14 +46,15 @@ pub async fn create_session(
             String::new()
         }),
     };
-    // Symmetric to tool_confirm: explicit override wins; otherwise use the
-    // active preset's builtin_tools (empty = don't pass flag = all tools).
-    let bt = match builtin_tools {
-        Some(v) => v,
-        None => crate::commands::effective_builtin_tools().unwrap_or_else(|e| {
-            log::warn!("[settings] builtin-tools unavailable, spawning without it: {e}");
-            String::new()
-        }),
+    // Symmetric to tool_confirm: an EXPLICIT override wins — including an
+    // explicit empty string, which means NO builtin tools (alayacore
+    // treats `--builtin-tools=` as an empty list; Plan Sessions use this
+    // so the planner physically cannot execute tools). Unspecified =
+    // the active preset's builtin_tools; an empty effective value means
+    // don't pass the flag = all tools.
+    let bt: Option<String> = match builtin_tools {
+        Some(v) => Some(v.to_string()),
+        None => crate::commands::effective_builtin_tools().ok().filter(|s| !s.is_empty()),
     };
     // Optional extra system prompt (Plan Sessions inject the planner
     // instructions here; empty = don't pass --system).
@@ -62,8 +63,8 @@ pub async fn create_session(
     if !tc.is_empty() {
         log::info!("  with --tool-confirm={}", &tc);
     }
-    if !bt.is_empty() {
-        log::info!("  with --builtin-tools={}", &bt);
+    if let Some(btl) = &bt {
+        log::info!("  with --builtin-tools={}", if btl.is_empty() { "<none>" } else { btl });
     }
     if !sp.is_empty() {
         log::info!("  with --system ({} chars)", &sp.len());
@@ -95,7 +96,7 @@ pub async fn create_session(
         sessions: &sessions,
         model_cache: &model_cache,
         tool_confirm: &tc,
-        builtin_tools: &bt,
+        builtin_tools: bt.as_deref(),
         system_prompt: &sp,
         work_dir: wd,
     }).await
@@ -160,7 +161,7 @@ pub async fn resume_session(
         sessions: &sessions,
         model_cache: &model_cache,
         tool_confirm: "",
-        builtin_tools: "",
+        builtin_tools: None,
         system_prompt: "",
         work_dir: wd,
     }).await
@@ -263,7 +264,7 @@ pub async fn fork_session(
         sessions: &sessions,
         model_cache: &model_cache,
         tool_confirm: "",
-        builtin_tools: "",
+        builtin_tools: None,
         system_prompt: "",
         work_dir: None,
     }).await

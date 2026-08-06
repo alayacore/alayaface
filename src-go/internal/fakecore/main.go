@@ -176,12 +176,22 @@ func main() {
 	_ = flag.String("config-path", "", "config dir (accepted, unused)")
 	_ = flag.String("tool-confirm", "", "pre-approved tool list (accepted, unused)")
 	systemFlag := flag.String("system", "", "system prompt (accepted; non-empty switches to plan mode)")
-	_ = flag.String("builtin-tools", "", "builtin tools (accepted, unused)")
+	builtinToolsFlag := flag.String("builtin-tools", "", "builtin tools (accepted; echoed in the boot frame)")
 	flag.Parse()
 
 	if !*rawio {
 		os.Exit(2) // not rawio mode: refuse like the real binary would
 	}
+
+	// Explicit-set detection mirrors alayacore: unspecified --builtin-tools
+	// = all tools; explicitly empty = NO tools. The boot frame echoes both
+	// so integration tests can assert the spawn flags.
+	btSet := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "builtin-tools" {
+			btSet = true
+		}
+	})
 
 	// Plan mode: Plan Sessions spawn with --system (the planner prompt);
 	// plain sessions and runner node sessions do not. In plan mode the
@@ -197,12 +207,19 @@ func main() {
 	}
 
 	// Startup system message, like alayacore announcing its task. The
-	// cwd field lets tests assert per-plan working-directory isolation
-	// (the spawn cwd reaches the child; the client ignores the field).
+	// cwd/builtin_tools fields let tests assert spawn flags (per-plan
+	// working-directory isolation, no-tools Plan Sessions); the client
+	// ignores them.
 	cwd, _ := os.Getwd()
 	boot, _ := json.Marshal(map[string]any{
 		"type": "task",
-		"data": map[string]any{"id": "boot", "title": "fake core ready", "cwd": cwd},
+		"data": map[string]any{
+			"id":               "boot",
+			"title":            "fake core ready",
+			"cwd":              cwd,
+			"builtin_tools":    *builtinToolsFlag,
+			"builtin_tools_set": btSet,
+		},
 	})
 	writeFrame("SM", string(boot))
 

@@ -64,7 +64,10 @@ pub struct SessionConfig<'a> {
     pub sessions: &'a SessionMap,
     pub model_cache: &'a ModelCache,
     pub tool_confirm: &'a str,
-    pub builtin_tools: &'a str,
+    /// Built-in tools: Some(list) → `--builtin-tools=<list>` (Some("") =
+    /// NO builtin tools — used by Plan Sessions so the planner cannot
+    /// execute tools); None = don't pass the flag = all tools.
+    pub builtin_tools: Option<&'a str>,
     pub system_prompt: &'a str,
     /// Child process working directory (per-plan isolation; None =
     /// inherit the backend's cwd).

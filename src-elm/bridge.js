@@ -149,7 +149,11 @@
         binaryPath: "", configPath: "",
         toolConfirm: data.toolConfirm || null,
         preset: data.preset || null,
-        builtinTools: data.builtinTools || null,
+        // Preserve an explicit empty string: Plan Sessions pass
+        // builtinTools="" → NO builtin tools (the planner must not
+        // execute tools). `|| null` would turn "" into null.
+        builtinTools: (data.builtinTools === undefined || data.builtinTools === null)
+          ? null : data.builtinTools,
         systemPrompt: data.systemPrompt || null,
         workDir: data.workDir || null,
       }).then(function (id) { app.ports.onSessionCreated.send(id); })

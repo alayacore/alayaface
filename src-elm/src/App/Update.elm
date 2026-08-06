@@ -511,11 +511,21 @@ eventSessionId ev =
 {-| Built-in planner system prompt injected via `--system` into Plan
 Sessions. The user only describes the goal in natural language; this
 instruction (invisible to them) tells the model to emit one fenced
-```json plan block, then answer normally afterwards.
+```json plan block and nothing else. Plan Sessions also spawn with
+builtinTools="" (no builtin tools), so the planner physically cannot
+execute the task — it can only plan.
 -}
 planSystemPrompt : String
 planSystemPrompt =
-    """你是 AlayaFace 的任务规划助手。用户会描述一个目标，你需要把它拆解为可并行执行的子任务，并输出唯一一个 ```json 代码块（不要输出其他内容）。格式如下：
+    """你是 AlayaFace 的【规划器】（Planner），不是执行器（Executor）。你的唯一职责是把用户的目标拆解成一份可执行的子任务计划；执行由计划里的节点会话完成，永远轮不到你。
+
+铁律：
+1. 你绝不执行用户的任务本身。禁止调用任何工具（搜索、读写文件、执行命令等），禁止做任何"实际工作"——即使你具备能力，规划器的职责也只是规划。
+2. 你的输出只包含【唯一一个】```json 代码块，即完整计划。JSON 块之前不要写解释，块之后最多一句简短说明（例如"已生成计划，执行将由节点完成"）。
+3. 如果用户说"直接做 / 帮我写 / 查一下 / 运行一下"，那是在要求你执行——你仍然只输出计划，并用一句话说明：执行会由计划中的节点完成。
+4. 用户后续的追问：只回答关于计划本身的问题（解释任务、调整依赖、修改参数），用普通文字回答即可；绝不开始执行任务，也绝不输出第二个计划块（除非用户明确要求修改/重新生成计划，此时输出修改后的完整计划）。
+
+计划格式（唯一一个 ```json 代码块）：
 {
   "schema_version": 1,
   "name": "计划名称",
@@ -531,7 +541,7 @@ planSystemPrompt =
 - 能并行执行的任务之间不要互相依赖
 - 需要特定环境的任务用 preset 指定（Default/Fast/Deep/Data/Safe）
 - 涉及执行命令等有风险操作的任务用 preset: "Safe"（禁 execute_command）或 tools 字段限制
-- 首次输出计划之后，如果用户继续对话，请正常回答，不要再输出计划代码块"""
+- 如果任务本身无需拆解（一句话能完成），也要输出计划（一个任务即可），这是你的输出格式"""
 
 {-| Run one state-machine step for a specific plan window, with a
 timestamp, then dispatch effects. Appends a log line for every node
@@ -677,7 +687,9 @@ startNextCreateIn model =
                     , Ports.createSession
                         { toolConfirm = Nothing
                         , preset = Nothing
-                        , builtinTools = Nothing
+                        -- NO builtin tools: the planner must only output
+                        -- the plan JSON, never execute the task itself.
+                        , builtinTools = Just ""
                         , systemPrompt = Just planSystemPrompt
                         , workDir = Nothing
                         }
@@ -873,7 +885,9 @@ update msg model =
                     , Ports.createSession
                         { toolConfirm = Nothing
                         , preset = Nothing
-                        , builtinTools = Nothing
+                        -- NO builtin tools: the planner must only output
+                        -- the plan JSON, never execute the task itself.
+                        , builtinTools = Just ""
                         , systemPrompt = Just planSystemPrompt
                         , workDir = Nothing
                         }

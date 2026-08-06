@@ -19,8 +19,10 @@ pub struct CoreProcess {
 /// If `config_path` is non-empty, passes `--config-path <config_path>`.
 /// If `session_path` is non-empty, passes `--session <session_path>`.
 /// If `tool_confirm` is non-empty, passes `--tool-confirm=<tool_confirm>`.
-/// If `builtin_tools` is non-empty, passes `--builtin-tools=<list>`
-/// (comma-separated; empty = don't pass the flag = alayacore default: all).
+/// If `builtin_tools` is Some (including Some("")), passes
+/// `--builtin-tools=<list>` — Some("") = NO builtin tools (alayacore
+/// treats an explicitly-empty flag as an empty list); None = don't pass
+/// the flag = alayacore default (all tools).
 /// If `system_prompt` is non-empty, passes `--system=<text>` (appended to
 /// alayacore's default system prompt; used by Plan Sessions).
 /// If `work_dir` is Some, the child's working directory is set to it
@@ -32,7 +34,7 @@ pub fn spawn(
     config_path: &str,
     session_path: &str,
     tool_confirm: &str,
-    builtin_tools: &str,
+    builtin_tools: Option<&str>,
     system_prompt: &str,
     work_dir: Option<&str>,
 ) -> io::Result<CoreProcess> {
@@ -49,8 +51,8 @@ pub fn spawn(
     if !tool_confirm.is_empty() {
         cmd.arg(format!("--tool-confirm={}", tool_confirm));
     }
-    if !builtin_tools.is_empty() {
-        cmd.arg(format!("--builtin-tools={}", builtin_tools));
+    if let Some(list) = builtin_tools {
+        cmd.arg(format!("--builtin-tools={}", list));
     }
     if !system_prompt.is_empty() {
         cmd.arg(format!("--system={}", system_prompt));
@@ -328,6 +330,40 @@ mod tests {
         // Must return quickly without panicking (disconnect path: the
         // child died on its own before kill_child runs).
         kill_child(&mut child);
+    }
+
+    #[test]
+    fn spawn_builtin_tools_flag_semantics() {
+        use std::io::Read;
+
+        let read_args = |bt: Option<&str>| {
+            let mut p = spawn("/bin/echo", "", "", "", bt, "", None).unwrap();
+            let mut out = String::new();
+            p.stdout.read_to_string(&mut out).unwrap();
+            let _ = p.child.wait();
+            out
+        };
+
+        // Some("") → explicit empty flag: alayacore treats it as NO tools.
+        let out = read_args(Some(""));
+        assert!(
+            out.contains("--builtin-tools=\n"),
+            "Some(\"\") must pass an empty --builtin-tools flag, got: {out:?}"
+        );
+
+        // Some(list) → the comma list.
+        let out = read_args(Some("read_file,write_file"));
+        assert!(
+            out.contains("--builtin-tools=read_file,write_file"),
+            "Some(list) must pass the list, got: {out:?}"
+        );
+
+        // None → no flag at all (alayacore default: all tools).
+        let out = read_args(None);
+        assert!(
+            !out.contains("--builtin-tools"),
+            "None must not pass the flag, got: {out:?}"
+        );
     }
 
     #[test]

@@ -86,19 +86,29 @@ Plan.Types.decode + normalize + validate（id 唯一/依赖存在/无环）
 节点成功 → 解锁下游 → 并行调度（≤ concurrency 上限）
 ```
 
-### Plan Session（P6）
+### Plan Session（P6 + P22）
 
 用户不需要知道任何实现细节（schema / fenced JSON / preset）：
 
 1. ⚙ 菜单 → **New Plan Session** → 创建普通会话，但 spawn 时通过
    `--system` 注入内置的**规划器指令**（`planSystemPrompt`，App/Update.elm
-   常量：身份 + 一次性输出 ```json 计划块 + schema + 质量规则 + "之后正常回答"）；
-2. 用户只用自然语言描述目标；
-3. 模型输出计划块 → 现有 Create Plan 流程接管（检测/校验/保存/Run 零改动）；
-4. 会话窗口标题带 `[Plan]` 前缀（`planSessionIds : Set String`）。
+   常量：角色锁死"规划器不是执行器" + 禁止工具/执行 + 一次性输出 ```json
+   计划块 + schema + 质量规则 + 后续只答计划追问）；
+2. **同时以 `builtinTools=""` spawn（显式空串 = alayacore 无内置工具）**
+   ——规划器**物理上无法执行任务**（搜不了/写不了/跑不了），只能输出计划；
+   runner 节点会话不受影响（不传 flag = 全开）；
+3. 用户只用自然语言描述目标；
+4. 模型输出计划块 → 现有 Create Plan 流程接管（检测/校验/保存/Run 零改动）；
+5. 会话窗口标题带 `[Plan]` 前缀（`planSessionIds : Set String`）。
 
-链路：`create_session {systemPrompt}` → `spawn --system=<text>`（alayacore
-默认 system prompt 之后追加）。resume/fork 会话不传。
+链路：`create_session {systemPrompt, builtinTools:""}` → `spawn --system=<text>
+--builtin-tools=`（alayacore 默认 system prompt 之后追加；显式空 flag = 无
+工具）。resume/fork 会话不传。
+
+> **P22 背景**：模型"忘记职责直接干活"的根因 = 默认 system prompt 在前
+> （"执行任务"），我们的规划指令在后 + 工具全开。修复：提示词角色锁死 +
+> 工具禁用双保险。后端 `builtin_tools` 参数现支持三态：`null`（preset 默认/
+> 全开）、`"a,b"`（子集）、`""`（**无工具**，P6 遗留的 v2 语义落地）。
 
 ---
 

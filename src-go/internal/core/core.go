@@ -24,15 +24,18 @@ type CoreProcess struct {
 // If configPath is non-empty, passes --config-path <configPath>.
 // If sessionPath is non-empty, passes --session <sessionPath>.
 // If toolConfirm is non-empty, passes --tool-confirm=<toolConfirm>.
-// If builtinTools is non-empty, passes --builtin-tools=<list> (empty =
-// don't pass the flag = alayacore default: all tools).
+// If builtinTools is non-nil, passes --builtin-tools=<value> — a nil
+// pointer means "don't pass the flag" (alayacore default: all tools),
+// while a pointer to "" means NO builtin tools (alayacore treats an
+// explicitly-empty flag as an empty list; Plan Sessions use this so the
+// planner physically cannot execute tools).
 // If systemPrompt is non-empty, passes --system=<text> (appended to the
 // default system prompt; used by Plan Sessions).
 // If workDir is non-empty, the child's working directory is set to it
 // (per-plan isolation for Plan Mode nodes; empty = inherit the backend's
 // cwd, the pre-isolation behavior).
 // stderr is inherited so alayacore's own logs reach the terminal.
-func Spawn(binaryPath, configPath, sessionPath, toolConfirm, builtinTools, systemPrompt, workDir string) (*CoreProcess, error) {
+func Spawn(binaryPath, configPath, sessionPath, toolConfirm string, builtinTools *string, systemPrompt, workDir string) (*CoreProcess, error) {
 	args := []string{"--rawio"}
 	if configPath != "" {
 		args = append(args, "--config-path", configPath)
@@ -43,8 +46,8 @@ func Spawn(binaryPath, configPath, sessionPath, toolConfirm, builtinTools, syste
 	if toolConfirm != "" {
 		args = append(args, "--tool-confirm="+toolConfirm)
 	}
-	if builtinTools != "" {
-		args = append(args, "--builtin-tools="+builtinTools)
+	if builtinTools != nil {
+		args = append(args, "--builtin-tools="+*builtinTools)
 	}
 	if systemPrompt != "" {
 		args = append(args, "--system="+systemPrompt)

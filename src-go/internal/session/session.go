@@ -141,7 +141,10 @@ type CreateConfig struct {
 	SessionFile  string
 	SessionDir   string
 	ToolConfirm  string
-	BuiltinTools string
+	// BuiltinTools: nil = don't pass --builtin-tools (all tools);
+	// pointer to "" = explicitly no builtin tools (Plan Sessions);
+	// pointer to a list = those tools only.
+	BuiltinTools *string
 	SystemPrompt string
 	WorkDir      string // child cwd (per-plan isolation; "" = backend cwd)
 }

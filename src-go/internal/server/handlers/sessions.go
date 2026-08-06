@@ -69,14 +69,21 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 			tc = eff
 		}
 	}
-	bt := ""
+	// Builtin tools: an EXPLICIT override wins — including an explicit
+	// empty string, which means NO builtin tools (alayacore treats
+	// `--builtin-tools=` as an empty list; Plan Sessions use this so the
+	// planner physically cannot execute tools). Unspecified = the active
+	// preset's builtin_tools; an empty effective value means don't pass
+	// the flag = all tools.
+	var bt *string
 	if args.BuiltinTools != nil {
-		bt = *args.BuiltinTools
+		v := *args.BuiltinTools
+		bt = &v
 	} else {
 		if eff, err := effectiveBuiltinTools(); err != nil {
 			log.Printf("[settings] builtin-tools unavailable, spawning without it: %v", err)
-		} else {
-			bt = eff
+		} else if eff != "" {
+			bt = &eff
 		}
 	}
 	sp := ""
@@ -96,8 +103,12 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	if tc != "" {
 		log.Printf("  with --tool-confirm=%s", tc)
 	}
-	if bt != "" {
-		log.Printf("  with --builtin-tools=%s", bt)
+	if bt != nil {
+		label := *bt
+		if label == "" {
+			label = "<none>"
+		}
+		log.Printf("  with --builtin-tools=%s", label)
 	}
 	if sp != "" {
 		log.Printf("  with --system (%d chars)", len(sp))

@@ -709,13 +709,48 @@ required" noise) + runtime.conf (proper key:value, no "{}" parse error).
 
 ---
 
+## P22 — Plan Session: role-lock prompt + no builtin tools (planner can't execute)
+
+Bug report: the Plan Session "经常忘记自己的职责", executing the task
+directly instead of emitting the plan JSON.
+
+Root cause: alayacore sends TWO system messages — its default ("execute
+the user's task with tools") FIRST, then our `--system` planner
+instruction — and Plan Sessions spawned with ALL builtin tools, so the
+model both heard "do the work" and physically could.
+
+Fix (two layers):
+- [x] Rewrite `planSystemPrompt` (App/Update.elm): role-locked
+      ("规划器不是执行器"), explicit prohibitions (never execute, never
+      use tools, only ONE ```json block), handles "直接做" requests by
+      still planning, follow-ups answer plan questions only
+- [x] Plan Sessions spawn with `builtinTools=""` → NO builtin tools:
+      the planner physically cannot search/read/write/execute
+- [x] Backend tri-state `builtin_tools` (P6-documented v2 semantics,
+      now implemented): Rust `Option<&str>` (Some("") → `--builtin-tools=`,
+      None → no flag) + Go `*string`; effective-setting "" still means
+      "don't pass = all tools"; bridge.js preserves explicit "" (was
+      `|| null`-ed to null)
+- [x] fakecore echoes `builtin_tools` + `builtin_tools_set` in the boot
+      frame; Go test asserts the three states; Rust spawn test asserts
+      the flag for Some("")/Some(list)/None
+- [x] Tests: elm 156 / Rust 42 / Go -race all pkgs / make e2e ALL PASS
+      (e2e server log shows `with --builtin-tools=<none>` for the Plan
+      Session, runner sessions unaffected)
+- [ ] Real-model validation: plan session now cannot do anything but
+      answer with text → JSON; verify with the user's model
+
+---
+
 ## Known pitfalls
 
 - Never edit `../alayacore` — tool set = spawn params only.
 - JSON contract: snake_case returns, camelCase args, null keys must exist,
   error messages capitalized & identical across Rust/Go.
-- `--builtin-tools` empty ≠ all: empty config means DON'T pass the flag
-  (alayacore all-on); explicit empty string means no builtin tools (v2).
+- `--builtin-tools` tri-state (P22): `null`/未指定 = preset 默认，"" 有效值
+  = 不传 flag = alayacore 全开；**显式空串 = 无内置工具**（Plan Session 用
+  这个让规划器无法执行）。创建会话参数 `builtinTools`: `null` | `"a,b"` |
+  `""` 三种值语义不同，bridge.js 必须保真传空串（不能 `|| null`）。
 - Don't pass preset dir as `configPath` in create_session — breaks
   resume_session (needs session_dir/config); use the `preset` param instead.
 - settings.conf is per-preset and NOT copied into session dirs.
