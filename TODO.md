@@ -56,6 +56,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P10 Review pass: runner race fixes + orphan cleanup | [x] |
 | P11 Review pass 2: create-queue serialization + create-failure recovery | [x] |
 | P12 Graceful close (save+EOF+grace) + dead-code cleanup + acceptance doc | [x] |
+| P13 Attempt-session history (attempt_session_ids + detail-panel list) | [x] |
 
 ## P11 — 第二轮审查：创建队列串行化 + 创建失败恢复
 
@@ -116,6 +117,30 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
       README（优雅关闭段落）；
 - [x] 测试：Elm 128 / Rust 39 / Go 全绿（-race）。
 - [ ] MANUAL smoke（GUI 环境，照 docs/manual-acceptance.md 执行）
+
+## P13 — 历史尝试会话列表（attempt_session_ids）
+
+P9 遗留：重试后 `lastSessionId` 被新会话替换，失败那次尝试的会话目录
+虽在磁盘上却不可达（只能经 last_session_id 看最近一次）。
+
+- [x] `NodeRunState` 新增 `attemptSessions : List String`：**所有**绑定过该
+      节点的会话 id（去重、顺序保留）；`bindSession` 时追加；重试/Stop/
+      重新 Run 都**不**清空（跨 run 保留，旧会话目录仍在，可随时
+      `resume_session` 回看）；只有全新 RunState 才为空；
+- [x] run.json codec：`attempt_session_ids` 编码 + lenient 解码（elm/json
+      无 map9 → 嵌套 map2 叠加，旧文件缺字段 → []，兼容 P12 之前的文件）；
+- [x] UI：节点详情面板新增「历史会话 (N)」列表（短 id 按钮，monospace）；
+      点击 → `PlanOpenAttemptSession planId nodeId sid`：
+      - 会话存活 → ActivateSession 聚焦；
+      - 已关闭 → `resume_session` + pendingSwitchOnCreate 聚焦 +
+        planResumeOwner 错误路由；**planResumeNode = Nothing** —— 与
+        PlanOpenNodeSession 不同，历史视图**不重绑**节点，当前活跃绑定
+        不被破坏；
+- [x] 测试：runner（跨重试累积 [s1,s2]、重复绑定不重复、重新 Run 保留
+      历史）+ codec roundtrip（attempt_session_ids 双节点断言）+ lenient
+      （缺字段 → []）；Elm 131 全绿；
+- [x] 文档同步：docs/plan-mode.md §10（三字段持久化）；TODO 进度表；
+      docs/manual-acceptance.md 增补历史会话验收项。
 
 ## P10 — 全面审查修复（评审轮）
 

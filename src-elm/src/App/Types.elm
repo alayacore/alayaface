@@ -260,6 +260,7 @@ type Msg
     | PlanClose String
     | PlanSelectNode String
     | PlanOpenNodeSession String String
+    | PlanOpenAttemptSession String String String
     | PlanSetExportPath String
     | PlanExport
       -- Plan runner

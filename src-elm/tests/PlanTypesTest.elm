@@ -360,6 +360,7 @@ tests =
                                                 , maxAttempts = 3
                                                 , sessionId = Just "s1"
                                                 , lastSessionId = Just "s1"
+                                                , attemptSessions = [ "s1" ]
                                                 , failures = []
                                                 , startedAt = Just 100
                                                 , finishedAt = Just 200
@@ -374,6 +375,7 @@ tests =
                                                     , maxAttempts = 3
                                                     , sessionId = Nothing
                                                     , lastSessionId = Just "s-old"
+                                                    , attemptSessions = [ "s-old", "s-old2" ]
                                                     , failures = [ { attempt = 1, reason = "boom", at = 300 } ]
                                                     , startedAt = Nothing
                                                     , finishedAt = Nothing
@@ -400,8 +402,10 @@ tests =
                                 , \r -> Expect.equal P.Succeeded (nodeState "t1" r).status
                                 , \r -> Expect.equal (Just "s1") (nodeState "t1" r).sessionId
                                 , \r -> Expect.equal (Just "s1") (nodeState "t1" r).lastSessionId
+                                , \r -> Expect.equal [ "s1" ] (nodeState "t1" r).attemptSessions
                                 , \r -> Expect.equal P.Waiting (nodeState "t2" r).status
                                 , \r -> Expect.equal (Just "s-old") (nodeState "t2" r).lastSessionId
+                                , \r -> Expect.equal [ "s-old", "s-old2" ] (nodeState "t2" r).attemptSessions
                                 , \r -> Expect.equal 1 (List.length (nodeState "t2" r).failures)
                                 , \r -> Expect.equal "boom" (Maybe.withDefault { attempt = 0, reason = "", at = 0 } (List.head (nodeState "t2" r).failures)).reason
                                 ]
@@ -409,6 +413,31 @@ tests =
 
                         Err err ->
                             Expect.fail ("decode failed: " ++ D.errorToString err)
+            , test "lenient: missing attempt_session_ids decodes to []" <|
+                \_ ->
+                    -- Old run files predate attempt_session_ids; the node
+                    -- decoder must overlay a default instead of failing.
+                    let
+                        nodeJson =
+                            """{"node_id":"t1","status":"failed","attempts":2,"max_attempts":3,
+                                "session_id":null,"last_session_id":"s-old",
+                                "failures":[{"attempt":1,"reason":"boom","at":1}],
+                                "started_at":null,"finished_at":null}"""
+
+                        decoded =
+                            D.decodeString P.nodeRunStateDecoderPublic nodeJson
+                    in
+                    case decoded of
+                        Ok n ->
+                            Expect.all
+                                [ \ns -> Expect.equal P.Failed ns.status
+                                , \ns -> Expect.equal (Just "s-old") ns.lastSessionId
+                                , \ns -> Expect.equal [] ns.attemptSessions
+                                ]
+                                n
+
+                        Err e ->
+                            Expect.fail ("lenient decode failed: " ++ D.errorToString e)
             , test "unknown status strings are rejected" <|
                 \_ ->
                     let

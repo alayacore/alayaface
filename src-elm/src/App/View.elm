@@ -491,7 +491,7 @@ viewPlanPanel model planId =
                                             Html.text ""
                                     , Html.div [ Attr.class "plan-page-canvas" ]
                                         [ Plan.View.viewDag nodeClick runStates plan ]
-                                    , viewPlanNodeDetail win plan
+                                    , viewPlanNodeDetail planId win plan
                                     , viewPlanRunLog win
                                     , viewPlanExport pv
                                     ]
@@ -663,8 +663,8 @@ runStatusClass st =
             "stopped"
 
 
-viewPlanNodeDetail : PlanWindow -> PT.Plan -> Html Msg
-viewPlanNodeDetail win plan =
+viewPlanNodeDetail : String -> PlanWindow -> PT.Plan -> Html Msg
+viewPlanNodeDetail planId win plan =
     case win.selectedNode of
         Just nodeId ->
             case List.filter (\t -> t.id == nodeId) plan.tasks |> List.head of
@@ -736,6 +736,33 @@ viewPlanNodeDetail win plan =
                                     )
                                     (List.reverse failures)
                                 )
+                        , let
+                            attemptSessions =
+                                win.run
+                                    |> Maybe.andThen (\run -> Dict.get nodeId run.nodes)
+                                    |> Maybe.map .attemptSessions
+                                    |> Maybe.withDefault []
+                          in
+                          if List.isEmpty attemptSessions then
+                            Html.text ""
+
+                          else
+                            Html.div [ Attr.class "plan-node-detail-attempts" ]
+                                [ Html.div [ Attr.class "plan-node-detail-label" ]
+                                    [ Html.text ("历史会话 (" ++ String.fromInt (List.length attemptSessions) ++ ")") ]
+                                , Html.div [ Attr.class "plan-node-detail-attempt-row" ]
+                                    (List.map
+                                        (\sid ->
+                                            Html.button
+                                                [ Attr.class "plan-node-detail-attempt"
+                                                , Attr.title ("打开会话 " ++ sid)
+                                                , Ev.onClick (PlanOpenAttemptSession planId nodeId sid)
+                                                ]
+                                                [ Html.text (shortSessionId sid) ]
+                                        )
+                                        attemptSessions
+                                    )
+                                ]
                         , Html.div [ Attr.class "plan-node-detail-label" ] [ Html.text "Prompt" ]
                         , Html.div [ Attr.class "plan-node-detail-prompt" ] [ Html.text t.prompt ]
                         , Html.button
@@ -777,6 +804,16 @@ statusLabelFor st =
         PT.Failed -> "Failed"
         PT.Blocked -> "Blocked"
         PT.Canceled -> "Canceled"
+
+
+{-| Compact display of a session id (UUID): first 8 chars + ellipsis. -}
+shortSessionId : String -> String
+shortSessionId sid =
+    if String.length sid > 11 then
+        String.left 8 sid ++ "…"
+
+    else
+        sid
 
 
 viewPlanRunLog : PlanWindow -> Html Msg

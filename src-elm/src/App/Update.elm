@@ -2677,6 +2677,25 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
+        PlanOpenAttemptSession planId nodeId sid ->
+            -- Open a HISTORICAL attempt session (from the node's
+            -- attemptSessions list): focus it if alive, otherwise resume
+            -- it from disk. Unlike PlanOpenNodeSession this never rebinds
+            -- the node — the current live binding (if any) stays untouched.
+            if Dict.member sid model.sessions then
+                update (ActivateSession sid) model
+
+            else
+                ( { model
+                    | pendingSwitchOnCreate = True
+                    , planResumeOwner = Just planId
+                    , planResumeNode = Nothing
+                    , planNodeSessions =
+                        Dict.insert sid (planId ++ "/" ++ nodeId) model.planNodeSessions
+                  }
+                , Ports.resumeSession { sessionId = sid }
+                )
+
         PlanSetExportPath text ->
             ( updateActivePlanWin model
                 (\w ->

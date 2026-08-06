@@ -214,6 +214,63 @@ tests =
                         ]
                         run3
             ]
+        , describe "attempt session history"
+            [ test "bindSession appends to attemptSessions across retries, dedup on duplicate" <|
+                \_ ->
+                    let
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan singlePlan)
+
+                        -- first attempt binds s1
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        -- duplicate bind while Running: no append, no prompt
+                        ( run3, _ ) =
+                            R.step 2500 (R.SessionCreatedFor "a" "s1") run2
+
+                        -- first attempt fails → Waiting (backoff)
+                        ( run4, _ ) =
+                            R.step 3000 (R.TaskDone "s1" True) run3
+
+                        -- auto-retry tick relaunches → new session s2
+                        ( run5, _ ) =
+                            R.step 5000 (R.RetryTick "a") run4
+
+                        ( run6, _ ) =
+                            R.step 6000 (R.SessionCreatedFor "a" "s2") run5
+                    in
+                    Expect.all
+                        [ \r -> Expect.equal [ "s1", "s2" ] (nodeState "a" r).attemptSessions
+                        , \r -> Expect.equal (Just "s2") (nodeState "a" r).sessionId
+                        , \r -> Expect.equal (Just "s2") (nodeState "a" r).lastSessionId
+                        , \r -> Expect.equal P.Running (nodeState "a" r).status
+                        ]
+                        run6
+            , test "startRun keeps attemptSessions from a previous run (history survives)" <|
+                \_ ->
+                    let
+                        ( run1, _ ) =
+                            R.step 1000 R.StartRun (runFromPlan singlePlan)
+
+                        ( run2, _ ) =
+                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
+
+                        ( run3, _ ) =
+                            R.step 3000 (R.StopRun) run2
+
+                        -- Run again: fresh statuses, but the old session
+                        -- stays listed so it remains reopenable.
+                        ( run4, _ ) =
+                            R.step 4000 R.StartRun run3
+                    in
+                    Expect.all
+                        [ \r -> Expect.equal P.Starting (nodeState "a" r).status
+                        , \r -> Expect.equal [ "s1" ] (nodeState "a" r).attemptSessions
+                        , \r -> Expect.equal Nothing (nodeState "a" r).sessionId
+                        ]
+                        run4
+            ]
         , describe "task completion"
             [ test "TaskDone ok marks node Succeeded and keeps session" <|
                 \_ ->

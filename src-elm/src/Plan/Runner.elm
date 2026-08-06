@@ -186,8 +186,15 @@ bindSession nodeId sid run =
                             |> List.head
                             |> Maybe.map .prompt
                             |> Maybe.withDefault ""
+
+                    attemptSessions =
+                        if List.member sid n.attemptSessions then
+                            n.attemptSessions
+
+                        else
+                            n.attemptSessions ++ [ sid ]
                 in
-                ( { run | nodes = Dict.insert nodeId { n | status = PT.Running, sessionId = Just sid, lastSessionId = Just sid } run.nodes }
+                ( { run | nodes = Dict.insert nodeId { n | status = PT.Running, sessionId = Just sid, lastSessionId = Just sid, attemptSessions = attemptSessions } run.nodes }
                 , [ PT.SendPrompt sid promptText ]
                 )
 
