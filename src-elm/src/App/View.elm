@@ -570,49 +570,51 @@ viewPlanHeader win plan =
     Html.div [ Attr.class "plan-header" ]
         [ Html.div [ Attr.class "plan-header-text" ]
             [ Html.div [ Attr.class "plan-page-name" ] [ Html.text plan.name ]
-            , Html.div [ Attr.class "plan-page-goal" ]
+            , runBadge
+            ]
+        , Html.div [ Attr.class "plan-header-meta-row" ]
+            [ Html.div [ Attr.class "plan-page-goal" ]
                 [ Html.text (if plan.goal == "" then "" else plan.goal) ]
             , Html.div [ Attr.class "plan-page-meta" ]
                 [ Html.text
                     ("Concurrency: "
                         ++ String.fromInt plan.concurrency
-                        ++ "  ·  Max attempts: "
+                        ++ " · Max attempts: "
                         ++ String.fromInt plan.defaultMaxAttempts
                     )
                 ]
-            , runBadge
             ]
         , Html.div [ Attr.class "plan-header-controls" ]
             [ Html.button
-                [ Attr.class "confirm-page-btn confirm-page-btn-allow"
+                [ Attr.class "confirm-page-btn confirm-page-btn-allow plan-header-btn"
                 , Attr.disabled (not canRun)
                 , Ev.onClick PlanRunStart
                 , Attr.title "Run all tasks"
                 ]
                 [ Html.text "Run" ]
             , Html.button
-                [ Attr.class "confirm-page-btn"
+                [ Attr.class "confirm-page-btn plan-header-btn"
                 , Attr.disabled (not canPause)
                 , Ev.onClick PlanRunPause
                 , Attr.title "Pause launching new tasks"
                 ]
                 [ Html.text "Pause" ]
             , Html.button
-                [ Attr.class "confirm-page-btn"
+                [ Attr.class "confirm-page-btn plan-header-btn"
                 , Attr.disabled (not canResume)
                 , Ev.onClick PlanRunResume
                 , Attr.title "Resume a paused run"
                 ]
                 [ Html.text "Resume" ]
             , Html.button
-                [ Attr.class "confirm-page-btn confirm-page-btn-deny"
+                [ Attr.class "confirm-page-btn confirm-page-btn-deny plan-header-btn"
                 , Attr.disabled (not canStop)
                 , Ev.onClick PlanRunStop
                 , Attr.title "Stop all running tasks"
                 ]
                 [ Html.text "Stop" ]
             , Html.button
-                [ Attr.class "confirm-page-btn"
+                [ Attr.class "confirm-page-btn plan-header-btn"
                 , Attr.disabled (not canLoadRun)
                 , Ev.onClick PlanResume
                 , Attr.title "Load the saved run state and continue unfinished tasks"

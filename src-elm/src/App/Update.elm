@@ -43,6 +43,13 @@ defaultWinW = 560
 defaultWinH : Int
 defaultWinH = 640
 
+-- Plan windows default larger (DAG canvas + header need room).
+planDefaultWinW : Int
+planDefaultWinW = 680
+
+planDefaultWinH : Int
+planDefaultWinH = 720
+
 minWinW : Int
 minWinW = 300
 
@@ -211,8 +218,8 @@ addPlanWindow key win model =
                     { x = 60 + remainderBy 6 n * 50
                     , y = 60 + remainderBy 4 n * 40
                     , z = model.nextZIndex
-                    , w = defaultWinW
-                    , h = defaultWinH
+                    , w = planDefaultWinW
+                    , h = planDefaultWinH
                     }
                     model.windowPositions
 
