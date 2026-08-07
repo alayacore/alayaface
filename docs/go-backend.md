@@ -80,10 +80,10 @@ One-way push (server → client), message format:
 
 | Rust command | Go endpoint | Args (camelCase) | Return |
 |--------------|-------------|------------------|--------|
-| `create_session` | `POST /rpc/create_session` | `binaryPath`, `configPath`, `toolConfirm`(nullable), `preset`(nullable), `builtinTools`(nullable), `systemPrompt`(nullable), `workDir`(nullable), `planId`(nullable), `nodeId`(nullable), `originSessionId`(nullable) | string sessionId |
-| `resume_session` | `POST /rpc/resume_session` | `sessionId`, `binaryPath`, `workDir`(nullable), `planId`(nullable), `nodeId`(nullable), `originSessionId`(nullable) | string sessionId |
-| `close_session` | `POST /rpc/close_session` | `sessionId` | — (graceful: CI `save` → stdin EOF → ≤5s natural exit → SIGKILL fallback) |
-| `close_all_sessions` | `POST /rpc/close_all_sessions` | — | — (graceful close of EVERY active session; the frontend fires it once on page load so sessions orphaned by a page refresh are reclaimed — otherwise `resume_session` fails with "Session is already active" until the backend restarts) |
+| `create_session` | `POST /rpc/create_session` | `binaryPath`, `configPath`, `toolConfirm`(nullable), `preset`(nullable), `builtinTools`(nullable), `systemPrompt`(nullable), `workDir`(nullable), `planId`(nullable), `nodeId`(nullable), `originSessionId`(nullable), `clientId` | string sessionId (spawn args persisted to `<sessionDir>/session.spawn.json` for resume) |
+| `resume_session` | `POST /rpc/resume_session` | `sessionId`, `binaryPath`, `workDir`(nullable), `planId`(nullable), `nodeId`(nullable), `originSessionId`(nullable), `clientId` | string sessionId (re-applies the persisted spawn args: tool-confirm policy, builtin-tools restriction, system prompt, work dir) |
+| `close_session` | `POST /rpc/close_session` | `sessionId` | — (graceful: CI cancel → CI save → stdin EOF → ≤5s natural exit → SIGKILL fallback) |
+| `close_all_sessions` | `POST /rpc/close_all_sessions` | `clientId` | — (graceful close of the CALLING client's sessions only — empty `clientId` = all; the frontend fires it once on page load so sessions orphaned by a page refresh are reclaimed — otherwise `resume_session` fails with "Session is already active" until the backend restarts) |
 | `list_session_dirs` | `POST /rpc/list_session_dirs` | — | `[{id, created_at}]` (top-level session dirs only; plan subtrees excluded) |
 | `delete_session_dir` | `POST /rpc/delete_session_dir` | `sessionId`, `planId`(nullable), `nodeId`(nullable), `originSessionId`(nullable) | — |
 | `fork_session` | `POST /rpc/fork_session` | `sourceSessionId`, `historyId`, `binaryPath` | string sessionId |
