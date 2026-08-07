@@ -966,20 +966,46 @@ suppression only worked for frames that arrived before SessionCreated
 
 Fix:
 - [x] `SessionCreated` (resume branch) MOVES the replay marker old→new:
-      `Set.insert id (Set.remove origId planReplaySessions)` — replayed
-      frames (fresh id) are suppressed; live frames after the boot SM
-      (marker removed on first SM) still auto-create as designed
+      `Set.insert id (Set.remove origId planReplaySessions)`
 - [x] Session Manager `ResumeSession` sets `planResumeFrom = Just id` so
       the same move happens for manager-initiated resumes
 - [x] fakecore: on resume (session file exists) replay a canned
-      plan-message history BEFORE the boot SM, with a 400ms delay
-      (mirrors real alayacore: replay takes time → frames arrive after
-      SessionCreated; without the delay they'd be buffered and the path
-      never exercised)
+      plan-message history, with a 400ms delay (mirrors real alayacore:
+      replay takes time → frames arrive after SessionCreated; without
+      the delay they'd be buffered and the path never exercised)
 - [x] E2E step 8 asserts: after close→click, exactly ONE plan window
       and ONE plan file (no duplicates). Verified the assertion FAILS
       with the fix reverted (3 plan windows) and PASSES with it
 - [x] Tests: elm 208 / Rust 42 / Go -race all pkgs / make e2e ALL PASS
+
+---
+
+## P25 — Replay marker must NOT be removed on the first SM
+
+Follow-up bug report: "打开 f36895fd 这个 session，他的 plan 依旧自动被
+打开了" — P24 (id move) was NOT sufficient. Verified against the REAL
+binary with a throwaway driver (`src-go/cmd/alayadump`, deleted after):
+alayacore emits SIX boot SM frames first (`version`, `task`
+in_progress:false, `model_list`, `model`, `reasoning`, `video_config`)
+and ONLY THEN replays history content. The original assumption ("history
+content frames BEFORE any SM") was wrong, so removing the marker on the
+first SM dropped it before the replayed plan message arrived →
+duplicate auto-created window (the user's exact symptom).
+
+- [x] `FrameEvent` no longer removes the marker on SM (both handlers)
+- [x] The marker is removed when the USER sends a new message
+      (`SendPrompt`) — replayed content is always suppressed; a live
+      follow-up plan message can still auto-create
+- [x] fakecore now mirrors the REAL order: boot SM first, then replayed
+      content (was the reverse — which is why the e2e could not catch
+      the bug before)
+- [x] E2E reproduces the user's bug: with the old SM-removal logic the
+      resume auto-created a duplicate plan window (assert FAILS, got 2);
+      with the fix PASSES (exactly 1 window + 1 file)
+- [x] Tests: elm 208 / Rust 42 / Go -race all pkgs / make e2e ALL PASS
+- [ ] Manual GUI: open any old session containing a plan message → no
+      duplicate plan window; send a new message → live plan still
+      auto-creates
 
 ---
 

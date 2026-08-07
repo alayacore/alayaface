@@ -250,13 +250,16 @@ func main() {
 
 	// Real alayacore creates session.alaya when started with --session
 	// (the session dir already exists). On RESUME the file already exists
-	// → replay history content frames BEFORE the boot SM frame (mirrors
-	// real alayacore: history content frames first, boot SM last). The
-	// E2E uses this to verify that a plan message inside a replayed
-	// history does NOT auto-create a duplicate plan window.
+	// → history content frames are replayed after the boot SM frames —
+	// this ORDER was verified against the real binary (alayadump: 6 boot
+	// SMs first, then UT/At/AT replay). The frontend's replay suppression
+	// must NOT key on the first SM; it keys on the user sending a new
+	// message instead. The E2E depends on this order to exercise the
+	// suppression path.
+	wasResume := false
 	if sessionFile != "" {
 		if _, err := os.Stat(sessionFile); err == nil {
-			replayResumedHistory()
+			wasResume = true
 		}
 		_ = os.WriteFile(sessionFile, []byte(`{"version":1}`), 0o644)
 	}
@@ -278,6 +281,11 @@ func main() {
 		},
 	})
 	writeFrame("SM", string(boot))
+
+	// Boot SMs first, then replayed history content (real alayacore order).
+	if wasResume {
+		replayResumedHistory()
+	}
 
 	reader := bufio.NewReader(os.Stdin)
 	staged := 0

@@ -280,14 +280,23 @@ E2E covers the gate.
 - `hasPlanTypeMarker : String -> Bool`: whether the block's top-level `"type"` == `"alayaface-plan"` (P26);
 - called on the latest assistant message at AT frame completion: **first extractPlanJson, then require hasPlanTypeMarker == True** to match (plain ```json code examples — without the marker — are ignored);
 - **R2 auto-create (no button)**: a match stores `messageId → rawJson` in `Model.pendingPlanOffers` and immediately issues `PlanCreateOffer` — the Plan window opens automatically, without user confirmation. `messageBoundToPlan` (meta origin) prevents replay duplicates; a parse failure is inlined back into the session as an error message.
-- **Replay suppression (P24)**: resuming a session replays its history,
+- **Replay suppression (P24/P25)**: resuming a session replays its history,
   including plan messages from the MIDDLE (long since completed). The
-  replay marker (`Model.planReplaySessions`) is keyed by the ORIGINAL
-  dir id at resume-click time, but the replayed frames carry the FRESH
-  resumed id — `SessionCreated` moves the marker old→new so a replayed
-  plan message never auto-creates a duplicate window/file (it shows the
-  manual "Open plan" button instead; without the move the duplicate
-  window opened with all tasks Pending).
+  replay marker (`Model.planReplaySessions`) is keyed by the ORIGINAL dir
+  id at resume-click time, but the replayed frames carry the FRESH resumed
+  id — `SessionCreated` moves the marker old→new so a replayed plan
+  message never auto-creates a duplicate window/file (it shows the manual
+  "Open plan" button instead).
+- **P25 (critical ordering fact)**: the marker must NOT be removed on the
+  first SM frame. Verified against the real binary (alayadump): alayacore
+  emits its boot SM frames (`version`/`task`/`model_list`/`model`/
+  `reasoning`/`video_config`) BEFORE replaying history content — the
+  opposite of the original assumption. Removing on the first SM dropped
+  the marker before the replayed plan message arrived → duplicate
+  auto-created windows (exactly the user's bug). The marker is instead
+  removed when the USER sends a new message to that session
+  (`SendPrompt`) — replayed content is always suppressed, and a live
+  follow-up plan message can still auto-create.
 - decode/validate (`type` **required**: missing or wrong value rejected, no backward compat) → normalize → generate planId → `fs_write_file_text` writes `~/.alayaface/plans/<planId>.json` → opens the Plan window.
 
 ---

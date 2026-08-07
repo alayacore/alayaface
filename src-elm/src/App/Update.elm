@@ -1584,16 +1584,19 @@ update msg model =
                                 updatedModel =
                                     { model
                                         | sessions = Dict.insert ev.sessionId { newSession | prevMsgCount = List.length newSession.messages } model.sessions
-                                        -- Playback end: alayacore replays
-                                        -- history content frames BEFORE any
-                                        -- SM frame — the first SM marks the
-                                        -- replay done, so detection resumes.
-                                        , planReplaySessions =
-                                            if ev.tag == "SM" then
-                                                Set.remove ev.sessionId model.planReplaySessions
-
-                                            else
-                                                model.planReplaySessions
+                                        -- Replay suppression: the marker is
+                                        -- removed when the USER sends a new
+                                        -- message (SendPrompt), NOT on the
+                                        -- first SM — the real alayacore
+                                        -- emits its boot SM frames (version/
+                                        -- task/model_list/model/reasoning/
+                                        -- video_config) BEFORE replaying
+                                        -- history content (verified against
+                                        -- the binary: alayadump). Keying the
+                                        -- replay end on SM would drop the
+                                        -- marker before the replayed plan
+                                        -- message arrives → auto-create
+                                        -- duplicate windows.
                                     }
 
                                 -- Plan Mode (R2): when an assistant message
@@ -1805,6 +1808,10 @@ update msg model =
                                     , sendPending = True
                                 }
                                 model.sessions
+                            -- The user acted: the resumed session's history
+                            -- replay is over — from here on, a NEW live
+                            -- plan message may auto-create again.
+                            , planReplaySessions = Set.remove s.id model.planReplaySessions
                           }
                         , Ports.sendPrompt
                             { sessionId = s.id
