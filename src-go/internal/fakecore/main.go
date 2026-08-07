@@ -64,7 +64,17 @@ var hanging bool
 // feedback prompt).
 var msgSeq int
 
-const historyID = "hist-1"
+// replySeq numbers ASSISTANT content blocks (Ar/At/AT/AR echo ids).
+// Real alayacore gives every content block a unique history id; constant
+// ids (the historical "t1"/"p1"/"r1") made every reply share one id —
+// the plan-message binding (meta origin messageId) then matched multiple
+// messages in the same session.
+var replySeq int
+
+func nextReplyID() string {
+	replySeq++
+	return fmt.Sprintf("a-%d", replySeq)
+}
 
 type cmdMsg struct {
 	ID    string `json:"id"`
@@ -96,13 +106,16 @@ func echoID(tag, id, content string) {
 // verify output injection: a downstream node's prompt contains the
 // upstream node's final answer (which itself echoes its own prompt).
 func streamReply() {
-	echoID("Ar", "r1", "Thinking about it...")
-	echoID("At", "t1", "Hello")
-	echoID("At", "t1", " world")
-	echoID("AT", "t1", "")
-	echoID("AR", "r1", "")
-	echoID("At", "p1", "Received prompt: "+stagedText)
-	echoID("AT", "p1", "")
+	rid := nextReplyID()
+	aid1 := nextReplyID()
+	aid2 := nextReplyID()
+	echoID("Ar", rid, "Thinking about it...")
+	echoID("At", aid1, "Hello")
+	echoID("At", aid1, " world")
+	echoID("AT", aid1, "")
+	echoID("AR", rid, "")
+	echoID("At", aid2, "Received prompt: "+stagedText)
+	echoID("AT", aid2, "")
 	writeFrame("SM", `{"type":"task","data":{"in_progress":false,"task_error":false}}`)
 }
 
@@ -334,8 +347,8 @@ func planReply() {
     { "id": "t3", "title": "Review", "prompt": "review the draft and fix any issues (hang-once marker)", "depends_on": ["t2"], "max_attempts": 3 }
   ]
 }`
-	echoID("AT", "t1", "Here is the plan:\n```json\n"+planJSON+"\n```\nI'll wait for you to create it.")
-	echoID("AR", "r1", "")
+	echoID("AT", nextReplyID(), "Here is the plan:\n```json\n"+planJSON+"\n```\nI'll wait for you to create it.")
+	echoID("AR", nextReplyID(), "")
 	streamReply()
 }
 

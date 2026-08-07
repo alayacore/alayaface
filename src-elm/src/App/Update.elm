@@ -287,41 +287,20 @@ setPlanErrors errs model =
                 model
 
 
-{-| R2/R3: find the session whose history contains the given message id
-(the plan JSON message). Used to route auto-create errors and to record
-the plan's origin.
+{-| Whether some plan's meta origin binds the given message in the given
+SESSION (message ids are per-session sequences — alayacore HistoryID —
+and repeat across sessions, so the check must be scoped to the
+originating session). Replay guard: a replayed historical message must
+not create a duplicate plan.
 -}
-findSessionByMessageId : String -> Model -> Maybe String
-findSessionByMessageId messageId model =
-    Dict.foldl
-        (\sid s acc ->
-            case acc of
-                Just _ ->
-                    acc
-
-                Nothing ->
-                    if List.any (\m -> m.id == messageId) s.messages then
-                        Just sid
-
-                    else
-                        Nothing
-        )
-        Nothing
-        model.sessions
-
-
-{-| Whether some plan's meta origin binds the given message id (the plan
-was already auto-created from it). Replay guard: a replayed historical
-message must not create a duplicate plan.
--}
-messageBoundToPlan : Model -> String -> Bool
-messageBoundToPlan model messageId =
+messageBoundToPlan : Model -> String -> String -> Bool
+messageBoundToPlan model sid messageId =
     Dict.foldl
         (\_ meta acc ->
             acc
                 || (case meta.origin of
                         Just o ->
-                            o.messageId == messageId
+                            o.sessionId == sid && o.messageId == messageId
 
                         Nothing ->
                             False
@@ -331,33 +310,27 @@ messageBoundToPlan model messageId =
         model.planMetas
 
 
-{-| R2: inject a visible error message into the session whose history
-contains the given message id (the plan JSON message that failed to
-parse during auto-create). The user sees the error inline next to the
-plan message instead of a broken window.
+{-| R2: inject a visible error message into the given session (the plan
+JSON message that failed to parse during auto-create). The user sees the
+error inline next to the plan message instead of a broken window.
 -}
-injectPlanErrorIntoSession : List String -> String -> Model -> Model
-injectPlanErrorIntoSession errs messageId model =
-    case findSessionByMessageId messageId model of
-        Just sid ->
-            case Dict.get sid model.sessions of
-                Just s ->
-                    let
-                        errMsg =
-                            { id = "plan-error-" ++ messageId
-                            , role = T.Error
-                            , content = "Plan parsing failed: " ++ String.join "; " errs
-                            , toolId = Nothing
-                            , toolName = Nothing
-                            , isError = True
-                            , historyId = Nothing
-                            , media = Nothing
-                            }
-                    in
-                    { model | sessions = Dict.insert sid { s | messages = s.messages ++ [ errMsg ] } model.sessions }
-
-                Nothing ->
-                    model
+injectPlanErrorIntoSession : List String -> String -> String -> Model -> Model
+injectPlanErrorIntoSession errs sid messageId model =
+    case Dict.get sid model.sessions of
+        Just s ->
+            let
+                errMsg =
+                    { id = "plan-error-" ++ sid ++ "-" ++ messageId
+                    , role = T.Error
+                    , content = "Plan parsing failed: " ++ String.join "; " errs
+                    , toolId = Nothing
+                    , toolName = Nothing
+                    , isError = True
+                    , historyId = Nothing
+                    , media = Nothing
+                    }
+            in
+            { model | sessions = Dict.insert sid { s | messages = s.messages ++ [ errMsg ] } model.sessions }
 
         Nothing ->
             model
@@ -1579,11 +1552,11 @@ update msg model =
                                     if ev.tag == "AT" then
                                         case List.head (List.reverse newSession.messages) of
                                             Just m ->
-                                                if m.role == T.Assistant && not (Dict.member m.id updatedModel.pendingPlanOffers) && not (messageBoundToPlan updatedModel m.id) then
+                                                if m.role == T.Assistant && not (Dict.member ( ev.sessionId, m.id ) updatedModel.pendingPlanOffers) && not (messageBoundToPlan updatedModel ev.sessionId m.id) then
                                                     case Plan.Detect.extractPlanJson m.content of
                                                         Just offerRaw ->
                                                             if Plan.Detect.hasPlanTypeMarker offerRaw then
-                                                                Task.perform (\_ -> PlanCreateOffer m.id) Time.now
+                                                                Task.perform (\_ -> PlanCreateOffer ev.sessionId m.id) Time.now
 
                                                             else
                                                                 Cmd.none
@@ -1604,11 +1577,11 @@ update msg model =
                                     if ev.tag == "AT" then
                                         case List.head (List.reverse newSession.messages) of
                                             Just m ->
-                                                if m.role == T.Assistant && not (Dict.member m.id updatedModel.pendingPlanOffers) && not (messageBoundToPlan updatedModel m.id) then
+                                                if m.role == T.Assistant && not (Dict.member ( ev.sessionId, m.id ) updatedModel.pendingPlanOffers) && not (messageBoundToPlan updatedModel ev.sessionId m.id) then
                                                     case Plan.Detect.extractPlanJson m.content of
                                                         Just offerRaw ->
                                                             if Plan.Detect.hasPlanTypeMarker offerRaw then
-                                                                { updatedModel | pendingPlanOffers = Dict.insert m.id offerRaw updatedModel.pendingPlanOffers }
+                                                                { updatedModel | pendingPlanOffers = Dict.insert ( ev.sessionId, m.id ) offerRaw updatedModel.pendingPlanOffers }
 
                                                             else
                                                                 updatedModel
@@ -3207,23 +3180,25 @@ update msg model =
         PlanManagerBrowserPick idx ->
             planBrowserPick model (Just idx)
 
-        PlanCreateOffer messageId ->
-            case Dict.get messageId model.pendingPlanOffers of
+        PlanCreateOffer sid messageId ->
+            case Dict.get ( sid, messageId ) model.pendingPlanOffers of
                 Just rawJson ->
                     let
                         -- consume the offer immediately (single-use)
                         model2 =
-                            { model | pendingPlanOffers = Dict.remove messageId model.pendingPlanOffers }
+                            { model | pendingPlanOffers = Dict.remove ( sid, messageId ) model.pendingPlanOffers }
                     in
                     case PT.parsePlan rawJson of
                         Ok plan ->
                             let
                                 -- R3: record the origin session/message so
                                 -- feedback can route results back and the
-                                -- status bar can bind to this message.
+                                -- status bar can bind to this message. The
+                                -- session id comes from the frame that
+                                -- detected the plan (message ids are NOT
+                                -- unique across sessions).
                                 origin =
-                                    findSessionByMessageId messageId model2
-                                        |> Maybe.map (\sid -> PM.Origin sid messageId)
+                                    Just (PM.Origin sid messageId)
                             in
                             ( model2
                             , Task.perform (PlanSaveReady plan origin) (Task.map Time.posixToMillis Time.now)
@@ -3232,7 +3207,7 @@ update msg model =
                         Err errs ->
                             -- R2: invalid detected plan — report inline in
                             -- the originating session (no window is created).
-                            ( injectPlanErrorIntoSession errs messageId model2, Cmd.none )
+                            ( injectPlanErrorIntoSession errs sid messageId model2, Cmd.none )
 
                 Nothing ->
                     ( model, Cmd.none )

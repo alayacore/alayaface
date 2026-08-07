@@ -113,7 +113,9 @@ type alias Model =
     , planOrder : List String
     , planActiveId : Maybe String
     , planManager : PlanManagerState
-    , pendingPlanOffers : Dict String String
+    -- Keyed by (sessionId, messageId) — message ids are per-session
+    -- sequences, so the raw offer must be scoped to its session.
+    , pendingPlanOffers : Dict ( String, String ) String
     , planCreating : Maybe CreateTask
     , planCreateQueue : List CreateTask
     , planReadTarget : Maybe PlanReadTarget
@@ -295,7 +297,10 @@ type Msg
     | PlanManagerBrowserSelect Int
     | PlanManagerBrowserConfirm
     | PlanManagerBrowserPick Int
-    | PlanCreateOffer String
+    -- (sessionId, messageId): message ids are per-session sequences
+    -- (alayacore HistoryID), NOT unique across sessions — the offer must
+    -- be keyed by the originating session too.
+    | PlanCreateOffer String String
     | PlanSaveReady PT.Plan (Maybe PM.Origin) Int
     -- Status-bar "Open" click on a message-bound plan (R3).
     | PlanStatusOpen String

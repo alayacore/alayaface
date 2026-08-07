@@ -1092,7 +1092,7 @@ viewMessage model session msg =
 
           else
             viewMsgBody model session.id msg
-        , viewPlanStatusBar model msg.id
+        , viewPlanStatusBar model session.id msg.id
         ]
 
 
@@ -1102,9 +1102,9 @@ name + run status; [Open] focuses the window (or opens from disk after a
 restart). Failed/Stopped plans show the status too; the [Re-run] action
 arrives with the R4 re-run cascade.
 -}
-viewPlanStatusBar : Model -> String -> Html Msg
-viewPlanStatusBar model messageId =
-    case planMetaForMessage model messageId of
+viewPlanStatusBar : Model -> String -> String -> Html Msg
+viewPlanStatusBar model sid messageId =
+    case planMetaForMessage model sid messageId of
         Just ( planId, _ ) ->
             let
                 name =
@@ -1143,8 +1143,8 @@ viewPlanStatusBar model messageId =
 
 {-| The meta whose origin.messageId matches (the plan bound to a message).
 -}
-planMetaForMessage : Model -> String -> Maybe ( String, PM.PlanMeta )
-planMetaForMessage model messageId =
+planMetaForMessage : Model -> String -> String -> Maybe ( String, PM.PlanMeta )
+planMetaForMessage model sid messageId =
     Dict.foldl
         (\planId meta acc ->
             case acc of
@@ -1154,7 +1154,10 @@ planMetaForMessage model messageId =
                 Nothing ->
                     case meta.origin of
                         Just o ->
-                            if o.messageId == messageId then
+                            -- Message ids are per-session sequences, so the
+                            -- binding must match BOTH the session and the
+                            -- message id.
+                            if o.sessionId == sid && o.messageId == messageId then
                                 Just ( planId, meta )
 
                             else

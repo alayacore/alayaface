@@ -236,16 +236,46 @@ try {
   // Ev.onClick SwitchSession, whose "already active" branch re-focused
   // the input (Dom.focus) — clearing the user's text selection on
   // mouseup. Select a message and assert the selection is kept.
-  const selBox = await page.$$eval('.message-assistant .message-content', els => {
+  // The origin session is identified by its plan status bar; it is
+  // activated first so its window sits on top (other windows would
+  // intercept the synthetic mouse events otherwise).
+  const originIdx = await page.evaluate(() => {
+    const panels = [...document.querySelectorAll('.session-panel')];
+    return panels.findIndex(p => p.querySelector('.plan-offer'));
+  });
+  assert(originIdx >= 0, 'origin session (with plan status bar) not found');
+  await page.evaluate(idx => {
+    document.querySelectorAll('.session-panel')[idx].querySelector('.session-bar').dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    document.querySelectorAll('.session-panel')[idx].querySelector('.session-bar').dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+  }, originIdx);
+  await sleep(200);
+  const selBox = await page.$$eval('.session-panel .message-assistant .msg-body .message-content', els => {
     const el = els.find(e => (e.textContent || '').length > 20);
     if (!el) return null;
-    const r = el.getBoundingClientRect();
-    return { x: r.left + 20, y: r.top + 10, w: Math.min(r.width - 40, 120) };
+    // The message may be scrolled out of view (e.g. below the plan
+    // feedback); bring it into view first so the synthetic mouse events
+    // land on it.
+    el.scrollIntoView({ block: 'center' });
+    return { found: true };
   });
   assert(selBox, 'no selectable assistant message found');
-  await page.mouse.move(selBox.x, selBox.y);
+  await sleep(200);
+  const selBox2 = await page.$$eval('.session-panel .message-assistant .msg-body .message-content', els => {
+    const el = els.find(e => {
+      const r = e.getBoundingClientRect();
+      return (e.textContent || '').length > 20 && r.top >= 0 && r.bottom <= window.innerHeight;
+    });
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    // Click inside the BODY (below the collapsible msg-header) so the
+    // mouseup click does not hit ToggleMsgCollapse.
+    return { x: r.left + 20, y: r.top + Math.min(r.height / 2, 20), w: Math.min(r.width - 40, 120) };
+  });
+  assert(selBox2, 'no selectable assistant message in viewport');
+  console.log('5c selBox:', JSON.stringify(selBox2));
+  await page.mouse.move(selBox2.x, selBox2.y);
   await page.mouse.down();
-  await page.mouse.move(selBox.x + selBox.w, selBox.y + 8, { steps: 5 });
+  await page.mouse.move(selBox2.x + selBox2.w, selBox2.y + 8, { steps: 5 });
   await page.mouse.up();
   await sleep(200);
   const selKept = await page.evaluate(() => {
