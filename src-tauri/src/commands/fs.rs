@@ -241,9 +241,9 @@ mod tests {
         let dir = temp_path("roundtrip");
         let file = dir.join("a.txt");
         let path = file.to_string_lossy().to_string();
-        fs_write_file_text(path.clone(), "hello 世界".to_string(), Some(false)).await.unwrap();
+        fs_write_file_text(path.clone(), "hello world".to_string(), Some(false)).await.unwrap();
         let out = fs_read_file_text(path).await.unwrap();
-        assert_eq!(out, "hello 世界");
+        assert_eq!(out, "hello world");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

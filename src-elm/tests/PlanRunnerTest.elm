@@ -865,7 +865,7 @@ tests =
                             (\e ->
                                 case e of
                                     P.SendPrompt _ text ->
-                                        String.contains "没有可用输出记录" text
+                                        String.contains "no output recorded for upstream task" text
 
                                     _ ->
                                         False
@@ -891,7 +891,7 @@ tests =
                             (\e ->
                                 case e of
                                     P.SendPrompt _ text ->
-                                        String.contains "没有可用输出记录" text
+                                        String.contains "no output recorded for upstream task" text
                                             && not (String.contains "{{" text)
 
                                     _ ->

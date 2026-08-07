@@ -473,7 +473,7 @@ non-empty assistant text in the session):
   `SendPrompt` — upstream outputs are guaranteed to exist by then; template
   replacement is the pure function `Plan.Inject.injectOutputs` (find
   `.output}}` after `{{`, exact match no spaces; unknown id / no output →
-  replaced with a Chinese placeholder notice, **the raw template is never
+  replaced with a placeholder notice, **the raw template is never
   leaked to the model**; `{{` without `.output}}` is kept verbatim);
 - **Persistence**: `output` is written to run.json (§10) → after restart /
   silent restore, downstream nodes can still inject when starting (upstream

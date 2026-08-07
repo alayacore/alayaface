@@ -36,13 +36,13 @@ tests =
                 Expect.all
                     [ \s -> Expect.equal False (String.contains "{{" s)
                     , \s -> Expect.equal True (String.contains "t9" s)
-                    , \s -> Expect.equal True (String.contains "没有可用输出记录" s)
+                    , \s -> Expect.equal True (String.contains "no output recorded for upstream task" s)
                     ]
                     out
         , test "known id without output becomes a marker" <|
             \_ ->
                 injectOutputs (Dict.fromList [ ( "t1", "" ) ]) "{{t1.output}}"
-                    |> Expect.equal "（上游任务 t1 没有可用输出记录）"
+                    |> Expect.equal "(no output recorded for upstream task t1)"
         , test "no template: text unchanged" <|
             \_ ->
                 injectOutputs (Dict.fromList [ ( "t1", "X" ) ]) "plain prompt"

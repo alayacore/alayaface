@@ -28,7 +28,7 @@ import Dict exposing (Dict)
 -}
 missingOutputMarker : String -> String
 missingOutputMarker taskId =
-    "（上游任务 " ++ taskId ++ " 没有可用输出记录）"
+    "(no output recorded for upstream task " ++ taskId ++ ")"
 
 
 {-| Replace every `{{<id>.output}}` in the prompt with that task's

@@ -574,8 +574,8 @@ viewPlanHeader win plan =
                 , Attr.type_ "number"
                 , Attr.min "1"
                 , Attr.max "8"
-                , Attr.placeholder "并发"
-                , Attr.title ("并发度 1-8（留空 = 计划默认 " ++ String.fromInt plan.concurrency ++ "）")
+                , Attr.placeholder "Concurrency"
+                , Attr.title ("Concurrency 1-8 (empty = plan default " ++ String.fromInt plan.concurrency ++ ")")
                 , Attr.value win.view.concurrencyInput
                 , Ev.onInput PlanSetConcurrency
                 ]
@@ -732,7 +732,7 @@ viewPlanNodeDetail planId win plan =
                                 (List.map
                                     (\f ->
                                         Html.div [ Attr.class "plan-node-detail-failure" ]
-                                            [ Html.text ("第 " ++ String.fromInt f.attempt ++ " 次失败: " ++ f.reason) ]
+                                            [ Html.text ("Attempt " ++ String.fromInt f.attempt ++ " failed: " ++ f.reason) ]
                                     )
                                     (List.reverse failures)
                                 )
@@ -749,13 +749,13 @@ viewPlanNodeDetail planId win plan =
                           else
                             Html.div [ Attr.class "plan-node-detail-attempts" ]
                                 [ Html.div [ Attr.class "plan-node-detail-label" ]
-                                    [ Html.text ("历史会话 (" ++ String.fromInt (List.length attemptSessions) ++ ")") ]
+                                    [ Html.text ("History sessions (" ++ String.fromInt (List.length attemptSessions) ++ ")") ]
                                 , Html.div [ Attr.class "plan-node-detail-attempt-row" ]
                                     (List.map
                                         (\sid ->
                                             Html.button
                                                 [ Attr.class "plan-node-detail-attempt"
-                                                , Attr.title ("打开会话 " ++ sid)
+                                                , Attr.title ("Open session " ++ sid)
                                                 , Ev.onClick (PlanOpenAttemptSession planId nodeId sid)
                                                 ]
                                                 [ Html.text (shortSessionId sid) ]
@@ -772,7 +772,7 @@ viewPlanNodeDetail planId win plan =
                           Html.div []
                               [ Html.div [ Attr.class "plan-node-detail-label" ] [ Html.text "Output" ]
                               , Html.div [ Attr.class "plan-node-detail-output" ]
-                                  [ Html.text (Maybe.withDefault "（无输出记录）" nodeOutput) ]
+                                  [ Html.text (Maybe.withDefault "(no output recorded)" nodeOutput) ]
                               ]
                         , Html.div [ Attr.class "plan-node-detail-label" ] [ Html.text "Prompt" ]
                         , Html.div [ Attr.class "plan-node-detail-prompt" ] [ Html.text t.prompt ]
@@ -1099,7 +1099,7 @@ viewMessage model session msg =
 {-| R3: the plan status bar under the assistant message that auto-created
 a plan — bound via meta.json origin (messageId → planId). Shows the plan
 name + run status; [Open] focuses the window (or opens from disk after a
-restart). Failed/Stopped plans show the status too; the [重新执行] action
+restart). Failed/Stopped plans show the status too; the [Re-run] action
 arrives with the R4 re-run cascade.
 -}
 viewPlanStatusBar : Model -> String -> Html Msg
@@ -1122,16 +1122,16 @@ viewPlanStatusBar model messageId =
                 [ Html.button
                     [ Attr.class ("plan-offer-btn plan-status-" ++ statusClass)
                     , Ev.onClick (PlanStatusOpen planId)
-                    , Attr.title ("打开计划 " ++ planId)
+                    , Attr.title ("Open plan " ++ planId)
                     ]
                     [ Html.text ("[Plan: " ++ planId ++ "] " ++ name ++ " · " ++ statusLabel) ]
                 , if canRestart then
                     Html.button
                         [ Attr.class "plan-offer-btn plan-restart-btn"
                         , Ev.onClick (PlanRunRestart planId)
-                        , Attr.title "重新执行：跳过已成功节点，重跑未完成节点（含子计划）"
+                        , Attr.title "Re-run: skip succeeded nodes, rerun unfinished nodes (including sub-plans)"
                         ]
-                        [ Html.text "重新执行" ]
+                        [ Html.text "Re-run" ]
 
                   else
                     Html.text ""
@@ -1366,7 +1366,7 @@ viewTextWithPlanLinks model text =
                                     Html.button
                                         [ Attr.class "plan-link"
                                         , Ev.onClick (PlanStatusOpen planId)
-                                        , Attr.title ("打开计划 " ++ planId)
+                                        , Attr.title ("Open plan " ++ planId)
                                         ]
                                         [ Html.text ("[Plan: " ++ planId ++ "]") ]
                             in

@@ -221,11 +221,11 @@ try {
 
   // ── 5b. R3: feedback + status bar ────────────────────────────────
   // The completed plan feeds its results back to the origin (plain)
-  // session as a "[Plan 结果]" prompt carrying a [Plan: <planId>] link,
+  // session as a "[Plan Result]" prompt carrying a [Plan: <planId>] link,
   // and the plan JSON message gets a status bar (bound via meta.json).
   await sleep(600);
   const fbTexts = await page.$$eval('.message-content', els => els.map(e => e.textContent));
-  assert(fbTexts.some(t => t.includes('[Plan 结果]')), 'feedback sent to the origin session, got: ' + JSON.stringify(fbTexts.slice(-3)));
+  assert(fbTexts.some(t => t.includes('[Plan Result]')), 'feedback sent to the origin session, got: ' + JSON.stringify(fbTexts.slice(-3)));
   assert(fbTexts.some(t => t.includes('[Plan: e2e-demo-')), 'feedback carries the plan link, got: ' + JSON.stringify(fbTexts.slice(-3)));
   const statusBars = await page.$$eval('.plan-offer-btn', els => els.map(e => e.textContent));
   assert(statusBars.some(t => t.includes('Completed')), 'status bar shows Completed, got: ' + JSON.stringify(statusBars));
@@ -320,7 +320,7 @@ try {
   // t1's recorded output before sending. fakecore echoes the received
   // prompt as its reply, so the injected text is IN t2's output in
   // run.json (session messages are not replayed by fakecore on resume).
-  assert(t2n.output && t2n.output.includes('参考上游任务输出'), 't2 output carries the injection label, got: ' + JSON.stringify(t2n.output));
+  assert(t2n.output && t2n.output.includes('using upstream output:'), 't2 output carries the injection label, got: ' + JSON.stringify(t2n.output));
   assert(t2n.output.includes('research the topic and summarize findings'), 't2 output contains t1\'s recorded output');
   assert(!t2n.output.includes('{{t1.output}}'), 'raw template fully replaced');
   console.log('PASS: {{t1.output}} injected t1\'s recorded output into t2\'s prompt (no raw template)');

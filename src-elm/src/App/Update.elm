@@ -346,7 +346,7 @@ injectPlanErrorIntoSession errs messageId model =
                         errMsg =
                             { id = "plan-error-" ++ messageId
                             , role = T.Error
-                            , content = "Plan 解析失败：" ++ String.join "；" errs
+                            , content = "Plan parsing failed: " ++ String.join "; " errs
                             , toolId = Nothing
                             , toolName = Nothing
                             , isError = True
@@ -596,32 +596,32 @@ and waits for the plan to be executed and its result fed back.
 -}
 planSystemPrompt : String
 planSystemPrompt =
-    """你可以使用 AlayaFace 的计划模式：遇到复杂或多步骤的任务，先输出一个计划，让计划里的子任务并行/按依赖执行，而不是自己一口气做完。
+    """You can use AlayaFace's plan mode: for complex or multi-step tasks, first output a plan so its subtasks run in parallel / by dependency, instead of doing everything yourself in one go.
 
-何时输出计划：
-- 任务需要多步、需要调研/搜索多个方面、或结果要汇总成报告时 → 输出计划；
-- 简单任务（一句话能完成）→ 直接完成，不要输出计划。
+When to output a plan:
+- The task needs multiple steps, research/search across several areas, or a summarized report → output a plan;
+- A simple task (doable in one sentence) → just do it directly, do not output a plan.
 
-计划格式（输出【唯一一个】```json 代码块，之后停下，等计划执行完）：
+Plan format (output exactly one ```json code block, then stop and wait for the plan to finish executing):
 {
   "type": "alayaface-plan",
   "schema_version": 1,
-  "name": "计划名称",
-  "goal": "目标描述",
+  "name": "plan name",
+  "goal": "goal description",
   "concurrency": 2,
   "default_max_attempts": 3,
   "tasks": [
-    { "id": "t1", "title": "子任务标题", "prompt": "完整且自包含的执行指令", "depends_on": [], "preset": "Default", "max_attempts": 3 }
+    { "id": "t1", "title": "subtask title", "prompt": "complete, self-contained instruction", "depends_on": [], "preset": "Default", "max_attempts": 3 }
   ]
 }
-规则：
-- 顶层必须包含 "type": "alayaface-plan"（缺少它框架不会识别为计划）
-- id 全局唯一；prompt 默认自包含；如果下游任务需要上游任务的产出，在 prompt 中用 {{t1.output}} 引用该任务的输出（框架会在该上游任务完成后把它的最终输出替换进下游 prompt；只能引用已声明依赖的任务，不要引用依赖关系之外的任务）
-- 能并行执行的任务之间不要互相依赖
-- 任务默认不要指定 preset（缺省 = Default，已配置可用模型）；除非用户明确要求使用某个预设环境（Fast/Deep/Data/Safe 等），否则不要指定——这些预设可能尚未配置模型，指定后任务会直接失败
-- 涉及执行命令等有风险操作的任务，用 tools 字段限制工具集（如只读工具）；"Safe" preset 已禁用 execute_command，但同样需要预先配置模型才能使用
-- 如果任务本身无需拆解（一句话能完成），也要输出计划（一个任务即可），这是你的输出格式
-- 输出计划后：停止，等待计划执行完成并收到结果，再基于结果继续回答"""
+Rules:
+- The top level MUST include "type": "alayaface-plan" (without it the framework will not recognize the plan)
+- ids are globally unique; prompts are self-contained by default; if a downstream task needs an upstream task's output, reference it in the prompt with {{t1.output}} (the framework replaces it with that upstream task's final output once it completes; you may only reference tasks already declared as dependencies — never reference tasks outside the dependency graph)
+- Tasks that can run in parallel must not depend on each other
+- By default, do NOT set a preset (absent = Default, which has a working model configured). Only set one if the user explicitly asks for a specific preset environment (Fast/Deep/Data/Safe, etc.) — those presets may have no model configured yet, and using one will make the task fail immediately
+- For risky tasks involving commands, restrict the tool set with the tools field (e.g. read-only tools); the "Safe" preset disables execute_command but likewise needs a model configured beforehand
+- Even if a task needs no decomposition (doable in one sentence), still output a plan (a single task is fine) — that is your output format
+- After outputting the plan: stop, wait for the plan to finish and its result to come back, then continue your answer based on the result"""
 
 {-| Run one state-machine step for a specific plan window, with a
 timestamp, then dispatch effects. Appends a log line for every node
@@ -706,7 +706,7 @@ feedbackCompletedPlan planId now model =
                             feedbackSummary planId model
 
                         prefix =
-                            "[Plan 结果] 计划已执行完成，结果如下：\n\n"
+                            "[Plan Result] The plan has completed. Results:\n\n"
                                 ++ summary
                                 ++ "\n\n[Plan: "
                                 ++ planId
@@ -890,7 +890,7 @@ runDiffLog before after =
                         (id
                             ++ " ["
                             ++ String.fromInt n2.attempts
-                            ++ "次] "
+                            ++ " attempts] "
                             ++ PT.nodeStatusToString n1.status
                             ++ " → "
                             ++ PT.nodeStatusToString n2.status

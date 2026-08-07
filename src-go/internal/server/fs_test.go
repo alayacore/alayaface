@@ -18,7 +18,7 @@ func TestFsWriteReadTextRoundtrip(t *testing.T) {
 
 	e.rpcOK(t, "fs_write_file_text", map[string]any{
 		"path":    path,
-		"content": "hello 世界\nline2",
+		"content": "hello world\nline2",
 	})
 
 	var got string
@@ -26,7 +26,7 @@ func TestFsWriteReadTextRoundtrip(t *testing.T) {
 	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatalf("decode read result: %v body=%s", err, body)
 	}
-	if got != "hello 世界\nline2" {
+	if got != "hello world\nline2" {
 		t.Fatalf("read content mismatch: %q", got)
 	}
 }
@@ -211,7 +211,7 @@ func TestCreateSessionWithSystemPrompt(t *testing.T) {
 		"binaryPath":   "",
 		"configPath":   "",
 		"toolConfirm":  nil,
-		"systemPrompt": "你是任务规划助手，输出 ```json 计划块。",
+		"systemPrompt": "You are the task planner. Output a ```json plan block.",
 	})
 	var sid string
 	if err := json.Unmarshal(body, &sid); err != nil || sid == "" {

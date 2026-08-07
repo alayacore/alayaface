@@ -71,7 +71,7 @@
 - [ ] Generate a plan with a Plan Session: downstream prompt writes `based on {{t1.output}} ...` (downstream declares t1 as a dependency) → the model accepts the template
 - [ ] After Run, click the downstream node to open its session → `{{t1.output}}` in its user message has **been replaced** with t1's actual final answer (no raw template residue)
 - [ ] Node detail panel shows the node's Output (final answer for succeeded nodes; "no output recorded" for unsuccessful nodes)
-- [ ] Referencing a nonexistent task id (e.g. `{{t9.output}}`) → the downstream prompt contains a Chinese placeholder notice, not the raw template
+- [ ] Referencing a nonexistent task id (e.g. `{{t9.output}}`) → the downstream prompt contains an English placeholder notice, not the raw template
 - [ ] Reopen the app → open the plan → silently restore and re-Run unfinished tasks → downstream nodes still inject (upstream Succeeded nodes don't rerun; output restored from run.json)
 
 ## 5. Graceful Close (P25 cancel-first)

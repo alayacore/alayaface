@@ -360,8 +360,8 @@ tests =
                 \_ -> Expect.equal "monthly-report" (P.slugify "Monthly Report")
             , test "non-alphanumeric collapsed" <|
                 \_ -> Expect.equal "a-b-c" (P.slugify "  a!!b??c  ")
-            , test "chinese characters become dashes" <|
-                \_ -> Expect.equal "plan" (P.slugify "月度销售报告")
+            , test "non-ASCII characters fall back to plan" <|
+                \_ -> Expect.equal "plan" (P.slugify "🚀🎉✨")
             , test "empty fallback" <|
                 \_ -> Expect.equal "plan" (P.slugify "")
             , test "keeps digits" <|

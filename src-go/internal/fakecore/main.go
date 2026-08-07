@@ -274,7 +274,7 @@ func main() {
 					stagedText = ""
 				} else {
 					switch {
-					case strings.HasPrefix(stagedText, "[Plan 结果]"):
+					case strings.HasPrefix(stagedText, "[Plan Result]"):
 						// R3: the plan-feedback continuation prompt may
 						// contain arbitrary node outputs (including words
 						// like "hang-once" that trigger marker scenarios) —
@@ -330,7 +330,7 @@ func planReply() {
   "default_max_attempts": 3,
   "tasks": [
     { "id": "t1", "title": "Research", "prompt": "research the topic and summarize findings", "depends_on": [], "max_attempts": 3 },
-    { "id": "t2", "title": "Draft", "prompt": "draft the report from the research (fail-once marker). 参考上游任务输出: {{t1.output}}", "depends_on": ["t1"], "max_attempts": 3 },
+    { "id": "t2", "title": "Draft", "prompt": "draft the report from the research (fail-once marker). using upstream output: {{t1.output}}", "depends_on": ["t1"], "max_attempts": 3 },
     { "id": "t3", "title": "Review", "prompt": "review the draft and fix any issues (hang-once marker)", "depends_on": ["t2"], "max_attempts": 3 }
   ]
 }`

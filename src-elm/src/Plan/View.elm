@@ -89,7 +89,7 @@ viewNode onNodeClick runStates tasksById pos =
         failureTip =
             runState
                 |> Maybe.andThen (\rs -> List.head rs.failures)
-                |> Maybe.map (\f -> "第 " ++ String.fromInt f.attempt ++ " 次失败: " ++ f.reason)
+                |> Maybe.map (\f -> "Attempt " ++ String.fromInt f.attempt ++ " failed: " ++ f.reason)
     in
     Html.div
         [ Attr.class ("plan-node plan-node-" ++ statusClass status)
