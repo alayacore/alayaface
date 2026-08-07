@@ -93,6 +93,12 @@ type alias Model =
     -- Loading state for planMetas: a dedicated fs_list_dir/fs_read chain
     -- that bypasses planReadTarget (single-slot) and the manager UI.
     , planMetaLoading : Bool
+    -- Set by FsHomeDirResult; the meta scan starts only AFTER the
+    -- session file-picker's home listing has been consumed (both are
+    -- fs_list_dir results with no path tag — firing them in the same
+    -- batch lets the home listing be misrouted into the scan and
+    -- desynchronize it, leaving planMetas empty after a restart).
+    , planMetaScanPending : Bool
     -- Two-level dir scan: planMetaDirQueue holds the remaining
     -- sessions/<uuid>/plans dirs to list; planMetaDirListing is the dir
     -- whose listing the next FsListDirResult belongs to (Nothing + empty

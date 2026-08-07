@@ -68,6 +68,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P28 Plan 归属 Session（用户决策：导入是早期遗留物，整体移除）：plan 文档/meta/run/work/节点子会话全部收进 `sessions/<来源session>/plans/<planId>/`，删除顶层 `plans/` 根；Plans manager 单页（从 planMetas 索引列，无 Browse/导入）；meta origin 记 on-disk 会话 id，绑定按 live id 解析 | [x] |
 | P29 清理全部"向后兼容"代码（用户：都是没用的）：删 session 目录 legacy 回退链（只认 P28 路径）、Plan/Meta lenient 解码（origin/planIndex 必填、删 messageId、origin 收紧为非 Maybe）、Legacy config 种子修复（heal 整块移除）、恒真 `has_session_file` 字段 | [x] |
 | P30 系统菜单移除 Plans 入口（用户："系统菜单里不需要plans了"）：Plans manager 整体删除（overlay/消息/状态/`fsDeleteFile` 端口/`PlanFileInfo`）；plan 只经会话内 `[Plan: …]` 状态条重开；菜单保留"打开的 plan 窗口"切换列表 | [x] |
+| P31 修复重启后 plan 状态丢失（用户反馈）：planMetas 重建扫描仍按 P27 旧布局找 `plans/*.meta.json`，而 P28 后 meta 在 `plans/<planId>/<planId>.meta.json` → 扫描永远读不到 → 重启后 planMetas 为空；改为从 plans/ 列表的子目录直接构造 meta 路径 + 过滤 `..`；并把扫描与文件选择器的 home 列表串行化（消除未标记 fs_list_dir 结果的竞态） | [x] |
 | R 系列 | Plan 重构：模型自主子流程 + 递归（自动创建 / 回填自动继续 / 重跑级联 / 状态条 / 超时移除）——**详见 REFACTOR.md** | 进行中 |
 
 ## P24 — 输出注入（{{tX.output}}）
@@ -318,6 +319,38 @@ C1 安全：`cancelTask` → `activeTask.cancel()` → 任务经 `taskResultCh`
 - [x] e2e：第 9 步改为断言菜单**没有** Plans 项（plan 经状态条重开仍由
       第 6 步覆盖）；ALL PASS；
 - [x] 文档：plan-mode.md §7.1/§7.2（管理器移除说明）/§12、TODO 本表。
+
+---
+
+## P31 — 修复：重启后 plan 执行状态丢失（用户反馈）
+
+用户：**"重新启动后，似乎plan的执行状态弄丢了？"**。用
+`e2e/restart-e2e.mjs`（新建：建 plan → 跑完 → 重启后端 → resume 来源会话
+→ 状态条重开 plan → 断言 badge/nodes）复现并定位。
+
+**根因**：P28 把 plan 文件收进 `plans/<planId>/<planId>.meta.json`（plan
+自己的子目录），但 planMetas 索引重建的两级扫描还按 P27 旧布局找
+`plans/*.meta.json`（直接平铺）——`plans/` 里只有 planId 子目录（全是
+dir），所以 meta 列表永远为空、不发任何读取 → **重启后 planMetas 为空**
+→ `[Plan: …]` 状态条不渲染、plan 打不开（表现为"状态丢了"）。此前 e2e
+从未重启，planMetas 都是运行中由 PlanSaveReady 实时填充，因此没暴露。
+
+**修复（Update.elm）**：
+- 扫描第 2 级（`sessions/<uuid>/plans` 列表）改为：每个**子目录**即一个
+  plan，直接构造 meta 路径 `<plansDir>/<planId>/<planId>.meta.json`
+  （无需第三级扫描）；过滤 `..`/`.`（fs_list_dir 会给非 `/` 目录加 `..`，
+  旧代码把 `sessions/../plans` 也列了进去——无害但浪费）；
+- 顺带消除一个潜在竞态：`FsHomeDirResult` 原来同批发出
+  `fs_list_dir(home)`（文件选择器）和 `fs_list_dir(sessions)`（扫描），
+  两个结果无路径标签、无法区分——home 结果先到会被扫描分支吃掉导致
+  扫描错位。新增 `planMetaScanPending`：等 home 列表被文件选择器分支
+  消费后再启动扫描（串行化，无同批竞态）。
+
+- [x] 验证：`e2e/restart-e2e.mjs` ALL PASS（重启 → resume 来源会话 →
+      `[Plan: …]` 出现 → 重开 plan → badge Completed + 3 节点 succeeded）；
+      `make e2e` 现在连跑 plan-e2e + restart-e2e；Elm 213 / Rust 43 /
+      Go -race 8 包全绿；
+- [x] 文档：TODO 本表。
 
 ---
 

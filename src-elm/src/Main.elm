@@ -69,6 +69,7 @@ init _ =
       , planWindows = Dict.empty
       , planMetas = Dict.empty
       , planMetaLoading = False
+      , planMetaScanPending = False
       , planMetaDirQueue = []
       , planMetaDirListing = Nothing
       , planMetaReading = Nothing

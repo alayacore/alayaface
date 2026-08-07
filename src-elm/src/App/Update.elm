@@ -2493,11 +2493,13 @@ update msg model =
                 -- R3: dedicated listing for meta.json files (planMetas
                 -- index rebuild). Two-level scan:
                 --   1. sessions/ listing (planMetaDirListing == Nothing)
-                --      → build the queue of each session's plans/ dir;
+                --      → queue each session's plans/ dir;
                 --   2. a sessions/<uuid>/plans listing (planMetaDirListing
-                --      == Just dir) → collect *.meta.json into the read
-                --      queue.
-                -- Every *.meta.json is then read one at a time.
+                --      == Just dir) → each SUBDIR is a plan (P28 nests
+                --      plan files in their own dir), so the meta path is
+                --      <plansDir>/<planId>/<planId>.meta.json — built
+                --      directly, no third listing level needed.
+                -- Every meta is then read one at a time.
                 let
                     parsed =
                         List.filterMap (\v -> D.decodeValue planDirEntryDecoder v |> Result.toMaybe) entries
@@ -2505,15 +2507,14 @@ update msg model =
                 case model.planMetaDirListing of
                     Just dir ->
                         let
-                            metaFiles =
+                            planDirsIn =
                                 parsed
-                                    |> List.filter (\e -> not e.isDir)
+                                    |> List.filter (\e -> e.isDir && e.name /= ".." && e.name /= ".")
                                     |> List.map .name
-                                    |> List.filter (\n -> String.endsWith ".meta.json" n)
-                                    |> List.sort
 
                             newReadQueue =
-                                model.planMetaReadQueue ++ List.map (\n -> dir ++ "/" ++ n) metaFiles
+                                model.planMetaReadQueue
+                                    ++ List.map (\p -> dir ++ "/" ++ p ++ "/" ++ p ++ ".meta.json") planDirsIn
                         in
                         case model.planMetaDirQueue of
                             next :: rest ->
@@ -2545,11 +2546,12 @@ update msg model =
 
                     Nothing ->
                         -- The sessions/ listing: queue every session's
-                        -- plans/ subdir (missing plans dirs list empty).
+                        -- plans/ subdir (missing plans dirs list empty;
+                        -- ".." from the listing is skipped).
                         let
                             planDirs =
                                 parsed
-                                    |> List.filter .isDir
+                                    |> List.filter (\e -> e.isDir && e.name /= ".." && e.name /= ".")
                                     |> List.map .name
                                     |> List.map (\n -> sessionsDir model.homeDir ++ "/" ++ n ++ "/plans")
                         in
@@ -2573,8 +2575,21 @@ update msg model =
                     -- Filter out ".." (parent directory entry) — not useful in UI
                     noDotDot =
                         List.filter (\e -> e.name /= "..") parsed
+
+                    -- The planMetas index rebuild starts HERE, after the
+                    -- session file-picker's home listing has been
+                    -- consumed — no other fs_list_dir is in flight, so
+                    -- the scan's listings cannot be misrouted.
+                    ( m0, scanCmd ) =
+                        if model.planMetaScanPending then
+                            ( { model | planMetaScanPending = False, planMetaLoading = True }
+                            , Ports.fsListDir { path = sessionsDir model.homeDir }
+                            )
+
+                        else
+                            ( model, Cmd.none )
                 in
-                ( updateActiveSession model (\s ->
+                ( updateActiveSession m0 (\s ->
                     let
                         fp =
                             s.filePicker
@@ -2583,7 +2598,7 @@ update msg model =
                         | filePicker = { fp | entries = noDotDot, loading = False, error = Nothing }
                     }
                   )
-                , Cmd.none
+                , scanCmd
                 )
 
         FsHomeDirResult home ->
@@ -2609,11 +2624,6 @@ update msg model =
               )
             , Cmd.batch
                 [ Ports.fsListDir { path = home }
-                , -- R3: rebuild the planMetas index from meta.json files
-                  -- (status bars / feedback routing survive restarts).
-                  -- Two-level scan: list sessions/ → each session's
-                  -- plans/ dir → read every *.meta.json.
-                  Ports.fsListDir { path = sessionsDir home }
                 , case model.activeId of
                     Just sid ->
                         Cmd.batch
@@ -2625,7 +2635,15 @@ update msg model =
                         Cmd.none
                 ]
             )
-            |> (\( m, c ) -> ( { m | planMetaLoading = True }, c ))
+            -- The planMetas index rebuild (fs_list_dir sessions/ → each
+            -- session's plans/ → read every *.meta.json) starts ONLY
+            -- after this home listing has been consumed (FsListDirResult's
+            -- picker branch): both are untagged fs_list_dir results, so
+            -- firing them in the same batch would let the home listing
+            -- be misrouted into the scan and desynchronize it — leaving
+            -- planMetas empty after a restart (plans unreachable via the
+            -- status-bar link).
+            |> (\( m, c ) -> ( { m | planMetaScanPending = True }, c ))
 
         FsReadFileResult uri ->
             case getActiveSession model of
