@@ -116,6 +116,13 @@ type alias Model =
     -- Keyed by (sessionId, planIndex) — the plan message's index within
     -- its session (message ids are deliberately not used).
     , pendingPlanOffers : Dict ( String, Int ) String
+    -- Sessions currently replaying their history after a resume_session:
+    -- alayacore replays content frames (UT/AT/AR/AF/UF) BEFORE any SM
+    -- frame, so while a session is in this set, detected plan messages
+    -- are history — they must NOT auto-create a plan window (the user
+    -- opens them via the status bar or the "Open plan" button). The
+    -- first SM frame removes the session from the set (replay done).
+    , planReplaySessions : Set String
     , planCreating : Maybe CreateTask
     , planCreateQueue : List CreateTask
     , planReadTarget : Maybe PlanReadTarget
@@ -301,14 +308,8 @@ type Msg
     -- counted with Plan.Detect.isPlanMessage). Message ids are NOT used
     -- for binding — they are per-session implementation details.
     | PlanCreateOffer String Int
-    -- Delayed auto-open check for a detected plan message: the window is
-    -- auto-created only if the message is still the session's last one
-    -- and the binding is still absent (history replays / meta-index
-    -- rebuilds must not pop windows).
-    | PlanOfferSettle String Int
     -- Manual "Open plan" from a detected-but-not-auto-created plan
-    -- message (the delayed auto-open suppressed it: the message was not
-    -- the session's last one).
+    -- message (a history replay suppressed the auto-create).
     | PlanOpenFromMessage String Int
     | PlanSaveReady PT.Plan (Maybe PM.Origin) Int
     -- Status-bar "Open" click on a message-bound plan (R3).

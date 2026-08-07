@@ -571,10 +571,10 @@ try {
   await shot(page, '08-imported-plan-window.png');
   console.log('PASS: Browse tab imported the plan file (new Plan window with node n1)');
 
-  // ── 9. Auto-open is last-message-only (R6 settle rule) ────────────
-  // A plan message followed within the settle window by another message
-  // must NOT auto-open a window; the message instead shows a manual
-  // "Open plan" button.
+  // ── 9. Auto-open is immediate for live plans (R6 playback-aware) ──
+  // A LIVE plan message auto-opens right away (no settle delay), even if
+  // a follow-up message arrives shortly after. History replays (resumed
+  // sessions) are suppressed — covered by the dedicated verification.
   await page.click('.global-menu-btn');
   await waitFor('.global-menu-panel', 10000);
   await clickByText('.global-menu-item', 'New Session');
@@ -597,12 +597,10 @@ try {
   await sleep(400);
   await page.keyboard.type('and then follow up', { delay: 2 });
   await page.keyboard.press('Enter');
-  await sleep(3500);
+  await sleep(2500);
   const settlePlanCount = await page.$$eval('.plan-page', els => els.length);
-  const openBtnVisible = await page.$$eval('.session-panel .plan-open-btn', els => els.length);
-  assert(settlePlanCount === beforeSettleCount, 'plan followed by another message must not auto-open (before=' + beforeSettleCount + ', after=' + settlePlanCount + ')');
-  assert(openBtnVisible >= 1, 'suppressed plan message shows a manual "Open plan" button');
-  console.log('PASS: auto-open is last-message-only; suppressed plan shows "Open plan"');
+  assert(settlePlanCount === beforeSettleCount + 1, 'live plan auto-opened immediately (before=' + beforeSettleCount + ', after=' + settlePlanCount + ')');
+  console.log('PASS: live plan auto-opens immediately; follow-up message does not suppress it');
 
   console.log('\nALL PASS ✅');
   console.log('artifacts:', tmp);

@@ -77,6 +77,7 @@ init _ =
       , planActiveId = Nothing
       , planManager = emptyPlanManager
       , pendingPlanOffers = Dict.empty
+      , planReplaySessions = Set.empty
       , planCreating = Nothing
       , planCreateQueue = []
       , planReadTarget = Nothing
