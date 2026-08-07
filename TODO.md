@@ -73,7 +73,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P33 修复页面刷新后 resume 报 "Session is already active"（用户反馈）：刷新后前端会话注册表清空，但后端仍持有旧页面的会话句柄 → resume_session 一直拒绝，只能重启 Go 进程；新增 `close_all_sessions` RPC（Go+Rust 对称，优雅关闭=历史保留），前端 init 时调用一次回收孤儿会话；restart-e2e 新增「页面刷新」阶段回归 | [x] |
 | P34 关闭 session 时级联关闭其子项（用户要求）：关掉来源 session 窗口 → 它拥有的 plans（meta origin 匹配）全部停跑（StopRun 防重生）+ 关掉各 plan 的节点会话窗口 + 关掉 plan 窗口；节点会话自己的子 plan（递归）同样级联；DeleteSession（Session Manager 删除）同样级联；纯逻辑 `Plan.Meta.plansOwnedBySession` 抽出可测；plan-e2e 新增 8c 级联回归 | [x] |
 | P35 关闭 plan window 时级联关闭其下节点会话（用户反馈："关闭plan window的时候，他下面的session window没有被关闭"）：**第一版只处理了活跃 run（InProgress/Paused 才停跑关会话），终态 plan 下经点击节点 resume 打开的节点会话窗口没被关（用户实测仍未修复）**；改为 PlanClose 无条件关闭所有绑定到该 plan 节点的**存活**会话窗口（`nodeSessionIdsForPlan`：planNodeSessions 直接绑定 + planResumedFrom 恢复窗口，过滤非存活避免 "Session not found" 噪音），活跃 run 仍先 StopRun 防重生，终态 run 不重停（保住状态条 Completed）；plan-e2e 新增 8e（Stopped plan + resume 打开的 t1 窗口 → 关 plan ✕ → t1 关闭）与 8d（活跃 run） | [x] |
-| R 系列 | Plan 重构：模型自主子流程 + 递归（自动创建 / 回填自动继续 / 重跑级联 / 状态条 / 超时移除）——**详见 REFACTOR.md** | 进行中 |
+| R 系列 | Plan 重构：模型自主子流程 + 递归（自动创建 / 回填自动继续 / 重跑级联 / 状态条 / 超时移除）——**详见 REFACTOR.md**（R1–R5 全部完成，见本表下方清单） | [x] |
 
 ## P24 — 输出注入（{{tX.output}}）
 
@@ -560,7 +560,7 @@ node sessions"）。用户要求对称：关 plan 窗口也要关掉它下面的
 - [x] fakecore：planMode 触发改为 prompt 含 "plan" 关键词；E2E：New Session 流程 +
       自动创建断言 + t3 hang marker 预置（超时移除后第一次 run 不挂起）+ 删 t3
       超时断言；E2E ALL PASS；
-- [ ] 重放跳过检测（防重复创建）→ R3 随 meta.json 绑定实现
+- [x] 重放跳过检测（防重复创建）→ R3 随 meta.json 绑定实现（见 R3 首条）
 
 ### R3 回填 + 状态条 + 持久化
 - [x] **重放跳过检测**（R2 遗留）：messageBoundToPlan（meta origin 绑定查重）；
@@ -607,10 +607,13 @@ node sessions"）。用户要求对称：关 plan 窗口也要关掉它下面的
 - [x] E2E full rewrite (done in R4, commit 4bc7456): fixture t3 keeps hang-once
       (for Stop); E2E pre-seeds the t3 hang marker (first run succeeds
       instantly); recursion/feedback/status-bar/re-run-cascade steps;
-- [ ] 死代码清理（P22 残余、plan-offer-btn CSS）；Time.every 订阅删除；
-- [ ] 文档：docs/plan-mode.md（§5/§6.7/§7/§8.5 超时移除/§13、§6.4 boot 帧门控）、README、
-      docs/manual-acceptance.md；
-- [ ] 全量验证：Elm / Rust / Go -race / make e2e 全绿 → 提交 → push 三 remote
+- [x] 死代码清理（P22 残余、plan-offer-btn CSS）；Time.every 订阅删除 ——
+      commit `20d10a5` 已完成（Main.elm 无 Time.every、无 Create Plan offer 按钮
+      残留；`.plan-offer`/`.plan-offer-btn` 为状态条活代码）；
+- [x] 文档：docs/plan-mode.md（§5/§6.7/§7/§8.5 超时移除/§13、§6.4 boot 帧门控）、README、
+      docs/manual-acceptance.md —— commit `b7c9b6a` 已完成（英文新章节）；
+- [x] 全量验证：Elm / Rust / Go -race / make e2e 全绿 → 提交 → push 三 remote ——
+      R1–R5 commit（e934235/7672815/51077ea/4bc7456/b0a58b8）已全部提交并推送
 
 ## P11 — 第二轮审查：创建队列串行化 + 创建失败恢复
 
@@ -1019,8 +1022,8 @@ alayacore 替身）+ **系统 Chrome 无头** + Go 后端，跑真实 DOM。
       run status badge, node click opens its session window (ActivateSession)
       when it has one else detail panel; Retry node button; failure
       history in detail panel
-- [ ] fakecore/E2E: task_error → retry → success, parallel windows, node
-      click opens window — GUI env; checklist in docs/manual-acceptance.md
+- [x] fakecore/E2E: task_error → retry → success, parallel windows, node
+      click opens window — 已由 P15 起的 plan-e2e 全自动覆盖（GUI env 条目过时）
 - [x] `elm-test` green
 
 ## P4.5 — create_session preset/builtinTools + settings.conf + seed presets
@@ -1118,8 +1121,8 @@ reusing the multimodal picker machinery (file list + fuzzy matching).
       dispatch by `planManager.tab`; `refreshPlanList` no-ops while Browse is
       active (fs_list_dir owned by the browser); tab switch re-requests
 - [x] Tests: elm-test 145 green; cargo/go unchanged (frontend-only change)
-- [ ] Manual GUI smoke: ⚙ → Plans → Browse → navigate/filter → click a plan
-      JSON → opens Plan window (docs/manual-acceptance.md)
+- [x] Manual GUI smoke: ⚙ → Plans → Browse → navigate/filter → click a plan
+      JSON → opens Plan window —— **P28 已删除 Browse/导入（用户决策），条目过时**
 
 ---
 
@@ -1324,8 +1327,8 @@ windows, making Stop look like it didn't stop anything.
       gone; DOM clicks for Run/Stop (overlapping windows would
       intercept coordinate clicks)
 - [x] Tests: elm 156 / Rust 42 / Go -race all pkgs / make e2e ALL PASS
-- [ ] Manual GUI: Stop mid-run → all running node windows close, plan
-      badge Stopped (docs/manual-acceptance.md)
+- [x] Manual GUI: Stop mid-run → all running node windows close, plan
+      badge Stopped —— 已由 E2E 8b 自动覆盖（t3 挂起 → Stop → 窗口关闭 + badge Stopped）
 
 ---
 
@@ -1394,8 +1397,9 @@ replaces the P25 heuristic (remove on user SendPrompt).
 - [x] fakecore emits the ready SM after the replayed content (mirrors
       v0.62.4)
 - [x] Tests: elm 208 / Rust 42 / Go -race all pkgs / make e2e ALL PASS
-- [ ] Manual GUI: open an old session with a plan message → no duplicate
-      window; after ready, a live plan message still auto-creates
+- [x] Manual GUI: open an old session with a plan message → no duplicate
+      window; after ready, a live plan message still auto-creates ——
+      已由 E2E 自动覆盖（resume 重放不重复建窗 + live plan 立即自动打开）
 
 ---
 
