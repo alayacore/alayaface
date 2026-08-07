@@ -309,6 +309,84 @@ fn copy_dir(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String> 
     copy_dir_excluding(src, dst, &[])
 }
 
+// ─── Spawn args persistence ─────────────────────────────────────────
+//
+// The alayacore spawn arguments used when a session was created are
+// persisted as <sessionDir>/session.spawn.json so resume_session can
+// re-apply them: a resumed session must keep its capability envelope
+// (builtin-tools restriction, tool-confirm policy, planner prompt, work
+// dir) — otherwise e.g. a Plan Session with NO tools would come back
+// with ALL tools after a restart. Mirrors Go internal/dirs/spawn.go.
+
+/// The spawn-args file inside a session directory.
+pub fn spawn_args_file(session_dir: &std::path::Path) -> PathBuf {
+    session_dir.join("session.spawn.json")
+}
+
+/// Persisted spawn configuration of a session.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct SpawnArgs {
+    /// --tool-confirm list ("allow" = runner auto-approve).
+    pub tool_confirm: String,
+    /// None = don't pass --builtin-tools (all tools); Some("") = NO
+    /// builtin tools (Plan Sessions); Some("a,b") = those tools only.
+    pub builtin_tools: Option<String>,
+    /// --system text (planner hint / delegation).
+    pub system_prompt: String,
+    /// Child working directory (per-plan isolation).
+    pub work_dir: String,
+}
+
+impl SpawnArgs {
+    /// Log-friendly summary.
+    pub fn summary(&self) -> String {
+        let bt = match &self.builtin_tools {
+            Some(v) if v.is_empty() => "<none>".to_string(),
+            Some(v) => v.clone(),
+            None => "<unset>".to_string(),
+        };
+        format!(
+            "tool_confirm={:?} builtin_tools={} system_prompt={} chars work_dir={:?}",
+            self.tool_confirm,
+            bt,
+            self.system_prompt.chars().count(),
+            self.work_dir
+        )
+    }
+}
+
+/// Persist the spawn args atomically (tmp + rename).
+pub fn write_spawn_args(session_dir: &std::path::Path, args: &SpawnArgs) -> Result<(), String> {
+    let path = spawn_args_file(session_dir);
+    let tmp = session_dir.join("session.spawn.json.tmp");
+    let text = serde_json::to_string_pretty(args)
+        .map_err(|e| format!("Cannot serialize spawn args: {e}"))?;
+    std::fs::write(&tmp, text)
+        .map_err(|e| format!("Cannot write spawn args: {e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("Cannot persist spawn args: {e}"))
+}
+
+/// Read the persisted spawn args. A missing or corrupt file yields
+/// zero-value args (legacy pre-persistence behavior) — never an error,
+/// so resume keeps working for old sessions.
+pub fn read_spawn_args(session_dir: &std::path::Path) -> SpawnArgs {
+    let text = match std::fs::read_to_string(spawn_args_file(session_dir)) {
+        Ok(t) => t,
+        Err(_) => return SpawnArgs::default(),
+    };
+    match serde_json::from_str::<SpawnArgs>(&text) {
+        Ok(mut args) => {
+            // Defensive: a relative work dir would resolve against the
+            // backend's cwd, not the session's — treat as absent.
+            if !args.work_dir.is_empty() && !std::path::Path::new(&args.work_dir).is_absolute() {
+                args.work_dir = String::new();
+            }
+            args
+        }
+        Err(_) => SpawnArgs::default(),
+    }
+}
+
 #[cfg(test)]
 pub(crate) static TEST_HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -442,5 +520,46 @@ mod tests {
             assert!(!sessions.join("uuid-1").exists());
             assert!(!sessions.join("demo_plan_x").exists());
         });
+    }
+
+    #[test]
+    fn spawn_args_roundtrip() {
+        isolated_home(|| {
+            let dir = std::env::temp_dir().join(format!(
+                "alayaface-spawn-args-{}-{}",
+                std::process::id(),
+                TEST_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+
+            // Full envelope: no-tools restriction + runner tool-confirm +
+            // planner prompt + work dir.
+            let full = SpawnArgs {
+                tool_confirm: "allow".into(),
+                builtin_tools: Some(String::new()),
+                system_prompt: "planner-hint".into(),
+                work_dir: "/tmp/plan-work".into(),
+            };
+            write_spawn_args(&dir, &full).unwrap();
+            let got = read_spawn_args(&dir);
+            assert_eq!(got.tool_confirm, "allow");
+            assert_eq!(got.system_prompt, "planner-hint");
+            assert_eq!(got.work_dir, "/tmp/plan-work");
+            assert_eq!(got.builtin_tools, Some(String::new()), "explicit empty = NO tools");
+
+            // Nil builtin_tools (don't pass the flag = all tools).
+            write_spawn_args(&dir, &SpawnArgs::default()).unwrap();
+            assert_eq!(read_spawn_args(&dir).builtin_tools, None);
+
+            // A relative work dir is defensively dropped.
+            write_spawn_args(&dir, &SpawnArgs { work_dir: "relative/dir".into(), ..SpawnArgs::default() }).unwrap();
+            assert_eq!(read_spawn_args(&dir).work_dir, "");
+
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+        // Missing file → zero values (legacy sessions resume unrestricted).
+        let empty = read_spawn_args(std::path::Path::new("/nonexistent-dir"));
+        assert_eq!(empty.tool_confirm, "");
+        assert_eq!(empty.builtin_tools, None);
     }
 }

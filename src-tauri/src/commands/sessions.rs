@@ -104,6 +104,19 @@ pub async fn create_session(
         log::info!("  work_dir={}", wd.as_deref().unwrap());
     }
 
+    // Persist the effective spawn args so resume_session can re-apply
+    // them (capability envelope: builtin-tools restriction, tool-confirm
+    // policy, planner prompt, work dir). Best-effort — a failure must
+    // not prevent the session from starting.
+    if let Err(e) = dirs::write_spawn_args(&session_dir, &dirs::SpawnArgs {
+        tool_confirm: tc.clone(),
+        builtin_tools: bt.clone(),
+        system_prompt: sp.clone(),
+        work_dir: wd.clone().unwrap_or_default(),
+    }) {
+        log::warn!("[session] cannot persist spawn args for {:?}: {e}", session_dir);
+    }
+
     session::create(session::SessionConfig {
         id: &session_id,
         app: &app,
@@ -190,15 +203,31 @@ pub async fn resume_session(
     let config_path = config_dir.to_string_lossy().to_string();
     let session_path = session_file.to_string_lossy().to_string();
 
-    // Resumed plan-node sessions keep the plan's working directory.
+    // Re-apply the persisted spawn args so the resumed session keeps its
+    // capability envelope (builtin-tools restriction, tool-confirm
+    // policy, planner prompt). A missing spawn.json = legacy session →
+    // old behavior (no restrictions).
+    let spawn = dirs::read_spawn_args(&sessions_dir);
+
+    // Resumed plan-node sessions keep the plan's working directory: an
+    // explicit workDir from the frontend wins; otherwise the persisted one.
     let wd = match &work_dir {
         Some(d) if !d.trim().is_empty() => {
             std::fs::create_dir_all(d)
                 .map_err(|e| format!("Cannot create work dir {}: {}", d, e))?;
             Some(d.clone())
         }
-        _ => None,
+        _ => {
+            if spawn.work_dir.is_empty() {
+                None
+            } else {
+                std::fs::create_dir_all(&spawn.work_dir)
+                    .map_err(|e| format!("Cannot create work dir {}: {}", spawn.work_dir, e))?;
+                Some(spawn.work_dir.clone())
+            }
+        }
     };
+    log::info!("Resuming {:?} with spawn args {}", sessions_dir, spawn.summary());
 
     // Resumed sessions get a FRESH id (matching Go) while keeping the
     // original on-disk directory. The client must keep the node bound to
@@ -214,9 +243,9 @@ pub async fn resume_session(
         session_dir: sessions_dir,
         sessions: &sessions,
         model_cache: &model_cache,
-        tool_confirm: "",
-        builtin_tools: None,
-        system_prompt: "",
+        tool_confirm: &spawn.tool_confirm,
+        builtin_tools: spawn.builtin_tools.as_deref(),
+        system_prompt: &spawn.system_prompt,
         work_dir: wd,
     }).await
 }

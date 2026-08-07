@@ -162,3 +162,49 @@ func TestCreatePlanSessionDirFromNests(t *testing.T) {
 		}
 	})
 }
+
+func TestSpawnArgsRoundtrip(t *testing.T) {
+	isolatedHome(t, func() {
+		dir := t.TempDir()
+
+		// Full envelope: no-tools restriction + runner tool-confirm +
+		// planner prompt + work dir.
+		bt := ""
+		full := SpawnArgs{ToolConfirm: "allow", BuiltinTools: &bt, SystemPrompt: "planner-hint", WorkDir: "/tmp/plan-work"}
+		if err := WriteSpawnArgs(dir, full); err != nil {
+			t.Fatal(err)
+		}
+		got := ReadSpawnArgs(dir)
+		if got.ToolConfirm != "allow" || got.SystemPrompt != "planner-hint" || got.WorkDir != "/tmp/plan-work" {
+			t.Errorf("roundtrip = %+v, want the full envelope", got)
+		}
+		if got.BuiltinTools == nil || *got.BuiltinTools != "" {
+			t.Errorf("builtin_tools = %v, want explicit empty (NO tools)", got.BuiltinTools)
+		}
+
+		// Nil builtin_tools (don't pass the flag = all tools).
+		nilBt := SpawnArgs{ToolConfirm: "", SystemPrompt: ""}
+		if err := WriteSpawnArgs(dir, nilBt); err != nil {
+			t.Fatal(err)
+		}
+		got = ReadSpawnArgs(dir)
+		if got.BuiltinTools != nil {
+			t.Errorf("builtin_tools = %v, want nil (unset)", got.BuiltinTools)
+		}
+
+		// A relative work dir is defensively dropped (it would resolve
+		// against the backend cwd, not the session).
+		rel := SpawnArgs{WorkDir: "relative/dir"}
+		if err := WriteSpawnArgs(dir, rel); err != nil {
+			t.Fatal(err)
+		}
+		if got := ReadSpawnArgs(dir); got.WorkDir != "" {
+			t.Errorf("relative work dir = %q, want dropped", got.WorkDir)
+		}
+	})
+
+	// Missing file → zero values (legacy sessions resume unrestricted).
+	if got := ReadSpawnArgs(t.TempDir()); got.ToolConfirm != "" || got.BuiltinTools != nil {
+		t.Errorf("missing file = %+v, want zero values", got)
+	}
+}

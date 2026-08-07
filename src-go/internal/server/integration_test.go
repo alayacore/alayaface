@@ -509,6 +509,95 @@ func TestIntegrationResumeAndDeleteSession(t *testing.T) {
 	}
 }
 
+// TestIntegrationResumeKeepsSpawnArgs: the capability envelope of a
+// session (tool_confirm, builtin_tools restriction, system prompt, work
+// dir) must survive close + resume — a Plan Session with NO tools must
+// not come back with ALL tools after a restart.
+func TestIntegrationResumeKeepsSpawnArgs(t *testing.T) {
+	e := newTestEnv(t, "")
+
+	// Boot frame of a session created with a restricted envelope.
+	waitBoot := func(sid string, want map[string]any) {
+		t.Helper()
+		e.waitEvent(t, "tlv-frame", func(p map[string]any) bool {
+			js, _ := p["json"].(map[string]any)
+			if p["session_id"] != sid || p["tag"] != "SM" || js == nil || js["type"] != "task" {
+				return false
+			}
+			data, _ := js["data"].(map[string]any)
+			if data == nil {
+				return false
+			}
+			for k, v := range want {
+				if data[k] != v {
+					return false
+				}
+			}
+			return true
+		})
+	}
+
+	workDir := filepath.Join(t.TempDir(), "plan-work")
+	body := e.rpcOK(t, "create_session", map[string]any{
+		"binaryPath":   "",
+		"configPath":   "",
+		"toolConfirm":  "allow",
+		"builtinTools": "", // explicitly NO builtin tools (Plan Session)
+		"systemPrompt": "planner-hint",
+		"workDir":      workDir,
+	})
+	var sid string
+	if err := json.Unmarshal(body, &sid); err != nil {
+		t.Fatalf("create_session: %s", body)
+	}
+	waitBoot(sid, map[string]any{
+		"tool_confirm":      "allow",
+		"builtin_tools":     "",
+		"builtin_tools_set": true,
+		"system":            "planner-hint",
+		"cwd":               workDir,
+	})
+
+	// The spawn args were persisted next to the session.
+	spawnFile := filepath.Join(dirs.AlayafaceDir(), "sessions", sid, "session.spawn.json")
+	if _, err := os.Stat(spawnFile); err != nil {
+		t.Fatalf("session.spawn.json missing: %v", err)
+	}
+
+	e.rpcOK(t, "close_session", map[string]any{"sessionId": sid})
+
+	// Resume WITHOUT passing workDir (the frontend omits it) — the
+	// persisted envelope must be re-applied.
+	resumeBody := e.rpcOK(t, "resume_session", map[string]any{"sessionId": sid, "binaryPath": ""})
+	var newID string
+	if err := json.Unmarshal(resumeBody, &newID); err != nil {
+		t.Fatalf("resume_session: %s", resumeBody)
+	}
+	waitBoot(newID, map[string]any{
+		"tool_confirm":      "allow",
+		"builtin_tools":     "",
+		"builtin_tools_set": true,
+		"system":            "planner-hint",
+		"cwd":               workDir,
+	})
+	e.rpcOK(t, "close_session", map[string]any{"sessionId": newID})
+
+	// A legacy session without spawn.json resumes with the old behavior
+	// (no restrictions): build one by deleting the file.
+	legacyID := e.createSession(t)
+	waitBoot(legacyID, map[string]any{"builtin_tools_set": false})
+	os.Remove(filepath.Join(dirs.AlayafaceDir(), "sessions", legacyID, "session.spawn.json"))
+	e.rpcOK(t, "close_session", map[string]any{"sessionId": legacyID})
+	resumeBody = e.rpcOK(t, "resume_session", map[string]any{"sessionId": legacyID, "binaryPath": ""})
+	var legacyNewID string
+	if err := json.Unmarshal(resumeBody, &legacyNewID); err != nil {
+		t.Fatalf("resume legacy: %s", resumeBody)
+	}
+	// No --builtin-tools flag → boot frame has builtin_tools_set=false.
+	waitBoot(legacyNewID, map[string]any{"builtin_tools_set": false})
+	e.rpcOK(t, "close_session", map[string]any{"sessionId": legacyNewID})
+}
+
 // TestIntegrationCloseAllSessionsReclaimsOnPageLoad: a page refresh
 // leaves the backend holding session handles whose windows are gone —
 // resume then fails with "Session is already active" until the backend

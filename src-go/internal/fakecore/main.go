@@ -222,7 +222,7 @@ func main() {
 	rawio := flag.Bool("rawio", false, "required rawio mode flag")
 	flag.StringVar(&sessionFile, "session", "", "session file to create on startup")
 	_ = flag.String("config-path", "", "config dir (accepted, unused)")
-	_ = flag.String("tool-confirm", "", "pre-approved tool list (accepted, unused)")
+	toolConfirmFlag := flag.String("tool-confirm", "", "pre-approved tool list (accepted; echoed in the boot frame)")
 	systemFlag := flag.String("system", "", "system prompt (accepted; non-empty switches to plan mode)")
 	builtinToolsFlag := flag.String("builtin-tools", "", "builtin tools (accepted; echoed in the boot frame)")
 	flag.Parse()
@@ -277,6 +277,8 @@ func main() {
 			"in_progress":       false, // mirrors real alayacore's boot task frame
 			"builtin_tools":     *builtinToolsFlag,
 			"builtin_tools_set": btSet,
+			"tool_confirm":      *toolConfirmFlag,
+			"system":            *systemFlag,
 		},
 	})
 	writeFrame("SM", string(boot))

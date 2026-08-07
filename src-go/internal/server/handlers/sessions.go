@@ -140,6 +140,20 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		log.Printf("  work_dir=%s", wd)
 	}
 
+	// Persist the effective spawn args so resume_session can re-apply
+	// them: a resumed session must keep its capability envelope
+	// (builtin-tools restriction, tool-confirm policy, planner prompt,
+	// work dir) — otherwise e.g. a Plan Session with NO tools would
+	// come back with ALL tools after a restart.
+	if err := dirs.WriteSpawnArgs(sessionDir, dirs.SpawnArgs{
+		ToolConfirm:  tc,
+		BuiltinTools: bt,
+		SystemPrompt: sp,
+		WorkDir:      wd,
+	}); err != nil {
+		log.Printf("[session] warning: cannot persist spawn args for %s: %v", sessionDir, err)
+	}
+
 	s, err := h.Sessions.Create(session.CreateConfig{
 		ID:           id,
 		Binary:       bin,
@@ -237,22 +251,38 @@ func ResumeSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	}
 
 	bin := ResolveBinary(args.BinaryPath)
-	// Resumed plan-node sessions keep the plan's working directory.
+
+	// Re-apply the persisted spawn args so the resumed session keeps its
+	// capability envelope (builtin-tools restriction, tool-confirm
+	// policy, planner prompt). A missing spawn.json = legacy session →
+	// old behavior (no restrictions).
+	spawn := dirs.ReadSpawnArgs(sessionsDir)
+
+	// Resumed plan-node sessions keep the plan's working directory: an
+	// explicit workDir from the frontend wins; otherwise the persisted one.
 	wd := ""
 	if args.WorkDir != nil && strings.TrimSpace(*args.WorkDir) != "" {
 		wd = *args.WorkDir
 		if err := os.MkdirAll(wd, 0o755); err != nil {
 			return fmt.Errorf("Cannot create work dir %s: %w", wd, err)
 		}
+	} else if spawn.WorkDir != "" {
+		wd = spawn.WorkDir
+		if err := os.MkdirAll(wd, 0o755); err != nil {
+			return fmt.Errorf("Cannot create work dir %s: %w", wd, err)
+		}
 	}
+	log.Printf("Resuming %s with spawn args %s", sessionsDir, spawn.String())
 	s, err := h.Sessions.Create(session.CreateConfig{
-		ID:          uuid.NewString(),
-		Binary:      bin,
-		ConfigPath:  configDir,
-		SessionFile: sessionFile,
-		SessionDir:  sessionsDir,
-		ToolConfirm: "",
-		WorkDir:     wd,
+		ID:           uuid.NewString(),
+		Binary:       bin,
+		ConfigPath:   configDir,
+		SessionFile:  sessionFile,
+		SessionDir:   sessionsDir,
+		ToolConfirm:  spawn.ToolConfirm,
+		BuiltinTools: spawn.BuiltinTools,
+		SystemPrompt: spawn.SystemPrompt,
+		WorkDir:      wd,
 	}, h.Hub, h.Cache)
 	if err != nil {
 		return err
