@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -28,22 +29,32 @@ func ListModels(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		return writeJSON(w, h.Cache.Get())
 	}
 
-	// Ask any connected session.
-	found := false
+	// Ask any connected session: send model_load and WAIT for the SM
+	// model_list reply to populate the cache. The reply arrives via the
+	// reader goroutine (asynchronous), so checking the cache immediately
+	// after SendCmd would always miss it and silently fall through to
+	// the probe — while also spamming the live session with a pointless
+	// model_load on every call.
+	asked := false
 	h.Sessions.ForEach(func(s *session.Session) bool {
-		if s.Connected() {
-			// SendCmd registers the call ID → name mapping so the
-			// matching CO frame is rendered with the command name.
-			_, _ = s.SendCmd("model_load", "")
-			if !h.Cache.IsEmpty() {
-				found = true
-			}
-			return true // only try the first connected session
+		if !s.Connected() {
+			return false // keep looking for a connected session
 		}
-		return false
+		if _, err := s.SendCmd("model_load", ""); err == nil {
+			asked = true
+		}
+		return true // only ask the first connected session
 	})
-	if found {
-		return writeJSON(w, h.Cache.Get())
+	if asked {
+		// Wait up to 2s for the model_list SM (alayacore answers fast);
+		// on timeout fall back to the probe rather than hanging the RPC.
+		deadline := time.Now().Add(2 * time.Second)
+		for h.Cache.IsEmpty() && time.Now().Before(deadline) {
+			time.Sleep(20 * time.Millisecond)
+		}
+		if !h.Cache.IsEmpty() {
+			return writeJSON(w, h.Cache.Get())
+		}
 	}
 
 	// Fallback: probe with a temporary process.

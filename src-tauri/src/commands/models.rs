@@ -31,16 +31,34 @@ pub async fn list_models(
     {
         let map = sessions.0.lock().await;
         for (sid, handle) in map.iter() {
-            if handle.connected.load(std::sync::atomic::Ordering::SeqCst) {
-                // send_cmd registers the call ID → name mapping so the
-                // matching CO frame is rendered with the command name.
-                let _ = send_cmd(&map, sid, "model_load", "").await;
-                let cache = model_cache.0.lock().unwrap();
-                if !cache.is_empty() {
-                    return Ok(cache.clone());
-                }
+            if !handle.connected.load(std::sync::atomic::Ordering::SeqCst) {
+                continue;
+            }
+            // send_cmd registers the call ID → name mapping so the
+            // matching CO frame is rendered with the command name.
+            if send_cmd(&map, sid, "model_load", "").await.is_err() {
                 break;
             }
+            // WAIT for the SM model_list to populate the cache: the
+            // reply arrives via the stdout reader thread, so checking
+            // the cache immediately after send_cmd would always miss it
+            // and silently fall through to the probe (while spamming
+            // the live session with a pointless model_load on every
+            // call). 2s bound; on timeout fall back to the probe.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            loop {
+                {
+                    let cache = model_cache.0.lock().unwrap();
+                    if !cache.is_empty() {
+                        return Ok(cache.clone());
+                    }
+                }
+                if std::time::Instant::now() > deadline {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            break;
         }
     }
 
