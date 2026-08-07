@@ -33,6 +33,12 @@ type Session struct {
 	Stdout     io.ReadCloser // owned by the reader goroutine
 	Child      *exec.Cmd
 	SessionDir string
+	// Owner is the client identity that created/resumed this session
+	// (empty = legacy/unknown). close_all_sessions reclaims only the
+	// caller's own sessions, so one browser tab's page load never kills
+	// another tab's live sessions (the Go backend is reachable from
+	// multiple clients over LAN/SSH).
+	Owner string
 
 	stdinMu   sync.Mutex
 	connected atomic.Bool
@@ -158,7 +164,25 @@ func (m *Manager) CloseAll() {
 // Runs the per-session sequence in parallel (bounded by one grace
 // period regardless of session count).
 func (m *Manager) CloseAllGracefully() {
-	items := m.takeAll()
+	m.CloseAllGracefullyFor("")
+}
+
+// CloseAllGracefullyFor closes the sessions owned by `owner` (empty =
+// all). The frontend passes its per-page clientId so a page refresh
+// reclaims only ITS orphaned sessions — with the Go backend reachable
+// from multiple clients (LAN/SSH port forwarding), an unconditional
+// close-all on every page load would kill the other clients' live
+// sessions.
+func (m *Manager) CloseAllGracefullyFor(owner string) {
+	var items []*Session
+	m.mu.Lock()
+	for _, s := range m.sessions {
+		if owner == "" || s.Owner == owner {
+			items = append(items, s)
+			delete(m.sessions, s.ID)
+		}
+	}
+	m.mu.Unlock()
 	var wg sync.WaitGroup
 	for _, s := range items {
 		wg.Add(1)
@@ -185,6 +209,10 @@ type CreateConfig struct {
 	BuiltinTools *string
 	SystemPrompt string
 	WorkDir      string // child cwd (per-plan isolation; "" = backend cwd)
+	// Owner is the client identity that created the session (empty =
+	// legacy). Used by close_all_sessions to reclaim only one client's
+	// orphaned sessions.
+	Owner string
 }
 
 // Create spawns alayacore, registers the session, and starts the stdout
@@ -203,6 +231,7 @@ func (m *Manager) Create(cfg CreateConfig, h *hub.Hub, cache *ModelCache) (*Sess
 		Stdout:     proc.Stdout,
 		Child:      proc.Cmd,
 		SessionDir: cfg.SessionDir,
+		Owner:      cfg.Owner,
 	}
 	s.setConnected(true)
 

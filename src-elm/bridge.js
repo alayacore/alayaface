@@ -14,6 +14,25 @@
 (function () {
   "use strict";
 
+  // Per-page client identity. Persisted in sessionStorage so a page
+  // REFRESH keeps the same id (its orphaned sessions are reclaimable),
+  // while a new tab gets its own id. close_all_sessions / create /
+  // resume carry it so one tab's page load never closes another tab's
+  // live sessions (the Go backend is reachable from several clients
+  // over LAN/SSH port forwarding).
+  var clientId = (function () {
+    try {
+      var id = window.sessionStorage.getItem("alayaface-client-id");
+      if (!id) {
+        id = "c-" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+        window.sessionStorage.setItem("alayaface-client-id", id);
+      }
+      return id;
+    } catch (e) {
+      return "c-" + Date.now().toString(36);
+    }
+  })();
+
   // ─── Transport ────────────────────────────────────────────────────
   // interface:
   //   invoke(cmd, args) → Promise<result>          (Tauri invoke parity)
@@ -175,6 +194,7 @@
         nodeId: (data.nodeId === undefined || data.nodeId === null) ? null : data.nodeId,
         originSessionId: (data.originSessionId === undefined || data.originSessionId === null)
           ? null : data.originSessionId,
+        clientId: clientId,
       }).then(function (id) { app.ports.onSessionCreated.send(id); })
         .catch(function (err) {
           console.error("create_session failed:", err);
@@ -387,6 +407,7 @@
         planId: (data && data.planId) || null,
         nodeId: (data && data.nodeId) || null,
         originSessionId: (data && data.originSessionId) || null,
+        clientId: clientId,
       }).then(function (id) {
         app.ports.onSessionCreated.send(id);
         app.ports.onSessionActionResult.send({ ok: true, error: "", kind: "resume" });
@@ -410,9 +431,11 @@
     // Page load: reclaim sessions orphaned by a previous page (refresh).
     // Their windows are gone but the backend still holds the handles;
     // without this, resume_session keeps failing with "Session is
-    // already active" until the backend process is restarted.
+    // already active" until the backend process is restarted. The
+    // clientId scopes the reclaim to THIS page's sessions — a second
+    // tab (new id) or another client's live sessions are untouched.
     on("closeAllSessions", function () {
-      transport.invoke("close_all_sessions", {}).catch(function (err) {
+      transport.invoke("close_all_sessions", { clientId: clientId }).catch(function (err) {
         console.error("close_all_sessions failed:", err);
       });
     });

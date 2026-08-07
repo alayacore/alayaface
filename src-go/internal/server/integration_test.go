@@ -635,6 +635,52 @@ func TestIntegrationCloseAllSessionsReclaimsOnPageLoad(t *testing.T) {
 	}
 }
 
+// TestIntegrationCloseAllSessionsScopedByClient: close_all_sessions
+// with a clientId must reclaim only THAT client's sessions — another
+// client's live sessions survive (multi-client LAN/SSH scenario; a
+// second tab's page load must not kill the first tab's sessions). An
+// empty clientId (legacy client) still closes everything.
+func TestIntegrationCloseAllSessionsScopedByClient(t *testing.T) {
+	e := newTestEnv(t, "")
+
+	createFor := func(client string) string {
+		t.Helper()
+		body := e.rpcOK(t, "create_session", map[string]any{
+			"binaryPath": "", "configPath": "", "toolConfirm": nil, "clientId": client,
+		})
+		var id string
+		if err := json.Unmarshal(body, &id); err != nil {
+			t.Fatalf("create_session: %s", body)
+		}
+		return id
+	}
+	sidA := createFor("client-a")
+	sidB := createFor("client-b")
+
+	// A page load for client A reclaims only A's session.
+	e.rpcOK(t, "close_all_sessions", map[string]any{"clientId": "client-a"})
+	if msg := e.rpcErr(t, "close_session", map[string]any{"sessionId": sidA}); msg != "Session not found" {
+		t.Errorf("client A's session after its reclaim = %q, want 'Session not found'", msg)
+	}
+	// B's session is still active (resume is rejected).
+	if msg := e.rpcErr(t, "resume_session", map[string]any{"sessionId": sidB, "binaryPath": ""}); msg != "Session is already active" {
+		t.Errorf("client B's session after A's reclaim = %q, want 'Session is already active'", msg)
+	}
+
+	// B's own page load reclaims B's session.
+	e.rpcOK(t, "close_all_sessions", map[string]any{"clientId": "client-b"})
+	if msg := e.rpcErr(t, "close_session", map[string]any{"sessionId": sidB}); msg != "Session not found" {
+		t.Errorf("client B's session after its reclaim = %q, want 'Session not found'", msg)
+	}
+
+	// Empty clientId (legacy client) closes everything.
+	sidC := createFor("client-c")
+	e.rpcOK(t, "close_all_sessions", map[string]any{})
+	if msg := e.rpcErr(t, "close_session", map[string]any{"sessionId": sidC}); msg != "Session not found" {
+		t.Errorf("legacy close_all_sessions did not close everything: %q", msg)
+	}
+}
+
 // ─── Graceful close (save + EOF + natural exit) ─────────────────────
 
 func TestIntegrationGracefulCloseSavesSession(t *testing.T) {

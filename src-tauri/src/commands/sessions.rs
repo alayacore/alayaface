@@ -24,6 +24,7 @@ pub async fn create_session(
     plan_id: Option<String>,
     node_id: Option<String>,
     origin_session_id: Option<String>,
+    client_id: Option<String>,
     sessions: State<'_, SessionMap>,
     model_cache: State<'_, ModelCache>,
 ) -> Result<String, String> {
@@ -130,6 +131,7 @@ pub async fn create_session(
         builtin_tools: bt.as_deref(),
         system_prompt: &sp,
         work_dir: wd,
+        owner: client_id.as_deref().unwrap_or(""),
     }).await
 }
 
@@ -164,6 +166,7 @@ pub async fn resume_session(
     plan_id: Option<String>,
     node_id: Option<String>,
     origin_session_id: Option<String>,
+    client_id: Option<String>,
     sessions: State<'_, SessionMap>,
     model_cache: State<'_, ModelCache>,
 ) -> Result<String, String> {
@@ -247,6 +250,7 @@ pub async fn resume_session(
         builtin_tools: spawn.builtin_tools.as_deref(),
         system_prompt: &spawn.system_prompt,
         work_dir: wd,
+        owner: client_id.as_deref().unwrap_or(""),
     }).await
 }
 
@@ -258,17 +262,25 @@ pub async fn close_session(
     session::close(&session_id, &sessions).await
 }
 
-/// Gracefully close every active session. The frontend calls this once
-/// on page load so sessions orphaned by a page refresh (their windows
-/// are gone but the backend still holds the handles) are reclaimed —
-/// otherwise resume_session keeps failing with "Session is already
-/// active" until the backend is restarted. History is saved up to each
-/// session's cancel point (same sequence as close_session).
+/// Gracefully close every active session owned by the calling client
+/// (`client_id` None/empty = all — legacy clients). The frontend calls
+/// this once on page load so sessions orphaned by a page refresh (their
+/// windows are gone but the backend still holds the handles) are
+/// reclaimed — otherwise resume_session keeps failing with "Session is
+/// already active" until the backend is restarted. History is saved up
+/// to each session's cancel point (same sequence as close_session).
 #[tauri::command]
-pub async fn close_all_sessions(sessions: State<'_, SessionMap>) -> Result<(), String> {
+pub async fn close_all_sessions(
+    client_id: Option<String>,
+    sessions: State<'_, SessionMap>,
+) -> Result<(), String> {
+    let owner = client_id.unwrap_or_default();
     let ids: Vec<String> = {
         let map = sessions.0.lock().await;
-        map.keys().cloned().collect()
+        map.iter()
+            .filter(|(_, h)| owner.is_empty() || h.owner == owner)
+            .map(|(id, _)| id.clone())
+            .collect()
     };
     for id in ids {
         let _ = session::close(&id, &sessions).await;
@@ -387,5 +399,6 @@ pub async fn fork_session(
         builtin_tools: None,
         system_prompt: "",
         work_dir: None,
+        owner: "",
     }).await
 }

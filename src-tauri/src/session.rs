@@ -30,6 +30,11 @@ pub struct SessionHandle {
     pub child: Arc<std::sync::Mutex<Option<std::process::Child>>>,
     /// Path to the session's directory (~/.alayaface/sessions/<uuid>/).
     pub session_dir: PathBuf,
+    /// Client identity that created/resumed this session (empty =
+    /// legacy). close_all_sessions reclaims only the caller's own
+    /// sessions, so one client's page load never kills another client's
+    /// live sessions (the Go backend is reachable from several clients).
+    pub owner: String,
 }
 
 impl Drop for SessionHandle {
@@ -72,6 +77,10 @@ pub struct SessionConfig<'a> {
     /// Child process working directory (per-plan isolation; None =
     /// inherit the backend's cwd).
     pub work_dir: Option<String>,
+    /// Client identity that created the session (empty = legacy). Used
+    /// by close_all_sessions to reclaim only one client's orphaned
+    /// sessions.
+    pub owner: &'a str,
 }
 
 // ─── Factory ──────────────────────────────────────────────────────────
@@ -105,6 +114,7 @@ pub async fn create(cfg: SessionConfig<'_>) -> Result<String, String> {
         pending_commands: pending_commands.clone(),
         child: child.clone(),
         session_dir: cfg.session_dir,
+        owner: cfg.owner.to_string(),
     };
 
     cfg.sessions.0.lock().await.insert(session_id.clone(), handle);

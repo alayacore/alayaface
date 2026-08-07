@@ -35,6 +35,7 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		PlanID          *string `json:"planId"`
 		NodeID          *string `json:"nodeId"`
 		OriginSessionID *string `json:"originSessionId"`
+		ClientID        string  `json:"clientId"`
 	}
 	if err := decodeArgs(r, &args); err != nil {
 		return err
@@ -164,6 +165,7 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		BuiltinTools: bt,
 		SystemPrompt: sp,
 		WorkDir:      wd,
+		Owner:        args.ClientID,
 	}, h.Hub, h.Cache)
 	if err != nil {
 		return err
@@ -198,6 +200,7 @@ func ResumeSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		PlanID          *string `json:"planId"`
 		NodeID          *string `json:"nodeId"`
 		OriginSessionID *string `json:"originSessionId"`
+		ClientID        string  `json:"clientId"`
 	}
 	if err := decodeArgs(r, &args); err != nil {
 		return err
@@ -283,6 +286,7 @@ func ResumeSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		BuiltinTools: spawn.BuiltinTools,
 		SystemPrompt: spawn.SystemPrompt,
 		WorkDir:      wd,
+		Owner:        args.ClientID,
 	}, h.Hub, h.Cache)
 	if err != nil {
 		return err
@@ -304,14 +308,21 @@ func CloseSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	return writeResult(w, nil)
 }
 
-// CloseAllSessions gracefully closes every active session. The
+// CloseAllSessions gracefully closes every active session owned by the
+// calling client (clientId; empty = all — legacy clients). The
 // frontend calls this once on page load so sessions orphaned by a page
 // refresh (their windows are gone but the backend still holds the
 // handles) are reclaimed — otherwise resume_session keeps failing with
 // "Session is already active" until the backend is restarted. History
 // is saved up to each session's cancel point (same as close_session).
 func CloseAllSessions(h *Handler, w http.ResponseWriter, r *http.Request) error {
-	h.Sessions.CloseAllGracefully()
+	var args struct {
+		ClientID string `json:"clientId"`
+	}
+	if err := decodeArgs(r, &args); err != nil {
+		return err
+	}
+	h.Sessions.CloseAllGracefullyFor(args.ClientID)
 	return writeResult(w, nil)
 }
 
