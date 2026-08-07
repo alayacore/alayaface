@@ -578,6 +578,49 @@ try {
   await shot(page, '05e-stop-after.png');
   console.log("PASS: Plan Stop closed the run's node session windows (badge Stopped)");
 
+  // ── 8c. Closing the ORIGIN session cascades to its children (P34) ──
+  // Re-run the plan (t3 hangs again): origin session + plan window + t3
+  // session window are all open. Closing the origin session must STOP
+  // the run and close the plan window AND the t3 session window — no
+  // respawn afterwards. (Remove the hang marker again: 8b's hung t3
+  // re-wrote it, which would make t3 succeed instantly here.)
+  execSync('rm -f /tmp/alayaface-fakecore-hang-once-*.marker');
+  assert(await clickPlanHeaderBtn('Run'), 'cascade re-Run button');
+  await page.waitForFunction(() => {
+    return [...document.querySelectorAll('.session-panel')].some(p =>
+      (p.querySelector('.session-bar-title')?.textContent || '').includes('/t3]'));
+  }, { timeout: 30000 });
+  await sleep(400);
+  await shot(page, '05f-cascade-before.png');
+  // Close the ORIGIN session: the plain "Session N" window that created
+  // the plan (node sessions carry a "[Plan · ..." badge — exclude them).
+  const closedOrigin = await page.evaluate(() => {
+    const panels = [...document.querySelectorAll('.session-panel')];
+    for (const p of panels) {
+      const t = p.querySelector('.session-bar-title')?.textContent || '';
+      if (!t.includes('[Plan ·') && /Session \d+/.test(t)) {
+        const btn = p.querySelector('.session-bar-close');
+        if (btn) { btn.click(); return true; }
+      }
+    }
+    return false;
+  });
+  assert(closedOrigin, 'origin session close button clicked');
+  await page.waitForFunction(() => {
+    return document.querySelectorAll('.plan-page').length === 0;
+  }, { timeout: 10000 });
+  await sleep(1500); // let the cascade settle; assert nothing respawns
+  const cascadeAfter = await page.evaluate(() => {
+    const planCount = document.querySelectorAll('.plan-page').length;
+    const t3Count = [...document.querySelectorAll('.session-panel')].filter(p =>
+      (p.querySelector('.session-bar-title')?.textContent || '').includes('/t3]')).length;
+    return { planCount, t3Count };
+  });
+  assert(cascadeAfter.planCount === 0, 'plan window closed after origin session close, got: ' + cascadeAfter.planCount);
+  assert(cascadeAfter.t3Count === 0, 'node session window closed after origin session close (no respawn), got: ' + cascadeAfter.t3Count);
+  await shot(page, '05g-cascade-after.png');
+  console.log('PASS: closing the origin session cascaded: plan window + node session windows closed (P34)');
+
   // ── 9. No Plans manager in the system menu (P30: plans are reopened
   // via the session's [Plan: …] status-bar link; the standalone manager
   // entry was removed).

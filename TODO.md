@@ -71,6 +71,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P31 修复重启后 plan 状态丢失（用户反馈）：planMetas 重建扫描仍按 P27 旧布局找 `plans/*.meta.json`，而 P28 后 meta 在 `plans/<planId>/<planId>.meta.json` → 扫描永远读不到 → 重启后 planMetas 为空；改为从 plans/ 列表的子目录直接构造 meta 路径 + 过滤 `..`；并把扫描与文件选择器的 home 列表串行化（消除未标记 fs_list_dir 结果的竞态） | [x] |
 | P32 用户驱动的 UI/CI 一轮：S 形贝塞尔（两控制点反向）；~~祖先链连线~~（**用户澄清后移除**——DAG 内部节点已有连线，不再额外画；plan 窗口激活只连所属会话 `[Plan: …]`）；消息区覆盖式滚动条（隐藏原生滚动条 → 消息列与输入框永远同宽）；Session Manager 列表按钮统一尺寸；启动不再自动开空 session（欢迎屏，按需自开）；GitHub CI 增加 Tauri `cargo build` + 完整 E2E job（Go 后端 + fakecore + 无头 Chrome）；修复 restart-e2e 后端重启端口竞态 | [x] |
 | P33 修复页面刷新后 resume 报 "Session is already active"（用户反馈）：刷新后前端会话注册表清空，但后端仍持有旧页面的会话句柄 → resume_session 一直拒绝，只能重启 Go 进程；新增 `close_all_sessions` RPC（Go+Rust 对称，优雅关闭=历史保留），前端 init 时调用一次回收孤儿会话；restart-e2e 新增「页面刷新」阶段回归 | [x] |
+| P34 关闭 session 时级联关闭其子项（用户要求）：关掉来源 session 窗口 → 它拥有的 plans（meta origin 匹配）全部停跑（StopRun 防重生）+ 关掉各 plan 的节点会话窗口 + 关掉 plan 窗口；节点会话自己的子 plan（递归）同样级联；DeleteSession（Session Manager 删除）同样级联；纯逻辑 `Plan.Meta.plansOwnedBySession` 抽出可测；plan-e2e 新增 8c 级联回归 | [x] |
 | R 系列 | Plan 重构：模型自主子流程 + 递归（自动创建 / 回填自动继续 / 重跑级联 / 状态条 / 超时移除）——**详见 REFACTOR.md** | 进行中 |
 
 ## P24 — 输出注入（{{tX.output}}）
@@ -460,6 +461,42 @@ plan-e2e + restart-e2e）。
   → Session Manager → Resume 来源会话（断言可点、无 already active）→ `[Plan: …]`
   状态条出现；Elm 219 / Rust 43 / Go -race 全绿 + make e2e 两脚本 ALL PASS；
 - 文档：go-backend.md 命令表 + TODO 本表。
+
+---
+
+## P34 — 关闭 session 级联关闭其子项（用户要求）
+
+用户：**"when a session window got closed, its children (plans, sessions of
+plans) should also be closed"**。
+
+**语义**：会话 → plan（meta origin 归属）→ 节点会话（planNodeSessions 绑定），
+且节点会话可以再拥有子 plan（R 系列递归）→ 关闭任一会话窗口时，它下面的整棵
+子树全部关闭：
+
+- 每个子 plan：**先 StopRun**（节点置 Canceled → `closeAndClear` 对每个有绑定
+  会话的节点发 `CloseSessionFor` → 关窗口 + 杀进程；**防止 runner 重生新会话**）
+  → 再 `PlanClose`（关 plan 窗口、清队列/连接曲线）；
+- 节点会话的关闭经 `CloseSessionFor → update (CloseSession sid)` **递归**进入
+  同一级联（子 plan 的子 plan…）；树深有限（每个会话只关一次，删除即出表），
+  无环；
+- 级联中关闭的节点会话不会误发 SessionDisconnected（StopRun 已清 sessionId，
+  `findPlanIdBySession` 找不到 → runnerFailCmd 为空）；**手动**关闭仍走原逻辑
+  （Running 节点 → disconnect → 失败重试）；
+- `DeleteSession`（Session Manager 删除目录，磁盘上本就包含 plans/ 子树）同样
+  先级联关窗口/进程再删目录。
+
+**实现**：
+- `Plan/Meta.elm`（纯模块，可测）：`plansOwnedBySession : Dict String PlanMeta
+  -> String -> List String`（按 meta.origin.sessionId 求会话拥有的 plan id）；
+- `App/Update.elm`：`closeSessionChildren`（磁盘 id 解析 → 子 plan 列表 →
+  foldl `closeChildPlan`）；`closeChildPlan` = `runStepIn planId 0 R.StopRun` +
+  `update (PlanClose planId)`；`CloseSession` 与 `DeleteSession` 处理入口先跑级联；
+- 测试：PlanMetaTest +4（多 plan 归属 / 其他会话排除 / 未知会话空 / 空索引空）；
+  **Elm 217** 全绿；
+- E2E：plan-e2e 新增 **8c**——重新 Run（t3 挂起，先清 hang marker）→ 来源会话
+  ✕ 关闭 → 断言 plan 窗口消失 + `/t3` 节点窗口消失 + 等 1.5s **无重生**；
+  plan-e2e + restart-e2e ALL PASS；Rust 43 / Go -race 8 包全绿；
+- 文档：TODO 本表。
 
 ---
 

@@ -1,5 +1,6 @@
 module PlanMetaTest exposing (tests)
 
+import Dict
 import Expect
 import Json.Decode as D
 import Json.Encode as E
@@ -60,4 +61,40 @@ tests =
 
                     Err _ ->
                         Expect.pass
+        , describe "plansOwnedBySession (P34 cascade close)"
+            [ test "returns every plan whose origin is the session" <|
+                \_ ->
+                    M.plansOwnedBySession sampleMetas "sess-a"
+                        |> List.sort
+                        |> Expect.equal [ "p-1", "p-2" ]
+            , test "other sessions are not included" <|
+                \_ ->
+                    M.plansOwnedBySession sampleMetas "sess-b"
+                        |> Expect.equal [ "p-3" ]
+            , test "unknown session → empty" <|
+                \_ ->
+                    M.plansOwnedBySession sampleMetas "nope"
+                        |> Expect.equal []
+            , test "empty index → empty" <|
+                \_ ->
+                    M.plansOwnedBySession Dict.empty "sess-a"
+                        |> Expect.equal []
+            ]
         ]
+
+
+sampleMetas : Dict.Dict String M.PlanMeta
+sampleMetas =
+    Dict.fromList
+        [ ( "p-1", metaOf "sess-a" )
+        , ( "p-2", metaOf "sess-a" )
+        , ( "p-3", metaOf "sess-b" )
+        ]
+
+
+metaOf : String -> M.PlanMeta
+metaOf sessionId =
+    { origin = { sessionId = sessionId, planIndex = 1 }
+    , feedbacks = []
+    , createdAt = 1
+    }

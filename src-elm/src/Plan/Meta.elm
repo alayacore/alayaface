@@ -5,6 +5,7 @@ module Plan.Meta exposing
     , encodeMeta
     , decodeMeta
     , metaPathFor
+    , plansOwnedBySession
     )
 
 {-| Runtime metadata for a plan, stored in
@@ -38,6 +39,7 @@ required (a meta.json that fails to decode is skipped by the index
 rebuild — no lenient/legacy fallbacks).
 -}
 
+import Dict exposing (Dict)
 import Json.Decode as D
 import Json.Encode as E
 
@@ -116,3 +118,21 @@ decodeMeta =
             )
         )
         (D.field "created_at" D.int)
+
+
+{-| Every plan id whose meta `origin` is the given ON-DISK session id.
+Used by the cascade close (P34): closing a session window also closes
+every plan it owns (stop the run, close its node sessions, close the
+plan window) — recursively, since node sessions may own sub-plans.
+-}
+plansOwnedBySession : Dict String PlanMeta -> String -> List String
+plansOwnedBySession metas diskSessionId =
+    Dict.foldl
+        (\pid meta acc ->
+            if meta.origin.sessionId == diskSessionId then
+                pid :: acc
+            else
+                acc
+        )
+        []
+        metas

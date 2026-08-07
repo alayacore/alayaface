@@ -47,6 +47,7 @@
 
 - [ ] Click a **live** node → its session window is focused
 - [ ] Close a node's session window → click the node → automatically `resume_session` from disk, content complete (full UT/AT/AF/UF/AR history rendered)
+- [ ] **Cascade close (P34)**: with a plan running, close the ORIGIN session (✕) → the plan window AND every node session window close, and the run does not respawn anything; closing a node session manually (its own window) still fails the node → retry (unchanged)
 - [ ] **Repeated open/close cycles** (close → click node → close → click node…) no longer report "Session directory not found"; after app restart clicking a node still recovers (P18: nodes are always bound to the on-disk dir id; live mapping goes through planResumedFrom)
 - [ ] Failed/canceled node → click node → old session recovered via `last_session_id` for review
 - [ ] **Connection curve (P19/P27)**: focus a node's session → plan window is raised to the second layer (session z = plan z + 1), a **solid, thicker (stroke-width 3)** bezier curve (two control points) connects the session window edge to the node card; the curve follows live when dragging/resizing/scrolling; closing the session or focusing elsewhere → curve disappears; node scrolled out of the canvas → curve hidden

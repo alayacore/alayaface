@@ -570,6 +570,44 @@ eventSessionId ev =
             Nothing
 
 
+-- ─── Cascade close (P34) ──────────────────────────────────────────
+
+{-| Close everything owned by a session, recursively:
+  - every plan whose meta.json origin is this session (its on-disk id),
+  - each such plan's node sessions (which may themselves own sub-plans —
+    recursion — closed the same way through CloseSessionFor),
+  - then the plan windows themselves.
+
+Each child plan's run is STOPPED first so it cannot respawn sessions:
+StopRun marks every non-succeeded node Canceled, then closeAndClear
+emits CloseSessionFor per bound session (window + process closed); each
+of those CloseSession calls re-enters this cascade for the node
+session's own children (R-series sub-plans).
+-}
+closeSessionChildren : String -> Model -> ( Model, Cmd Msg )
+closeSessionChildren sid model =
+    let
+        diskId =
+            Dict.get sid model.planResumedFrom |> Maybe.withDefault sid
+
+        childPlanIds =
+            PM.plansOwnedBySession model.planMetas diskId
+    in
+    List.foldl closeChildPlan ( model, Cmd.none ) childPlanIds
+
+
+closeChildPlan : String -> ( Model, Cmd Msg ) -> ( Model, Cmd Msg )
+closeChildPlan planId ( model, cmds ) =
+    let
+        ( m1, c1 ) =
+            runStepIn planId 0 R.StopRun model
+
+        ( m2, c2 ) =
+            update (PlanClose planId) m1
+    in
+    ( m2, Cmd.batch [ cmds, c1, c2 ] )
+
+
 -- ─── Plan runner wiring (effects ↔ ports) ──────────────────────────
 
 {-| Fixed plan mode (D2, R2): the planner hint injected via `--system`
@@ -1514,11 +1552,22 @@ update msg model =
                     ( model, Cmd.none )
 
         CloseSession id ->
-            -- If the closed window belongs to a plan run, fail its node
-            -- so the runner retries/continues instead of hanging.
+            -- Cascade-close the session's children first (P34): plans
+            -- owned by this session (meta origin) and their node
+            -- sessions, recursively. Each child plan's run is STOPPED
+            -- (no respawn), its node sessions are closed, and the plan
+            -- window itself is closed; a node session's own children
+            -- (sub-plans, recursion) cascade the same way.
             let
+                ( m0, cascadeCmd ) =
+                    closeSessionChildren id model
+
+                -- If the closed window belongs to a plan run, fail its node
+                -- so the runner retries/continues instead of hanging.
+                -- (Cascade-closed node sessions are already Canceled by
+                -- StopRun, so they do NOT emit a spurious disconnect.)
                 runnerFailCmd =
-                    case findPlanIdBySession model id of
+                    case findPlanIdBySession m0 id of
                         Just _ ->
                             Task.perform
                                 (\t ->
@@ -1530,41 +1579,43 @@ update msg model =
                         Nothing ->
                             Cmd.none
             in
-            ( { model
-                | sessions = Dict.remove id model.sessions
-                , sessionOrder = List.filter (\k -> k /= id) model.sessionOrder
-                , sessionNums = Dict.remove id model.sessionNums
-                , windowPositions = Dict.remove id model.windowPositions
-                , planNodeSessions = Dict.remove id model.planNodeSessions
-                , planResumedFrom = Dict.remove id model.planResumedFrom
-                , planTaskStarted = Set.remove id model.planTaskStarted
+            ( { m0
+                | sessions = Dict.remove id m0.sessions
+                , sessionOrder = List.filter (\k -> k /= id) m0.sessionOrder
+                , sessionNums = Dict.remove id m0.sessionNums
+                , windowPositions = Dict.remove id m0.windowPositions
+                , planNodeSessions = Dict.remove id m0.planNodeSessions
+                , planResumedFrom = Dict.remove id m0.planResumedFrom
+                , planTaskStarted = Set.remove id m0.planTaskStarted
                 , nodeConnection =
-                    if (model.nodeConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
+                    if (m0.nodeConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
                         Nothing
 
                     else
-                        model.nodeConnection
+                        m0.nodeConnection
                 , planConnection =
-                    if (model.planConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
+                    if (m0.planConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
                         Nothing
 
                     else
-                        model.planConnection
+                        m0.planConnection
                 , activeId =
-                    if model.activeId == Just id then
-                        List.head (List.reverse (List.filter (\k -> k /= id) model.sessionOrder))
+                    if m0.activeId == Just id then
+                        List.head (List.reverse (List.filter (\k -> k /= id) m0.sessionOrder))
+
                     else
-                        model.activeId
+                        m0.activeId
               }
             , Cmd.batch
                 [ Ports.closeSession { sessionId = id }
                 , runnerFailCmd
-                , if (model.nodeConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
+                , cascadeCmd
+                , if (m0.nodeConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
                     Ports.setNodeConnection Nothing
 
                   else
                     Cmd.none
-                , if (model.planConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
+                , if (m0.planConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
                     Ports.setPlanConnection Nothing
 
                   else
@@ -3704,47 +3755,55 @@ update msg model =
 
         DeleteSession id ->
             let
+                -- Cascade-close children first (P34): the deleted dir
+                -- contains the session's plans + node sessions on disk,
+                -- so their windows/processes must go too.
+                ( mC, cascadeCmd ) =
+                    closeSessionChildren id model
+
                 -- If the deleted dir belongs to a running session, drop
                 -- its window too (delete_session_dir closes the process).
                 cleaned =
-                    if Dict.member id model.sessions then
-                        { model
-                            | sessions = Dict.remove id model.sessions
-                            , sessionOrder = List.filter (\k -> k /= id) model.sessionOrder
-                            , sessionNums = Dict.remove id model.sessionNums
-                            , windowPositions = Dict.remove id model.windowPositions
-                            , planNodeSessions = Dict.remove id model.planNodeSessions
-                            , planResumedFrom = Dict.remove id model.planResumedFrom
+                    if Dict.member id mC.sessions then
+                        { mC
+                            | sessions = Dict.remove id mC.sessions
+                            , sessionOrder = List.filter (\k -> k /= id) mC.sessionOrder
+                            , sessionNums = Dict.remove id mC.sessionNums
+                            , windowPositions = Dict.remove id mC.windowPositions
+                            , planNodeSessions = Dict.remove id mC.planNodeSessions
+                            , planResumedFrom = Dict.remove id mC.planResumedFrom
                             , nodeConnection =
-                                if (model.nodeConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
+                                if (mC.nodeConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
                                     Nothing
 
                                 else
-                                    model.nodeConnection
+                                    mC.nodeConnection
                             , planConnection =
-                                if (model.planConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
+                                if (mC.planConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
                                     Nothing
 
                                 else
-                                    model.planConnection
+                                    mC.planConnection
                             , activeId =
-                                if model.activeId == Just id then
-                                    List.head (List.reverse (List.filter (\k -> k /= id) model.sessionOrder))
+                                if mC.activeId == Just id then
+                                    List.head (List.reverse (List.filter (\k -> k /= id) mC.sessionOrder))
+
                                 else
-                                    model.activeId
+                                    mC.activeId
                         }
                     else
-                        model
+                        mC
             in
             ( { cleaned | sessionManagerError = Nothing }
             , Cmd.batch
                 [ Ports.deleteSessionDir { sessionId = id, planId = Nothing, nodeId = Nothing, originSessionId = Nothing }
-                , if (model.nodeConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
+                , cascadeCmd
+                , if (mC.nodeConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
                     Ports.setNodeConnection Nothing
 
                   else
                     Cmd.none
-                , if (model.planConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
+                , if (mC.planConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
                     Ports.setPlanConnection Nothing
 
                   else
