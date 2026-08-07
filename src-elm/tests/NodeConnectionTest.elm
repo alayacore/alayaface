@@ -82,4 +82,45 @@ suite =
                     NC.nodeConnectionFor nodeSessions resumed "ghost"
                         |> Expect.equal Nothing
             ]
+        , describe "liveSessionForOrigin"
+            [ test "origin session open → its own id" <|
+                \_ ->
+                    NC.liveSessionForOrigin
+                        (Dict.fromList [ ( "sess-a", () ) ])
+                        resumed
+                        "sess-a"
+                        |> Expect.equal (Just "sess-a")
+
+            , test "origin session resumed → fresh live id" <|
+                \_ ->
+                    NC.liveSessionForOrigin
+                        (Dict.fromList [ ( "live-c", () ) ])
+                        resumed
+                        "sess-a"
+                        |> Expect.equal (Just "live-c")
+
+            , test "origin closed (neither open nor resumed) → Nothing" <|
+                \_ ->
+                    NC.liveSessionForOrigin
+                        Dict.empty
+                        resumed
+                        "sess-b"
+                        |> Expect.equal Nothing
+
+            , test "resumed mapping exists but fresh session closed → Nothing" <|
+                \_ ->
+                    NC.liveSessionForOrigin
+                        Dict.empty
+                        resumed
+                        "sess-a"
+                        |> Expect.equal Nothing
+
+            , test "unknown origin → Nothing" <|
+                \_ ->
+                    NC.liveSessionForOrigin
+                        (Dict.fromList [ ( "sess-a", () ) ])
+                        resumed
+                        "ghost"
+                        |> Expect.equal Nothing
+            ]
         ]

@@ -156,6 +156,10 @@
           ? null : data.builtinTools,
         systemPrompt: data.systemPrompt || null,
         workDir: data.workDir || null,
+        // Plan node sessions are stored nested on disk:
+        // sessions/<planId>/<nodeId>/<uuid>/ (plain sessions omit both).
+        planId: (data.planId === undefined || data.planId === null) ? null : data.planId,
+        nodeId: (data.nodeId === undefined || data.nodeId === null) ? null : data.nodeId,
       }).then(function (id) { app.ports.onSessionCreated.send(id); })
         .catch(function (err) {
           console.error("create_session failed:", err);
@@ -362,6 +366,8 @@
       transport.invoke("resume_session", {
         sessionId: data.sessionId, binaryPath: "",
         workDir: (data && data.workDir) || null,
+        planId: (data && data.planId) || null,
+        nodeId: (data && data.nodeId) || null,
       }).then(function (id) {
         app.ports.onSessionCreated.send(id);
         app.ports.onSessionActionResult.send({ ok: true, error: "", kind: "resume" });
@@ -383,7 +389,11 @@
     });
 
     on("deleteSessionDir", function (data) {
-      transport.invoke("delete_session_dir", { sessionId: data.sessionId })
+      transport.invoke("delete_session_dir", {
+        sessionId: data.sessionId,
+        planId: (data && data.planId) || null,
+        nodeId: (data && data.nodeId) || null,
+      })
         .then(function () {
           // Reflect the deletion immediately
           transport.invoke("list_session_dirs").then(function (dirs) {
@@ -504,15 +514,23 @@
       if (el) { el.scrollIntoView({ block: "nearest" }); }
     });
 
-    // ── Node ↔ session connection curve (P19) ───────────────────────
-    // Elm raises the plan window to the second layer when its node's
-    // session is focused; this overlay draws a bezier from the session
-    // window edge to the node card. Lives on <body> (outside Elm's vdom)
-    // with the plan window's z-index: same value + later DOM position →
-    // above the plan window; the session is planZ + 1 → above the curve.
+    // ── Session ↔ node / plan ↔ session connection curves ──────────
+    // Two fixed SVG overlays on <body> (outside Elm's vdom):
+    //   .node-connection-overlay — focused node session → its node card
+    //   .plan-connection-overlay — active plan window → its owning
+    //                              session (anchored on the [Plan: …]
+    //                              button when visible, else the edge)
+    // The plan window is raised to the SECOND layer when one of its node
+    // sessions is focused (session z = plan z + 1); the plan overlay is
+    // drawn at the plan window's z (same value + later DOM position →
+    // above the plan, below the session). The plan↔session overlay is
+    // drawn at the session window's z (it runs between two windows).
     var nodeConnection = null;
+    var planConnection = null;
     var connSvg = null;
     var connPath = null;
+    var planConnSvg = null;
+    var planConnPath = null;
     var connRaf = 0;
 
     function ensureConnSvg() {
@@ -526,6 +544,19 @@
       connSvg.appendChild(connPath);
       document.body.appendChild(connSvg);
       return connSvg;
+    }
+
+    function ensurePlanConnSvg() {
+      if (planConnSvg) return planConnSvg;
+      var ns = "http://www.w3.org/2000/svg";
+      planConnSvg = document.createElementNS(ns, "svg");
+      planConnSvg.setAttribute("class", "plan-connection-overlay");
+      planConnSvg.style.display = "none";
+      planConnPath = document.createElementNS(ns, "path");
+      planConnPath.setAttribute("class", "plan-connection-curve");
+      planConnSvg.appendChild(planConnPath);
+      document.body.appendChild(planConnSvg);
+      return planConnSvg;
     }
 
     function connSessionPanel(sid) {
@@ -554,6 +585,76 @@
       return null;
     }
 
+    // The [Plan: <planId>] button inside the owning session (the status
+    // bar under the plan message, or a feedback link). Returns its rect
+    // if one is found AND visible within the session panel's viewport,
+    // else null (caller falls back to the session window edge).
+    function connPlanButtonRect(sessionPanel, planId) {
+      if (!sessionPanel) return null;
+      var sr = sessionPanel.getBoundingClientRect();
+      var marker = "[Plan: " + planId + "]";
+      var btns = sessionPanel.querySelectorAll("button");
+      for (var i = 0; i < btns.length; i++) {
+        if ((btns[i].textContent || "").indexOf(marker) === -1) continue;
+        var r = btns[i].getBoundingClientRect();
+        // Visible = intersects the session panel's content area.
+        if (r.width > 0 && r.height > 0 &&
+            r.right > sr.left && r.left < sr.right &&
+            r.bottom > sr.top && r.top < sr.bottom) {
+          return r;
+        }
+      }
+      return null;
+    }
+
+    // Edge anchor on a panel: the midpoint of the side nearest the
+    // target point.
+    function edgeAnchor(rect, tx, ty) {
+      var cx = rect.left + rect.width / 2;
+      var cy = rect.top + rect.height / 2;
+      var dx = tx - cx, dy = ty - cy;
+      var ax = Math.abs(dx), ay = Math.abs(dy);
+      if (ax > ay) {
+        return dx > 0
+          ? { x: rect.right, y: cy }
+          : { x: rect.left, y: cy };
+      }
+      return dy > 0
+        ? { x: cx, y: rect.bottom }
+        : { x: cx, y: rect.top };
+    }
+
+    // Cubic bezier with TWO independent control points (smoother than a
+    // single-point quadratic): cp1 leaves `from` along the travel
+    // direction (pulled toward `to`), cp2 arrives at `to` from the same
+    // direction; both are offset perpendicular by `bow` so the curve
+    // arcs out of the way of the two windows.
+    function curvePath(from, to) {
+      var dx = to.x - from.x, dy = to.y - from.y;
+      var dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      var ux = dx / dist, uy = dy / dist;
+      // Stronger, visible bow (clamped so short hops stay subtle).
+      var bow = Math.max(20, Math.min(80, dist * 0.18));
+      var bx = -uy * bow, by = ux * bow;
+      // Control-point reach: fixed fraction of the distance (kept in a
+      // sane band so very long curves still leave/enter smoothly).
+      var k = Math.max(0.28, Math.min(0.42, 140 / dist));
+      var c1x = from.x + ux * dist * k + bx;
+      var c1y = from.y + uy * dist * k + by;
+      var c2x = to.x - ux * dist * k + bx;
+      var c2y = to.y - uy * dist * k + by;
+      return "M " + from.x.toFixed(1) + " " + from.y.toFixed(1)
+        + " C " + c1x.toFixed(1) + " " + c1y.toFixed(1)
+        + " " + c2x.toFixed(1) + " " + c2y.toFixed(1)
+        + " " + to.x.toFixed(1) + " " + to.y.toFixed(1);
+    }
+
+    function rectVisibleIn(rect, containerRect) {
+      return rect.width > 0 && rect.height > 0 &&
+        rect.right > containerRect.left && rect.left < containerRect.right &&
+        rect.bottom > containerRect.top && rect.top < containerRect.bottom;
+    }
+
     function drawNodeConnection() {
       if (!nodeConnection) {
         if (connSvg) connSvg.style.display = "none";
@@ -570,8 +671,7 @@
       var nr = n.getBoundingClientRect();
       var pr = plan.getBoundingClientRect();
       // Node scrolled out of the plan window's visible area → hide.
-      if (nr.right < pr.left || nr.left > pr.right ||
-          nr.bottom < pr.top || nr.top > pr.bottom) {
+      if (!rectVisibleIn(nr, pr)) {
         if (connSvg) connSvg.style.display = "none";
         return;
       }
@@ -579,21 +679,9 @@
       // Anchor on the session edge nearest the node center.
       var nx = nr.left + nr.width / 2;
       var ny = nr.top + nr.height / 2;
-      var from;
-      if (nx < sr.left) from = { x: sr.left, y: sr.top + sr.height / 2 };
-      else if (nx > sr.right) from = { x: sr.right, y: sr.top + sr.height / 2 };
-      else if (ny < sr.top) from = { x: sr.left + sr.width / 2, y: sr.top };
-      else from = { x: sr.left + sr.width / 2, y: sr.bottom };
+      var from = edgeAnchor(sr, nx, ny);
       var to = { x: nx, y: ny };
-      var dx = to.x - from.x, dy = to.y - from.y;
-      var dist = Math.sqrt(dx * dx + dy * dy) || 1;
-      var bow = Math.max(10, Math.min(48, dist * 0.12));
-      var bx = (-dy / dist) * bow, by = (dx / dist) * bow;
-      var d = "M " + from.x.toFixed(1) + " " + from.y.toFixed(1)
-        + " C " + (from.x + dx * 0.33 + bx).toFixed(1) + " " + (from.y + dy * 0.33 + by).toFixed(1)
-        + " " + (from.x + dx * 0.66 + bx).toFixed(1) + " " + (from.y + dy * 0.66 + by).toFixed(1)
-        + " " + to.x.toFixed(1) + " " + to.y.toFixed(1);
-      connPath.setAttribute("d", d);
+      connPath.setAttribute("d", curvePath(from, to));
       svg.setAttribute("width", String(window.innerWidth));
       svg.setAttribute("height", String(window.innerHeight));
       // Match the plan window's z-index: above it (same z, later in
@@ -603,15 +691,70 @@
       svg.style.display = "block";
     }
 
+    function drawPlanConnection() {
+      if (!planConnection) {
+        if (planConnSvg) planConnSvg.style.display = "none";
+        return;
+      }
+      var plan = connPlanPanel(planConnection.planId);
+      var s = connSessionPanel(planConnection.sessionId);
+      if (!plan || !s) {
+        if (planConnSvg) planConnSvg.style.display = "none";
+        return;
+      }
+      var pr = plan.getBoundingClientRect();
+      var sr = s.getBoundingClientRect();
+      var svg = ensurePlanConnSvg();
+      // From the plan window edge nearest the session…
+      var scx = sr.left + sr.width / 2;
+      var scy = sr.top + sr.height / 2;
+      var from = edgeAnchor(pr, scx, scy);
+      // …to the session's [Plan: <planId>] button when visible, else the
+      // session edge nearest the plan window.
+      var pcx = pr.left + pr.width / 2;
+      var pcy = pr.top + pr.height / 2;
+      var btnRect = connPlanButtonRect(s, planConnection.planId);
+      var to = btnRect
+        ? { x: btnRect.left + btnRect.width / 2, y: btnRect.top + btnRect.height / 2 }
+        : edgeAnchor(sr, pcx, pcy);
+      planConnPath.setAttribute("d", curvePath(from, to));
+      svg.setAttribute("width", String(window.innerWidth));
+      svg.setAttribute("height", String(window.innerHeight));
+      // Between two windows: draw at the TOP of the two participants
+      // (same z + later DOM position → above both, below anything
+      // focused above them).
+      var planZ = parseInt(getComputedStyle(plan).zIndex, 10) || 0;
+      var sessionZ = parseInt(getComputedStyle(s).zIndex, 10) || 0;
+      svg.style.zIndex = String(Math.max(planZ, sessionZ));
+      svg.style.display = "block";
+    }
+
+    function drawConnections() {
+      drawNodeConnection();
+      drawPlanConnection();
+    }
+
     on("setNodeConnection", function (data) {
       nodeConnection = data || null;
-      if (nodeConnection && !connRaf) {
+      if ((nodeConnection || planConnection) && !connRaf) {
         connRaf = requestAnimationFrame(function tick() {
-          drawNodeConnection();
-          connRaf = nodeConnection ? requestAnimationFrame(tick) : 0;
+          drawConnections();
+          connRaf = (nodeConnection || planConnection) ? requestAnimationFrame(tick) : 0;
         });
-      } else if (!nodeConnection) {
-        drawNodeConnection(); // hides
+      } else if (!nodeConnection && !planConnection) {
+        drawConnections(); // hides
+      }
+    });
+
+    on("setPlanConnection", function (data) {
+      planConnection = data || null;
+      if ((nodeConnection || planConnection) && !connRaf) {
+        connRaf = requestAnimationFrame(function tick() {
+          drawConnections();
+          connRaf = (nodeConnection || planConnection) ? requestAnimationFrame(tick) : 0;
+        });
+      } else if (!nodeConnection && !planConnection) {
+        drawConnections(); // hides
       }
     });
 

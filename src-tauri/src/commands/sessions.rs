@@ -21,6 +21,8 @@ pub async fn create_session(
     builtin_tools: Option<String>,
     system_prompt: Option<String>,
     work_dir: Option<String>,
+    plan_id: Option<String>,
+    node_id: Option<String>,
     sessions: State<'_, SessionMap>,
     model_cache: State<'_, ModelCache>,
 ) -> Result<String, String> {
@@ -29,7 +31,20 @@ pub async fn create_session(
     let bin = resolve_binary(&binary_path);
     let session_id = Uuid::new_v4().to_string();
     let preset_name = preset.unwrap_or_default();
-    let session_dir = dirs::create_session_dir_from(&sessions_dir, &session_id, &preset_name)?;
+    // Plan node sessions live NESTED under sessions/<planId>/<nodeId>/ so
+    // the sessions/ top level only ever contains plain sessions (the
+    // session manager lists only top-level dirs). Plain sessions stay at
+    // sessions/<uuid>/.
+    let session_dir = match &plan_id {
+        Some(pid) if !pid.trim().is_empty() => dirs::create_session_dir_nested(
+            &sessions_dir,
+            pid,
+            node_id.as_deref().unwrap_or(""),
+            &session_id,
+            &preset_name,
+        )?,
+        _ => dirs::create_session_dir_from(&sessions_dir, &session_id, &preset_name)?,
+    };
 
     let effective_config = if config_path.is_empty() {
         session_dir.join("config").to_string_lossy().to_string()
@@ -108,10 +123,33 @@ pub async fn resume_session(
     session_id: String,
     binary_path: String,
     work_dir: Option<String>,
+    plan_id: Option<String>,
+    node_id: Option<String>,
     sessions: State<'_, SessionMap>,
     model_cache: State<'_, ModelCache>,
 ) -> Result<String, String> {
-    let sessions_dir = dirs::alayaface_dir().join("sessions").join(&session_id);
+    let sessions_root = dirs::alayaface_dir().join("sessions");
+    // Plan node sessions are nested under sessions/<planId>/<nodeId>/;
+    // the frontend passes planId (+nodeId) so resume finds the on-disk
+    // dir even though the session id alone is only unique per plan.
+    // LEGACY fallback: plan sessions created before the hierarchy lived
+    // flat at sessions/<uuid>/ — if the nested dir is missing, fall back
+    // to the top level so old sessions stay resumable (creation always
+    // nests; the manager never lists plan children).
+    let sessions_dir = match &plan_id {
+        Some(pid) if !pid.trim().is_empty() => {
+            let nested = sessions_root
+                .join(dirs::sanitize_dir_component(pid))
+                .join(dirs::sanitize_dir_component(node_id.as_deref().unwrap_or("")))
+                .join(&session_id);
+            if nested.exists() {
+                nested
+            } else {
+                sessions_root.join(&session_id)
+            }
+        }
+        _ => sessions_root.join(&session_id),
+    };
     let session_file = sessions_dir.join("session.alaya");
     let config_dir = sessions_dir.join("config");
 
@@ -196,6 +234,14 @@ pub async fn list_session_dirs() -> Result<Vec<SessionDirInfo>, String> {
         }
         let id = entry.file_name().to_string_lossy().to_string();
         let session_file = path.join("session.alaya");
+        // ONLY top-level session dirs are listed. Plan Mode nests its
+        // node sessions under sessions/<planId>/<nodeId>/ (which contain
+        // no session.alaya at the top level), so the manager never shows
+        // plan child sessions — a top-level entry is guaranteed not to be
+        // a plan's child session.
+        if !session_file.exists() {
+            continue;
+        }
         let created_at = path.metadata().ok()
             .and_then(|m| m.created().ok())
             .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs().to_string())
@@ -203,7 +249,7 @@ pub async fn list_session_dirs() -> Result<Vec<SessionDirInfo>, String> {
 
         result.push(SessionDirInfo {
             id,
-            has_session_file: session_file.exists(),
+            has_session_file: true,
             created_at,
         });
     }
@@ -213,12 +259,22 @@ pub async fn list_session_dirs() -> Result<Vec<SessionDirInfo>, String> {
 #[tauri::command]
 pub async fn delete_session_dir(
     session_id: String,
+    plan_id: Option<String>,
+    node_id: Option<String>,
     sessions: State<'_, SessionMap>,
 ) -> Result<(), String> {
     // Close if running
     let _ = session::close(&session_id, &sessions).await;
 
-    let session_dir = dirs::alayaface_dir().join("sessions").join(&session_id);
+    let sessions_root = dirs::alayaface_dir().join("sessions");
+    // Plan node sessions are nested; optional planId/nodeId locate them.
+    let session_dir = match &plan_id {
+        Some(pid) if !pid.trim().is_empty() => sessions_root
+            .join(dirs::sanitize_dir_component(pid))
+            .join(dirs::sanitize_dir_component(node_id.as_deref().unwrap_or("")))
+            .join(&session_id),
+        _ => sessions_root.join(&session_id),
+    };
     if session_dir.exists() {
         std::fs::remove_dir_all(&session_dir)
             .map_err(|e| format!("Cannot delete {:?}: {}", session_dir, e))?;

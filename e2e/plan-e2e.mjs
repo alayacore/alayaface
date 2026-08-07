@@ -196,6 +196,56 @@ try {
   await shot(page, '01-auto-created-plan.png');
   console.log('PASS: plan auto-created (no button)');
 
+  // ── 4b. Plan window ↔ owning session curve ────────────────────────
+  // The active plan window is connected to the session that auto-created
+  // it: bridge.js draws the plan-connection overlay, anchored on the
+  // session's [Plan: <planId>] button when visible. The curve must be a
+  // SOLID, thicker line (both connection curves share that style).
+  const planConnState = async () => {
+    return page.evaluate(() => {
+      const svg = document.querySelector('.plan-connection-overlay');
+      const path = svg ? svg.querySelector('path') : null;
+      const d = path ? (path.getAttribute('d') || '') : '';
+      const nums = d.split(/[ MC,]/).filter(Boolean).map(Number);
+      const visible = svg ? getComputedStyle(svg).display !== 'none' : false;
+      const style = path ? getComputedStyle(path) : null;
+      // The [Plan: …] button inside the origin session (status bar).
+      const btn = [...document.querySelectorAll('button')]
+        .find(b => /^\[Plan: /.test((b.textContent || '').trim()));
+      const br = btn ? btn.getBoundingClientRect() : null;
+      const nodeSvg = document.querySelector('.node-connection-overlay');
+      return {
+        visible,
+        hasPath: d.length > 10,
+        endX: nums.length >= 2 ? nums[nums.length - 2] : null,
+        endY: nums.length >= 2 ? nums[nums.length - 1] : null,
+        btn: br ? { x: br.left + br.width / 2, y: br.top + br.height / 2, text: (btn.textContent || '').slice(0, 40) } : null,
+        dash: style ? getComputedStyle(path).strokeDasharray : null,
+        width: style ? parseFloat(getComputedStyle(path).strokeWidth) : null,
+        nodeVisible: nodeSvg ? getComputedStyle(nodeSvg).display !== 'none' : false,
+      };
+    });
+  };
+  // Scroll the [Plan: …] status-bar button into view so the curve
+  // anchors to it (bridge.js falls back to the window edge otherwise).
+  await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('button')]
+      .find(b => /^\[Plan: /.test((b.textContent || '').trim()));
+    if (btn) btn.scrollIntoView({ block: 'center' });
+  });
+  await sleep(400);
+  let pcs = await planConnState();
+  assert(pcs.visible, 'plan↔session overlay visible, got: ' + JSON.stringify(pcs));
+  assert(pcs.hasPath, 'plan↔session curve has a path, got: ' + JSON.stringify(pcs));
+  assert(pcs.btn, 'origin session has a [Plan: …] button, got: ' + JSON.stringify(pcs));
+  assert(pcs.endX !== null && Math.abs(pcs.endX - pcs.btn.x) < 8 && Math.abs(pcs.endY - pcs.btn.y) < 8,
+    'plan↔session curve anchored to the [Plan: …] button, got: ' + JSON.stringify(pcs));
+  assert(pcs.dash === 'none' || pcs.dash === '', 'connection curve is SOLID (no dash), got: ' + JSON.stringify(pcs));
+  assert(pcs.width >= 3, 'connection curve is thicker (stroke-width ≥ 3), got: ' + JSON.stringify(pcs));
+  assert(!pcs.nodeVisible, 'node↔session overlay hidden while the plan is active, got: ' + JSON.stringify(pcs));
+  console.log('PASS: plan↔session curve visible + solid/thick + anchored to the [Plan: …] button');
+  await shot(page, '01b-plan-session-connection.png');
+
   // ── 5. Plan window → Run ──────────────────────────────────────────
   const nodeIds = await page.$$eval('.plan-node-id', els => els.map(e => e.textContent));
   assert(nodeIds.includes('t1') && nodeIds.includes('t2') && nodeIds.includes('t3'),
@@ -295,6 +345,30 @@ try {
   assert(workDirs.length >= 1, 'plan work dir exists, found: ' + JSON.stringify(workDirs));
   console.log('PASS: plan work dir isolated:', workDirs[0]);
 
+  // ── 5d. Session directory hierarchy ───────────────────────────────
+  // Plan node sessions must be NESTED under sessions/<planId>/<nodeId>/
+  // so the sessions/ top level only ever contains plain (non-plan)
+  // sessions. The origin (plain) session stays at the top level; the
+  // plan subtree holds one dir per node, each containing session dirs.
+  const sessionsRoot = path.join(home, '.alayaface', 'sessions');
+  const sessTop = readdirSync(sessionsRoot).filter(n => !n.startsWith('.'));
+  const planSubDirs = sessTop.filter(n => n.startsWith('e2e-demo-'));
+  assert(planSubDirs.length >= 1, 'plan session subtree under sessions/, got: ' + JSON.stringify(sessTop));
+  for (const pd of planSubDirs) {
+    const nodeDirs = readdirSync(path.join(sessionsRoot, pd));
+    for (const nd of nodeDirs) {
+      const uuids = readdirSync(path.join(sessionsRoot, pd, nd)).filter(n => !n.startsWith('.'));
+      assert(uuids.length >= 1, pd + '/' + nd + ': contains session dir(s), got: ' + JSON.stringify(uuids));
+    }
+    assert(['t1', 't2', 't3'].every(n => nodeDirs.includes(n)),
+      pd + ': node subdirs t1/t2/t3, got: ' + JSON.stringify(nodeDirs));
+  }
+  // Top-level entries: plan subtrees + the plain origin session — no
+  // plan child uuid may appear directly under sessions/.
+  const topUuids = sessTop.filter(n => !n.startsWith('e2e-demo-'));
+  assert(topUuids.length >= 1, 'plain origin session remains at top level, got: ' + JSON.stringify(sessTop));
+  console.log('PASS: session dir hierarchy — plan children nested, top level = plain sessions only');
+
   // ── 6. Retry evidence: t2 failed once and auto-retried ─────────────
   // (The plan window auto-closed on completion — reopen it via the
   // status bar [Plan: …] button, which also exercises PlanStatusOpen.
@@ -351,9 +425,14 @@ try {
       const active = document.querySelector('.session-panel.session-panel-active');
       const plan = [...document.querySelectorAll('.plan-panel')]
         .find(p => [...p.querySelectorAll('.plan-node-id')].some(e => e.textContent === 't1'));
+      const pathEl = svg ? svg.querySelector('path') : null;
+      const planSvg = document.querySelector('.plan-connection-overlay');
       return {
         svgVisible: svg ? getComputedStyle(svg).display !== 'none' : false,
         pathD: svg ? (svg.querySelector('path')?.getAttribute('d') || '') : '',
+        dash: pathEl ? getComputedStyle(pathEl).strokeDasharray : null,
+        width: pathEl ? parseFloat(getComputedStyle(pathEl).strokeWidth) : null,
+        planConnVisible: planSvg ? getComputedStyle(planSvg).display !== 'none' : false,
         sessionZ: active ? parseInt(getComputedStyle(active).zIndex, 10) : -1,
         planZ: plan ? parseInt(getComputedStyle(plan).zIndex, 10) : -1,
       };
@@ -365,7 +444,10 @@ try {
     assert(st.svgVisible, label + ': connection overlay visible, got: ' + JSON.stringify(st));
     assert(st.pathD.length > 10, label + ': connection curve has a path, got: ' + JSON.stringify(st));
     assert(st.sessionZ === st.planZ + 1, label + ': plan window is one layer below the session, got: ' + JSON.stringify(st));
-    console.log('PASS: ' + label + ' (session z=' + st.sessionZ + ', plan z=' + st.planZ + ')');
+    assert(st.dash === 'none' || st.dash === '', label + ': connection curve is SOLID, got: ' + JSON.stringify(st));
+    assert(st.width >= 3, label + ': connection curve is thicker (stroke-width ≥ 3), got: ' + JSON.stringify(st));
+    assert(!st.planConnVisible, label + ': plan↔session overlay hidden while a node session is focused, got: ' + JSON.stringify(st));
+    console.log('PASS: ' + label + ' (session z=' + st.sessionZ + ', plan z=' + st.planZ + ', solid + width ' + st.width + ')');
   };
   await assertConnection('node↔session connection (plan second layer + bezier)');
   await shot(page, '05a-node-connection.png');

@@ -323,6 +323,11 @@ E2E covers the gate.
   - bridge.js draws a **bezier curve** on `<body>` (rAF measures DOM `getBoundingClientRect` every frame; follows drag/resize/scroll), from the midpoint of the session window edge nearest the node to the node card center, z-index = the plan window's value (same value + inserted later in body → above the plan, below the session);
   - pure logic in `App/NodeConnection.elm` (`planNodeSessions` tags + P18's `planResumedFrom` resolves live ids from resumes; node ids may contain `/`);
   - disappearance: focusing a non-node session / plan window, closing or deleting that session or plan window; JS hides it automatically when the node scrolls out of the visible canvas;
+- **Plan window ↔ owning session curve (P27)**: when the plan window is **active**, a second curve connects it to the session that auto-created it (meta.json `origin`; resolved to the LIVE window via `planResumedFrom` when the origin was resumed):
+  - anchored on the plan window edge nearest the session, and on the session side it targets the session's **`[Plan: <planId>]` button** (the status bar under the plan message / feedback links) **when that button is visible** — otherwise it falls back to the session window edge;
+  - drawn by bridge.js as a second fixed SVG overlay (`.plan-connection-overlay`), z-index = the top of the two participant windows (above both, below anything focused above them);
+  - shown while the plan is active (auto-create, `PlanActivate`, `PlanStatusOpen`); hidden when a session is focused (the node curve takes over), or the plan/session window closes;
+  - both curves share the **solid, thicker style** (`stroke-width: 3`, no dasharray) and a **cubic bezier with two independent control points** (`curvePath` in bridge.js — stronger bow, tangent-aligned control points for a smoother arc);
 - Bottom: run log stream (node start/success/failure/retry events);
 - **Stop semantics (P23)**: clicking Stop = stop **all in-progress node sessions owned by this plan run** — the runner marks running/starting nodes Canceled, `closeAndClear` issues `CloseSessionFor` for every node with a bound session → **kills the alayacore process and closes the session window at once** (history stays on disk; clicking the node recovers it). **Not stopped**: succeeded nodes' sessions (kept viewable), other plans' sessions, normal sessions, planner sessions;
 - Closing the plan window does not stop running node sessions (run.json keeps flushing; Load run can restore); manually closing a node session window injects a disconnect event into the runner → the node fails and retries.
@@ -503,6 +508,59 @@ non-empty assistant text in the session):
   prompt references `{{t1.output}}`; fakecore echoes the received prompt →
   assert t2's session contains t1's output text and no raw template).
 
+### 8.7 Session Directory Hierarchy (P27)
+
+**Problem**: every session (plain chats AND plan node sessions) lived
+flat in `~/.alayaface/sessions/<uuid>/`. A plan's child sessions were
+indistinguishable from plain sessions on disk, so any tool iterating the
+top level (Session Manager list, backups, manual browsing) had to know
+about plan metadata to tell them apart.
+
+**Solution**: plan node sessions are created NESTED — a top-level entry
+under `sessions/` is guaranteed to be a plain (non-plan) session:
+
+```
+~/.alayaface/sessions/
+  <uuid>/                  ← plain sessions ONLY (top level = never a plan child)
+  <planId>/                ← one subtree per plan (sanitized id)
+    <nodeId>/              ← one subtree per node (sanitized id)
+      <uuid>/              ← the node session (config/ + session.alaya)
+```
+
+- **create_session** / **resume_session** / **delete_session_dir** gain
+  optional `planId` + `nodeId` arguments (frontend passes both for node
+  sessions, omits them for plain sessions):
+  - `create_session` with planId → `sessions/<planId>/<nodeId>/<uuid>/`;
+    without → `sessions/<uuid>/` (unchanged);
+  - `resume_session` with planId → resolves `sessions/<planId>/<nodeId>/<sessionId>/`
+    (the resumed session keeps its fresh-id semantics and the ORIGINAL
+    on-disk dir, P18); without → top-level (Session Manager resume);
+    **legacy fallback**: pre-hierarchy plan sessions (flat at
+    `sessions/<uuid>/`) stay resumable — nested dir missing → fall back
+    to the top level (creation always nests; the manager never lists
+    plan children);
+  - `delete_session_dir` with planId → removes the nested dir;
+- **Sanitization**: plan/node ids may contain `/`, spaces, etc. (node ids
+  may contain `/` by schema) → `SanitizeDirComponent` / `sanitize_dir_component`
+  map every char outside `[A-Za-z0-9_-]` to `_` (including `.`, so an id of
+  `..` can never escape the sessions dir), empty → `p`. **Deterministic**:
+  create and resume apply the same mapping, so both sides always agree;
+- **list_session_dirs** (Session Manager) now lists ONLY top-level dirs
+  that directly contain `session.alaya` — plan subtrees never appear, and
+  a listed entry is by construction not a plan child session;
+- Frontend: `Ports.createSession`/`resumeSession` carry `planId`/`nodeId`
+  (`nodeSessionArgsIn` fills them for runner nodes; plain creates pass
+  Nothing); bridge.js passes them through to the backend;
+- Dual-backend parity: Go (`internal/dirs`, `handlers/sessions.go`) and
+  Rust (`src-tauri/src/dirs.rs`, `commands/sessions.rs`) implement the
+  same layout and sanitizer;
+- Tests: Go `TestSanitizeDirComponent` / `TestCreatePlanSessionDirFromNests` /
+  `TestIntegrationNestedPlanSessionDir` (create→nested, manager hides plan
+  dirs, nested resume works, flat resume fails, nested delete) + Rust
+  `sanitize_dir_component_maps_to_safe_names` /
+  `create_session_dir_nested_keeps_plan_children_out_of_top_level` + E2E
+  (asserts `sessions/<planId>/{t1,t2,t3}/<uuid>` after a run).
+
 ---
 
 ## 9. Presets & Seed Presets
@@ -569,6 +627,7 @@ non-empty assistant text in the session):
 | P24 | output injection `{{tX.output}}` (§8.6: TaskDone records output → run.json persistence → downstream SendPrompt replacement → detail panel display) | ✅ done |
 | P25 | close_session cancel-first (§8.3: Stop/close window immediately cancels the task, history saved up to the cancel point) | ✅ done |
 | P26 | plan JSON top-level `"type": "alayaface-plan"` marker (§5/§6.7: the button only recognizes the explicit marker; **required, no compat** — missing/wrong value errors out) | ✅ done |
+| P27 | connection curves upgraded (§7.1: plan↔owning-session curve anchored to the visible `[Plan: …]` button; both curves solid + thicker with a 2-control-point bezier) + session dir hierarchy (§8.7: `sessions/<planId>/<nodeId>/<uuid>/`, top level = plain sessions only) | ✅ done |
 
 > Implementation deviations: the DAG renders in pure HTML/CSS (absolute-positioned
 > divs + orthogonal connectors) because elm/svg isn't in the offline package

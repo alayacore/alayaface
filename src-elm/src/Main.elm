@@ -86,10 +86,11 @@ init _ =
       , planResumeFrom = Nothing
       , planResumedFrom = Dict.empty
       , nodeConnection = Nothing
+      , planConnection = Nothing
       , homeDir = ""
       }
     , Cmd.batch
-        [ Ports.createSession { toolConfirm = Nothing, preset = Nothing, builtinTools = Nothing, systemPrompt = Just App.Update.planSystemPrompt, workDir = Nothing }
+        [ Ports.createSession { toolConfirm = Nothing, preset = Nothing, builtinTools = Nothing, systemPrompt = Just App.Update.planSystemPrompt, workDir = Nothing, planId = Nothing, nodeId = Nothing }
         , Ports.listPresets {}
         , Ports.fsHomeDir {}
         , Task.attempt GotContainerSize (Dom.getElement "main-content")

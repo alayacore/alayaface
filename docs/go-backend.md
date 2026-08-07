@@ -80,11 +80,11 @@ One-way push (server → client), message format:
 
 | Rust command | Go endpoint | Args (camelCase) | Return |
 |--------------|-------------|------------------|--------|
-| `create_session` | `POST /rpc/create_session` | `binaryPath`, `configPath`, `toolConfirm`(nullable), `preset`(nullable), `builtinTools`(nullable), `systemPrompt`(nullable), `workDir`(nullable) | string sessionId |
-| `resume_session` | `POST /rpc/resume_session` | `sessionId`, `binaryPath`, `workDir`(nullable) | string sessionId |
+| `create_session` | `POST /rpc/create_session` | `binaryPath`, `configPath`, `toolConfirm`(nullable), `preset`(nullable), `builtinTools`(nullable), `systemPrompt`(nullable), `workDir`(nullable), `planId`(nullable), `nodeId`(nullable) | string sessionId |
+| `resume_session` | `POST /rpc/resume_session` | `sessionId`, `binaryPath`, `workDir`(nullable), `planId`(nullable), `nodeId`(nullable) | string sessionId |
 | `close_session` | `POST /rpc/close_session` | `sessionId` | — (graceful: CI `save` → stdin EOF → ≤5s natural exit → SIGKILL fallback) |
-| `list_session_dirs` | `POST /rpc/list_session_dirs` | — | `[{id, has_session_file, created_at}]` |
-| `delete_session_dir` | `POST /rpc/delete_session_dir` | `sessionId` | — |
+| `list_session_dirs` | `POST /rpc/list_session_dirs` | — | `[{id, has_session_file, created_at}]` (top-level session dirs only; plan subtrees excluded) |
+| `delete_session_dir` | `POST /rpc/delete_session_dir` | `sessionId`, `planId`(nullable), `nodeId`(nullable) | — |
 | `fork_session` | `POST /rpc/fork_session` | `sourceSessionId`, `historyId`, `binaryPath` | string sessionId |
 | `alayacore_send_prompt` | `POST /rpc/alayacore_send_prompt` | `sessionId`, `text`, `media:[{media_type,uri}]` | — |
 | `alayacore_cancel` | `POST /rpc/alayacore_cancel` | `sessionId` | — |
@@ -373,7 +373,9 @@ runtimes auto-switch on the presence of `window.__TAURI__`, avoiding two bridge 
 4. **CO injection ordering**: register `pendingCmds` **before** writing the CI frame
    (the race point Rust comments call out).
 5. **Temp probes**: `list_default_models` etc. must not read the session cache; use temp probes.
-6. **Dual-backend coexistence**: both backends share `~/.alayaface/sessions/<uuid>`;
+6. **Dual-backend coexistence**: both backends share `~/.alayaface/sessions/`
+   (plain sessions at the top level, plan node sessions nested under
+   `sessions/<planId>/<nodeId>/<uuid>/` — same sanitizer on both sides);
    resuming the same session dir from both sides at once conflicts (Rust already guards
    double-resume). Recommend using one backend at a time; document "do not operate the
    same session from both backends simultaneously".

@@ -658,6 +658,105 @@ func TestIntegrationSessionWorkDir(t *testing.T) {
 	e.rpcOK(t, "close_session", map[string]any{"sessionId": sid2})
 }
 
+// ─── Nested plan-session directories ────────────────────────────────
+
+// Plan node sessions (create_session with planId/nodeId) must be stored
+// NESTED under sessions/<planId>/<nodeId>/ so the sessions/ top level
+// only ever contains plain (non-plan) sessions. The session manager
+// (list_session_dirs) must not show plan dirs, resume must find the
+// nested dir, and delete must remove it.
+func TestIntegrationNestedPlanSessionDir(t *testing.T) {
+	e := newTestEnv(t, "")
+	sessionsRoot := filepath.Join(dirs.AlayafaceDir(), "sessions")
+
+	// Plain session stays at the top level. session.alaya is written by
+	// the core on boot, so wait for the boot SM before asserting.
+	plainSid := e.createSession(t)
+	e.waitEvent(t, "tlv-frame", func(p map[string]any) bool {
+		js, _ := p["json"].(map[string]any)
+		return p["session_id"] == plainSid && p["tag"] == "SM" && js != nil && js["type"] == "task"
+	})
+	if _, err := os.Stat(filepath.Join(sessionsRoot, plainSid, "session.alaya")); err != nil {
+		t.Fatalf("plain session dir missing: %v", err)
+	}
+	e.rpcOK(t, "close_session", map[string]any{"sessionId": plainSid})
+
+	// Plan node session goes NESTED (id with '/' + spaces exercises the
+	// sanitizer; create and resume must agree on the mapping).
+	workDir := filepath.Join(dirs.AlayafaceDir(), "plans", "demo 1", "work")
+	body := e.rpcOK(t, "create_session", map[string]any{
+		"binaryPath": "", "configPath": "", "toolConfirm": nil,
+		"workDir": workDir, "planId": "demo 1", "nodeId": "t1/x",
+	})
+	var sid string
+	if err := json.Unmarshal(body, &sid); err != nil {
+		t.Fatalf("create_session: %s", body)
+	}
+	nestedDir := filepath.Join(sessionsRoot, "demo_1", "t1_x", sid)
+	// The nested DIR (with config/) is created synchronously; the
+	// session.alaya appears once the core boots.
+	if _, err := os.Stat(filepath.Join(nestedDir, "config")); err != nil {
+		t.Fatalf("plan session not nested at %s: %v", nestedDir, err)
+	}
+	// Top level must NOT contain the plan session id.
+	if _, err := os.Stat(filepath.Join(sessionsRoot, sid)); err == nil {
+		t.Fatal("plan child session must not live at the sessions top level")
+	}
+	e.waitEvent(t, "tlv-frame", func(p map[string]any) bool {
+		js, _ := p["json"].(map[string]any)
+		return p["session_id"] == sid && p["tag"] == "SM" && js != nil && js["type"] == "task"
+	})
+	if _, err := os.Stat(filepath.Join(nestedDir, "session.alaya")); err != nil {
+		t.Fatalf("nested session.alaya missing: %v", err)
+	}
+
+	// list_session_dirs shows only top-level SESSION dirs (not plan dirs).
+	var dirs1 []map[string]any
+	body = e.rpcOK(t, "list_session_dirs", map[string]any{})
+	if err := json.Unmarshal(body, &dirs1); err != nil {
+		t.Fatalf("list_session_dirs: %s", body)
+	}
+	if len(dirs1) != 1 || dirs1[0]["id"] != plainSid {
+		t.Fatalf("list_session_dirs = %v, want only the plain session %s", dirs1, plainSid)
+	}
+
+	// Resume with planId/nodeId finds the nested dir (close the live
+	// session first — double-resume of the same dir is rejected).
+	e.rpcOK(t, "close_session", map[string]any{"sessionId": sid})
+	body = e.rpcOK(t, "resume_session", map[string]any{
+		"sessionId": sid, "binaryPath": "", "workDir": workDir, "planId": "demo 1", "nodeId": "t1/x",
+	})
+	var newID string
+	if err := json.Unmarshal(body, &newID); err != nil {
+		t.Fatalf("resume_session: %s", body)
+	}
+	if newID == sid {
+		t.Fatal("resume must hand out a fresh id")
+	}
+	e.rpcOK(t, "close_session", map[string]any{"sessionId": newID})
+
+	// Resume WITHOUT planId must NOT find it (proves the lookup is
+	// nested-aware, not a flat fallback).
+	e.rpcErr(t, "resume_session", map[string]any{"sessionId": sid, "binaryPath": ""})
+
+	// LEGACY fallback: a pre-hierarchy plan session lives flat at the top
+	// level — resuming it WITH planId falls back to sessions/<uuid>.
+	body = e.rpcOK(t, "resume_session", map[string]any{
+		"sessionId": plainSid, "binaryPath": "", "planId": "legacy-plan", "nodeId": "t1",
+	})
+	var legacyID string
+	if err := json.Unmarshal(body, &legacyID); err != nil {
+		t.Fatalf("legacy flat resume: %s", body)
+	}
+	e.rpcOK(t, "close_session", map[string]any{"sessionId": legacyID})
+
+	// Delete with planId/nodeId removes the nested dir.
+	e.rpcOK(t, "delete_session_dir", map[string]any{"sessionId": sid, "planId": "demo 1", "nodeId": "t1/x"})
+	if _, err := os.Stat(nestedDir); err == nil {
+		t.Fatal("nested plan session dir not deleted")
+	}
+}
+
 // ─── Token auth hardening ───────────────────────────────────────────
 
 func TestIntegrationTokenAuth(t *testing.T) {

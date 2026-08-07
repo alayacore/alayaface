@@ -255,8 +255,51 @@ pub fn create_session_dir_from(
     uuid: &str,
     preset: &str,
 ) -> Result<PathBuf, String> {
+    create_session_dir_in(sessions_dir, uuid, preset)
+}
+
+/// Map an arbitrary plan/node id to a safe single path component
+/// (deterministic: create and resume apply the same mapping, so both
+/// sides agree on the directory). Every character outside
+/// [A-Za-z0-9_-] becomes '_' — including '.', so an id of ".." can
+/// never resolve to a parent directory — and an empty result becomes
+/// "p". Mirrors Go dirs.SanitizeDirComponent.
+pub fn sanitize_dir_component(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+            out.push(c);
+        } else {
+            out.push('_');
+        }
+    }
+    if out.is_empty() {
+        out.push('p');
+    }
+    out
+}
+
+/// Create a PLAN NODE session directory nested under
+/// sessions/<planId>/<nodeId>/<uuid>/, so the sessions/ top level only
+/// ever contains plain (non-plan) sessions. planId/nodeId are sanitized
+/// with `sanitize_dir_component`. Mirrors Go CreatePlanSessionDirFrom.
+pub fn create_session_dir_nested(
+    sessions_dir: &PathBuf,
+    plan_id: &str,
+    node_id: &str,
+    uuid: &str,
+    preset: &str,
+) -> Result<PathBuf, String> {
+    let parent = sessions_dir
+        .join(sanitize_dir_component(plan_id))
+        .join(sanitize_dir_component(node_id));
+    create_session_dir_in(&parent, uuid, preset)
+}
+
+/// Shared body: copy the preset's config into parent/<uuid>/config.
+fn create_session_dir_in(parent: &std::path::Path, uuid: &str, preset: &str) -> Result<PathBuf, String> {
     ensure()?; // guarantee presets exist + active marker set
-    let session_dir = sessions_dir.join(uuid);
+    let session_dir = parent.join(uuid);
     let dst_config = session_dir.join("config");
     let template = if preset.is_empty() {
         active_config_dir()?
@@ -478,6 +521,33 @@ mod tests {
 
             // Unknown preset is rejected.
             assert!(create_session_dir_from(&sessions, "q", "nope").is_err());
+        });
+    }
+
+    #[test]
+    fn sanitize_dir_component_maps_to_safe_names() {
+        assert_eq!(sanitize_dir_component("demo-1"), "demo-1");
+        assert_eq!(sanitize_dir_component("task 1"), "task_1");
+        assert_eq!(sanitize_dir_component("a/b"), "a_b");
+        assert_eq!(sanitize_dir_component(".."), "__");
+        assert_eq!(sanitize_dir_component("."), "_");
+        assert_eq!(sanitize_dir_component(""), "p");
+        // Deterministic: create and resume must agree.
+        assert_eq!(sanitize_dir_component("a/b"), sanitize_dir_component("a_b"));
+    }
+
+    #[test]
+    fn create_session_dir_nested_keeps_plan_children_out_of_top_level() {
+        isolated_home(|| {
+            let (config, sessions) = ensure().unwrap();
+            std::fs::write(config.join("model.conf"), "name: \"Real\"\n").unwrap();
+
+            let dir = create_session_dir_nested(&sessions, "demo plan/x", "t1", "uuid-1", "").unwrap();
+            let want = sessions.join("demo_plan_x").join("t1").join("uuid-1");
+            assert_eq!(dir, want);
+            assert!(dir.join("config").join("model.conf").exists());
+            // The session uuid must NOT appear at the top level.
+            assert!(!sessions.join("uuid-1").exists());
         });
     }
 }

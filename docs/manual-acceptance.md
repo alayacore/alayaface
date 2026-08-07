@@ -44,7 +44,8 @@
 - [ ] Close a node's session window → click the node → automatically `resume_session` from disk, content complete (full UT/AT/AF/UF/AR history rendered)
 - [ ] **Repeated open/close cycles** (close → click node → close → click node…) no longer report "Session directory not found"; after app restart clicking a node still recovers (P18: nodes are always bound to the on-disk dir id; live mapping goes through planResumedFrom)
 - [ ] Failed/canceled node → click node → old session recovered via `last_session_id` for review
-- [ ] **Connection curve (P19)**: focus a node's session → plan window is raised to the second layer (session z = plan z + 1), a dashed bezier curve connects the session window edge to the node card; the curve follows live when dragging/resizing/scrolling; closing the session or focusing elsewhere → curve disappears; node scrolled out of the canvas → curve hidden
+- [ ] **Connection curve (P19/P27)**: focus a node's session → plan window is raised to the second layer (session z = plan z + 1), a **solid, thicker (stroke-width 3)** bezier curve (two control points) connects the session window edge to the node card; the curve follows live when dragging/resizing/scrolling; closing the session or focusing elsewhere → curve disappears; node scrolled out of the canvas → curve hidden
+- [ ] **Plan ↔ session curve (P27)**: focus (activate) the plan window → a second solid curve connects it to the session that created it, anchored on that session's `[Plan: <planId>]` button when visible (scroll it out of view → the curve falls back to the session window edge); focusing a session hides it (the node curve takes over); closing the plan window or its origin session hides it
 - [ ] Node detail panel shows a "history sessions (N)" list → click a short id → opens **that** attempt's session (old attempts remain reachable after retry rebinds; opening an old session does **not** change the node's current binding)
 - [ ] Reopen the app → open the plan → run.json silently restored → clicking a ran node reopens its session; the node detail "history sessions" list is preserved too
 - [ ] **Load run** → restore and continue executing unfinished tasks
@@ -73,6 +74,13 @@
 - [ ] Node detail panel shows the node's Output (final answer for succeeded nodes; "no output recorded" for unsuccessful nodes)
 - [ ] Referencing a nonexistent task id (e.g. `{{t9.output}}`) → the downstream prompt contains an English placeholder notice, not the raw template
 - [ ] Reopen the app → open the plan → silently restore and re-Run unfinished tasks → downstream nodes still inject (upstream Succeeded nodes don't rerun; output restored from run.json)
+
+## 5c. Session Directory Hierarchy (P27)
+
+- [ ] After a Run, plan node sessions live at `~/.alayaface/sessions/<planId>/<nodeId>/<uuid>/` (config/ + session.alaya inside), NOT at the top level
+- [ ] `~/.alayaface/sessions/` top level contains only plain (non-plan) sessions + plan subtrees — no plan child uuid directly
+- [ ] Session Manager never lists plan child sessions (only plain sessions)
+- [ ] Click a node (resume) after the app restarts → still reopens the session (nested dir found via planId/nodeId)
 
 ## 5. Graceful Close (P25 cancel-first)
 

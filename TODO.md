@@ -64,6 +64,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P24 Output injection `{{tX.output}}`（TaskDone 记录输出 → run.json 持久化 → 下游 prompt 替换 → 详情面板） | [x] |
 | P25 Close_session cancel-first（Stop/关窗口立即取消任务，不等 drain 跑完；历史保存到取消点） | [x] |
 | P26 plan JSON 顶层 `"type": "alayaface-plan"` 标志（按钮只认显式标志，普通 ```json 不误触发；**必填无兼容**——缺失/错误值直接报错） | [x] |
+| P27 连线升级 + session 目录层级：plan↔所属 session 连线（锚到可见的 `[Plan: …]` 按钮）；两条连线实线加粗 + 双控制点贝塞尔；`sessions/<planId>/<nodeId>/<uuid>/` 嵌套（顶层=纯普通会话） | [x] |
 | R 系列 | Plan 重构：模型自主子流程 + 递归（自动创建 / 回填自动继续 / 重跑级联 / 状态条 / 超时移除）——**详见 REFACTOR.md** | 进行中 |
 
 ## P24 — 输出注入（{{tX.output}}）
@@ -153,6 +154,58 @@ C1 安全：`cancelTask` → `activeTask.cancel()` → 任务经 `taskResultCh`
       （无标志）→ 管理器显示 `Missing top-level "type"...` 且不开窗口；
       ALL PASS；
 - [x] 文档：plan-mode.md §5 schema/字段表（type 必填）、§6.7、§12、§13 已确认。
+
+---
+
+## P27 — 连线升级 + session 目录层级
+
+用户三项要求：
+1. **Plan 窗口 ↔ 所属 session 连线**：plan 窗口激活时，用一条线把它和
+   创建它的 session（meta.json origin）连起来；session 里可见的
+   `[Plan: <planId>]` 按钮作为锚点（按钮不可见/滚出视野时退回窗口边）。
+2. **实线加粗 + 双控制点贝塞尔**：session↔node 与 plan↔session 两条连线
+   都是实线（去掉 dasharray）、更粗（stroke-width 3），贝塞尔用 2 个
+   独立控制点（cubic `C`），更强的 bow + 切向对齐 → 更平滑。
+3. **session 目录层级**：plan 子会话嵌套到
+   `sessions/<planId>/<nodeId>/<uuid>/`，保证 `sessions/` 顶层只可能是
+   普通（非 plan）会话。
+
+### 1+2 前端（bridge.js + Elm）
+- [x] `App/NodeConnection.elm`：新增 `PlanConnection {planId, sessionId}` +
+      `liveSessionForOrigin`（origin 会话 live id 解析：原 id 或 resume 的新 id）；
+- [x] Model 新增 `planConnection : Maybe PlanConnection`；`planConnectionFor planId`
+      从 planMetas.origin 解析（Update.elm）；
+- [x] 新 port `setPlanConnection` + bridge.js `.plan-connection-overlay`（第二个
+      SVG overlay）；`curvePath(from,to)` 共享：**2 个独立控制点** cubic +
+      `bow = clamp(20,80, dist*0.18)`；z-index = 两窗口 z 的较大者（都盖住）；
+- [x] 显示时机：plan 激活（addPlanWindow/PlanActivate/PlanStatusOpen）设置 +
+      port 发出；session 聚焦（activateSessionModel/ActivateSession 幂等分支/
+      SessionCreated resume 分支）清空；PlanClose/CloseSession/DeleteSession
+      按 planId/sessionId 清空；
+- [x] CSS：`.node-connection-curve`/`.plan-connection-curve` 实线 + width 3；
+- [x] bridge.js 锚点：session 端优先找会话内 `[Plan: <planId>]` 按钮
+      （可见且与会话内容区相交）→ 锚到按钮中心；否则退回窗口边；
+- [x] 测试：NodeConnectionTest +5（liveSessionForOrigin）；Elm 213 全绿。
+
+### 3 后端 session 目录层级（Rust + Go 双端对称）
+- [x] `dirs.SanitizeDirComponent` / `sanitize_dir_component`：非 `[A-Za-z0-9_-]`
+      字符（含 `.`）→ `_`，空 → `p`；确定性（create/resume 同映射，`.`→`_`
+      使 `..` 无法逃逸 sessions 根）；
+- [x] `CreatePlanSessionDirFrom` / `create_session_dir_nested`：
+      `sessions/<planId>/<nodeId>/<uuid>/`（共用 `createSessionDirIn` 拷贝 config）；
+- [x] `create_session` / `resume_session` / `delete_session_dir` 增加可选
+      `planId`/`nodeId`：有 → 嵌套路径，无 → 顶层（普通会话不变）；
+- [x] `list_session_dirs`：只列顶层**直接含 session.alaya** 的目录
+      → 管理器永远不出现 plan 子会话；
+- [x] 前端：Ports/bridge.js 透传 planId/nodeId；`nodeSessionArgsIn` 填节点
+      会话；普通创建/管理器 resume 传 Nothing；
+- [x] 测试：Go `TestSanitizeDirComponent` + `TestCreatePlanSessionDirFromNests` +
+      `TestIntegrationNestedPlanSessionDir`（create 嵌套/管理器隐藏/嵌套
+      resume 成功/扁平 resume 失败/嵌套 delete）；Rust 同名 2 例；全绿；
+- [x] E2E：4b 断言 plan↔session 曲线可见 + 锚到按钮 + 实线 width≥3 + node
+      曲线互斥；7b 断言 node 曲线实线加粗 + plan 曲线隐藏；5d 断言
+      `sessions/<planId>/{t1,t2,t3}/<uuid>` 层级；ALL PASS；
+- [x] 文档：plan-mode.md §7.1（两条曲线）、新增 §8.7、TODO 本表。
 
 ---
 

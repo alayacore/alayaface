@@ -143,6 +143,10 @@ type alias Model =
     -- the second layer and a bezier curve connects the two windows
     -- (drawn by bridge.js; Elm only tracks which pair is connected).
     , nodeConnection : Maybe NC.NodeConnection
+    -- Active plan window ↔ owning session connection: when the plan
+    -- window is active, a curve connects it to the (live) session that
+    -- auto-created it (meta.json origin). Drawn by bridge.js.
+    , planConnection : Maybe NC.PlanConnection
     , homeDir : String
     }
 

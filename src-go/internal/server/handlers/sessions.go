@@ -33,6 +33,8 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		BuiltinTools *string `json:"builtinTools"`
 		SystemPrompt *string `json:"systemPrompt"`
 		WorkDir      *string `json:"workDir"`
+		PlanID       *string `json:"planId"`
+		NodeID       *string `json:"nodeId"`
 	}
 	if err := decodeArgs(r, &args); err != nil {
 		return err
@@ -48,7 +50,20 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	if args.Preset != nil {
 		presetName = *args.Preset
 	}
-	sessionDir, err := dirs.CreateSessionDirFrom(sessionsDir, id, presetName)
+	// Plan node sessions live NESTED under sessions/<planId>/<nodeId>/ so
+	// the sessions/ top level only ever contains plain sessions (the
+	// session manager lists only top-level dirs). Plain sessions stay at
+	// sessions/<uuid>/.
+	var sessionDir string
+	if args.PlanID != nil && strings.TrimSpace(*args.PlanID) != "" {
+		nodeID := ""
+		if args.NodeID != nil {
+			nodeID = *args.NodeID
+		}
+		sessionDir, err = dirs.CreatePlanSessionDirFrom(sessionsDir, *args.PlanID, nodeID, id, presetName)
+	} else {
+		sessionDir, err = dirs.CreateSessionDirFrom(sessionsDir, id, presetName)
+	}
 	if err != nil {
 		return err
 	}
@@ -143,12 +158,34 @@ func ResumeSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		SessionID  string  `json:"sessionId"`
 		BinaryPath string  `json:"binaryPath"`
 		WorkDir    *string `json:"workDir"`
+		PlanID     *string `json:"planId"`
+		NodeID     *string `json:"nodeId"`
 	}
 	if err := decodeArgs(r, &args); err != nil {
 		return err
 	}
 
-	sessionsDir := filepath.Join(dirs.AlayafaceDir(), "sessions", args.SessionID)
+	sessionsRoot := filepath.Join(dirs.AlayafaceDir(), "sessions")
+	// Plan node sessions live nested under sessions/<planId>/<nodeId>/;
+	// the frontend passes planId (+nodeId) so resume finds the on-disk
+	// dir even though the session id alone is only unique per plan.
+	// LEGACY fallback: plan sessions created before the hierarchy lived
+	// flat at sessions/<uuid>/ — if the nested dir is missing, fall back
+	// to the top level so old sessions stay resumable (creation always
+	// nests; the manager never lists plan children).
+	var sessionsDir string
+	if args.PlanID != nil && strings.TrimSpace(*args.PlanID) != "" {
+		nodeID := ""
+		if args.NodeID != nil {
+			nodeID = *args.NodeID
+		}
+		sessionsDir = filepath.Join(sessionsRoot, dirs.SanitizeDirComponent(*args.PlanID), dirs.SanitizeDirComponent(nodeID), args.SessionID)
+		if _, err := os.Stat(sessionsDir); err != nil {
+			sessionsDir = filepath.Join(sessionsRoot, args.SessionID)
+		}
+	} else {
+		sessionsDir = filepath.Join(sessionsRoot, args.SessionID)
+	}
 	sessionFile := filepath.Join(sessionsDir, "session.alaya")
 	configDir := filepath.Join(sessionsDir, "config")
 
@@ -238,8 +275,14 @@ func ListSessionDirs(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		if err != nil || !fi.IsDir() {
 			continue
 		}
-		_, err = os.Stat(filepath.Join(path, "session.alaya"))
-		hasSessionFile := err == nil
+		// ONLY top-level session dirs are listed. Plan Mode nests its
+		// node sessions under sessions/<planId>/<nodeId>/ (which contain
+		// no session.alaya at the top level), so the manager never shows
+		// plan child sessions — a top-level entry is guaranteed not to be
+		// a plan's child session.
+		if _, err := os.Stat(filepath.Join(path, "session.alaya")); err != nil {
+			continue
+		}
 		// Sort key: modification time (matches Rust's sort by
 		// metadata.modified()). created_at mirrors Rust's
 		// metadata.created() (birth time) where available.
@@ -248,7 +291,7 @@ func ListSessionDirs(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		items = append(items, item{
 			info: SessionDirInfo{
 				ID:             e.Name(),
-				HasSessionFile: hasSessionFile,
+				HasSessionFile: true,
 				CreatedAt:      fmt.Sprintf("%d", created.Unix()),
 			},
 			mod: mod,
@@ -267,13 +310,26 @@ func ListSessionDirs(h *Handler, w http.ResponseWriter, r *http.Request) error {
 // on-disk session directory.
 func DeleteSessionDir(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	var args struct {
-		SessionID string `json:"sessionId"`
+		SessionID string  `json:"sessionId"`
+		PlanID    *string `json:"planId"`
+		NodeID    *string `json:"nodeId"`
 	}
 	if err := decodeArgs(r, &args); err != nil {
 		return err
 	}
 	_ = h.Sessions.Close(args.SessionID)
-	sessionDir := filepath.Join(dirs.AlayafaceDir(), "sessions", args.SessionID)
+	sessionsRoot := filepath.Join(dirs.AlayafaceDir(), "sessions")
+	// Plan node sessions are nested; optional planId/nodeId locate them.
+	var sessionDir string
+	if args.PlanID != nil && strings.TrimSpace(*args.PlanID) != "" {
+		nodeID := ""
+		if args.NodeID != nil {
+			nodeID = *args.NodeID
+		}
+		sessionDir = filepath.Join(sessionsRoot, dirs.SanitizeDirComponent(*args.PlanID), dirs.SanitizeDirComponent(nodeID), args.SessionID)
+	} else {
+		sessionDir = filepath.Join(sessionsRoot, args.SessionID)
+	}
 	if _, err := os.Stat(sessionDir); err == nil {
 		if err := os.RemoveAll(sessionDir); err != nil {
 			return fmt.Errorf("Cannot delete %s: %w", sessionDir, err)

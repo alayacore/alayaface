@@ -10,9 +10,12 @@
 //	      settings.conf    — AlayaFace-owned (tool_confirm etc.); NOT copied into sessions
 //	      themes/
 //	  sessions/
-//	    <uuid>/
+//	    <uuid>/            — PLAIN sessions only (top level is never a plan child)
 //	      config/          — copy of the active preset's config (minus settings.conf)
 //	      session.alaya
+//	    <planId>/          — Plan Mode: one subtree per plan (sanitized id)
+//	      <nodeId>/        — one subtree per plan node (sanitized id)
+//	        <uuid>/        — the node's session dir (config/ + session.alaya)
 //
 // Port of src-tauri/src/dirs.rs.
 package dirs
@@ -294,10 +297,48 @@ func CreateSessionDir(sessionsDir, uuid string) (string, error) {
 // different DAG nodes can run under different presets. settings.conf is
 // excluded from the copy.
 func CreateSessionDirFrom(sessionsDir, uuid, preset string) (string, error) {
+	return createSessionDirIn(sessionsDir, uuid, preset)
+}
+
+// SanitizeDirComponent maps an arbitrary plan/node id to a safe single
+// path component (deterministic: create and resume apply the same
+// mapping, so both sides agree on the directory). Every character
+// outside [A-Za-z0-9_-] becomes '_' — including '.', so an id of ".."
+// can never resolve to a parent directory — and an empty result becomes
+// "p".
+func SanitizeDirComponent(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	out := b.String()
+	if out == "" {
+		return "p"
+	}
+	return out
+}
+
+// CreatePlanSessionDirFrom creates a PLAN NODE session directory nested
+// under sessions/<planId>/<nodeId>/<uuid>/, so the sessions/ top level
+// only ever contains plain (non-plan) sessions. planId/nodeId are
+// sanitized with SanitizeDirComponent; preset selects the config
+// template like CreateSessionDirFrom.
+func CreatePlanSessionDirFrom(sessionsDir, planId, nodeId, uuid, preset string) (string, error) {
+	parent := filepath.Join(sessionsDir, SanitizeDirComponent(planId), SanitizeDirComponent(nodeId))
+	return createSessionDirIn(parent, uuid, preset)
+}
+
+// createSessionDirIn copies the preset config into parent/<uuid>/config.
+func createSessionDirIn(parent, uuid, preset string) (string, error) {
 	if _, _, err := Ensure(); err != nil {
 		return "", err
 	}
-	sessionDir := filepath.Join(sessionsDir, uuid)
+	sessionDir := filepath.Join(parent, uuid)
 	dstConfig := filepath.Join(sessionDir, "config")
 
 	var template string

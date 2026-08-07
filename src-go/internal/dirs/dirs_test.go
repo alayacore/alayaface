@@ -169,3 +169,56 @@ func TestSessionDirCopyExcludesSettingsConf(t *testing.T) {
 		}
 	})
 }
+
+func TestSanitizeDirComponent(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"demo-1", "demo-1"},
+		{"task 1", "task_1"},
+		{"a/b", "a_b"},
+		{"..", "__"},
+		{".", "_"},
+		{"", "p"},
+		{"deep/node.id", "deep_node_id"},
+		{"weird~chars!?", "weird_chars__"},
+	}
+	for _, c := range cases {
+		if got := SanitizeDirComponent(c.in); got != c.want {
+			t.Errorf("SanitizeDirComponent(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	// Deterministic: create and resume must agree on the mapping.
+	if SanitizeDirComponent("a/b") != SanitizeDirComponent("a_b") {
+		t.Error("sanitize must be deterministic")
+	}
+}
+
+func TestCreatePlanSessionDirFromNests(t *testing.T) {
+	isolatedHome(t, func() {
+		config, sessions, err := Ensure()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(config, "model.conf"), []byte("name: \"Real\"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		sessionDir, err := CreatePlanSessionDirFrom(sessions, "demo plan/x", "t1", "uuid-1", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := filepath.Join(sessions, "demo_plan_x", "t1", "uuid-1")
+		if sessionDir != want {
+			t.Fatalf("nested session dir = %q, want %q", sessionDir, want)
+		}
+		if _, err := os.Stat(filepath.Join(sessionDir, "config", "model.conf")); err != nil {
+			t.Errorf("config not copied into nested dir: %v", err)
+		}
+		// Top level must NOT contain the session uuid (only the plan dir).
+		if _, err := os.Stat(filepath.Join(sessions, "uuid-1")); err == nil {
+			t.Error("plan child session must not live at the sessions top level")
+		}
+	})
+}

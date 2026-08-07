@@ -435,10 +435,36 @@ connectionForSession sid model =
     NC.nodeConnectionFor model.planNodeSessions model.planResumedFrom sid
 
 
+{-| Build the active plan window ↔ owning session connection: the plan
+whose meta.json origin session is currently open (live or resumed). This
+is what makes the plan window "belong to" a session — the curve draws to
+the [Plan: <planId>] button in that session when visible.
+-}
+planConnectionFor : String -> Model -> Maybe NC.PlanConnection
+planConnectionFor planId model =
+    case Dict.get planId model.planMetas of
+        Just meta ->
+            case meta.origin of
+                Just origin ->
+                    case NC.liveSessionForOrigin model.sessions model.planResumedFrom origin.sessionId of
+                        Just liveId ->
+                            Just { planId = planId, sessionId = liveId }
+
+                        Nothing ->
+                            Nothing
+
+                Nothing ->
+                    Nothing
+
+        Nothing ->
+            Nothing
+
+
 {-| Focus a session: raise it above everything else. If it belongs to a
 plan node, also raise that plan window to the SECOND layer (directly
 below the session) and tell bridge.js to draw the connection curve;
-otherwise hide any curve.
+otherwise hide any curve. The plan↔session curve hides too (the session
+focus is now the active connection).
 -}
 activateSessionModel : Model -> String -> ( Model, Cmd Msg )
 activateSessionModel model id =
@@ -457,8 +483,12 @@ activateSessionModel model id =
                 , windowPositions = newPositions
                 , nextZIndex = model.nextZIndex + 2
                 , nodeConnection = Just conn
+                , planConnection = Nothing
               }
-            , Ports.setNodeConnection (Just conn)
+            , Cmd.batch
+                [ Ports.setNodeConnection (Just conn)
+                , Ports.setPlanConnection Nothing
+                ]
             )
 
         Nothing ->
@@ -473,8 +503,12 @@ activateSessionModel model id =
                 , windowPositions = newPositions
                 , nextZIndex = model.nextZIndex + 1
                 , nodeConnection = Nothing
+                , planConnection = Nothing
               }
-            , Ports.setNodeConnection Nothing
+            , Cmd.batch
+                [ Ports.setNodeConnection Nothing
+                , Ports.setPlanConnection Nothing
+                ]
             )
 
 
@@ -515,6 +549,10 @@ addPlanWindow key win model =
         , planActiveId = Just key
         , windowPositions = positions2
         , nextZIndex = model.nextZIndex + 1
+        -- The new plan window is active: connect it to its owning
+        -- session (drawn by bridge.js via the setPlanConnection port —
+        -- PlanSaveReady emits the matching Cmd).
+        , planConnection = planConnectionFor key model
     }
 
 
@@ -1010,6 +1048,8 @@ startNextCreateIn model =
                         , builtinTools = Nothing
                         , systemPrompt = Just planSystemPrompt
                         , workDir = Nothing
+                        , planId = Nothing
+                        , nodeId = Nothing
                         }
                     )
 
@@ -1027,8 +1067,12 @@ confirmation; "allow" matches no real tool, so nothing is confirmed →
 every tool auto-runs. That is exactly the runner's intent (unattended
 execution), but it means a plan task CAN auto-run risky tools — use the
 Safe preset / tools field to restrict per node.
+
+planId/nodeId tag the session as a PLAN CHILD: the backend stores its
+directory nested under sessions/<planId>/<nodeId>/ so the sessions/ top
+level only ever contains plain (non-plan) sessions.
 -}
-nodeSessionArgsIn : String -> String -> Model -> { toolConfirm : Maybe String, preset : Maybe String, builtinTools : Maybe String, systemPrompt : Maybe String, workDir : Maybe String }
+nodeSessionArgsIn : String -> String -> Model -> { toolConfirm : Maybe String, preset : Maybe String, builtinTools : Maybe String, systemPrompt : Maybe String, workDir : Maybe String, planId : Maybe String, nodeId : Maybe String }
 nodeSessionArgsIn planId nodeId model =
     let
         task =
@@ -1047,6 +1091,8 @@ nodeSessionArgsIn planId nodeId model =
     -- a node model may itself delegate to a sub-plan (recursion).
     , systemPrompt = Just planSystemPrompt
     , workDir = planWorkDir planId model
+    , planId = Just planId
+    , nodeId = Just nodeId
     }
 
 
@@ -1271,7 +1317,7 @@ update msg model =
 
                 Nothing ->
                     ( { model | pendingSwitchOnCreate = True, showGlobalMenu = False }
-                    , Ports.createSession { toolConfirm = Nothing, preset = Nothing, builtinTools = Nothing, systemPrompt = Just planSystemPrompt, workDir = Nothing }
+                    , Ports.createSession { toolConfirm = Nothing, preset = Nothing, builtinTools = Nothing, systemPrompt = Just planSystemPrompt, workDir = Nothing, planId = Nothing, nodeId = Nothing }
                     )
 
         SessionCreated id ->
@@ -1358,6 +1404,16 @@ update msg model =
 
                             else
                                 False
+                        -- A (user/resume) session taking focus yields the
+                        -- plan↔session curve (mirrors ActivateSession);
+                        -- runner sessions don't take focus, so the curve
+                        -- stays while the plan runs.
+                        , planConnection =
+                            if isRunnerCreate then
+                                model.planConnection
+
+                            else
+                                Nothing
                         , pendingEvents = Dict.remove id model.pendingEvents
                     }
 
@@ -1428,6 +1484,7 @@ update msg model =
                                 , planReplaySessions =
                                     Set.insert id (Set.remove origId baseModel.planReplaySessions)
                                 , nodeConnection = resumedConn
+                                , planConnection = Nothing
                                 , windowPositions = zRaised
                                 , nextZIndex = baseModel.nextZIndex + zBump
                                 , planNodeSessions =
@@ -1466,6 +1523,9 @@ update msg model =
                 [ cmds
                 , drainCmd
                 , Ports.setNodeConnection resumedConn
+                -- A (possibly resumed) session now owns the focus: the
+                -- plan↔session curve yields to the node↔session curve.
+                , Ports.setPlanConnection Nothing
                 , case model.planCreating of
                     -- A runner-created session: bind it to its node
                     -- (PlanBindSession also starts the next queued create).
@@ -1540,6 +1600,12 @@ update msg model =
 
                     else
                         model.nodeConnection
+                , planConnection =
+                    if (model.planConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
+                        Nothing
+
+                    else
+                        model.planConnection
                 , activeId =
                     if model.activeId == Just id then
                         List.head (List.reverse (List.filter (\k -> k /= id) model.sessionOrder))
@@ -1551,6 +1617,11 @@ update msg model =
                 , runnerFailCmd
                 , if (model.nodeConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
                     Ports.setNodeConnection Nothing
+
+                  else
+                    Cmd.none
+                , if (model.planConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
+                    Ports.setPlanConnection Nothing
 
                   else
                     Cmd.none
@@ -2948,11 +3019,14 @@ update msg model =
                                                                     , continueRun = False
                                                                     }
                                                           }
-                                                        , Ports.fsReadFileText { path = runPath }
+                                                        , Cmd.batch
+                                                            [ Ports.fsReadFileText { path = runPath }
+                                                            , Ports.setPlanConnection m2.planConnection
+                                                            ]
                                                         )
 
                                                     else
-                                                        ( m2, Cmd.none )
+                                                        ( m2, Ports.setPlanConnection m2.planConnection )
 
                                                 Err errs ->
                                                     -- Invalid plan file: report in
@@ -3386,10 +3460,15 @@ update msg model =
                         | planMetas = Dict.insert planId meta model.planMetas
                     }
             in
-            ( addPlanWindow planId win1 m1
+            let
+                m2 =
+                    addPlanWindow planId win1 m1
+            in
+            ( m2
             , Cmd.batch
                 [ Ports.fsWriteFileText { path = path, content = content, createParents = True }
                 , Ports.fsWriteFileText { path = metaPath, content = E.encode 2 (PM.encodeMeta meta), createParents = True }
+                , Ports.setPlanConnection m2.planConnection
                 ]
             )
 
@@ -3397,8 +3476,12 @@ update msg model =
             -- The plan window is already open (auto-create) → focus it;
             -- otherwise (restart) open from disk like the manager does.
             if Dict.member planId model.planWindows then
-                ( { model | planActiveId = Just planId, showGlobalMenu = False }
-                , Cmd.none
+                let
+                    conn =
+                        planConnectionFor planId model
+                in
+                ( { model | planActiveId = Just planId, showGlobalMenu = False, planConnection = conn }
+                , Ports.setPlanConnection conn
                 )
 
             else
@@ -3414,6 +3497,9 @@ update msg model =
                         Dict.update planId
                             (Maybe.map (\pos -> { pos | z = model.nextZIndex }))
                             model.windowPositions
+
+                    conn =
+                        planConnectionFor planId model
                 in
                 ( { model
                     | planActiveId = Just planId
@@ -3421,8 +3507,12 @@ update msg model =
                     , nextZIndex = model.nextZIndex + 1
                     , showGlobalMenu = False
                     , nodeConnection = Nothing
+                    , planConnection = conn
                   }
-                , Ports.setNodeConnection Nothing
+                , Cmd.batch
+                    [ Ports.setNodeConnection Nothing
+                    , Ports.setPlanConnection conn
+                    ]
                 )
 
         PlanClose planId ->
@@ -3455,12 +3545,25 @@ update msg model =
 
                     else
                         model.nodeConnection
-              }
-            , if (model.nodeConnection |> Maybe.map (\c -> c.planId)) == Just planId then
-                Ports.setNodeConnection Nothing
+                , planConnection =
+                    if (model.planConnection |> Maybe.map (\c -> c.planId)) == Just planId then
+                        Nothing
 
-              else
-                Cmd.none
+                    else
+                        model.planConnection
+              }
+            , Cmd.batch
+                [ if (model.nodeConnection |> Maybe.map (\c -> c.planId)) == Just planId then
+                    Ports.setNodeConnection Nothing
+
+                  else
+                    Cmd.none
+                , if (model.planConnection |> Maybe.map (\c -> c.planId)) == Just planId then
+                    Ports.setPlanConnection Nothing
+
+                  else
+                    Cmd.none
+                ]
             )
 
         -- ─── Plan runner ────────────────────────────────────────────
@@ -3741,7 +3844,7 @@ update msg model =
                                                             , planNodeSessions =
                                                                 Dict.insert sid (planId ++ "/" ++ nodeId) model.planNodeSessions
                                                           }
-                                                        , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model }
+                                                        , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model, planId = Just planId, nodeId = Just nodeId }
                                                         )
 
                                         Nothing ->
@@ -3767,7 +3870,7 @@ update msg model =
                                                                     , planNodeSessions =
                                                                         Dict.insert sid (planId ++ "/" ++ nodeId) model.planNodeSessions
                                                                   }
-                                                                , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model }
+                                                                , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model, planId = Just planId, nodeId = Just nodeId }
                                                                 )
 
                                                 Nothing ->
@@ -3810,7 +3913,7 @@ update msg model =
                             , planNodeSessions =
                                 Dict.insert sid (planId ++ "/" ++ nodeId) model.planNodeSessions
                           }
-                        , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model }
+                        , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model, planId = Just planId, nodeId = Just nodeId }
                         )
 
         PlanSetConcurrency text ->
@@ -3938,7 +4041,7 @@ update msg model =
                 , planResumeFrom = Just id
                 , planReplaySessions = Set.insert id model.planReplaySessions
               }
-            , Ports.resumeSession { sessionId = id, workDir = Nothing }
+            , Ports.resumeSession { sessionId = id, workDir = Nothing, planId = Nothing, nodeId = Nothing }
             )
 
         DeleteSession id ->
@@ -3960,6 +4063,12 @@ update msg model =
 
                                 else
                                     model.nodeConnection
+                            , planConnection =
+                                if (model.planConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
+                                    Nothing
+
+                                else
+                                    model.planConnection
                             , activeId =
                                 if model.activeId == Just id then
                                     List.head (List.reverse (List.filter (\k -> k /= id) model.sessionOrder))
@@ -3971,9 +4080,14 @@ update msg model =
             in
             ( { cleaned | sessionManagerError = Nothing }
             , Cmd.batch
-                [ Ports.deleteSessionDir { sessionId = id }
+                [ Ports.deleteSessionDir { sessionId = id, planId = Nothing, nodeId = Nothing }
                 , if (model.nodeConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
                     Ports.setNodeConnection Nothing
+
+                  else
+                    Cmd.none
+                , if (model.planConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
+                    Ports.setPlanConnection Nothing
 
                   else
                     Cmd.none
@@ -4996,12 +5110,16 @@ update msg model =
             if model.activeId == Just id then
                 -- Already focused: (re)assert the connection — it may have
                 -- been cleared by focusing the plan window in between.
+                -- The plan↔session curve yields to the session focus.
                 let
                     conn =
                         connectionForSession id model
                 in
-                ( { model | nodeConnection = conn }
-                , Ports.setNodeConnection conn
+                ( { model | nodeConnection = conn, planConnection = Nothing }
+                , Cmd.batch
+                    [ Ports.setNodeConnection conn
+                    , Ports.setPlanConnection Nothing
+                    ]
                 )
 
             else
