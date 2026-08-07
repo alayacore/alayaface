@@ -510,4 +510,55 @@ tests =
                         ]
                         ()
             ]
+        , describe "unknown-field detection (schema typo guard)"
+            [ test "misspelled plan field is rejected with a readable error" <|
+                \_ ->
+                    case P.parsePlan """{ "type": "alayaface-plan", "name": "x", "concurreny": 5, "tasks": [ { "id": "t1", "title": "A", "prompt": "a" } ] }""" of
+                        Ok _ ->
+                            Expect.fail "plan with unknown field must be rejected"
+
+                        Err errs ->
+                            Expect.equal True (List.any (String.contains "Unknown plan field: concurreny") errs)
+            , test "misspelled depends_on is rejected (silent ignore would drop the dependency)" <|
+                \_ ->
+                    case P.parsePlan """{ "type": "alayaface-plan", "name": "x", "tasks": [ { "id": "t1", "title": "A", "prompt": "a" }, { "id": "t2", "title": "B", "prompt": "b", "depend_on": ["t1"] } ] }""" of
+                        Ok _ ->
+                            Expect.fail "plan with misspelled dependency must be rejected"
+
+                        Err errs ->
+                            Expect.all
+                                [ \e -> Expect.equal True (List.any (String.contains "Unknown task field \"depend_on\" (task \"t2\")") e)
+                                -- the misspelled dep must NOT be silently accepted as "no dependency"
+                                , \e -> Expect.equal False (List.any (String.contains "cycle detected") e)
+                                ]
+                                errs
+            , test "misspelled task max_attemps is rejected" <|
+                \_ ->
+                    case P.parsePlan """{ "type": "alayaface-plan", "name": "x", "tasks": [ { "id": "t1", "title": "A", "prompt": "a", "max_attemps": 5 } ] }""" of
+                        Ok _ ->
+                            Expect.fail "plan with misspelled task field must be rejected"
+
+                        Err errs ->
+                            Expect.equal True (List.any (String.contains "Unknown task field \"max_attemps\"") errs)
+            , test "a plan with all known fields parses without unknown-field errors" <|
+                \_ ->
+                    case P.parsePlan """{ "type": "alayaface-plan", "schema_version": 1, "name": "x", "goal": "g", "concurrency": 2, "default_max_attempts": 3, "tasks": [ { "id": "t1", "title": "A", "prompt": "a", "depends_on": [], "preset": "Default", "tools": "read_file", "max_attempts": 3 } ] }""" of
+                        Ok _ ->
+                            Expect.pass
+
+                        Err errs ->
+                            Expect.fail ("valid plan rejected: " ++ String.join "; " errs)
+            , test "unknown field errors join other validation errors" <|
+                \_ ->
+                    case P.parsePlan """{ "type": "alayaface-plan", "name": "x", "unknown_plan_thing": 1, "tasks": [ { "id": "t1", "title": "A", "prompt": "a", "depends_on": ["nope"] } ] }""" of
+                        Ok _ ->
+                            Expect.fail "must be rejected"
+
+                        Err errs ->
+                            Expect.all
+                                [ \e -> Expect.equal True (List.any (String.contains "Unknown plan field: unknown_plan_thing") e)
+                                , \e -> Expect.equal True (List.any (String.contains "depends on unknown task") e)
+                                ]
+                                errs
+            ]
         ]

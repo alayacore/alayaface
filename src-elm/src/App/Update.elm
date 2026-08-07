@@ -610,6 +610,7 @@ Plan format (output exactly one ```json code block, then stop and wait for the p
 }
 Rules:
 - The top level MUST include "type": "alayaface-plan" (without it the framework will not recognize the plan)
+- Field names must be spelled exactly as in the schema above (depends_on, concurrency, max_attempts, ...) — a misspelled or extra field makes the whole plan be rejected; do not invent fields
 - ids are globally unique; prompts are self-contained by default; if a downstream task needs an upstream task's output, reference it in the prompt with {{t1.output}} (the framework replaces it with that upstream task's final output once it completes; you may only reference tasks already declared as dependencies — never reference tasks outside the dependency graph)
 - Tasks that can run in parallel must not depend on each other
 - By default, do NOT set a preset (absent = Default, which has a working model configured). Only set one if the user explicitly asks for a specific preset environment (Fast/Deep/Data/Safe, etc.) — those presets may have no model configured yet, and using one will make the task fail immediately

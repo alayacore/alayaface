@@ -279,17 +279,89 @@ decodePlan =
     planDecoder
 
 
+-- Known top-level and task-level fields of the v1 schema. Used by the
+-- unknown-field check so a typo (e.g. "depend_on", "concurreny") is
+-- reported instead of silently ignored (which would change the plan's
+-- behavior — a misspelled dependency becomes "no dependency").
+knownPlanKeys : List String
+knownPlanKeys =
+    [ "type", "schema_version", "name", "goal", "concurrency", "default_max_attempts", "tasks" ]
+
+
+knownTaskKeys : List String
+knownTaskKeys =
+    [ "id", "title", "prompt", "depends_on", "preset", "tools", "max_attempts" ]
+
+
+unknownKeysIn : List String -> D.Decoder (List String)
+unknownKeysIn known =
+    D.keyValuePairs D.value
+        |> D.map
+            (List.filterMap
+                (\( k, _ ) ->
+                    if List.member k known then
+                        Nothing
+
+                    else
+                        Just k
+                )
+            )
+
+
+{-| Collect unknown (misspelled / unsupported) fields at the top level
+and in every task. Runs on the RAW json (in addition to planDecoder,
+which silently drops unknown fields).
+-}
+unknownKeyErrors : D.Decoder (List String)
+unknownKeyErrors =
+    D.map2
+        (\planUnk taskErrs -> List.map (\k -> "Unknown plan field: " ++ k) planUnk ++ List.concat taskErrs)
+        (unknownKeysIn knownPlanKeys)
+        (D.oneOf
+            [ D.field "tasks"
+                (D.list
+                    (D.map2
+                        (\tid unk ->
+                            List.map
+                                (\u -> "Unknown task field \"" ++ u ++ "\" (task \"" ++ tid ++ "\")")
+                                unk
+                        )
+                        (D.oneOf [ D.field "id" D.string, D.succeed "?" ])
+                        (unknownKeysIn knownTaskKeys)
+                    )
+                )
+            , D.succeed []
+            ]
+        )
+
+
 {-| Parse raw plan JSON text: decode, then normalize + validate.
-Errors are a readable list (all problems found, not just the first).
+Errors are a readable list (all problems found, not just the first);
+unknown/misspelled fields are reported too (a typo would otherwise be
+silently ignored and change the plan's behavior).
 -}
 parsePlan : String -> Result (List String) Plan
 parsePlan text =
+    let
+        unknownErrs =
+            D.decodeString unknownKeyErrors text
+                |> Result.withDefault []
+    in
     case D.decodeString planDecoder text of
         Ok plan ->
-            normalizeAndValidate plan
+            case normalizeAndValidate plan of
+                Ok p ->
+                    if List.isEmpty unknownErrs then
+                        Ok p
+
+                    else
+                        Err unknownErrs
+
+                Err errs ->
+                    Err (errs ++ unknownErrs)
 
         Err err ->
-            Err [ D.errorToString err ]
+            Err (D.errorToString err :: unknownErrs)
 
 
 {-| Normalize defaults and validate. Returns the normalized plan on
