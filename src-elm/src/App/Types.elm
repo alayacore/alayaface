@@ -170,6 +170,7 @@ type Msg
     | DeltaEvent E.Value
     | FrameEvent E.Value
     | StatusEvent E.Value
+    | RpcError E.Value
       -- User actions
     | SendPrompt
     | CancelTask

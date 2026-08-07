@@ -142,6 +142,18 @@
       p.subscribe(function (v) { cb(v); });
     }
 
+    // Surface a backend RPC failure to the Elm UI (clears stuck
+    // "Sending…" states, shows the reason in the session status line).
+    function rpcError(kind, sessionId, err) {
+      var message = String((err && err.message) || err);
+      app.ports.onRpcError.send({
+        kind: kind,
+        sessionId: sessionId || "",
+        message: message,
+      });
+      console.error("[" + kind + "] failed:", message);
+    }
+
     // 2. Subscribe to all Elm ports SYNCHRONOUSLY
 
     on("createSession", function (data) {
@@ -171,29 +183,31 @@
     });
 
     on("closeSession", function (data) {
-      transport.invoke("close_session", { sessionId: data.sessionId });
+      transport.invoke("close_session", { sessionId: data.sessionId })
+        .catch(function (err) { rpcError("close_session", data.sessionId, err); });
     });
 
     on("sendPrompt", function (data) {
       transport.invoke("alayacore_send_prompt", {
         sessionId: data.sessionId, text: data.text, media: data.media,
-      });
+      }).catch(function (err) { rpcError("send_prompt", data.sessionId, err); });
     });
 
     on("cancelTask", function (data) {
-      transport.invoke("alayacore_cancel", { sessionId: data.sessionId });
+      transport.invoke("alayacore_cancel", { sessionId: data.sessionId })
+        .catch(function (err) { rpcError("cancel_task", data.sessionId, err); });
     });
 
     on("setModel", function (data) {
       transport.invoke("alayacore_model_set", {
         sessionId: data.sessionId, modelId: data.modelId,
-      });
+      }).catch(function (err) { rpcError("model_set", data.sessionId, err); });
     });
 
     on("modelSync", function (data) {
       transport.invoke("alayacore_model_sync", {
         sessionId: data.sessionId, config: data.config,
-      });
+      }).catch(function (err) { rpcError("model_sync", data.sessionId, err); });
     });
 
     on("listDefaultModels", function (data) {
@@ -343,17 +357,18 @@
     on("confirmTool", function (data) {
       transport.invoke("alayacore_confirm", {
         sessionId: data.sessionId, id: data.id, allowed: data.allowed,
-      });
+      }).catch(function (err) { rpcError("tool_confirm", data.sessionId, err); });
     });
 
     on("sendMcpDecline", function (data) {
       transport.invoke("alayacore_mcp_decline", {
         sessionId: data.sessionId, server: data.server,
-      });
+      }).catch(function (err) { rpcError("mcp_decline", data.sessionId, err); });
     });
 
     on("sendMcpCancel", function (data) {
-      transport.invoke("alayacore_mcp_cancel", { sessionId: data.sessionId });
+      transport.invoke("alayacore_mcp_cancel", { sessionId: data.sessionId })
+        .catch(function (err) { rpcError("mcp_cancel", data.sessionId, err); });
     });
 
     on("forkSession", function (data) {
@@ -490,7 +505,7 @@
         sessionId: data.sessionId,
         serverName: data.serverName,
         authUrl: data.authUrl,
-      });
+      }).catch(function (err) { rpcError("mcp_auth", data.sessionId, err); });
     });
 
     on("fillMcpAuthUrl", function (data) {

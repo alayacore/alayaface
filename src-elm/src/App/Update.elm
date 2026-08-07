@@ -1898,6 +1898,10 @@ update msg model =
                                     { session
                                         | connected = ev.connected
                                         , statusMsg = ev.message
+                                        -- A disconnect means any in-flight
+                                        -- prompt can never be echoed back —
+                                        -- clear the stuck "Sending…" state.
+                                        , sendPending = if ev.connected then session.sendPending else False
                                     }
                             in
                             if not ev.connected && session.modelSelector.page == ModelSelSyncing then
@@ -1927,6 +1931,35 @@ update msg model =
                                     bufferPendingEvent model ev.sessionId raw
                             in
                             ( model1, Cmd.batch [ cmds1, statusRunnerCmd ] )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        -- Backend RPC failure (bridge.js catches invoke rejections and
+        -- forwards {kind, sessionId, message} via onRpcError). The
+        -- critical case is send_prompt: the RPC can be rejected after
+        -- the UI set sendPending=True (e.g. the session disconnected
+        -- between the click and the write), which would otherwise leave
+        -- the prompt stuck in "Sending…" forever with no error shown.
+        RpcError raw ->
+            case D.decodeValue rpcErrorDecoder raw of
+                Ok err ->
+                    case Dict.get err.sessionId model.sessions of
+                        Just s ->
+                            ( { model
+                                | sessions =
+                                    Dict.insert err.sessionId
+                                        { s
+                                            | sendPending = False
+                                            , statusMsg = err.kind ++ " failed: " ++ err.message
+                                        }
+                                        model.sessions
+                              }
+                            , Cmd.none
+                            )
+
+                        Nothing ->
+                            ( model, Cmd.none )
 
                 Err _ ->
                     ( model, Cmd.none )
@@ -5413,6 +5446,15 @@ mcpSyncResultDecoder =
         (\ok error -> { ok = ok, error = error })
         (D.field "ok" D.bool)
         (D.field "error" D.string)
+
+
+rpcErrorDecoder : D.Decoder { kind : String, sessionId : String, message : String }
+rpcErrorDecoder =
+    D.map3
+        (\kind sessionId message -> { kind = kind, sessionId = sessionId, message = message })
+        (D.field "kind" D.string)
+        (D.field "sessionId" D.string)
+        (D.field "message" D.string)
 
 
 settingsListResultDecoder : D.Decoder { ok : Bool, toolConfirm : String, builtinTools : String, error : String }

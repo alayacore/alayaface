@@ -120,6 +120,7 @@ subscriptions model =
         , Ports.onDelta (\raw -> DeltaEvent raw)
         , Ports.onFrame (\raw -> FrameEvent raw)
         , Ports.onStatus (\raw -> StatusEvent raw)
+        , Ports.onRpcError (\raw -> RpcError raw)
         , Ports.onDefaultModelsList (\raw -> DefaultModelsListResult raw)
         , Ports.onDefaultModelsSyncResult (\raw -> DefaultModelsSyncResult raw)
         , Ports.onDefaultMcpList (\raw -> McpListResult raw)

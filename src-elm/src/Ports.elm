@@ -3,6 +3,7 @@ port module Ports exposing
       onDelta
     , onFrame
     , onStatus
+    , onRpcError
       -- Outbound commands (Elm → Tauri)
     , createSession
     , closeSession
@@ -82,6 +83,10 @@ import App.NodeConnection
 port onDelta : (E.Value -> msg) -> Sub msg
 port onFrame : (E.Value -> msg) -> Sub msg
 port onStatus : (E.Value -> msg) -> Sub msg
+
+-- Backend RPC failures surfaced to the UI (e.g. alayacore_send_prompt
+-- rejected because the session disconnected): { kind, sessionId, message }.
+port onRpcError : (E.Value -> msg) -> Sub msg
 
 
 -- Outbound commands (Elm → Tauri via JS bridge)
