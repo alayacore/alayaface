@@ -54,14 +54,12 @@ port module Ports exposing
     , fsHomeDir
     , fsWriteFileText
     , fsReadFileText
-    , fsDeleteFile
     , onFsListDir
     , onFsHomeDir
     , onFsResolvePath
     , onFsReadFileDataUri
     , onFsWriteResult
     , onFsReadResult
-    , onFsDeleteResult
       -- MCP Auth Flow
     , startMcpAuthFlow
     , fillMcpAuthUrl
@@ -139,7 +137,6 @@ port fsResolvePath : { path : String } -> Cmd msg
 port fsHomeDir : {} -> Cmd msg
 port fsWriteFileText : { path : String, content : String, createParents : Bool } -> Cmd msg
 port fsReadFileText : { path : String } -> Cmd msg
-port fsDeleteFile : { path : String } -> Cmd msg
 port startMcpAuthFlow : { sessionId : String, serverName : String, authUrl : String } -> Cmd msg
 port fillMcpAuthUrl : { sessionId : String, serverName : String, authUrl : String } -> Cmd msg
 
@@ -156,7 +153,6 @@ port onFsResolvePath : (E.Value -> msg) -> Sub msg
 port onFsReadFileDataUri : (String -> msg) -> Sub msg
 port onFsWriteResult : (E.Value -> msg) -> Sub msg
 port onFsReadResult : (E.Value -> msg) -> Sub msg
-port onFsDeleteResult : (E.Value -> msg) -> Sub msg
 
 
 -- Focus / Scroll

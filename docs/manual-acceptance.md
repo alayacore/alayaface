@@ -18,17 +18,16 @@
 ## Startup
 
 - [ ] Tauri: `make run`; or browser: `make run-go` → http://127.0.0.1:8765/
-- [ ] ⚙ menu shows: New Session / **New Plan Session** / Plans / Presets / Settings / Sessions
+- [ ] ⚙ menu shows: New Session / Session Manager / Presets / Settings (no Plans entry — P30)
 
 ## 1. Plan Session + Creating a Plan (P2/P6)
 
 - [ ] ⚙ → **New Plan Session** → session window title carries a `[Plan]` prefix
 - [ ] Describe the task in natural language (e.g. "write a monthly report: first an outline, then three body sections")
-- [ ] A fenced ```json plan block appears in the model reply → **Create Plan** button below the message
-- [ ] Click Create Plan → Plan window opens (independent window, not an overlay), showing the DAG (nodes + dependency edges), goal, and metadata
-- [ ] `~/.alayaface/plans/<name>-<ts>.json` saved (normalized version)
-- [ ] ⚙ → Plans manager: **Saved** tab lists the plan (with fuzzy filter), can Open / Delete
-- [ ] ⚙ → Plans manager → **Browse** tab: file browser (directory navigation + fuzzy match); clicking a plan JSON anywhere imports and opens a Plan window
+- [ ] A fenced ```json plan block appears in the model reply → the Plan window AUTO-CREATES (no button, R2)
+- [ ] Plan window opens (independent window, not an overlay), showing the DAG (nodes + dependency edges), goal, and metadata
+- [ ] `~/.alayaface/sessions/<origin>/plans/<planId>/<planId>.json` saved (normalized version; plan lives inside its session)
+- [ ] Reopen a plan after its window closed / after app restart: the session's `[Plan: …]` status-bar button opens it (P30: no Plans manager)
 
 ## 2. Run + Node Session Content (P4/P7 fix points)
 
@@ -86,10 +85,11 @@
       sessions — no plan dir / plan child uuid directly
 - [ ] Session Manager never lists plan child sessions (only plain sessions)
 - [ ] Click a node (resume) after the app restarts → still reopens the session (nested dir found via originSessionId/planId/nodeId)
-- [ ] Plans manager is a single view (no Browse/import tab); it lists every
-      plan (from the planMetas index) with Open/Delete; the status bar
-      under the plan message still binds after the origin session was
-      resumed/reopened (origin = on-disk session id, resolved to live)
+- [ ] No Plans manager in the system menu (P30); a plan is reopened via the
+      session's `[Plan: …]` status-bar button (works after restart); the
+      status bar under the plan message still binds after the origin
+      session was resumed/reopened (origin = on-disk session id, resolved
+      to live)
 
 ## 5. Graceful Close (P25 cancel-first)
 

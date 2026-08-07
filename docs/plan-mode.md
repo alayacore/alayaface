@@ -297,7 +297,7 @@ E2E covers the gate.
 ### 7.1 Plan Window (independent window, like a session window)
 - Each opened plan is an **independent draggable/resizable window** (reusing the session window panel/drag/resize/z-order machinery), not an overlay; multiple plans can be open at once;
 - Window title bar: `Plan — <name>` + close button; inside: plan name + goal + run status badge + **Run / Pause / Stop / Retry** + **Load run** + **Export JSON**;
-- **The system menu (⚙) lists all open plan windows** (name + run status); clicking raises/activates one; the Plans manager (overlay) lists/opens/deletes plans (from the planMetas index — plans live under their owning session, no import);
+- **The system menu (⚙) lists all open plan windows** (name + run status); clicking raises/activates one. **No Plans manager entry (P30)** — a plan is reopened through its session's `[Plan: …]` status-bar link (PlanStatusOpen → openPlanFile from planMetas origin), which survives restarts;
 - Canvas: HTML/CSS DAG; rounded-rect node cards, colors by status (gray=ready, blue=running, green=succeeded, red=failed, orange=retrying, dashed=blocked/canceled);
 - Node cards: `title`, status icon, retry badge `xN`, preset badge, hover shows the latest failure reason;
 - **Clicking a node (node ↔ session binding)**:
@@ -326,17 +326,14 @@ E2E covers the gate.
 - **Stop semantics (P23)**: clicking Stop = stop **all in-progress node sessions owned by this plan run** — the runner marks running/starting nodes Canceled, `closeAndClear` issues `CloseSessionFor` for every node with a bound session → **kills the alayacore process and closes the session window at once** (history stays on disk; clicking the node recovers it). **Not stopped**: succeeded nodes' sessions (kept viewable), other plans' sessions, normal sessions, planner sessions;
 - Closing the plan window does not stop running node sessions (run.json keeps flushing; Load run can restore); manually closing a node session window injects a disconnect event into the runner → the node fails and retries.
 
-### 7.2 Plans Manager (overlay, modeled on the Session Manager)
-- **Single view (P28: the Browse/import tab was removed** — every plan is
-  created by a session and lives under it, so importing external plan
-  files is no longer supported):
-  - lists all plans **from the planMetas index** (no directory scan):
-    name = planId, action **Open** (renders the DAG from
-    `sessions/<origin>/plans/<planId>/<planId>.json`) and **Delete**
-    (removes the file, drops the planMetas entry, closes the window);
-  - fuzzy filter input (`Fuzzy.fuzzyMatch`); "Loading…" while the
-    planMetas index rebuild is in flight;
-- Entry: a **Plans** item in the global menu (existing `showGlobalMenu` system).
+### 7.2 Plans Manager — REMOVED (P30)
+
+> The standalone Plans manager overlay was removed: plans always belong
+> to a session and are reopened through the session's `[Plan: …]`
+> status-bar link (PlanStatusOpen). The global menu no longer has a
+> **Plans** entry; plan deletion UI is gone (delete the plan file under
+> `sessions/<origin>/plans/<planId>/` manually if needed). The open-plan
+> window list in the system menu (window switching) remains.
 
 ### 7.3 Runner Sessions
 - Plain session windows (clickable/viewable) with a `[Plan]` prefix in the title;
@@ -656,6 +653,8 @@ There is **no top-level `plans/` root** anymore.
 | P26 | plan JSON top-level `"type": "alayaface-plan"` marker (§5/§6.7: the button only recognizes the explicit marker; **required, no compat** — missing/wrong value errors out) | ✅ done |
 | P27 | connection curves upgraded (§7.1: plan↔owning-session curve anchored to the visible `[Plan: …]` button; both curves solid + thicker with a 2-control-point bezier) + session dir hierarchy (§8.7: node sessions nested, top level = plain sessions only) | ✅ done |
 | P28 | plans live INSIDE the session that created them (§8.7: `sessions/<origin>/plans/<planId>/` — document/meta/run/work/node sessions; no top-level `plans/` root); **import removed** (§7.2: single-view manager over the planMetas index, no Browse tab); meta origin = on-disk session id, bindings resolve live ids | ✅ done |
+| P29 | removed all backward-compat code (§8.7: no session-dir fallback chain; Plan/Meta strict decode, origin non-Maybe; legacy config-seed heal removed; always-true `has_session_file` dropped) | ✅ done |
+| P30 | system-menu **Plans** entry removed (§7.1/§7.2: the whole Plans manager overlay is gone — plans reopen via the session's `[Plan: …]` status-bar link; the open-plan-window switcher list stays) | ✅ done |
 
 > Implementation deviations: the DAG renders in pure HTML/CSS (absolute-positioned
 > divs + orthogonal connectors) because elm/svg isn't in the offline package

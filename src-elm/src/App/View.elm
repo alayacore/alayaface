@@ -72,7 +72,6 @@ view model =
         , viewDefaultModelsEditorOverlay model
         , viewMcpEditorOverlay model
         , viewSettingsEditorOverlay model
-        , viewPlanManagerOverlay model
         ]
 
 
@@ -224,13 +223,6 @@ viewGlobalMenu model =
                                 ""
                            )
                     )
-                ]
-            , Html.div
-                [ Attr.class "global-menu-item"
-                , Ev.onClick OpenPlanManager
-                ]
-                [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "🕸" ]
-                , Html.text " Plans"
                 ]
             , if List.isEmpty model.planOrder then
                 Html.text ""
@@ -892,121 +884,6 @@ viewPlanExport pv =
             , Attr.style "min-width" "auto"
             ]
             [ Html.text "Export" ]
-        ]
-
-
-viewPlanManagerOverlay : Model -> Html Msg
-viewPlanManagerOverlay model =
-    if model.planManager.show then
-        viewOverlay ClosePlanManager
-            [ Html.div [ Attr.class "sel-page" ]
-                [ Html.div [ Attr.class "sel-page-title" ] [ Html.text "Plans" ]
-                , case model.planManager.error of
-                    Just err ->
-                        Html.div [ Attr.class "sel-page-status sel-page-status-error" ] [ Html.text err ]
-
-                    Nothing ->
-                        Html.text ""
-                , viewPlanSavedTab model
-                ]
-            ]
-
-    else
-        Html.text ""
-
-
-{-| The saved-plans list is derived from the planMetas index — every
-plan is created by a session and lives under it
-(sessions/<origin>/plans/<planId>/), so no directory scan is needed.
--}
-planFileListFromMetas : Model -> List PlanFileInfo
-planFileListFromMetas model =
-    Dict.foldl
-        (\planId meta acc ->
-            { name = planId
-            , path =
-                model.homeDir
-                    ++ "/.alayaface/sessions/"
-                    ++ meta.origin.sessionId
-                    ++ "/plans/"
-                    ++ planId
-                    ++ "/"
-                    ++ planId
-                    ++ ".json"
-            }
-                :: acc
-        )
-        []
-        model.planMetas
-        |> List.sortBy .name
-        |> List.reverse
-
-
-viewPlanSavedTab : Model -> Html Msg
-viewPlanSavedTab model =
-    let
-        term =
-            String.trim model.planManager.filter
-
-        visible =
-            if String.isEmpty term then
-                planFileListFromMetas model
-
-            else
-                List.filter
-                    (\info -> Fuzzy.fuzzyMatch (String.toLower term) (String.toLower info.name))
-                    (planFileListFromMetas model)
-    in
-    Html.div []
-        [ Html.div [ Attr.class "plan-filter-row" ]
-            [ Html.input
-                [ Attr.class "sel-page-input"
-                , Attr.placeholder "Filter plans…"
-                , Attr.value model.planManager.filter
-                , Ev.onInput PlanManagerSetFilter
-                ]
-                []
-            ]
-        , if model.planMetaLoading then
-            Html.div [ Attr.class "sel-page-status" ] [ Html.text "Loading…" ]
-
-          else if List.isEmpty visible then
-            Html.div [ Attr.class "sel-page-status" ]
-                [ Html.text
-                    (if String.isEmpty term then
-                        "No plans yet. Ask a session to output a plan."
-
-                     else
-                        "No plans match your filter."
-                    )
-                ]
-
-          else
-            Html.div [ Attr.class "sel-page-list" ]
-                (List.map viewPlanFile visible)
-        ]
-
-
-viewPlanFile : PlanFileInfo -> Html Msg
-viewPlanFile info =
-    Html.div [ Attr.class "sel-page-item" ]
-        [ Html.span [ Attr.class "sel-page-item-name" ] [ Html.text info.name ]
-        , Html.button
-            [ Attr.class "confirm-page-btn confirm-page-btn-allow"
-            , Ev.onClick (PlanManagerOpen info.path)
-            , Attr.style "padding" "4px 10px"
-            , Attr.style "font-size" "0.75rem"
-            , Attr.style "min-width" "auto"
-            ]
-            [ Html.text "Open" ]
-        , Html.button
-            [ Attr.class "confirm-page-btn confirm-page-btn-deny"
-            , Ev.onClick (PlanManagerDelete info.path)
-            , Attr.style "padding" "4px 10px"
-            , Attr.style "font-size" "0.75rem"
-            , Attr.style "min-width" "auto"
-            ]
-            [ Html.text "Delete" ]
         ]
 
 

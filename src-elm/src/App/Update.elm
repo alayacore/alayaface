@@ -194,17 +194,9 @@ fsReadOkDecoder =
         (D.field "error" D.string)
 
 
-refreshPlanList : Model -> Cmd Msg
-refreshPlanList _ =
-    -- The Plans manager lists from the planMetas index (every plan is
-    -- created by a session and has meta.json with its origin) — no fs
-    -- scan needed; planMetas updates re-render the list automatically.
-    Cmd.none
-
-
 -- Shared open: set the read target and read the plan file. Used by the
--- manager Open button and the [Plan: …] status-bar link (path comes
--- from planFilePathOf — plans always live under their owning session).
+-- [Plan: …] status-bar link (path comes from planFilePathOf — plans
+-- always live under their owning session).
 openPlanFile : String -> Model -> ( Model, Cmd Msg )
 openPlanFile path model =
     ( { model
@@ -2687,21 +2679,8 @@ update msg model =
                                         in
                                         { w | view = { wv | saving = False } }
                                     )
-
-                            pm =
-                                model2.planManager
                         in
-                        ( { model2 | planManager = { pm | error = Nothing } }
-                        -- Refresh the manager list only while it is open:
-                        -- run.json writes happen on every runner step and
-                        -- a stray fs_list_dir (plans dir) would otherwise
-                        -- land in the file picker branch of FsListDirResult.
-                        , if model2.planManager.show then
-                            refreshPlanList model2
-
-                          else
-                            Cmd.none
-                        )
+                        ( model2, Cmd.none )
 
                     else
                         ( setPlanErrors [ error ] model, Cmd.none )
@@ -2913,17 +2892,9 @@ update msg model =
                                                                     }
                                                             }
 
-                                                        pm =
-                                                            model.planManager
-
                                                         m1 =
                                                             { model
                                                                 | planReadTarget = Nothing
-                                                                , planManager =
-                                                                    { pm
-                                                                        | show = False
-                                                                        , filter = ""
-                                                                    }
                                                             }
 
                                                         m2 =
@@ -2956,36 +2927,14 @@ update msg model =
                                                         ( m2, Ports.setPlanConnection m2.planConnection )
 
                                                 Err errs ->
-                                                    -- Invalid plan file: report in
-                                                    -- the Plans manager (not a window)
-                                                    let
-                                                        pm =
-                                                            model.planManager
-                                                    in
-                                                    ( { model
-                                                        | planReadTarget = Nothing
-                                                        , planManager =
-                                                            { pm
-                                                                | show = True
-                                                                , error = Just (String.join "\n" errs)
-                                                            }
-                                                      }
+                                                    -- Invalid plan file: surface the
+                                                    -- parse errors in the plan window.
+                                                    ( setPlanErrors errs { model | planReadTarget = Nothing }
                                                     , Cmd.none
                                                     )
 
                                         else
-                                            let
-                                                pm =
-                                                    model.planManager
-                                            in
-                                            ( { model
-                                                | planReadTarget = Nothing
-                                                , planManager =
-                                                    { pm
-                                                        | show = True
-                                                        , error = Just error
-                                                    }
-                                              }
+                                            ( setPlanErrors [ error ] { model | planReadTarget = Nothing }
                                             , Cmd.none
                                             )
 
@@ -2994,53 +2943,6 @@ update msg model =
 
                         Nothing ->
                             ( model, Cmd.none )
-
-        FsDeleteResult raw ->
-            case D.decodeValue fsOkDecoder raw of
-                Ok { ok, error } ->
-                    if ok then
-                        let
-                            pm =
-                                model.planManager
-
-                            planId =
-                                pm.pendingDelete
-
-                            -- Drop the deleted plan from the index and
-                            -- close its window if it was open.
-                            m1 =
-                                case planId of
-                                    Just pid ->
-                                        { model
-                                            | planMetas = Dict.remove pid model.planMetas
-                                            , planWindows = Dict.remove pid model.planWindows
-                                            , planOrder = List.filter (\k -> k /= pid) model.planOrder
-                                            , planRunStatuses = Dict.remove pid model.planRunStatuses
-                                            , planActiveId =
-                                                if model.planActiveId == Just pid then
-                                                    Nothing
-                                                else
-                                                    model.planActiveId
-                                        }
-
-                                    Nothing ->
-                                        model
-                        in
-                        ( { m1 | planManager = { pm | error = Nothing, pendingDelete = Nothing } }
-                        , Cmd.none
-                        )
-
-                    else
-                        let
-                            pm =
-                                model.planManager
-                        in
-                        ( { model | planManager = { pm | error = Just error, pendingDelete = Nothing } }
-                        , Cmd.none
-                        )
-
-                Err _ ->
-                    ( model, Cmd.none )
 
         FsResolvePathResult result ->
             case getActiveSession model of
@@ -3084,75 +2986,6 @@ update msg model =
         CloseSessionManager ->
             ( { model | showSessionManager = False }
             , focusInput model
-            )
-
-        -- Plan Mode
-        OpenPlanManager ->
-            let
-                pm =
-                    model.planManager
-            in
-            ( { model
-                | showGlobalMenu = False
-                , planManager =
-                    { pm
-                        | show = True
-                        , error = Nothing
-                        , filter = ""
-                    }
-              }
-            , -- The list comes from planMetas (rebuilt from disk on
-              -- fs_home_dir); request home if it is still unknown.
-              if model.homeDir == "" then
-                Ports.fsHomeDir {}
-
-              else
-                Cmd.none
-            )
-
-        ClosePlanManager ->
-            let
-                pm =
-                    model.planManager
-            in
-            ( { model
-                | planManager =
-                    { pm
-                        | show = False
-                        , filter = ""
-                    }
-              }
-            , Cmd.none
-            )
-
-        PlanManagerOpen path ->
-            openPlanFile path model
-
-        PlanManagerDelete path ->
-            -- Record the planId (file name minus .json) so FsDeleteResult
-            -- can drop it from planMetas and close its window.
-            let
-                pm =
-                    model.planManager
-
-                planId =
-                    String.split "/" path
-                        |> List.reverse
-                        |> List.head
-                        |> Maybe.withDefault path
-                        |> (\n -> if String.endsWith ".json" n then String.dropRight 5 n else n)
-            in
-            ( { model | planManager = { pm | pendingDelete = Just planId } }
-            , Ports.fsDeleteFile { path = path }
-            )
-
-        PlanManagerSetFilter text ->
-            let
-                pm =
-                    model.planManager
-            in
-            ( { model | planManager = { pm | filter = text } }
-            , Cmd.none
             )
 
 

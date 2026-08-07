@@ -67,6 +67,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P27 连线升级 + session 目录层级：plan↔所属 session 连线（锚到可见的 `[Plan: …]` 按钮）；两条连线实线加粗 + 双控制点贝塞尔；`sessions/<planId>/<nodeId>/<uuid>/` 嵌套（顶层=纯普通会话） | [x] |
 | P28 Plan 归属 Session（用户决策：导入是早期遗留物，整体移除）：plan 文档/meta/run/work/节点子会话全部收进 `sessions/<来源session>/plans/<planId>/`，删除顶层 `plans/` 根；Plans manager 单页（从 planMetas 索引列，无 Browse/导入）；meta origin 记 on-disk 会话 id，绑定按 live id 解析 | [x] |
 | P29 清理全部"向后兼容"代码（用户：都是没用的）：删 session 目录 legacy 回退链（只认 P28 路径）、Plan/Meta lenient 解码（origin/planIndex 必填、删 messageId、origin 收紧为非 Maybe）、Legacy config 种子修复（heal 整块移除）、恒真 `has_session_file` 字段 | [x] |
+| P30 系统菜单移除 Plans 入口（用户："系统菜单里不需要plans了"）：Plans manager 整体删除（overlay/消息/状态/`fsDeleteFile` 端口/`PlanFileInfo`）；plan 只经会话内 `[Plan: …]` 状态条重开；菜单保留"打开的 plan 窗口"切换列表 | [x] |
 | R 系列 | Plan 重构：模型自主子流程 + 递归（自动创建 / 回填自动继续 / 重跑级联 / 状态条 / 超时移除）——**详见 REFACTOR.md** | 进行中 |
 
 ## P24 — 输出注入（{{tX.output}}）
@@ -293,6 +294,30 @@ C1 安全：`cancelTask` → `activeTask.cancel()` → 任务经 `taskResultCh`
       P26 type 标志的"无兼容"本来就是收紧方向；
 - [x] 验证：Elm 213 / Rust 43（-1 heal 测试）/ Go -race 8 包 / e2e ALL
       PASS；文档（plan-mode.md §8.7、go-backend.md 命令表/注记、TODO）同步。
+
+---
+
+## P30 — 系统菜单移除 Plans 入口（用户：不需要 plans 了）
+
+用户：**"系统菜单里不需要plans了"**。Plans manager 的唯一入口就是菜单
+里的 Plans 项，且 plan 已归属 session（经会话内 `[Plan: …]` 状态条重开，
+重启后仍可用）→ 管理器整体删除：
+
+- [x] 菜单：viewGlobalMenu 删除 "🕸 Plans" 项（OpenPlanManager）；保留
+      "打开的 plan 窗口"切换列表（viewGlobalMenuPlan，多窗口切换用）；
+- [x] View：删除 viewPlanManagerOverlay / viewPlanSavedTab /
+      planFileListFromMetas / viewPlanFile（含 `PlanFileInfo`）；
+      打开 plan 的解析失败/读取失败改走 setPlanErrors（窗口内报错，
+      不再弹管理器）；
+- [x] Types/Update：删除 OpenPlanManager/ClosePlanManager/
+      PlanManagerOpen/PlanManagerDelete/PlanManagerSetFilter 消息、
+      PlanManagerState + planManager 字段、FsDeleteResult handler、
+      refreshPlanList（本已 no-op）；删除 `fsDeleteFile`/`onFsDeleteResult`
+      端口 + bridge.js handler（唯一使用者是管理器；后端 fs_delete_file
+      命令保留为通用 fs API）；
+- [x] e2e：第 9 步改为断言菜单**没有** Plans 项（plan 经状态条重开仍由
+      第 6 步覆盖）；ALL PASS；
+- [x] 文档：plan-mode.md §7.1/§7.2（管理器移除说明）/§12、TODO 本表。
 
 ---
 

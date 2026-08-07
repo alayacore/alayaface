@@ -10,10 +10,10 @@
 //   6. Node detail: t2 shows failure history + ≥2 attempt sessions
 //   7. Click t1 node → its session window activates and shows the reply
 //
-// P28: plans live INSIDE the session that created them
+// P28/P30: plans live INSIDE the session that created them
 // (sessions/<origin>/plans/<planId>/ — document/meta/run/work + node
-// sessions); the Plans manager is a single view over the planMetas index
-// (no Browse/import tab).
+// sessions); no plan import; no Plans manager — plans are reopened via
+// the session's [Plan: …] status-bar link.
 //
 // Screenshots land in the artifact dir; ALL PASS printed on success.
 
@@ -578,43 +578,16 @@ try {
   await shot(page, '05e-stop-after.png');
   console.log("PASS: Plan Stop closed the run's node session windows (badge Stopped)");
 
-  // ── 9. Plans manager: single view listing plans from the planMetas
-  // index (P28: the Browse/import tab was removed — every plan is
-  // created by a session and lives under its session's dir).
-  // Open ⚙ → Plans.
+  // ── 9. No Plans manager in the system menu (P30: plans are reopened
+  // via the session's [Plan: …] status-bar link; the standalone manager
+  // entry was removed).
   await page.click('.global-menu-btn');
   await waitFor('.global-menu-panel');
-  assert(await clickByText('.global-menu-item', 'Plans'), 'Plans menu item');
-  await waitFor('.plan-filter-row', 10000);
-  await sleep(500);
-  await shot(page, '06-plans-manager-saved.png');
-
-  // The plan created earlier via Create Plan must be listed (from the
-  // planMetas index — no directory scan).
-  const savedNames = await page.$$eval('.sel-page-item-name', els => els.map(e => e.textContent));
-  assert(savedNames.some(n => n.startsWith('e2e-demo-')), 'Plans manager lists the created plan, got: ' + JSON.stringify(savedNames));
-
-  // Fuzzy filter: unmatched term → "No plans match".
-  await page.type('.plan-filter-row input', 'zzz-no-such-plan', { delay: 1 });
+  const menuItems = await page.$$eval('.global-menu-item', els => els.map(e => e.textContent));
+  assert(!menuItems.some(t => t.includes('Plans')), 'no "Plans" item in the system menu, got: ' + JSON.stringify(menuItems));
+  console.log('PASS: system menu has no Plans entry (plans reopen via [Plan: …] status-bar links)');
+  await page.click('.global-menu-btn'); // close the menu
   await sleep(200);
-  const savedStatuses = await page.$$eval('.sel-page-status', els => els.map(e => e.textContent));
-  assert(savedStatuses.some(s => s.includes('No plans match')), 'filter no-match status, got: ' + JSON.stringify(savedStatuses));
-  await page.evaluate(() => {
-    const i = document.querySelector('.plan-filter-row input');
-    if (i) { i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); }
-  });
-  await sleep(200);
-  // P28: the Browse/import tab is gone.
-  const browseTabs = await page.$$eval('.plan-tab', els => els.length);
-  assert(browseTabs === 0, 'Browse/import UI removed from the Plans manager, got: ' + browseTabs);
-  console.log('PASS: Plans manager lists plans + fuzzy-filters (no Browse/import tab)');
-  await shot(page, '07-plans-manager-single.png');
-  // Close the manager overlay before the next step.
-  await page.evaluate(() => {
-    const b = document.querySelector('.overlay .overlay-close');
-    if (b) b.click();
-  });
-  await sleep(300);
 
   // ── 9. Auto-open is immediate for live plans (R6 playback-aware) ──
   // A LIVE plan message auto-opens right away (no settle delay), even if

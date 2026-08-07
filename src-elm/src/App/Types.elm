@@ -15,11 +15,8 @@ module App.Types exposing
     , PresetInfo
     , PresetManager
     , emptyPresetManager
-    , PlanFileInfo
     , PlanViewState
     , emptyPlanView
-    , PlanManagerState
-    , emptyPlanManager
     , PlanWindow
     , emptyPlanWindow
     , PlanReadTarget
@@ -119,7 +116,6 @@ type alias Model =
     , planTaskStarted : Set String
     , planOrder : List String
     , planActiveId : Maybe String
-    , planManager : PlanManagerState
     -- Keyed by (sessionId, planIndex) — the plan message's index within
     -- its session (message ids are deliberately not used).
     , pendingPlanOffers : Dict ( String, Int ) String
@@ -202,7 +198,6 @@ type Msg
     | FsResolvePathResult E.Value
     | FsWriteResult E.Value
     | FsReadResult E.Value
-    | FsDeleteResult E.Value
       -- Session manager
     | OpenSessionManager
     | CloseSessionManager
@@ -304,11 +299,6 @@ type Msg
     | OpenMediaPreview T.MediaItem
     | CloseMediaPreview
       -- Plan Mode
-    | OpenPlanManager
-    | ClosePlanManager
-    | PlanManagerOpen String
-    | PlanManagerDelete String
-    | PlanManagerSetFilter String
     -- (sessionId, planIndex): which plan message of the session (1-based,
     -- counted with Plan.Detect.isPlanMessage). Message ids are NOT used
     -- for binding — they are per-session implementation details.
@@ -504,13 +494,6 @@ emptyPresetManager =
 
 -- PLAN MODE
 
--- A saved plan file in ~/.alayaface/plans/.
-type alias PlanFileInfo =
-    { name : String
-    , path : String
-    }
-
-
 -- The currently opened plan (P2: list view; P3+: SVG/HTML DAG).
 type alias PlanViewState =
     { plan : Maybe PT.Plan
@@ -532,27 +515,6 @@ emptyPlanView =
     , saving = False
     , exportPath = ""
     , concurrencyInput = ""
-    }
-
-
--- Plans manager overlay state (single view: saved plans from the
--- planMetas index — every plan is created by a session, no import).
-type alias PlanManagerState =
-    { show : Bool
-    , error : Maybe String
-    -- Saved-list fuzzy filter
-    , filter : String
-    -- planId of an in-flight delete (FsDeleteResult attributes it)
-    , pendingDelete : Maybe String
-    }
-
-
-emptyPlanManager : PlanManagerState
-emptyPlanManager =
-    { show = False
-    , error = Nothing
-    , filter = ""
-    , pendingDelete = Nothing
     }
 
 

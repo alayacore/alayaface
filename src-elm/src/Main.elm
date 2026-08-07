@@ -77,7 +77,6 @@ init _ =
       , planTaskStarted = Set.empty
       , planOrder = []
       , planActiveId = Nothing
-      , planManager = emptyPlanManager
       , pendingPlanOffers = Dict.empty
       , planReplaySessions = Set.empty
       , planCreating = Nothing
@@ -136,7 +135,6 @@ subscriptions model =
         , Ports.onFsReadFileDataUri (\uri -> FsReadFileResult uri)
         , Ports.onFsWriteResult (\raw -> FsWriteResult raw)
         , Ports.onFsReadResult (\raw -> FsReadResult raw)
-        , Ports.onFsDeleteResult (\raw -> FsDeleteResult raw)
         , Ports.onFsResolvePath (\result -> FsResolvePathResult result)
         , Ports.onWindowMaximized (\v -> WindowMaximized v)
         , Evts.onResize (\_ _ -> RequerySize)
