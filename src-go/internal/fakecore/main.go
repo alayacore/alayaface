@@ -282,10 +282,15 @@ func main() {
 	})
 	writeFrame("SM", string(boot))
 
-	// Boot SMs first, then replayed history content (real alayacore order).
+	// Boot SMs first, then replayed history content, then the explicit
+	// readiness signal — mirrors alayacore v0.62.4+:
+	//   SM {"type":"session","data":{"state":"ready"}}
+	// arrives AFTER all replayed content. The frontend removes its replay
+	// suppression marker ONLY on this frame (no fallback for older cores).
 	if wasResume {
 		replayResumedHistory()
 	}
+	writeFrame("SM", `{"type":"session","data":{"state":"ready"}}`)
 
 	reader := bufio.NewReader(os.Stdin)
 	staged := 0

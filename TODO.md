@@ -992,20 +992,30 @@ content frames BEFORE any SM") was wrong, so removing the marker on the
 first SM dropped it before the replayed plan message arrived →
 duplicate auto-created window (the user's exact symptom).
 
-- [x] `FrameEvent` no longer removes the marker on SM (both handlers)
-- [x] The marker is removed when the USER sends a new message
-      (`SendPrompt`) — replayed content is always suppressed; a live
-      follow-up plan message can still auto-create
-- [x] fakecore now mirrors the REAL order: boot SM first, then replayed
-      content (was the reverse — which is why the e2e could not catch
-      the bug before)
-- [x] E2E reproduces the user's bug: with the old SM-removal logic the
-      resume auto-created a duplicate plan window (assert FAILS, got 2);
-      with the fix PASSES (exactly 1 window + 1 file)
+Superseded by P26 (the core now emits an explicit readiness signal).
+
+---
+
+## P26 — Replay marker removed on the core's `session/ready` SM
+
+alayacore v0.62.4 adds `SM {"type":"session","data":{"state":"ready"}}`,
+emitted AFTER all replayed history content (verified against the binary:
+resume order = boot SMs → replay → ready; fresh boot = boot SMs →
+ready). This is the authoritative "replay ended, interactive" signal —
+replaces the P25 heuristic (remove on user SendPrompt).
+
+- [x] `isSessionReady` (App/Update.elm): `ev.tag == "SM"` + systemMsg
+      `type == "session"` + `data.state == "ready"` (reuses
+      P.systemMsgDecoder)
+- [x] `FrameEvent` removes `planReplaySessions` ONLY on the ready SM
+- [x] `SendPrompt` no longer removes the marker — **NO fallback**: cores
+      without the ready SM are unsupported (a resumed session's later
+      live plan messages would never auto-create)
+- [x] fakecore emits the ready SM after the replayed content (mirrors
+      v0.62.4)
 - [x] Tests: elm 208 / Rust 42 / Go -race all pkgs / make e2e ALL PASS
-- [ ] Manual GUI: open any old session containing a plan message → no
-      duplicate plan window; send a new message → live plan still
-      auto-creates
+- [ ] Manual GUI: open an old session with a plan message → no duplicate
+      window; after ready, a live plan message still auto-creates
 
 ---
 

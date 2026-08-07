@@ -1097,6 +1097,37 @@ runPathFor planPath =
         planPath ++ ".run.json"
 
 
+{-| Whether a frame is the core's explicit readiness signal:
+`SM {"type":"session","data":{"state":"ready"}}` (alayacore v0.62.4+).
+Emitted AFTER all replayed history content — the authoritative
+"replay ended, session interactive" marker. The replay-suppression
+marker (planReplaySessions) is removed on this frame.
+-}
+isSessionReady : P.FrameEvent -> Bool
+isSessionReady ev =
+    if ev.tag /= "SM" then
+        False
+
+    else
+        case ev.json of
+            Just json ->
+                case D.decodeValue P.systemMsgDecoder json of
+                    Ok env ->
+                        env.msgType == "session"
+                            && ((D.decodeValue (D.field "state" D.string) env.data
+                                    |> Result.toMaybe
+                                    |> Maybe.withDefault ""
+                                )
+                                    == "ready"
+                               )
+
+                    Err _ ->
+                        False
+
+            Nothing ->
+                False
+
+
 {-| Extract a runner event from a frame for a node-owned session:
 SM task done (in_progress=false) or SM error.
 
@@ -1585,18 +1616,21 @@ update msg model =
                                     { model
                                         | sessions = Dict.insert ev.sessionId { newSession | prevMsgCount = List.length newSession.messages } model.sessions
                                         -- Replay suppression: the marker is
-                                        -- removed when the USER sends a new
-                                        -- message (SendPrompt), NOT on the
-                                        -- first SM — the real alayacore
-                                        -- emits its boot SM frames (version/
-                                        -- task/model_list/model/reasoning/
-                                        -- video_config) BEFORE replaying
-                                        -- history content (verified against
-                                        -- the binary: alayadump). Keying the
-                                        -- replay end on SM would drop the
-                                        -- marker before the replayed plan
-                                        -- message arrives → auto-create
-                                        -- duplicate windows.
+                                        -- removed by the core's explicit
+                                        -- readiness signal — SM
+                                        -- {"type":"session","data":
+                                        -- {"state":"ready"}} arrives AFTER
+                                        -- all replayed history content
+                                        -- (alayacore v0.62.4+, verified
+                                        -- against the binary). No fallback:
+                                        -- older cores without the ready SM
+                                        -- are not supported.
+                                        , planReplaySessions =
+                                            if isSessionReady ev then
+                                                Set.remove ev.sessionId model.planReplaySessions
+
+                                            else
+                                                model.planReplaySessions
                                     }
 
                                 -- Plan Mode (R2): when an assistant message
@@ -1808,10 +1842,6 @@ update msg model =
                                     , sendPending = True
                                 }
                                 model.sessions
-                            -- The user acted: the resumed session's history
-                            -- replay is over — from here on, a NEW live
-                            -- plan message may auto-create again.
-                            , planReplaySessions = Set.remove s.id model.planReplaySessions
                           }
                         , Ports.sendPrompt
                             { sessionId = s.id
