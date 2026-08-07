@@ -60,6 +60,36 @@ minWinW = 300
 minWinH : Int
 minWinH = 200
 
+-- Infinite-canvas placement constants.
+-- New windows are anchored to their SOURCE window (a plan opens below
+-- the session that created it; a node session opens right of its plan),
+-- with same-source windows cascading down / stacking with a slight
+-- offset. Fallback placement (no live source) centers on the viewport.
+canvasGapY : Int
+canvasGapY = 24
+
+planStepY : Int
+planStepY = 36
+
+nodeGapX : Int
+nodeGapX = 24
+
+nodeStepX : Int
+nodeStepX = 28
+
+nodeStepY : Int
+nodeStepY = 24
+
+-- bringIntoView keeps this much breathing room around a fresh window
+-- when panning the canvas toward it.
+canvasMargin : Int
+canvasMargin = 24
+
+-- Safety bound for canvas pan (infinite in principle; guards float
+-- precision and runaway drags).
+canvasMaxPan : Int
+canvasMaxPan = 100000
+
 -- Helpers
 
 updateSession : Model -> String -> (T.SessionState -> T.SessionState) -> Model
@@ -455,48 +485,244 @@ activateSessionModel model id =
             )
 
 
+{-| Live session window that owns a plan (planMetas origin — an ON-DISK
+id — resolved to the currently open live id via planResumedFrom).
+Nothing when the owning session is closed (caller falls back to
+viewport-centered placement).
+-}
+originLiveId : Model -> String -> Maybe String
+originLiveId model planId =
+    Dict.get planId model.planMetas
+        |> Maybe.map (.origin >> .sessionId)
+        |> Maybe.andThen (\origId -> NC.liveSessionForOrigin model.sessions model.planResumedFrom origId)
+
+
+{-| Number of plan windows currently open that belong to the given LIVE
+source session. Used to cascade same-source plans downward.
+-}
+openPlansForOrigin : Model -> String -> Int
+openPlansForOrigin model liveOriginId =
+    Dict.foldl
+        (\planId _ acc ->
+            case originLiveId model planId of
+                Just lid ->
+                    if lid == liveOriginId then
+                        acc + 1
+
+                    else
+                        acc
+
+                Nothing ->
+                    acc
+        )
+        0
+        model.planWindows
+
+
+{-| Number of node-session windows currently open for a plan (label
+"planId/nodeId" and the session is still alive). Used to stack
+same-plan sessions beside the plan with a slight offset.
+-}
+openNodeSessionsForPlan : Model -> String -> Int
+openNodeSessionsForPlan model planId =
+    Dict.foldl
+        (\sid label acc ->
+            if String.startsWith (planId ++ "/") label && Dict.member sid model.sessions then
+                acc + 1
+
+            else
+                acc
+        )
+        0
+        model.planNodeSessions
+
+
+{-| The plan a PENDING session creation belongs to: a runner create
+(planCreating) or a node resume (planResumeFrom → planNodeSessions
+label). Used to place the fresh session window beside its plan.
+-}
+pendingNodePlanId : Model -> Maybe String
+pendingNodePlanId model =
+    case model.planCreating of
+        Just (RunnerCreate planId _) ->
+            Just planId
+
+        _ ->
+            case model.planResumeFrom of
+                Just origId ->
+                    Dict.get origId model.planNodeSessions
+                        |> Maybe.andThen NC.parseNodeConnection
+                        |> Maybe.map Tuple.first
+
+                Nothing ->
+                    Nothing
+
+
+{-| Viewport-centered fallback placement for a plain session window
+(New Session / fork / resume of a plain session): centered on the
+current viewport, cascading with the same 6×4 stagger as before.
+-}
+centeredSessionPos : Model -> WindowPos
+centeredSessionPos model =
+    { x = model.appWidth // 2 - defaultWinW // 2 + remainderBy 6 model.nextSessionNum * 50
+    , y = model.appHeight // 2 - defaultWinH // 2 + remainderBy 4 model.nextSessionNum * 40
+    , w = defaultWinW
+    , h = defaultWinH
+    , z = model.nextZIndex
+    }
+
+
+{-| Viewport-centered fallback placement for a plan window opened from
+the manager (no live owning session).
+-}
+centeredPlanPos : Model -> WindowPos
+centeredPlanPos model =
+    let
+        n =
+            Dict.size model.planWindows
+    in
+    { x = model.appWidth // 2 - planDefaultWinW // 2 + remainderBy 6 n * 50
+    , y = model.appHeight // 2 - planDefaultWinH // 2 + remainderBy 4 n * 40
+    , w = planDefaultWinW
+    , h = planDefaultWinH
+    , z = model.nextZIndex
+    }
+
+
+{-| Placement rule 1 (session → plan): the new plan window sits directly
+below its owning session, cascading downward as more plans open for the
+same session.
+-}
+planPositionBelowSession : Model -> String -> WindowPos
+planPositionBelowSession model liveOriginId =
+    case Dict.get liveOriginId model.windowPositions of
+        Just sp ->
+            { x = sp.x
+            , y = sp.y + sp.h + canvasGapY + openPlansForOrigin model liveOriginId * planStepY
+            , w = planDefaultWinW
+            , h = planDefaultWinH
+            , z = model.nextZIndex
+            }
+
+        Nothing ->
+            centeredPlanPos model
+
+
+{-| Placement rule 2 (plan → node session): the new session window sits
+directly right of its plan, stacking right-and-down with a slight
+offset as more node sessions open for the same plan.
+-}
+nodeSessionPositionBesidePlan : Model -> String -> WindowPos
+nodeSessionPositionBesidePlan model planId =
+    case Dict.get planId model.windowPositions of
+        Just pp ->
+            let
+                n =
+                    openNodeSessionsForPlan model planId
+            in
+            { x = pp.x + pp.w + nodeGapX + n * nodeStepX
+            , y = pp.y + n * nodeStepY
+            , w = defaultWinW
+            , h = defaultWinH
+            , z = model.nextZIndex
+            }
+
+        Nothing ->
+            centeredSessionPos model
+
+
+{-| Pan the canvas so a window (canvas coordinates) is visible in the
+viewport, keeping at least canvasMargin on each side. New windows are
+placed relative to their source — which may be far off-screen — so a
+fresh window must bring itself into view or the user would see nothing.
+-}
+bringIntoView : Model -> WindowPos -> Model
+bringIntoView model pos =
+    let
+        vx =
+            pos.x + model.canvasOffset.x
+
+        vy =
+            pos.y + model.canvasOffset.y
+
+        dx =
+            if vx + pos.w < canvasMargin then
+                canvasMargin - (vx + pos.w)
+
+            else if vx > model.appWidth - canvasMargin then
+                model.appWidth - canvasMargin - vx
+
+            else
+                0
+
+        dy =
+            if vy + pos.h < canvasMargin then
+                canvasMargin - (vy + pos.h)
+
+            else if vy > model.appHeight - canvasMargin then
+                model.appHeight - canvasMargin - vy
+
+            else
+                0
+    in
+    { model
+        | canvasOffset =
+            { x = model.canvasOffset.x + dx
+            , y = model.canvasOffset.y + dy
+            }
+    }
+
+
 {-| Insert (or update) a plan window, activate it, assign a default
 window position if it is new, and raise it to the top.
 -}
 addPlanWindow : String -> PlanWindow -> Model -> Model
 addPlanWindow key win model =
     let
-        n =
-            Dict.size model.planWindows
-
         positions1 =
             if Dict.member key model.windowPositions then
                 model.windowPositions
 
             else
                 Dict.insert key
-                    { x = 60 + remainderBy 6 n * 50
-                    , y = 60 + remainderBy 4 n * 40
-                    , z = model.nextZIndex
-                    , w = planDefaultWinW
-                    , h = planDefaultWinH
-                    }
+                    (case originLiveId model key of
+                        -- Rule 1: below the owning session (cascading).
+                        Just liveOrigin ->
+                            planPositionBelowSession model liveOrigin
+
+                        -- Manager open / no live source: center on viewport.
+                        Nothing ->
+                            centeredPlanPos model
+                    )
                     model.windowPositions
 
         positions2 =
             Dict.update key (Maybe.map (\p -> { p | z = model.nextZIndex })) positions1
-    in
-    { model
-        | planWindows = Dict.insert key win model.planWindows
-        , planOrder =
-            if List.member key model.planOrder then
-                model.planOrder
 
-            else
-                model.planOrder ++ [ key ]
-        , planActiveId = Just key
-        , windowPositions = positions2
-        , nextZIndex = model.nextZIndex + 1
-        -- The new plan window is active: connect it to its owning
-        -- session (drawn by bridge.js via the setPlanConnection port —
-        -- PlanSaveReady emits the matching Cmd).
-        , planConnection = planConnectionFor key model
-    }
+        m1 =
+            { model
+                | planWindows = Dict.insert key win model.planWindows
+                , planOrder =
+                    if List.member key model.planOrder then
+                        model.planOrder
+
+                    else
+                        model.planOrder ++ [ key ]
+                , planActiveId = Just key
+                , windowPositions = positions2
+                , nextZIndex = model.nextZIndex + 1
+                -- The new plan window is active: connect it to its owning
+                -- session (drawn by bridge.js via the setPlanConnection port —
+                -- PlanSaveReady emits the matching Cmd).
+                , planConnection = planConnectionFor key model
+            }
+    in
+    case Dict.get key positions2 of
+        Just p ->
+            bringIntoView m1 p
+
+        Nothing ->
+            m1
 
 
 {-| Window key for a plan file path: the plan file name minus .json
@@ -1398,7 +1624,7 @@ update msg model =
                     else
                         Cmd.none
 
-                baseModel =
+                baseModel0 =
                     { model
                         | sessions = sessionsAfterBuffer
                         , activeId = newActiveId
@@ -1410,26 +1636,19 @@ update msg model =
                                 model.windowPositions
                             else
                                 let
-                                    -- Cascade: each new window offsets from previous
-                                    -- Use nextSessionNum (monotonically increasing) to avoid
-                                    -- overlapping with existing windows after session closures
-                                    n =
-                                        model.nextSessionNum
+                                    -- Rule 2: a runner-created / resumed
+                                    -- node session opens beside its plan
+                                    -- window (stacking with an offset);
+                                    -- plain creates center on the viewport.
+                                    pos =
+                                        case pendingNodePlanId model of
+                                            Just planId ->
+                                                nodeSessionPositionBesidePlan model planId
 
-                                    baseX =
-                                        60 + remainderBy 6 n * 50
-
-                                    baseY =
-                                        60 + remainderBy 4 n * 40
+                                            Nothing ->
+                                                centeredSessionPos model
                                 in
-                                Dict.insert id
-                                    { x = baseX
-                                    , y = baseY
-                                    , z = model.nextZIndex
-                                    , w = defaultWinW
-                                    , h = defaultWinH
-                                    }
-                                    model.windowPositions
+                                Dict.insert id pos model.windowPositions
                         , nextZIndex = model.nextZIndex + 1
                         -- Only consume pendingSwitchOnCreate when this
                         -- session actually consumed it (non-runner). A
@@ -1453,6 +1672,16 @@ update msg model =
                                 Nothing
                         , pendingEvents = Dict.remove id model.pendingEvents
                     }
+
+                -- Pan the canvas so the fresh window is visible (its
+                -- source window may be far off-screen).
+                baseModel =
+                    case Dict.get id baseModel0.windowPositions of
+                        Just p ->
+                            bringIntoView baseModel0 p
+
+                        Nothing ->
+                            baseModel0
 
                 -- A session resumed for a plan node gets a FRESH id from
                 -- resume_session while keeping the ORIGINAL on-disk dir.
@@ -4909,6 +5138,22 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
+        CanvasDragStart mouseX mouseY ->
+            -- Drag on the empty canvas background: pan the infinite
+            -- canvas. Window mousedowns never reach here (panels
+            -- stopPropagation), so this only fires on true background.
+            ( { model
+                | canvasDrag =
+                    Just
+                        { startMouseX = mouseX
+                        , startMouseY = mouseY
+                        , startOffsetX = model.canvasOffset.x
+                        , startOffsetY = model.canvasOffset.y
+                        }
+              }
+            , Cmd.none
+            )
+
         WindowDragMove mouseX mouseY ->
             case model.dragInfo of
                 Just info ->
@@ -4919,33 +5164,13 @@ update msg model =
                         dy =
                             round mouseY - round info.startMouseY
 
-                        newRawX =
+                        -- No viewport clamp: the canvas is unbounded and
+                        -- the user recovers off-screen windows by panning.
+                        newX =
                             info.startWinX + dx
 
-                        newRawY =
-                            info.startWinY + dy
-
-                        -- Look up current window size for right/bottom clamping
-                        winSize =
-                            Dict.get info.sessionId model.windowPositions
-
-                        winW =
-                            Maybe.map .w winSize |> Maybe.withDefault defaultWinW
-
-                        winH =
-                            Maybe.map .h winSize |> Maybe.withDefault defaultWinH
-
-                        maxX =
-                            max 0 (model.appWidth - winW)
-
-                        maxY =
-                            max 0 (model.appHeight - winH)
-
-                        newX =
-                            clamp 0 maxX newRawX
-
                         newY =
-                            clamp 0 maxY newRawY
+                            info.startWinY + dy
                     in
                     ( { model
                         | windowPositions =
@@ -4957,10 +5182,30 @@ update msg model =
                     )
 
                 Nothing ->
-                    handleResizeMove model mouseX mouseY
+                    case model.canvasDrag of
+                        Just cd ->
+                            let
+                                dx =
+                                    round mouseX - round cd.startMouseX
+
+                                dy =
+                                    round mouseY - round cd.startMouseY
+
+                                newX =
+                                    clamp -canvasMaxPan canvasMaxPan (cd.startOffsetX + dx)
+
+                                newY =
+                                    clamp -canvasMaxPan canvasMaxPan (cd.startOffsetY + dy)
+                            in
+                            ( { model | canvasOffset = { x = newX, y = newY } }
+                            , Cmd.none
+                            )
+
+                        Nothing ->
+                            handleResizeMove model mouseX mouseY
 
         WindowDragEnd ->
-            ( { model | dragInfo = Nothing, resizeInfo = Nothing }, Cmd.none )
+            ( { model | dragInfo = Nothing, resizeInfo = Nothing, canvasDrag = Nothing }, Cmd.none )
 
         ActivateSession id ->
             if model.activeId == Just id then
@@ -5030,36 +5275,14 @@ handleResizeMove model mouseX mouseY =
                 r =
                     resizeDimensions config
 
-                -- Clamp so window stays within viewport
-                clampedX =
-                    max 0 (min (max 0 (model.appWidth - r.w)) r.x)
-
-                clampedY =
-                    max 0 (min (max 0 (model.appHeight - r.h)) r.y)
-
-                -- If x/y was clamped, adjust w/h so right/bottom edge stays put
-                adjustW =
-                    if clampedX /= r.x then
-                        r.w + (r.x - clampedX)
-                    else
-                        r.w
-
-                adjustH =
-                    if clampedY /= r.y then
-                        r.h + (r.y - clampedY)
-                    else
-                        r.h
-
-                finalW =
-                    max minWinW adjustW
-
-                finalH =
-                    max minWinH adjustH
+                -- No viewport clamp on resize either: the canvas is
+                -- unbounded, only the minimum size is enforced (inside
+                -- resizeDimensions). Positions move freely off-screen.
             in
             ( { model
                 | windowPositions =
                     Dict.update info.sessionId
-                        (Maybe.map (\pos -> { pos | x = clampedX, y = clampedY, w = finalW, h = finalH }))
+                        (Maybe.map (\pos -> { pos | x = r.x, y = r.y, w = r.w, h = r.h }))
                         model.windowPositions
               }
             , Cmd.none

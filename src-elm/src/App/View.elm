@@ -57,13 +57,28 @@ view model =
         [ Html.node "style"
             []
             [ Html.text (".app{--content-width:" ++ String.fromInt (min 864 (max 400 model.appWidth - 40)) ++ "px}") ]
-        , Html.div [ Attr.id "main-content", Attr.class "main-content" ]
+        , Html.div
+            [ Attr.id "main-content"
+            , Attr.class
+                ("main-content"
+                    ++ (if model.canvasDrag == Nothing then "" else " panning")
+                )
+            , Ev.preventDefaultOn "mousedown" canvasDragStartDecoder
+            ]
             (if List.isEmpty model.sessionOrder && List.isEmpty model.planOrder then
                 [ viewNoSessionPanel model ]
 
              else
-                List.map (\id -> viewSessionPanel model id) model.sessionOrder
-                    ++ List.map (\pid -> viewPlanPanel model pid) model.planOrder
+                -- Infinite canvas: windows live in canvas coordinates on
+                -- this layer; panning translates the whole layer.
+                [ Html.div
+                    [ Attr.class "canvas"
+                    , Attr.style "transform" (canvasTransform model)
+                    ]
+                    (List.map (\id -> viewSessionPanel model id) model.sessionOrder
+                        ++ List.map (\pid -> viewPlanPanel model pid) model.planOrder
+                    )
+                ]
             )
         , viewGlobalMenu model
         , viewContextMenu model
@@ -73,6 +88,26 @@ view model =
         , viewMcpEditorOverlay model
         , viewSettingsEditorOverlay model
         ]
+
+
+{-| Canvas pan starts on the empty background. Window panels stop
+mousedown propagation, so this decoder only ever sees true background
+clicks.
+-}
+canvasDragStartDecoder : D.Decoder ( Msg, Bool )
+canvasDragStartDecoder =
+    D.map2 (\x y -> ( CanvasDragStart x y, True ))
+        (D.field "clientX" D.float)
+        (D.field "clientY" D.float)
+
+
+canvasTransform : Model -> String
+canvasTransform model =
+    "translate3d("
+        ++ String.fromInt model.canvasOffset.x
+        ++ "px,"
+        ++ String.fromInt model.canvasOffset.y
+        ++ "px,0)"
 
 
 viewSessionPanel : Model -> String -> Html Msg
@@ -114,7 +149,9 @@ viewSessionPanel model id =
                 ([ Attr.class panelClasses
                  , Attr.attribute "data-session" id
                  , Ev.onClick (SwitchSession id)
-                 , Ev.on "mousedown" (D.succeed (ActivateSession id))
+                 -- stopPropagation so window mousedowns never reach the
+                 -- canvas pan handler on main-content.
+                 , Ev.stopPropagationOn "mousedown" (D.succeed ( ActivateSession id, True ))
                  ]
                     ++ positionStyles
                 )
@@ -439,7 +476,9 @@ viewPlanPanel model planId =
                     )
                  , Attr.attribute "data-plan" planId
                  , Ev.onClick (PlanActivate planId)
-                 , Ev.on "mousedown" (D.succeed (PlanActivate planId))
+                 -- stopPropagation so window mousedowns never reach the
+                 -- canvas pan handler on main-content.
+                 , Ev.stopPropagationOn "mousedown" (D.succeed ( PlanActivate planId, True ))
                  ]
                     ++ positionStyles
                 )

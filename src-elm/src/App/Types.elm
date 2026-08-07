@@ -4,6 +4,7 @@ module App.Types exposing
     , Msg(..)
     , WindowPos
     , DragInfo
+    , CanvasDragInfo
     , ResizeHandle(..)
     , ResizeInfo
     , DefaultModelsEditor
@@ -64,6 +65,13 @@ type alias Model =
     , nextSessionNum : Int
     , windowPositions : Dict String WindowPos
     , nextZIndex : Int
+    -- Infinite canvas: the viewport (main-content) shows a slice of an
+    -- unbounded canvas. Windows are positioned in CANVAS coordinates;
+    -- canvasOffset is the translate3d applied to the canvas layer
+    -- (viewport = canvas + offset). Dragging the empty background pans
+    -- the canvas instead of moving a window.
+    , canvasOffset : { x : Int, y : Int }
+    , canvasDrag : Maybe CanvasDragInfo
     , dragInfo : Maybe DragInfo
     , resizeInfo : Maybe ResizeInfo
     , showGlobalMenu : Bool
@@ -343,6 +351,8 @@ type Msg
     | WindowDragMove Float Float
     | WindowDragEnd
     | PlanWindowDragStart String Float Float
+    -- Canvas pan (drag on the empty background)
+    | CanvasDragStart Float Float
       -- Window resizing
     | ResizeStart String ResizeHandle Float Float
     | PlanResizeStart String ResizeHandle Float Float
@@ -380,6 +390,17 @@ type alias DragInfo =
     , startMouseY : Float
     , startWinX : Int
     , startWinY : Int
+    }
+
+
+{-| In-flight canvas pan: pointer start position + the canvas offset at
+drag start, so the pan delta accumulates from where the user grabbed.
+-}
+type alias CanvasDragInfo =
+    { startMouseX : Float
+    , startMouseY : Float
+    , startOffsetX : Int
+    , startOffsetY : Int
     }
 
 

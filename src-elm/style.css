@@ -2084,30 +2084,19 @@ body {
   padding: 4px 12px 10px 12px;
 }
 
+/* Unified plan links: plain text links. The run status is part of the
+   label; clicking opens the plan window where the user can see details.
+   Same look as .plan-link (inline [Plan: …] markers in message text). */
 .plan-offer-btn {
-  background: #6366f1;
-  color: #fff;
+  background: none;
   border: none;
-  border-radius: 6px;
-  padding: 5px 12px;
-  font-size: 0.75rem;
+  color: #6366f1;
   cursor: pointer;
+  font-size: 0.78rem;
+  padding: 0;
+  text-decoration: underline;
 }
-.plan-offer-btn:hover { background: #4f52e0; }
-.plan-open-btn { background: transparent; border: 1px solid #6366f1; color: #6366f1; font-weight: 600; }
-.plan-open-btn:hover { background: rgba(99,102,241,0.12); }
-
-/* R3: plan status bar colors (bound to the message that auto-created it) */
-.plan-status-running { background: #d97706; }
-.plan-status-running:hover { background: #b45309; }
-.plan-status-completed { background: #16a34a; }
-.plan-status-completed:hover { background: #15803d; }
-.plan-status-failed { background: #dc2626; }
-.plan-status-failed:hover { background: #b91c1c; }
-.plan-status-stopped { background: #64748b; }
-.plan-status-stopped:hover { background: #475569; }
-.plan-status-paused { background: #64748b; }
-.plan-status-paused:hover { background: #475569; }
+.plan-offer-btn:hover { color: #4f52e0; }
 
 .plan-page {
   min-width: 520px;
@@ -2581,3 +2570,33 @@ body {
   color: #555;
 }
 .plan-link { background: none; border: none; color: #6366f1; cursor: pointer; font-size: 0.78rem; padding: 0; text-decoration: underline; }
+
+/* ─── Infinite canvas ──────────────────────────────────────────────── */
+
+/* The viewport: hidden overflow (no scrollbars), grab cursor on the
+   empty background. `.panning` is set while a canvas drag is active. */
+.main-content {
+  cursor: grab;
+}
+.main-content.panning {
+  cursor: grabbing;
+}
+
+/* The canvas layer: zero-size origin that windows anchor to; the whole
+   layer is translated via transform (GPU-composited, no layout). */
+.canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  z-index: 0;
+  transform-origin: 0 0;
+}
+
+/* Windows keep the default cursor inside (don't inherit grab). */
+.session-panel,
+.plan-panel {
+  cursor: default;
+}
+

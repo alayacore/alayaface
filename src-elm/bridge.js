@@ -697,6 +697,15 @@
         rect.bottom > containerRect.top && rect.top < containerRect.bottom;
     }
 
+    // The canvas layer has `transform`, which creates a stacking context:
+    // window z-indexes now only order windows WITHIN that layer. The
+    // connection overlays are fixed on <body>, so to sit between the
+    // windows they must offset by the canvas layer's own z-index.
+    function canvasZBase() {
+      var c = document.querySelector(".canvas");
+      return c ? (parseInt(getComputedStyle(c).zIndex, 10) || 0) : 0;
+    }
+
     function drawNodeConnection() {
       if (!nodeConnection) {
         if (connSvg) connSvg.style.display = "none";
@@ -727,9 +736,10 @@
       svg.setAttribute("width", String(window.innerWidth));
       svg.setAttribute("height", String(window.innerHeight));
       // Match the plan window's z-index: above it (same z, later in
-      // <body>), below the session (session z = planZ + 1).
+      // <body>), below the session (session z = planZ + 1). Offset by
+      // the canvas layer's z (it creates a stacking context).
       var planZ = parseInt(getComputedStyle(plan).zIndex, 10) || 0;
-      svg.style.zIndex = String(planZ);
+      svg.style.zIndex = String(canvasZBase() + planZ);
       svg.style.display = "block";
     }
 
@@ -764,10 +774,10 @@
       svg.setAttribute("height", String(window.innerHeight));
       // Between two windows: draw at the TOP of the two participants
       // (same z + later DOM position → above both, below anything
-      // focused above them).
+      // focused above them). Offset by the canvas layer's z.
       var planZ = parseInt(getComputedStyle(plan).zIndex, 10) || 0;
       var sessionZ = parseInt(getComputedStyle(s).zIndex, 10) || 0;
-      svg.style.zIndex = String(Math.max(planZ, sessionZ));
+      svg.style.zIndex = String(canvasZBase() + Math.max(planZ, sessionZ));
       svg.style.display = "block";
     }
 

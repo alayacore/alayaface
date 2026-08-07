@@ -77,6 +77,8 @@ initModelWithSession =
     , nextSessionNum = 1
     , windowPositions = Dict.empty
     , nextZIndex = 1
+    , canvasOffset = { x = 0, y = 0 }
+    , canvasDrag = Nothing
     , dragInfo = Nothing
     , resizeInfo = Nothing
     , showGlobalMenu = False
