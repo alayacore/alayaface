@@ -72,6 +72,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P32 用户驱动的 UI/CI 一轮：S 形贝塞尔（两控制点反向）；~~祖先链连线~~（**用户澄清后移除**——DAG 内部节点已有连线，不再额外画；plan 窗口激活只连所属会话 `[Plan: …]`）；消息区覆盖式滚动条（隐藏原生滚动条 → 消息列与输入框永远同宽）；Session Manager 列表按钮统一尺寸；启动不再自动开空 session（欢迎屏，按需自开）；GitHub CI 增加 Tauri `cargo build` + 完整 E2E job（Go 后端 + fakecore + 无头 Chrome）；修复 restart-e2e 后端重启端口竞态 | [x] |
 | P33 修复页面刷新后 resume 报 "Session is already active"（用户反馈）：刷新后前端会话注册表清空，但后端仍持有旧页面的会话句柄 → resume_session 一直拒绝，只能重启 Go 进程；新增 `close_all_sessions` RPC（Go+Rust 对称，优雅关闭=历史保留），前端 init 时调用一次回收孤儿会话；restart-e2e 新增「页面刷新」阶段回归 | [x] |
 | P34 关闭 session 时级联关闭其子项（用户要求）：关掉来源 session 窗口 → 它拥有的 plans（meta origin 匹配）全部停跑（StopRun 防重生）+ 关掉各 plan 的节点会话窗口 + 关掉 plan 窗口；节点会话自己的子 plan（递归）同样级联；DeleteSession（Session Manager 删除）同样级联；纯逻辑 `Plan.Meta.plansOwnedBySession` 抽出可测；plan-e2e 新增 8c 级联回归 | [x] |
+| P35 关闭 plan window 时级联关闭其下节点会话（用户反馈："关闭plan window的时候，他下面的session window没有被关闭"）：PlanClose 现在先停跑（仅 InProgress/Paused —— 终态 Completed/FailedRun/Stopped 不动，避免把状态条 Completed 覆盖成 Stopped）再关窗口；StopRun → closeAndClear → CloseSessionFor 逐个关节点会话（其子 plan 经 CloseSession 递归）；closeChildPlan 简化为直接委托 PlanClose；plan-e2e 新增 8d（关 plan 窗口 → t3 窗口消失 + 无重生） | [x] |
 | R 系列 | Plan 重构：模型自主子流程 + 递归（自动创建 / 回填自动继续 / 重跑级联 / 状态条 / 超时移除）——**详见 REFACTOR.md** | 进行中 |
 
 ## P24 — 输出注入（{{tX.output}}）
@@ -489,14 +490,41 @@ plans) should also be closed"**。
 - `Plan/Meta.elm`（纯模块，可测）：`plansOwnedBySession : Dict String PlanMeta
   -> String -> List String`（按 meta.origin.sessionId 求会话拥有的 plan id）；
 - `App/Update.elm`：`closeSessionChildren`（磁盘 id 解析 → 子 plan 列表 →
-  foldl `closeChildPlan`）；`closeChildPlan` = `runStepIn planId 0 R.StopRun` +
-  `update (PlanClose planId)`；`CloseSession` 与 `DeleteSession` 处理入口先跑级联；
+  foldl `closeChildPlan`）；`closeChildPlan` = `update (PlanClose planId)`
+  （P35 起 PlanClose 自带停跑+关节点会话）；`CloseSession` 与 `DeleteSession`
+  处理入口先跑级联；
 - 测试：PlanMetaTest +4（多 plan 归属 / 其他会话排除 / 未知会话空 / 空索引空）；
   **Elm 217** 全绿；
 - E2E：plan-e2e 新增 **8c**——重新 Run（t3 挂起，先清 hang marker）→ 来源会话
   ✕ 关闭 → 断言 plan 窗口消失 + `/t3` 节点窗口消失 + 等 1.5s **无重生**；
   plan-e2e + restart-e2e ALL PASS；Rust 43 / Go -race 8 包全绿；
 - 文档：TODO 本表。
+
+---
+
+## P35 — 关闭 plan window 级联关闭其下节点会话（用户反馈）
+
+用户：**"关闭plan window的时候，他下面的session window没有被关闭"**。
+P34 只做了会话→plan 方向的级联；plan → 节点会话方向缺失（旧行为：关 plan
+窗口不停节点会话，文档明确写了"Closing the plan window does not stop running
+node sessions"）。用户要求对称：关 plan 窗口也要关掉它下面的节点会话窗口。
+
+**实现（PlanClose 改造）**：
+- `PlanClose planId` 先看 run 状态：**仅 InProgress/Paused**（唯一可能还开着
+  节点会话的状态）→ `runStepIn planId 0 R.StopRun`：StopRun 把全部节点置
+  Canceled → `closeAndClear` 对每个有绑定会话的节点发 `CloseSessionFor` →
+  逐个关节点会话窗口 + 杀进程（其子 plan 经 CloseSession 递归级联）；
+- **终态（Completed/FailedRun/Stopped/NotStarted）不重停**：节点会话早已由
+  closeAndClear 关掉，重停会把 `planRunStatuses` 里的 Completed 覆盖成
+  Stopped、破坏状态条（e2e 断言状态条显示 Completed）；完成自动关窗（R4 的
+  `Task.perform PlanClose`）因此不受影响；
+- `closeChildPlan`（P34）简化为直接 `update (PlanClose planId)`（停跑逻辑
+  内聚到 PlanClose 一处）；
+- E2E：plan-e2e 新增 **8d**（在 8c 之前）——重新 Run（t3 挂起）→ 关 plan
+  窗口 ✕ → 断言 plan 窗口消失 + `/t3` 节点窗口消失 + 等 1.5s 无重生 → 经
+  来源会话 `[Plan: …]` 状态条重开 plan 再走 8c；ALL PASS；
+- 验证：Elm 217 / Rust 43 / Go -race 8 包 / plan-e2e + restart-e2e ALL PASS；
+- 文档：plan-mode.md §7.1（P35 段）、TODO 本表。
 
 ---
 

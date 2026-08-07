@@ -578,12 +578,57 @@ try {
   await shot(page, '05e-stop-after.png');
   console.log("PASS: Plan Stop closed the run's node session windows (badge Stopped)");
 
+  // ── 8d. Closing the PLAN window cascades to its node sessions (P35) ─
+  // Re-run the plan (t3 hangs again): the t3 node session window is
+  // open below the plan window. Closing the plan window must STOP the
+  // run and close the t3 session window too — no respawn afterwards.
+  execSync('rm -f /tmp/alayaface-fakecore-hang-once-*.marker');
+  assert(await clickPlanHeaderBtn('Run'), 'plan-close re-Run button');
+  await page.waitForFunction(() => {
+    return [...document.querySelectorAll('.session-panel')].some(p =>
+      (p.querySelector('.session-bar-title')?.textContent || '').includes('/t3]'));
+  }, { timeout: 30000 });
+  await sleep(400);
+  await shot(page, '05f1-plan-close-before.png');
+  const closedPlanWin = await page.evaluate(() => {
+    const bar = document.querySelector('.plan-panel .session-bar.plan-bar');
+    const btn = bar && bar.querySelector('.session-bar-close');
+    if (btn) { btn.click(); return true; }
+    return false;
+  });
+  assert(closedPlanWin, 'plan window close button clicked');
+  await page.waitForFunction(() => {
+    return document.querySelectorAll('.plan-page').length === 0;
+  }, { timeout: 10000 });
+  await sleep(1500); // let the cascade settle; assert nothing respawns
+  const planCloseAfter = await page.evaluate(() => {
+    const planCount = document.querySelectorAll('.plan-page').length;
+    const t3Count = [...document.querySelectorAll('.session-panel')].filter(p =>
+      (p.querySelector('.session-bar-title')?.textContent || '').includes('/t3]')).length;
+    return { planCount, t3Count };
+  });
+  assert(planCloseAfter.planCount === 0, 'plan window closed, got: ' + planCloseAfter.planCount);
+  assert(planCloseAfter.t3Count === 0, 'node session window closed after plan window close (no respawn), got: ' + planCloseAfter.t3Count);
+  await shot(page, '05f2-plan-close-after.png');
+  console.log('PASS: closing the plan window cascaded: node session windows closed (P35)');
+
+  // Reopen the plan through the origin session's [Plan: …] status-bar
+  // link (the only way plans reopen — P30) for the 8c cascade below.
+  await page.evaluate(() => {
+    const b = [...document.querySelectorAll('button')].find(e => /^\[Plan: /.test((e.textContent || '').trim()));
+    if (b) b.click();
+  });
+  await page.waitForFunction(() => {
+    return document.querySelectorAll('.plan-page').length === 1;
+  }, { timeout: 10000 });
+  await sleep(400);
+
   // ── 8c. Closing the ORIGIN session cascades to its children (P34) ──
   // Re-run the plan (t3 hangs again): origin session + plan window + t3
   // session window are all open. Closing the origin session must STOP
   // the run and close the plan window AND the t3 session window — no
-  // respawn afterwards. (Remove the hang marker again: 8b's hung t3
-  // re-wrote it, which would make t3 succeed instantly here.)
+  // respawn afterwards. (Remove the hang marker again: the previous
+  // hung t3 re-wrote it, which would make t3 succeed instantly here.)
   execSync('rm -f /tmp/alayaface-fakecore-hang-once-*.marker');
   assert(await clickPlanHeaderBtn('Run'), 'cascade re-Run button');
   await page.waitForFunction(() => {

@@ -600,12 +600,9 @@ closeChildPlan : String -> ( Model, Cmd Msg ) -> ( Model, Cmd Msg )
 closeChildPlan planId ( model, cmds ) =
     let
         ( m1, c1 ) =
-            runStepIn planId 0 R.StopRun model
-
-        ( m2, c2 ) =
-            update (PlanClose planId) m1
+            update (PlanClose planId) model
     in
-    ( m2, Cmd.batch [ cmds, c1, c2 ] )
+    ( m1, Cmd.batch [ cmds, c1 ] )
 
 
 -- ─── Plan runner wiring (effects ↔ ports) ──────────────────────────
@@ -3225,12 +3222,41 @@ update msg model =
                 )
 
         PlanClose planId ->
+            -- Cascade (P35): closing a plan window also closes the node
+            -- session windows BELOW it. If the run is still active
+            -- (InProgress/Paused — the only states where node sessions
+            -- can be open), stop it first: StopRun marks every node
+            -- Canceled, closeAndClear emits CloseSessionFor per bound
+            -- session → each node session window + process closes (and
+            -- its own sub-plans cascade through CloseSession). Terminal
+            -- runs (Completed/FailedRun/Stopped) have no open node
+            -- sessions (closeAndClear already ran); stopping them again
+            -- would overwrite planRunStatuses (e.g. Completed → Stopped)
+            -- and break the status bar, so they are left untouched.
+            let
+                ( m1, stopCmd ) =
+                    case Dict.get planId model.planWindows of
+                        Just win ->
+                            case win.run of
+                                Just run ->
+                                    if List.member run.status [ PT.InProgress, PT.Paused ] then
+                                        runStepIn planId 0 R.StopRun model
+
+                                    else
+                                        ( model, Cmd.none )
+
+                                Nothing ->
+                                    ( model, Cmd.none )
+
+                        Nothing ->
+                            ( model, Cmd.none )
+            in
             -- Drop queued creates for this plan too: their sessions would
             -- only be created and immediately orphan-closed.
-            ( { model
-                | planWindows = Dict.remove planId model.planWindows
-                , planOrder = List.filter (\k -> k /= planId) model.planOrder
-                , windowPositions = Dict.remove planId model.windowPositions
+            ( { m1
+                | planWindows = Dict.remove planId m1.planWindows
+                , planOrder = List.filter (\k -> k /= planId) m1.planOrder
+                , windowPositions = Dict.remove planId m1.windowPositions
                 , planCreateQueue =
                     List.filter
                         (\task ->
@@ -3241,33 +3267,34 @@ update msg model =
                                 UserCreate _ ->
                                     True
                         )
-                        model.planCreateQueue
+                        m1.planCreateQueue
                 , planActiveId =
-                    if model.planActiveId == Just planId then
-                        List.head (List.reverse (List.filter (\k -> k /= planId) model.planOrder))
+                    if m1.planActiveId == Just planId then
+                        List.head (List.reverse (List.filter (\k -> k /= planId) m1.planOrder))
 
                     else
-                        model.planActiveId
+                        m1.planActiveId
                 , nodeConnection =
-                    if (model.nodeConnection |> Maybe.map (\c -> c.planId)) == Just planId then
+                    if (m1.nodeConnection |> Maybe.map (\c -> c.planId)) == Just planId then
                         Nothing
 
                     else
-                        model.nodeConnection
+                        m1.nodeConnection
                 , planConnection =
-                    if (model.planConnection |> Maybe.map (\c -> c.planId)) == Just planId then
+                    if (m1.planConnection |> Maybe.map (\c -> c.planId)) == Just planId then
                         Nothing
 
                     else
-                        model.planConnection
+                        m1.planConnection
               }
             , Cmd.batch
-                [ if (model.nodeConnection |> Maybe.map (\c -> c.planId)) == Just planId then
+                [ stopCmd
+                , if (m1.nodeConnection |> Maybe.map (\c -> c.planId)) == Just planId then
                     Ports.setNodeConnection Nothing
 
                   else
                     Cmd.none
-                , if (model.planConnection |> Maybe.map (\c -> c.planId)) == Just planId then
+                , if (m1.planConnection |> Maybe.map (\c -> c.planId)) == Just planId then
                     Ports.setPlanConnection Nothing
 
                   else
