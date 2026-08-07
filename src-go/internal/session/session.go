@@ -119,18 +119,33 @@ func (m *Manager) ForEach(fn func(*Session) bool) {
 	}
 }
 
-// CloseAll kills every session (used on server shutdown).
-func (m *Manager) CloseAll() {
+// takeAll removes every session from the map and returns them. The
+// caller owns their teardown.
+func (m *Manager) takeAll() []*Session {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	items := make([]*Session, 0, len(m.sessions))
 	for _, s := range m.sessions {
 		items = append(items, s)
 	}
 	m.sessions = make(map[string]*Session)
-	m.mu.Unlock()
+	return items
+}
+
+// CloseAll kills every session (used on server shutdown). Runs the
+// per-session teardown in parallel so N sessions cost one grace period,
+// not N × grace period.
+func (m *Manager) CloseAll() {
+	items := m.takeAll()
+	var wg sync.WaitGroup
 	for _, s := range items {
-		s.kill()
+		wg.Add(1)
+		go func(s *Session) {
+			defer wg.Done()
+			s.kill()
+		}(s)
 	}
+	wg.Wait()
 }
 
 // CloseAllGracefully closes every active session with the same
@@ -140,18 +155,20 @@ func (m *Manager) CloseAll() {
 // still holds the handles) are reclaimed — otherwise resume_session
 // keeps failing with "Session is already active" until the backend is
 // restarted. History is preserved up to each session's cancel point.
+// Runs the per-session sequence in parallel (bounded by one grace
+// period regardless of session count).
 func (m *Manager) CloseAllGracefully() {
-	m.mu.Lock()
-	items := make([]*Session, 0, len(m.sessions))
-	for _, s := range m.sessions {
-		items = append(items, s)
-	}
-	m.sessions = make(map[string]*Session)
-	m.mu.Unlock()
+	items := m.takeAll()
+	var wg sync.WaitGroup
 	for _, s := range items {
-		s.closeGracefully()
-		log.Printf("[session] closed %s (reclaimed on page load)", s.ID)
+		wg.Add(1)
+		go func(s *Session) {
+			defer wg.Done()
+			s.closeGracefully()
+			log.Printf("[session] closed %s", s.ID)
+		}(s)
 	}
+	wg.Wait()
 }
 
 // CreateConfig configures a new session.

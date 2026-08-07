@@ -48,7 +48,11 @@ func main() {
 
 	<-ctx.Done()
 	log.Println("shutting down: closing sessions…")
-	srv.Sessions.CloseAll()
+	// Cancel-first graceful close (cancel → save → EOF, SIGKILL only
+	// after the grace period) so in-flight tasks are aborted cleanly and
+	// their history is persisted — a hard kill would lose the partial
+	// conversation. Runs in parallel, bounded by one grace period.
+	srv.Sessions.CloseAllGracefully()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
