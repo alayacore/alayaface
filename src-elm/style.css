@@ -2053,6 +2053,8 @@ body {
   cursor: pointer;
 }
 .plan-offer-btn:hover { background: #4f52e0; }
+.plan-open-btn { background: transparent; border: 1px solid #6366f1; color: #6366f1; font-weight: 600; }
+.plan-open-btn:hover { background: rgba(99,102,241,0.12); }
 
 /* R3: plan status bar colors (bound to the message that auto-created it) */
 .plan-status-running { background: #d97706; }

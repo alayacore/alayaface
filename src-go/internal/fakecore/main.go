@@ -349,7 +349,9 @@ func planReply() {
 }`
 	echoID("AT", nextReplyID(), "Here is the plan:\n```json\n"+planJSON+"\n```\nI'll wait for you to create it.")
 	echoID("AR", nextReplyID(), "")
-	streamReply()
+	// NOTE: deliberately NOT calling streamReply() afterwards — the plan
+	// message must stay the session's LAST message so the frontend's
+	// delayed auto-open (PlanOfferSettle) confirms it as the newest.
 }
 
 // failOnceReply simulates a task that fails on its first attempt and

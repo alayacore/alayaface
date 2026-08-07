@@ -1175,7 +1175,22 @@ viewPlanStatusBar model sid planIndex =
                 ]
 
         Nothing ->
-            Html.text ""
+            -- The plan message was detected but NOT auto-created (the
+            -- delayed auto-open suppressed it because the message was not
+            -- the session's last one — history replay, follow-up message).
+            -- Give the user a manual open entry (R6).
+            if planIndex > 0 then
+                Html.div [ Attr.class "plan-offer" ]
+                    [ Html.button
+                        [ Attr.class "plan-offer-btn plan-open-btn"
+                        , Ev.onClick (PlanOpenFromMessage sid planIndex)
+                        , Attr.title "Open the plan from this message"
+                        ]
+                        [ Html.text "Open plan" ]
+                    ]
+
+            else
+                Html.text ""
 
 
 {-| The plan whose meta origin binds (sessionId, planIndex) — the plan

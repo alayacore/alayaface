@@ -571,6 +571,39 @@ try {
   await shot(page, '08-imported-plan-window.png');
   console.log('PASS: Browse tab imported the plan file (new Plan window with node n1)');
 
+  // ── 9. Auto-open is last-message-only (R6 settle rule) ────────────
+  // A plan message followed within the settle window by another message
+  // must NOT auto-open a window; the message instead shows a manual
+  // "Open plan" button.
+  await page.click('.global-menu-btn');
+  await waitFor('.global-menu-panel', 10000);
+  await clickByText('.global-menu-item', 'New Session');
+  await waitFor('.session-panel', 10000);
+  await sleep(600);
+  const beforeSettleCount = await page.$$eval('.plan-page', els => els.length);
+  await page.evaluate(() => {
+    const panels = [...document.querySelectorAll('.session-panel')];
+    let best = -1;
+    for (const p of panels) { const m = (p.querySelector('.session-bar-title')?.textContent || '').match(/Session (\d+)/); if (m) best = Math.max(best, parseInt(m[1], 10)); }
+    for (const p of panels) {
+      const m = (p.querySelector('.session-bar-title')?.textContent || '').match(/Session (\d+)/);
+      if (!m || parseInt(m[1], 10) !== best) continue;
+      const ta = p.querySelector('textarea.input-text');
+      if (ta) ta.focus();
+    }
+  });
+  await page.keyboard.type('create a plan', { delay: 2 });
+  await page.keyboard.press('Enter');
+  await sleep(400);
+  await page.keyboard.type('and then follow up', { delay: 2 });
+  await page.keyboard.press('Enter');
+  await sleep(3500);
+  const settlePlanCount = await page.$$eval('.plan-page', els => els.length);
+  const openBtnVisible = await page.$$eval('.session-panel .plan-open-btn', els => els.length);
+  assert(settlePlanCount === beforeSettleCount, 'plan followed by another message must not auto-open (before=' + beforeSettleCount + ', after=' + settlePlanCount + ')');
+  assert(openBtnVisible >= 1, 'suppressed plan message shows a manual "Open plan" button');
+  console.log('PASS: auto-open is last-message-only; suppressed plan shows "Open plan"');
+
   console.log('\nALL PASS ✅');
   console.log('artifacts:', tmp);
   console.log('screenshots:');

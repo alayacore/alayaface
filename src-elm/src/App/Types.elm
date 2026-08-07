@@ -301,6 +301,15 @@ type Msg
     -- counted with Plan.Detect.isPlanMessage). Message ids are NOT used
     -- for binding — they are per-session implementation details.
     | PlanCreateOffer String Int
+    -- Delayed auto-open check for a detected plan message: the window is
+    -- auto-created only if the message is still the session's last one
+    -- and the binding is still absent (history replays / meta-index
+    -- rebuilds must not pop windows).
+    | PlanOfferSettle String Int
+    -- Manual "Open plan" from a detected-but-not-auto-created plan
+    -- message (the delayed auto-open suppressed it: the message was not
+    -- the session's last one).
+    | PlanOpenFromMessage String Int
     | PlanSaveReady PT.Plan (Maybe PM.Origin) Int
     -- Status-bar "Open" click on a message-bound plan (R3).
     | PlanStatusOpen String

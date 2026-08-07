@@ -331,6 +331,45 @@ planIndexForMessage msgs =
         msgs
 
 
+{-| Whether the session's LAST message is still the plan message with the
+given plan index. Used by the delayed auto-open (PlanOfferSettle): a
+history replay feeds plan frames one at a time, so "is it the last
+message" can only be decided a moment later — if anything arrived after
+it, the plan window must not auto-open.
+-}
+isPlanMessageStillLast : Model -> String -> Int -> Bool
+isPlanMessageStillLast model sid planIndex =
+    case Dict.get sid model.sessions of
+        Just s ->
+            case List.reverse s.messages of
+                last :: _ ->
+                    Plan.Detect.isPlanMessage last.content
+                        && planIndexForMessage s.messages == planIndex
+
+                [] ->
+                    False
+
+        Nothing ->
+            False
+
+
+{-| The raw plan JSON of the session's planIndex-th plan message (used
+by the manual "Open plan" entry for suppressed auto-creates).
+-}
+findPlanMessageRaw : Model -> String -> Int -> Maybe String
+findPlanMessageRaw model sid planIndex =
+    case Dict.get sid model.sessions of
+        Just s ->
+            s.messages
+                |> List.filter (\m -> Plan.Detect.isPlanMessage m.content)
+                |> List.drop (max 0 (planIndex - 1))
+                |> List.head
+                |> Maybe.andThen (\m -> Plan.Detect.extractPlanJson m.content)
+
+        Nothing ->
+            Nothing
+
+
 {-| R2: inject a visible error message into the given session (the plan
 JSON message that failed to parse during auto-create). The user sees the
 error inline next to the plan message instead of a broken window.
@@ -1582,7 +1621,12 @@ update msg model =
                                                     case Plan.Detect.extractPlanJson m.content of
                                                         Just offerRaw ->
                                                             if Plan.Detect.hasPlanTypeMarker offerRaw then
-                                                                Task.perform (\_ -> PlanCreateOffer ev.sessionId planIdx) Time.now
+                                                                -- R-series: the plan window auto-opens only when this plan
+                                                                -- message is still the session's LAST message a moment later
+                                                                -- (PlanOfferSettle). A history replay feeding plan frames in
+                                                                -- the middle of a session (or a replay whose meta binding is
+                                                                -- still being rebuilt from disk) must NOT pop a window.
+                                                                Task.perform (\_ -> PlanOfferSettle ev.sessionId planIdx) (Process.sleep 1500)
 
                                                             else
                                                                 Cmd.none
@@ -3209,6 +3253,52 @@ update msg model =
 
         PlanManagerBrowserPick idx ->
             planBrowserPick model (Just idx)
+
+        PlanOfferSettle sid planIndex ->
+            -- Delayed auto-open confirmation: the plan window only
+            -- auto-opens if this plan message is STILL the session's last
+            -- message (a history replay feeding plan frames mid-session
+            -- must not pop windows), and the binding is still absent (the
+            -- planMetas index may have been rebuilt from disk since the
+            -- detection ran — a replay of an already-bound plan must not
+            -- create a duplicate).
+            case Dict.get ( sid, planIndex ) model.pendingPlanOffers of
+                Nothing ->
+                    ( model, Cmd.none )
+
+                Just _ ->
+                    if messageBoundToPlan model sid planIndex then
+                        -- Already bound (meta index caught up): drop the offer.
+                        ( { model | pendingPlanOffers = Dict.remove ( sid, planIndex ) model.pendingPlanOffers }
+                        , Cmd.none
+                        )
+
+                    else if isPlanMessageStillLast model sid planIndex then
+                        update (PlanCreateOffer sid planIndex) model
+
+                    else
+                        -- A later message arrived (replay continues / the
+                        -- user moved on): do NOT auto-open. The offer is
+                        -- dropped; the user can open it from the status bar
+                        -- if it ever got created.
+                        ( { model | pendingPlanOffers = Dict.remove ( sid, planIndex ) model.pendingPlanOffers }
+                        , Cmd.none
+                        )
+
+        PlanOpenFromMessage sid planIndex ->
+            -- Manual open of a detected-but-suppressed plan message: find
+            -- the raw plan JSON, queue it as an offer, and run the normal
+            -- create flow (PlanCreateOffer consumes the offer).
+            case findPlanMessageRaw model sid planIndex of
+                Just raw ->
+                    let
+                        m1 =
+                            { model | pendingPlanOffers = Dict.insert ( sid, planIndex ) raw model.pendingPlanOffers }
+                    in
+                    update (PlanCreateOffer sid planIndex) m1
+
+                Nothing ->
+                    ( model, Cmd.none )
 
         PlanCreateOffer sid planIndex ->
             case Dict.get ( sid, planIndex ) model.pendingPlanOffers of
