@@ -39,6 +39,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"alayaface/src-go/internal/tlv"
 )
@@ -46,6 +47,23 @@ import (
 // sessionFile is the --session flag value; `save` writes to it (empty
 // filename semantics, like real alayacore).
 var sessionFile string
+
+// planJSON is the fenced plan document emitted by plan mode AND replayed
+// on resume (see replayResumedHistory) — it must carry the alayaface-plan
+// marker so the UI's plan detection sees it.
+const planJSON = `{
+  "type": "alayaface-plan",
+  "schema_version": 1,
+  "name": "E2E Demo",
+  "goal": "Automated end-to-end verification of Plan Mode",
+  "concurrency": 2,
+  "default_max_attempts": 3,
+  "tasks": [
+    { "id": "t1", "title": "Research", "prompt": "research the topic and summarize findings", "depends_on": [], "max_attempts": 3 },
+    { "id": "t2", "title": "Draft", "prompt": "draft the report from the research (fail-once marker). using upstream output: {{t1.output}}", "depends_on": ["t1"], "max_attempts": 3 },
+    { "id": "t3", "title": "Review", "prompt": "review the draft and fix any issues (hang-once marker)", "depends_on": ["t2"], "max_attempts": 3 }
+  ]
+}`
 
 // stagedText accumulates user text frames of the current message; the
 // fail-once simulation keys its marker off it.
@@ -231,9 +249,15 @@ func main() {
 	planMode := *systemFlag != ""
 
 	// Real alayacore creates session.alaya when started with --session
-	// (the session dir already exists). No MkdirAll: the fake must not
-	// resurrect a directory that was deleted mid-startup.
+	// (the session dir already exists). On RESUME the file already exists
+	// → replay history content frames BEFORE the boot SM frame (mirrors
+	// real alayacore: history content frames first, boot SM last). The
+	// E2E uses this to verify that a plan message inside a replayed
+	// history does NOT auto-create a duplicate plan window.
 	if sessionFile != "" {
+		if _, err := os.Stat(sessionFile); err == nil {
+			replayResumedHistory()
+		}
 		_ = os.WriteFile(sessionFile, []byte(`{"version":1}`), 0o644)
 	}
 
@@ -334,24 +358,34 @@ func main() {
 // JSON (the Create Plan offer detector scans the final AT content), then
 // a normal reply and the task-done frame.
 func planReply() {
-	const planJSON = `{
-  "type": "alayaface-plan",
-  "schema_version": 1,
-  "name": "E2E Demo",
-  "goal": "Automated end-to-end verification of Plan Mode",
-  "concurrency": 2,
-  "default_max_attempts": 3,
-  "tasks": [
-    { "id": "t1", "title": "Research", "prompt": "research the topic and summarize findings", "depends_on": [], "max_attempts": 3 },
-    { "id": "t2", "title": "Draft", "prompt": "draft the report from the research (fail-once marker). using upstream output: {{t1.output}}", "depends_on": ["t1"], "max_attempts": 3 },
-    { "id": "t3", "title": "Review", "prompt": "review the draft and fix any issues (hang-once marker)", "depends_on": ["t2"], "max_attempts": 3 }
-  ]
-}`
 	echoID("AT", nextReplyID(), "Here is the plan:\n```json\n"+planJSON+"\n```\nI'll wait for you to create it.")
 	echoID("AR", nextReplyID(), "")
 	// NOTE: deliberately NOT calling streamReply() afterwards — the plan
 	// message must stay the session's LAST message so the frontend's
 	// delayed auto-open (PlanOfferSettle) confirms it as the newest.
+}
+
+// replayResumedHistory mirrors real alayacore's resume behavior: history
+// content frames are replayed BEFORE the boot SM frame. The fake replays
+// a canned plan-message history when the session file was saved at least
+// once ("saved":true) — i.e. the session was closed and is being resumed.
+// The E2E uses this to verify that a plan message inside a replayed
+// history does NOT auto-create a duplicate plan window (the frontend
+// suppresses detection while the session is in planReplaySessions).
+func replayResumedHistory() {
+	if sessionFile == "" {
+		return
+	}
+	// Real alayacore's history replay takes real time, so its content
+	// frames typically arrive AFTER the resume RPC response (and after
+	// the client's SessionCreated handler has registered the fresh id).
+	// The fake mirrors that with a short delay — without it the frames
+	// would all arrive before SessionCreated and be buffered, and the
+	// E2E would never exercise the replay-suppression path.
+	time.Sleep(400 * time.Millisecond)
+	writeFrame("UT", "\x00u-replay\x00Give me a plan")
+	echoID("At", "p-replay-1", "Here is the plan:\n```json\n"+planJSON+"\n```\nI'll wait for you to create it.")
+	echoID("AT", "p-replay-1", "")
 }
 
 // failOnceReply simulates a task that fails on its first attempt and

@@ -1387,6 +1387,15 @@ update msg model =
                                 | planResumeFrom = Nothing
                                 , planResumeOwner = Nothing
                                 , planResumedFrom = Dict.insert id origId baseModel.planResumedFrom
+                                -- The replay-suppression marker is keyed by
+                                -- the ORIGINAL id at resume-click time, but
+                                -- replayed history frames carry the FRESH
+                                -- id — move it old→new so a plan message
+                                -- inside the replayed history is suppressed
+                                -- (otherwise it auto-creates a duplicate
+                                -- plan window with all tasks Pending).
+                                , planReplaySessions =
+                                    Set.insert id (Set.remove origId baseModel.planReplaySessions)
                                 , nodeConnection = resumedConn
                                 , windowPositions = zRaised
                                 , nextZIndex = baseModel.nextZIndex + zBump
@@ -3883,10 +3892,13 @@ update msg model =
             -- pendingSwitchOnCreate makes SessionCreated switch to the
             -- resumed session once it appears (mirrors the original UX).
             -- Mark the session as replaying so plan messages in its
-            -- history don't auto-create windows.
+            -- history don't auto-create windows. planResumeFrom lets
+            -- SessionCreated move that marker old→new (the replayed
+            -- frames carry the fresh resumed id).
             ( { model
                 | pendingSwitchOnCreate = True
                 , sessionManagerError = Nothing
+                , planResumeFrom = Just id
                 , planReplaySessions = Set.insert id model.planReplaySessions
               }
             , Ports.resumeSession { sessionId = id, workDir = Nothing }

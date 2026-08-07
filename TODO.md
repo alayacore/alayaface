@@ -949,6 +949,40 @@ windows, making Stop look like it didn't stop anything.
 
 ---
 
+## P24 — Replay suppression: move planReplaySessions old→new on resume
+
+Bug report: opening a session whose history contains a plan message in
+the MIDDLE (long completed; the last message is not a plan) still
+auto-opened a plan window with ALL tasks Pending; opening the plan via
+the manager showed the real (Completed) one — i.e. a duplicate.
+
+Root cause: `resume_session` hands out a FRESH id (Y) while keeping the
+ORIGINAL dir (X). `planReplaySessions` is keyed by X at resume-click
+time, but the replayed history frames carry Y → `Set.member Y …` is
+False → a mid-history plan message is treated as LIVE → R2 auto-create
+fires → duplicate plan window (Pending) + duplicate plan file. The
+suppression only worked for frames that arrived before SessionCreated
+(those are buffered and applied without detection).
+
+Fix:
+- [x] `SessionCreated` (resume branch) MOVES the replay marker old→new:
+      `Set.insert id (Set.remove origId planReplaySessions)` — replayed
+      frames (fresh id) are suppressed; live frames after the boot SM
+      (marker removed on first SM) still auto-create as designed
+- [x] Session Manager `ResumeSession` sets `planResumeFrom = Just id` so
+      the same move happens for manager-initiated resumes
+- [x] fakecore: on resume (session file exists) replay a canned
+      plan-message history BEFORE the boot SM, with a 400ms delay
+      (mirrors real alayacore: replay takes time → frames arrive after
+      SessionCreated; without the delay they'd be buffered and the path
+      never exercised)
+- [x] E2E step 8 asserts: after close→click, exactly ONE plan window
+      and ONE plan file (no duplicates). Verified the assertion FAILS
+      with the fix reverted (3 plan windows) and PASSES with it
+- [x] Tests: elm 208 / Rust 42 / Go -race all pkgs / make e2e ALL PASS
+
+---
+
 ## Known pitfalls
 
 - Never edit `../alayacore` — tool set = spawn params only.

@@ -280,6 +280,14 @@ E2E covers the gate.
 - `hasPlanTypeMarker : String -> Bool`: whether the block's top-level `"type"` == `"alayaface-plan"` (P26);
 - called on the latest assistant message at AT frame completion: **first extractPlanJson, then require hasPlanTypeMarker == True** to match (plain ```json code examples — without the marker — are ignored);
 - **R2 auto-create (no button)**: a match stores `messageId → rawJson` in `Model.pendingPlanOffers` and immediately issues `PlanCreateOffer` — the Plan window opens automatically, without user confirmation. `messageBoundToPlan` (meta origin) prevents replay duplicates; a parse failure is inlined back into the session as an error message.
+- **Replay suppression (P24)**: resuming a session replays its history,
+  including plan messages from the MIDDLE (long since completed). The
+  replay marker (`Model.planReplaySessions`) is keyed by the ORIGINAL
+  dir id at resume-click time, but the replayed frames carry the FRESH
+  resumed id — `SessionCreated` moves the marker old→new so a replayed
+  plan message never auto-creates a duplicate window/file (it shows the
+  manual "Open plan" button instead; without the move the duplicate
+  window opened with all tasks Pending).
 - decode/validate (`type` **required**: missing or wrong value rejected, no backward compat) → normalize → generate planId → `fs_write_file_text` writes `~/.alayaface/plans/<planId>.json` → opens the Plan window.
 
 ---

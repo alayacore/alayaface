@@ -323,9 +323,10 @@ try {
 
   // ── 7. Click t1 node → its session window resumes ─────────────────
   // R4: succeeded node windows are closed — clicking the node RESUMES
-  // its on-disk session (history is kept by real alayacore; fakecore
-  // does not replay history, so we assert the resume succeeded: window
-  // with the /t1 badge and no plan error — not message content).
+  // its on-disk session (fakecore replays a canned plan-message history
+  // on resume; the frontend must suppress plan auto-create during that
+  // replay — asserted below in step 8). Here we assert the resume
+  // succeeded: window with the /t1 badge and no plan error.
   await clickNode(page, 't1');
   await sleep(1000);
   const active = await page.evaluate(() => {
@@ -407,7 +408,15 @@ try {
     const activeTitle = await page.$eval('.session-panel.session-panel-active .session-bar-title', e => e.textContent);
     const errCount = await planErrorCount();
     assert(errCount === 0, label + ': plan window has no resume error, got: ' + errCount);
-    console.log('PASS: ' + label + ' — session reopened (' + activeTitle + '), no error');
+    // Replay regression: the resumed fakecore replays a plan message
+    // (mid-history); the frontend must NOT auto-create a duplicate plan
+    // window or plan file from it (planReplaySessions suppression).
+    const winCount = await page.$$eval('.plan-page', els => els.length);
+    assert(winCount === 1, label + ': no duplicate plan window auto-created, got: ' + winCount);
+    const planFiles = readdirSync(plansRoot).filter(n =>
+      n.startsWith('e2e-demo-') && n.endsWith('.json') && !n.endsWith('.run.json') && !n.endsWith('.meta.json'));
+    assert(planFiles.length === 1, label + ': no duplicate plan file, got: ' + JSON.stringify(planFiles));
+    console.log('PASS: ' + label + ' — session reopened (' + activeTitle + '), no error, no duplicate plan');
     await assertConnection(label + ' — curve back after resume');
   };
 
