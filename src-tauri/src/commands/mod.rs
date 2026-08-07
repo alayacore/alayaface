@@ -100,20 +100,31 @@ pub(crate) async fn send_cmd(
     Ok(id)
 }
 
-/// Wait for a file to stabilize (size unchanged for a short period).
+/// Wait for a file to stabilize (size unchanged for ~300ms), with a
+/// 10-second deadline. Requiring several consecutive unchanged polls
+/// (instead of one 50ms tick) prevents returning on a file that is
+/// still being written in chunks; the longer deadline accommodates
+/// large session forks.
 pub(crate) async fn wait_for_file(path: &str) -> Result<(), String> {
     let target_path = std::path::Path::new(path);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let mut seen_size = 0u64;
+    let mut stable_ticks = 0u32;
+    const STABLE_WINDOW: u32 = 6; // 6 × 50ms ≈ 300ms unchanged
 
     loop {
         if let Ok(meta) = target_path.metadata() {
             let len = meta.len();
-            if len > 0 && len == seen_size {
-                return Ok(());
-            }
             if len > 0 {
-                seen_size = len;
+                if len == seen_size {
+                    stable_ticks += 1;
+                    if stable_ticks >= STABLE_WINDOW {
+                        return Ok(());
+                    }
+                } else {
+                    seen_size = len;
+                    stable_ticks = 1;
+                }
             }
         }
         if std::time::Instant::now() > deadline {
@@ -123,6 +134,38 @@ pub(crate) async fn wait_for_file(path: &str) -> Result<(), String> {
             return Err("Timeout waiting for fork to complete".to_string());
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn wait_for_file_waits_for_stability() {
+        let dir = std::env::temp_dir().join(format!(
+            "alayaface-wff-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fork.out");
+        let path_str = path.to_string_lossy().to_string();
+        let final_text = "chunk1-chunk2";
+
+        std::fs::write(&path, "chunk1").unwrap();
+        let handle = tokio::spawn(async move { wait_for_file(&path_str).await });
+        // The second chunk lands while wait_for_file is mid-polling.
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        std::fs::write(&path, final_text).unwrap();
+        handle.await.unwrap().unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().len(),
+            final_text.len() as u64,
+            "wait_for_file returned with a partially-written file"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

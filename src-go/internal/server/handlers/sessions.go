@@ -459,19 +459,30 @@ func ForkSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	return writeResult(w, s.ID)
 }
 
-// waitForFile waits for a file to stabilize (size unchanged for a short
-// period), with a 5-second deadline. Port of commands/mod.rs wait_for_file.
+// waitForFile waits for a file to stabilize (size unchanged for ~300ms),
+// with a 10-second deadline. Port of commands/mod.rs wait_for_file.
+// Requiring several consecutive unchanged polls (instead of one 50ms
+// tick) prevents returning on a file that is still being written in
+// chunks, and the longer deadline accommodates large session forks.
 func waitForFile(path string) error {
-	deadline := time.Now().Add(5 * time.Second)
-	seenSize := int64(0)
+	deadline := time.Now().Add(10 * time.Second)
+	var (
+		seenSize    int64
+		stableTicks int
+	)
+	const stableWindow = 6 // 6 × 50ms ≈ 300ms of unchanged size
 	for {
 		if fi, err := os.Stat(path); err == nil {
-			len := fi.Size()
-			if len > 0 && len == seenSize {
-				return nil
-			}
-			if len > 0 {
-				seenSize = len
+			if size := fi.Size(); size > 0 {
+				if size == seenSize {
+					stableTicks++
+					if stableTicks >= stableWindow {
+						return nil
+					}
+				} else {
+					seenSize = size
+					stableTicks = 1
+				}
 			}
 		}
 		if time.Now().After(deadline) {
