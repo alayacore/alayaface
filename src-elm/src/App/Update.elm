@@ -605,6 +605,64 @@ closeChildPlan planId ( model, cmds ) =
     ( m1, Cmd.batch [ cmds, c1 ] )
 
 
+{-| Every LIVE session window bound to a node of this plan: direct
+bindings (`planNodeSessions` sid → "planId/nodeId") plus resumed
+windows (`planResumedFrom` live → orig, orig bound to the plan). Only
+sessions with an open window are returned — a closed binding's backend
+handle is already gone (resume replaced it), so closing it again would
+only produce "Session not found" noise. Node sessions can be open under
+ANY run status — e.g. a node session resumed from disk under a
+Stopped/FailedRun/Completed plan for review — so PlanClose closes them
+regardless of the run state.
+-}
+nodeSessionIdsForPlan : String -> Model -> List String
+nodeSessionIdsForPlan planId model =
+    let
+        isNodeOfPlan label =
+            String.startsWith (planId ++ "/") label
+
+        live sid =
+            Dict.member sid model.sessions
+
+        direct =
+            Dict.foldl
+                (\sid label acc ->
+                    if isNodeOfPlan label && live sid then
+                        sid :: acc
+                    else
+                        acc
+                )
+                []
+                model.planNodeSessions
+
+        viaResume =
+            Dict.foldl
+                (\liveId orig acc ->
+                    case Dict.get orig model.planNodeSessions of
+                        Just label ->
+                            if isNodeOfPlan label && live liveId then
+                                liveId :: acc
+                            else
+                                acc
+
+                        Nothing ->
+                            acc
+                )
+                []
+                model.planResumedFrom
+    in
+    List.foldl
+        (\sid acc ->
+            if List.member sid acc then
+                acc
+
+            else
+                sid :: acc
+        )
+        direct
+        viaResume
+
+
 -- ─── Plan runner wiring (effects ↔ ports) ──────────────────────────
 
 {-| Fixed plan mode (D2, R2): the planner hint injected via `--system`
@@ -3223,16 +3281,21 @@ update msg model =
 
         PlanClose planId ->
             -- Cascade (P35): closing a plan window also closes the node
-            -- session windows BELOW it. If the run is still active
-            -- (InProgress/Paused — the only states where node sessions
-            -- can be open), stop it first: StopRun marks every node
-            -- Canceled, closeAndClear emits CloseSessionFor per bound
-            -- session → each node session window + process closes (and
-            -- its own sub-plans cascade through CloseSession). Terminal
-            -- runs (Completed/FailedRun/Stopped) have no open node
-            -- sessions (closeAndClear already ran); stopping them again
-            -- would overwrite planRunStatuses (e.g. Completed → Stopped)
-            -- and break the status bar, so they are left untouched.
+            -- session windows BELOW it — under ANY run status (node
+            -- sessions resumed from disk under a Stopped/FailedRun/
+            -- Completed plan are still open and must close too).
+            --
+            -- 1. If the run is still active (InProgress/Paused), stop it
+            --    first: StopRun → nodes Canceled → closeAndClear closes
+            --    the sessions it knows (and the run cannot respawn).
+            --    Terminal runs are NOT re-stopped: it would overwrite
+            --    planRunStatuses (e.g. Completed → Stopped) and break
+            --    the status bar.
+            -- 2. Close every remaining live session bound to this
+            --    plan's nodes (direct + resumed ids) — catches windows
+            --    open under terminal runs and resumed windows that
+            --    StopRun's closeAndClear could not reach.
+            -- 3. Remove the plan window.
             let
                 ( m1, stopCmd ) =
                     case Dict.get planId model.planWindows of
@@ -3250,13 +3313,28 @@ update msg model =
 
                         Nothing ->
                             ( model, Cmd.none )
+
+                nodeSids =
+                    nodeSessionIdsForPlan planId m1
+
+                ( m2, closeNodeCmds ) =
+                    List.foldl
+                        (\sid ( m, cmds ) ->
+                            let
+                                ( m2a, c2a ) =
+                                    update (CloseSession sid) m
+                            in
+                            ( m2a, Cmd.batch [ cmds, c2a ] )
+                        )
+                        ( m1, Cmd.none )
+                        nodeSids
             in
             -- Drop queued creates for this plan too: their sessions would
             -- only be created and immediately orphan-closed.
-            ( { m1
-                | planWindows = Dict.remove planId m1.planWindows
-                , planOrder = List.filter (\k -> k /= planId) m1.planOrder
-                , windowPositions = Dict.remove planId m1.windowPositions
+            ( { m2
+                | planWindows = Dict.remove planId m2.planWindows
+                , planOrder = List.filter (\k -> k /= planId) m2.planOrder
+                , windowPositions = Dict.remove planId m2.windowPositions
                 , planCreateQueue =
                     List.filter
                         (\task ->
@@ -3267,34 +3345,35 @@ update msg model =
                                 UserCreate _ ->
                                     True
                         )
-                        m1.planCreateQueue
+                        m2.planCreateQueue
                 , planActiveId =
-                    if m1.planActiveId == Just planId then
-                        List.head (List.reverse (List.filter (\k -> k /= planId) m1.planOrder))
+                    if m2.planActiveId == Just planId then
+                        List.head (List.reverse (List.filter (\k -> k /= planId) m2.planOrder))
 
                     else
-                        m1.planActiveId
+                        m2.planActiveId
                 , nodeConnection =
-                    if (m1.nodeConnection |> Maybe.map (\c -> c.planId)) == Just planId then
+                    if (m2.nodeConnection |> Maybe.map (\c -> c.planId)) == Just planId then
                         Nothing
 
                     else
-                        m1.nodeConnection
+                        m2.nodeConnection
                 , planConnection =
-                    if (m1.planConnection |> Maybe.map (\c -> c.planId)) == Just planId then
+                    if (m2.planConnection |> Maybe.map (\c -> c.planId)) == Just planId then
                         Nothing
 
                     else
-                        m1.planConnection
+                        m2.planConnection
               }
             , Cmd.batch
                 [ stopCmd
-                , if (m1.nodeConnection |> Maybe.map (\c -> c.planId)) == Just planId then
+                , closeNodeCmds
+                , if (m2.nodeConnection |> Maybe.map (\c -> c.planId)) == Just planId then
                     Ports.setNodeConnection Nothing
 
                   else
                     Cmd.none
-                , if (m1.planConnection |> Maybe.map (\c -> c.planId)) == Just planId then
+                , if (m2.planConnection |> Maybe.map (\c -> c.planId)) == Just planId then
                     Ports.setPlanConnection Nothing
 
                   else

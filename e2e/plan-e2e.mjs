@@ -562,6 +562,22 @@ try {
     if (b && !b.disabled) { b.click(); return true; }
     return false;
   }, label);
+  const closePlanWindow = () => page.evaluate(() => {
+    const bar = document.querySelector('.plan-panel .session-bar.plan-bar');
+    const btn = bar && bar.querySelector('.session-bar-close');
+    if (btn) { btn.click(); return true; }
+    return false;
+  });
+  const reopenPlanViaStatusBar = async () => {
+    await page.evaluate(() => {
+      const b = [...document.querySelectorAll('button')].find(e => /^\[Plan: /.test((e.textContent || '').trim()));
+      if (b) b.click();
+    });
+    await page.waitForFunction(() => {
+      return document.querySelectorAll('.plan-page').length === 1;
+    }, { timeout: 10000 });
+    await sleep(400);
+  };
   assert(await clickPlanHeaderBtn('Run'), 're-Run button');
   await page.waitForFunction(() => {
     return [...document.querySelectorAll('.session-panel')].some(p =>
@@ -578,6 +594,37 @@ try {
   await shot(page, '05e-stop-after.png');
   console.log("PASS: Plan Stop closed the run's node session windows (badge Stopped)");
 
+  // ── 8e. Plan window close under a TERMINAL run (P35, user report) ──
+  // The plan is Stopped (8b). Clicking node t1 RESUMES its session from
+  // disk (window opens for review). Closing the plan window must close
+  // that node session window too — this is the exact case the user
+  // reported as still broken: sessions open under a non-active run.
+  await clickNode(page, 't1');
+  await page.waitForFunction(() => {
+    return [...document.querySelectorAll('.session-panel')].some(p =>
+      (p.querySelector('.session-bar-title')?.textContent || '').includes('/t1]'));
+  }, { timeout: 30000 });
+  await sleep(400);
+  await shot(page, '05e1-terminal-node-open.png');
+  assert(await closePlanWindow(), 'plan window close button clicked (terminal run)');
+  await page.waitForFunction(() => {
+    return document.querySelectorAll('.plan-page').length === 0;
+  }, { timeout: 10000 });
+  await sleep(800);
+  const terminalCloseAfter = await page.evaluate(() => {
+    const planCount = document.querySelectorAll('.plan-page').length;
+    const t1Count = [...document.querySelectorAll('.session-panel')].filter(p =>
+      (p.querySelector('.session-bar-title')?.textContent || '').includes('/t1]')).length;
+    return { planCount, t1Count };
+  });
+  assert(terminalCloseAfter.planCount === 0, 'plan window closed (terminal run), got: ' + terminalCloseAfter.planCount);
+  assert(terminalCloseAfter.t1Count === 0, 'resumed node session window closed after plan window close, got: ' + terminalCloseAfter.t1Count);
+  await shot(page, '05e2-terminal-node-closed.png');
+  console.log('PASS: plan window close under a Stopped run closed the resumed node session window (P35)');
+
+  // Reopen the plan for the next phase.
+  await reopenPlanViaStatusBar();
+
   // ── 8d. Closing the PLAN window cascades to its node sessions (P35) ─
   // Re-run the plan (t3 hangs again): the t3 node session window is
   // open below the plan window. Closing the plan window must STOP the
@@ -590,13 +637,7 @@ try {
   }, { timeout: 30000 });
   await sleep(400);
   await shot(page, '05f1-plan-close-before.png');
-  const closedPlanWin = await page.evaluate(() => {
-    const bar = document.querySelector('.plan-panel .session-bar.plan-bar');
-    const btn = bar && bar.querySelector('.session-bar-close');
-    if (btn) { btn.click(); return true; }
-    return false;
-  });
-  assert(closedPlanWin, 'plan window close button clicked');
+  assert(await closePlanWindow(), 'plan window close button clicked');
   await page.waitForFunction(() => {
     return document.querySelectorAll('.plan-page').length === 0;
   }, { timeout: 10000 });
@@ -614,14 +655,7 @@ try {
 
   // Reopen the plan through the origin session's [Plan: …] status-bar
   // link (the only way plans reopen — P30) for the 8c cascade below.
-  await page.evaluate(() => {
-    const b = [...document.querySelectorAll('button')].find(e => /^\[Plan: /.test((e.textContent || '').trim()));
-    if (b) b.click();
-  });
-  await page.waitForFunction(() => {
-    return document.querySelectorAll('.plan-page').length === 1;
-  }, { timeout: 10000 });
-  await sleep(400);
+  await reopenPlanViaStatusBar();
 
   // ── 8c. Closing the ORIGIN session cascades to its children (P34) ──
   // Re-run the plan (t3 hangs again): origin session + plan window + t3
