@@ -69,7 +69,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P29 清理全部"向后兼容"代码（用户：都是没用的）：删 session 目录 legacy 回退链（只认 P28 路径）、Plan/Meta lenient 解码（origin/planIndex 必填、删 messageId、origin 收紧为非 Maybe）、Legacy config 种子修复（heal 整块移除）、恒真 `has_session_file` 字段 | [x] |
 | P30 系统菜单移除 Plans 入口（用户："系统菜单里不需要plans了"）：Plans manager 整体删除（overlay/消息/状态/`fsDeleteFile` 端口/`PlanFileInfo`）；plan 只经会话内 `[Plan: …]` 状态条重开；菜单保留"打开的 plan 窗口"切换列表 | [x] |
 | P31 修复重启后 plan 状态丢失（用户反馈）：planMetas 重建扫描仍按 P27 旧布局找 `plans/*.meta.json`，而 P28 后 meta 在 `plans/<planId>/<planId>.meta.json` → 扫描永远读不到 → 重启后 planMetas 为空；改为从 plans/ 列表的子目录直接构造 meta 路径 + 过滤 `..`；并把扫描与文件选择器的 home 列表串行化（消除未标记 fs_list_dir 结果的竞态） | [x] |
-| P32 用户驱动的 UI/CI 一轮：S 形贝塞尔（两控制点反向）+ 祖先链连线（聚焦 D 点亮 A→…→D 全部父边，淡色）；消息区覆盖式滚动条（隐藏原生滚动条 → 消息列与输入框永远同宽）；Session Manager 列表按钮统一尺寸；启动不再自动开空 session（欢迎屏，按需自开）；GitHub CI 增加 Tauri `cargo build` + 完整 E2E job（Go 后端 + fakecore + 无头 Chrome）；修复 restart-e2e 后端重启端口竞态 | [x] |
+| P32 用户驱动的 UI/CI 一轮：S 形贝塞尔（两控制点反向）；~~祖先链连线~~（**用户澄清后移除**——DAG 内部节点已有连线，不再额外画；plan 窗口激活只连所属会话 `[Plan: …]`）；消息区覆盖式滚动条（隐藏原生滚动条 → 消息列与输入框永远同宽）；Session Manager 列表按钮统一尺寸；启动不再自动开空 session（欢迎屏，按需自开）；GitHub CI 增加 Tauri `cargo build` + 完整 E2E job（Go 后端 + fakecore + 无头 Chrome）；修复 restart-e2e 后端重启端口竞态 | [x] |
 | P33 修复页面刷新后 resume 报 "Session is already active"（用户反馈）：刷新后前端会话注册表清空，但后端仍持有旧页面的会话句柄 → resume_session 一直拒绝，只能重启 Go 进程；新增 `close_all_sessions` RPC（Go+Rust 对称，优雅关闭=历史保留），前端 init 时调用一次回收孤儿会话；restart-e2e 新增「页面刷新」阶段回归 | [x] |
 | R 系列 | Plan 重构：模型自主子流程 + 递归（自动创建 / 回填自动继续 / 重跑级联 / 状态条 / 超时移除）——**详见 REFACTOR.md** | 进行中 |
 
@@ -375,23 +375,20 @@ dir），所以 meta 列表永远为空、不发任何读取 → **重启后 pla
 plan-e2e + restart-e2e）。
 
 ### 1+2 连线（bridge.js + Elm）
-- [x] `App/NodeConnection.elm`：`NodeConnection` 增加 `ancestors : List AncestorEdge`
-      （`{from, to}` 父边列表）+ 纯函数 `ancestorEdges : List (String, List String)
-      -> String -> List AncestorEdge`（按 (id, deps) 任务表求 `nodeId` 的传递父闭包
-      —— 返回所有落在「根 → nodeId 某条路径」上的边；Set 访问集保证环上终止）；
-      `nodeConnectionFor` 构造时 `ancestors = []`；
-- [x] Update 层 `withAncestors`：从 `model.planWindows[planId].view.plan.tasks`
-      取 (id, dependsOn) → 填 `ancestors`；三处发出 `setNodeConnection (Just …)`
-      的位置（activateSessionModel / SessionCreated resume 分支 / ActivateSession
-      重断言分支）全部套用；
-- [x] bridge.js `drawNodeConnection`：路径池 `connPathsFor(n)`；先画祖先边
-      （两节点卡均可见时，卡边↔卡边锚点），再画主曲线（会话↔聚焦节点）；
-      祖先边加 `.node-connection-curve-ancestor` 类（CSS opacity 0.4 淡色）；
+- [x] ~~祖先链连线~~ **（用户澄清后已整体移除）**：P32 初版实现了
+      `NodeConnection.ancestors`/`ancestorEdges`（传递父闭包）+ bridge 多路径池
+      （聚焦 D 时在节点卡之间额外画 A→B/B→C/C→D 淡色曲线）。用户指正：
+      **"plan window 在 active 的时候，需要连到它所属的那个 [Plan: xxxx]xxxx；
+      它内部的 node 之间本身就已经有连线了，不需要你再加额外的连线"** ——
+      DAG 画布本来就画着节点依赖边，额外曲线是重复的；已删除
+      （NodeConnection.elm 的 ancestors 字段与函数、Update 的 withAncestors、
+      bridge 路径池、`.node-connection-curve-ancestor` CSS、6 个单测）；
+      连线模型回归 P19（会话↔节点卡单条曲线）+ P27（plan 窗口↔所属会话
+      `[Plan: …]` 按钮）两条，不多画；
 - [x] bridge.js `curvePath`：**S 形** —— c1 偏移 +bow、c2 偏移 **-bow**
       （控制点在旅行线两侧 → 两个反向弧度，曲线在中点穿过直线）；
       计划↔会话曲线共用同一 curvePath，同样变 S 形；
-- [x] 测试：NodeConnectionTest +6（链 D→三边 / 链 B→单边 / 菱形 D→四边 /
-      根节点无边 / 未知节点无边 / 环终止不挂死）；**Elm 219** 全绿；
+- [x] 测试：NodeConnectionTest 恢复 213（ancestor 6 例删除）；**Elm 213** 全绿；
 
 ### 3 覆盖式滚动条（bridge.js + style.css）
 - [x] CSS：`.messages` 隐藏原生滚动条（`scrollbar-width: none` +

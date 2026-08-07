@@ -1,8 +1,6 @@
 module App.NodeConnection exposing
     ( NodeConnection
     , PlanConnection
-    , AncestorEdge
-    , ancestorEdges
     , nodeConnectionFor
     , nodeLabelFor
     , parseNodeConnection
@@ -27,25 +25,12 @@ App.Types (Model field) without dragging in the whole app model.
 -}
 
 import Dict exposing (Dict)
-import Set exposing (Set)
 
 
 type alias NodeConnection =
     { sessionId : String
     , planId : String
     , nodeId : String
-    , ancestors : List AncestorEdge
-    }
-
-
-{-| A dependency edge `from → to` between two nodes of the same plan.
-When a node session is focused, every edge on a path from the plan root
-down to that node is drawn (so the whole ancestor chain lights up, e.g.
-A→B→C→D when D is selected).
--}
-type alias AncestorEdge =
-    { from : String
-    , to : String
     }
 
 
@@ -121,8 +106,7 @@ parseNodeConnection label =
 {-| Build the connection for a session id: which plan window and which
 node card does this session belong to. Returns Nothing for sessions that
 are not bound to a plan node (plain chats, runner sessions without a
-completed binding, etc). The `ancestors` list is filled in later by the
-Update layer (it needs the parsed plan); here it starts empty.
+completed binding, etc).
 -}
 nodeConnectionFor : Dict String String -> Dict String String -> String -> Maybe NodeConnection
 nodeConnectionFor planNodeSessions planResumedFrom sid =
@@ -130,60 +114,5 @@ nodeConnectionFor planNodeSessions planResumedFrom sid =
         |> Maybe.andThen parseNodeConnection
         |> Maybe.map
             (\( planId, nodeId ) ->
-                { sessionId = sid
-                , planId = planId
-                , nodeId = nodeId
-                , ancestors = []
-                }
+                { sessionId = sid, planId = planId, nodeId = nodeId }
             )
-
-
-{-| All dependency edges that lie on SOME path from a plan root down to
-`nodeId` — i.e. every edge (parent → child) where the child is `nodeId`
-or an ancestor of it. Given the A→B→C→D chain, focusing D yields
-[(A,B),(B,C),(C,D)]; a diamond A→B,A→C,B→D,C→D focusing D yields all
-four edges. `nodes` is the task list as (id, dependsOn) pairs.
--}
-ancestorEdges : List ( String, List String ) -> String -> List AncestorEdge
-ancestorEdges nodes nodeId =
-    let
-        depsOf =
-            Dict.fromList nodes
-
-        relevant =
-            collectAncestors depsOf nodeId Set.empty
-
-        onPath id =
-            Set.member id relevant
-    in
-    List.filterMap
-        (\( id, deps ) ->
-            if onPath id then
-                Just ( id, List.filter onPath deps )
-
-            else
-                Nothing
-        )
-        nodes
-        |> List.concatMap
-            (\( child, parents ) ->
-                List.map (\p -> { from = p, to = child }) parents
-            )
-
-
-{-| Transitive closure of parents of `nodeId` (including itself).
-Terminates on cycles via the visited set (plans are validated acyclic,
-but a malformed hand-edited file must not hang the UI).
--}
-collectAncestors : Dict String (List String) -> String -> Set String -> Set String
-collectAncestors depsOf id acc =
-    if Set.member id acc then
-        acc
-
-    else
-        case Dict.get id depsOf of
-            Nothing ->
-                Set.insert id acc
-
-            Just deps ->
-                List.foldl (\d a -> collectAncestors depsOf d a) (Set.insert id acc) deps

@@ -64,13 +64,13 @@ suite =
                 \_ ->
                     NC.nodeConnectionFor nodeSessions resumed "live-c"
                         |> Expect.equal
-                            (Just { sessionId = "live-c", planId = "plan-1", nodeId = "t1", ancestors = [] })
+                            (Just { sessionId = "live-c", planId = "plan-1", nodeId = "t1" })
 
             , test "node id containing a slash survives the round trip" <|
                 \_ ->
                     NC.nodeConnectionFor nodeSessions resumed "sess-b"
                         |> Expect.equal
-                            (Just { sessionId = "sess-b", planId = "plan-2", nodeId = "deep/node", ancestors = [] })
+                            (Just { sessionId = "sess-b", planId = "plan-2", nodeId = "deep/node" })
 
             , test "unbound session → Nothing" <|
                 \_ ->
@@ -81,77 +81,6 @@ suite =
                 \_ ->
                     NC.nodeConnectionFor nodeSessions resumed "ghost"
                         |> Expect.equal Nothing
-            ]
-        , describe "ancestorEdges"
-            [ test "chain A→B→C→D, focus D → all three edges" <|
-                \_ ->
-                    NC.ancestorEdges
-                        [ ( "A", [] )
-                        , ( "B", [ "A" ] )
-                        , ( "C", [ "B" ] )
-                        , ( "D", [ "C" ] )
-                        ]
-                        "D"
-                        |> Expect.equal
-                            [ { from = "A", to = "B" }
-                            , { from = "B", to = "C" }
-                            , { from = "C", to = "D" }
-                            ]
-
-            , test "chain focus B → only the edge above it" <|
-                \_ ->
-                    NC.ancestorEdges
-                        [ ( "A", [] )
-                        , ( "B", [ "A" ] )
-                        , ( "C", [ "B" ] )
-                        , ( "D", [ "C" ] )
-                        ]
-                        "B"
-                        |> Expect.equal [ { from = "A", to = "B" } ]
-
-            , test "diamond A→B,C→D, focus D → all four edges" <|
-                \_ ->
-                    NC.ancestorEdges
-                        [ ( "A", [] )
-                        , ( "B", [ "A" ] )
-                        , ( "C", [ "A" ] )
-                        , ( "D", [ "B", "C" ] )
-                        ]
-                        "D"
-                        |> Expect.equal
-                            [ { from = "A", to = "B" }
-                            , { from = "A", to = "C" }
-                            , { from = "B", to = "D" }
-                            , { from = "C", to = "D" }
-                            ]
-
-            , test "focus a root node → no edges" <|
-                \_ ->
-                    NC.ancestorEdges
-                        [ ( "A", [] )
-                        , ( "B", [ "A" ] )
-                        ]
-                        "A"
-                        |> Expect.equal []
-
-            , test "unknown node → no edges" <|
-                \_ ->
-                    NC.ancestorEdges [ ( "A", [] ) ] "nope"
-                        |> Expect.equal []
-
-            , test "a cycle (malformed file) terminates instead of hanging" <|
-                \_ ->
-                    NC.ancestorEdges
-                        [ ( "A", [ "B" ] )
-                        , ( "B", [ "A" ] )
-                        , ( "C", [ "B" ] )
-                        ]
-                        "C"
-                        |> Expect.equal
-                            [ { from = "B", to = "A" }
-                            , { from = "A", to = "B" }
-                            , { from = "B", to = "C" }
-                            ]
             ]
         , describe "liveSessionForOrigin"
             [ test "origin session open → its own id" <|

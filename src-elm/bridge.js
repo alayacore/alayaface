@@ -531,7 +531,7 @@
     var nodeConnection = null;
     var planConnection = null;
     var connSvg = null;
-    var connPaths = []; // one <path> per curve (ancestor edges + main)
+    var connPath = null;
     var planConnSvg = null;
     var planConnPath = null;
     var connRaf = 0;
@@ -542,21 +542,11 @@
       connSvg = document.createElementNS(ns, "svg");
       connSvg.setAttribute("class", "node-connection-overlay");
       connSvg.style.display = "none";
+      connPath = document.createElementNS(ns, "path");
+      connPath.setAttribute("class", "node-connection-curve");
+      connSvg.appendChild(connPath);
       document.body.appendChild(connSvg);
       return connSvg;
-    }
-
-    // Grow/shrink the path pool to exactly `n` curves.
-    function connPathsFor(n) {
-      while (connPaths.length < n) {
-        var p = document.createElementNS("http://www.w3.org/2000/svg", "path");
-        p.setAttribute("class", "node-connection-curve");
-        connSvg.appendChild(p);
-        connPaths.push(p);
-      }
-      while (connPaths.length > n) {
-        connPaths.pop().remove();
-      }
     }
 
     function ensurePlanConnSvg() {
@@ -676,65 +666,26 @@
       }
       var s = connSessionPanel(nodeConnection.sessionId);
       var plan = connPlanPanel(nodeConnection.planId);
-      if (!s || !plan) {
+      var n = connNodeEl(plan, nodeConnection.nodeId);
+      if (!s || !plan || !n) {
         if (connSvg) connSvg.style.display = "none";
         return;
       }
+      var sr = s.getBoundingClientRect();
+      var nr = n.getBoundingClientRect();
       var pr = plan.getBoundingClientRect();
-      var svg = ensureConnSvg();
-      var curves = [];
-
-      // 1. Ancestor edges: every (parent → child) edge on a path from
-      //    the plan root down to the focused node (A→B→C→D lights up
-      //    fully when D is selected). Anchored card-edge to card-edge.
-      var ancestors = nodeConnection.ancestors || [];
-      for (var i = 0; i < ancestors.length; i++) {
-        var fromEl = connNodeEl(plan, ancestors[i].from);
-        var toEl = connNodeEl(plan, ancestors[i].to);
-        if (!fromEl || !toEl) continue;
-        var fr = fromEl.getBoundingClientRect();
-        var tr = toEl.getBoundingClientRect();
-        // Both cards must be visible inside the plan window.
-        if (!rectVisibleIn(fr, pr) || !rectVisibleIn(tr, pr)) continue;
-        curves.push({
-          from: edgeAnchor(fr, tr.left + tr.width / 2, tr.top + tr.height / 2),
-          to: edgeAnchor(tr, fr.left + fr.width / 2, fr.top + fr.height / 2),
-          ancestor: true,
-        });
-      }
-
-      // 2. Main curve: focused session → its node card.
-      var n = connNodeEl(plan, nodeConnection.nodeId);
-      if (n) {
-        var nr = n.getBoundingClientRect();
-        // Node scrolled out of the plan window's visible area → skip.
-        if (rectVisibleIn(nr, pr)) {
-          var sr = s.getBoundingClientRect();
-          var nx = nr.left + nr.width / 2;
-          var ny = nr.top + nr.height / 2;
-          curves.push({
-            from: edgeAnchor(sr, nx, ny),
-            to: { x: nx, y: ny },
-            ancestor: false,
-          });
-        }
-      }
-
-      if (curves.length === 0) {
-        svg.style.display = "none";
+      // Node scrolled out of the plan window's visible area → hide.
+      if (!rectVisibleIn(nr, pr)) {
+        if (connSvg) connSvg.style.display = "none";
         return;
       }
-      connPathsFor(curves.length);
-      for (var j = 0; j < curves.length; j++) {
-        var c = curves[j];
-        connPaths[j].setAttribute("d", curvePath(c.from, c.to));
-        connPaths[j].setAttribute(
-          "class",
-          c.ancestor
-            ? "node-connection-curve node-connection-curve-ancestor"
-            : "node-connection-curve"
-        );
-      }
+      var svg = ensureConnSvg();
+      // Anchor on the session edge nearest the node center.
+      var nx = nr.left + nr.width / 2;
+      var ny = nr.top + nr.height / 2;
+      var from = edgeAnchor(sr, nx, ny);
+      var to = { x: nx, y: ny };
+      connPath.setAttribute("d", curvePath(from, to));
       svg.setAttribute("width", String(window.innerWidth));
       svg.setAttribute("height", String(window.innerHeight));
       // Match the plan window's z-index: above it (same z, later in

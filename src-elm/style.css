@@ -2234,12 +2234,6 @@ body {
   opacity: 0.9;
 }
 
-/* Ancestor chain edges (A→B→C→D lit up when D is focused) are drawn
-   fainter so the focused session→node curve stays the visual anchor. */
-.node-connection-curve-ancestor {
-  opacity: 0.4;
-}
-
 /* ─── Overlay scrollbar for message areas ─────────────────────────────
    The native scrollbar is hidden so it never consumes layout width:
    the messages column stays exactly as wide as the prompt input, and a
