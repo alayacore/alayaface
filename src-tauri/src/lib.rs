@@ -39,6 +39,7 @@ pub fn run() {
             commands::create_session,
             commands::resume_session,
             commands::close_session,
+            commands::close_all_sessions,
             commands::list_session_dirs,
             commands::delete_session_dir,
             commands::alayacore_send_prompt,

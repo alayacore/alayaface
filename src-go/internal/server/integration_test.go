@@ -509,6 +509,43 @@ func TestIntegrationResumeAndDeleteSession(t *testing.T) {
 	}
 }
 
+// TestIntegrationCloseAllSessionsReclaimsOnPageLoad: a page refresh
+// leaves the backend holding session handles whose windows are gone —
+// resume then fails with "Session is already active" until the backend
+// restarts. The frontend fires close_all_sessions on page load to
+// reclaim them (graceful close, history kept on disk).
+func TestIntegrationCloseAllSessionsReclaimsOnPageLoad(t *testing.T) {
+	e := newTestEnv(t, "")
+	sid1 := e.createSession(t)
+	sid2 := e.createSession(t)
+
+	// Both are active: a direct resume must be rejected.
+	if msg := e.rpcErr(t, "resume_session", map[string]any{"sessionId": sid1, "binaryPath": ""}); msg != "Session is already active" {
+		t.Fatalf("pre-reclaim double resume = %q, want 'Session is already active'", msg)
+	}
+
+	// Page load: reclaim ALL active sessions.
+	e.rpcOK(t, "close_all_sessions", map[string]any{})
+
+	// Old handles are gone.
+	for _, sid := range []string{sid1, sid2} {
+		if msg := e.rpcErr(t, "close_session", map[string]any{"sessionId": sid}); msg != "Session not found" {
+			t.Errorf("close %s after close_all_sessions = %q, want 'Session not found'", sid, msg)
+		}
+	}
+
+	// Resume now works again (history preserved on disk) — this is the
+	// exact flow that used to require a backend restart.
+	for _, sid := range []string{sid1, sid2} {
+		body := e.rpcOK(t, "resume_session", map[string]any{"sessionId": sid, "binaryPath": ""})
+		var newID string
+		if err := json.Unmarshal(body, &newID); err != nil {
+			t.Fatalf("resume_session after close_all_sessions: %s", body)
+		}
+		e.rpcOK(t, "close_session", map[string]any{"sessionId": newID})
+	}
+}
+
 // ─── Graceful close (save + EOF + natural exit) ─────────────────────
 
 func TestIntegrationGracefulCloseSavesSession(t *testing.T) {

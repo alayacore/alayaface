@@ -19,6 +19,7 @@
 
 - [ ] Tauri: `make run`; or browser: `make run-go` → http://127.0.0.1:8765/
 - [ ] **No session is auto-created at startup (P32)** — the welcome screen shows "No session open — use ⚙ New Session to start"; open one on demand
+- [ ] **Page refresh while sessions are open (P33)**: F5 the browser page (Go backend keeps running) → open Session Manager → Resume still works — no "Session is already active" (the new page reclaims orphaned handles via `close_all_sessions` on init; no backend restart needed)
 - [ ] ⚙ menu shows: New Session / Session Manager / Presets / Settings (no Plans entry — P30)
 - [ ] Message area: when the conversation grows, the custom **overlay scrollbar** floats over the content — the message column width never changes (stays identical to the prompt input) and the scrollbar appears/disappears without shifting layout (P32)
 - [ ] Session Manager overlay: Resume / Delete buttons are **the same size** for every row (P32)

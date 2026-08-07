@@ -30,6 +30,7 @@ func Registry() map[string]Command {
 		"create_session":     CreateSession,
 		"resume_session":     ResumeSession,
 		"close_session":      CloseSession,
+		"close_all_sessions": CloseAllSessions,
 		"list_session_dirs":  ListSessionDirs,
 		"delete_session_dir": DeleteSessionDir,
 		"fork_session":       ForkSession,

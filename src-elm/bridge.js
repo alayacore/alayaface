@@ -392,6 +392,16 @@
       });
     });
 
+    // Page load: reclaim sessions orphaned by a previous page (refresh).
+    // Their windows are gone but the backend still holds the handles;
+    // without this, resume_session keeps failing with "Session is
+    // already active" until the backend process is restarted.
+    on("closeAllSessions", function () {
+      transport.invoke("close_all_sessions", {}).catch(function (err) {
+        console.error("close_all_sessions failed:", err);
+      });
+    });
+
     on("deleteSessionDir", function (data) {
       transport.invoke("delete_session_dir", {
         sessionId: data.sessionId,

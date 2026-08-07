@@ -166,6 +166,41 @@ try {
   assert(runBefore.status === 'completed', 'run.json status before restart: ' + runBefore.status);
   console.log('PASS: run.json on disk before restart: status=' + runBefore.status + ', nodes=' + Object.keys(runBefore.nodes).join(','));
 
+  // ── Phase 1.5: PAGE REFRESH (same backend) ────────────────────────
+  // A page refresh orphans the open session handles — the backend still
+  // holds them, so resume_session would keep failing with "Session is
+  // already active" until the backend process is restarted. The new
+  // page must reclaim them via close_all_sessions on init.
+  const originDir = readdirSync(sessionsRoot).find(sess =>
+    existsSync(path.join(sessionsRoot, sess, 'plans', planId, planId + '.meta.json')));
+  assert(originDir, 'origin session dir found on disk');
+  await page.reload({ waitUntil: 'networkidle0', timeout: 30000 });
+  await page.waitForSelector('.global-menu-btn', { timeout: 30000 });
+  // Let close_all_sessions (orphan reclaim) + the planMetas scan settle.
+  await sleep(1500);
+  await page.screenshot({ path: path.join(artifacts, 'r0-after-refresh.png') });
+  await page.click('.global-menu-btn');
+  await page.waitForSelector('.global-menu-panel');
+  assert(await clickByText('.global-menu-item', 'Session Manager'), 'Session Manager menu item (refresh)');
+  await page.waitForSelector('.sel-page-item', { timeout: 10000 });
+  const refreshed = await page.evaluate((prefix) => {
+    const items = [...document.querySelectorAll('.sel-page-item')];
+    for (const it of items) {
+      const name = it.querySelector('.sel-page-item-name')?.textContent || '';
+      const btn = [...it.querySelectorAll('button')].find(b => b.textContent.trim() === 'Resume');
+      if (name === prefix.slice(0, 8) && btn && !btn.disabled) { btn.click(); return true; }
+    }
+    return false;
+  }, originDir);
+  assert(refreshed, 'origin session Resume clickable after page refresh (no "Session is already active")');
+  // The resumed session replays its history → the [Plan: …] status bar
+  // appears (planMetas origin binding works after refresh too).
+  await page.waitForFunction(() => {
+    return [...document.querySelectorAll('button')].some(e => /^\[Plan: /.test((e.textContent || '').trim()));
+  }, { timeout: 30000 });
+  await sleep(600);
+  console.log('PASS: page refresh — resume works, no "Session is already active"');
+
   // ── Phase 2: restart the backend + reload the UI ──────────────────
   await page.close();
   await browser.close();
@@ -189,10 +224,7 @@ try {
   // The [Plan: …] status bar lives in the ORIGIN session's message view —
   // after restart the user resumes that session (Session Manager), the
   // replayed plan message re-binds via planMetas, and the status-bar
-  // button reopens the plan. Do exactly that:
-  const originDir = readdirSync(sessionsRoot).find(sess =>
-    existsSync(path.join(sessionsRoot, sess, 'plans', planId, planId + '.meta.json')));
-  assert(originDir, 'origin session dir found on disk');
+  // button reopens the plan. Do exactly that (originDir from phase 1.5):
   await page.click('.global-menu-btn');
   await page.waitForSelector('.global-menu-panel');
   assert(await clickByText('.global-menu-item', 'Session Manager'), 'Session Manager menu item');

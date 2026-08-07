@@ -133,6 +133,27 @@ func (m *Manager) CloseAll() {
 	}
 }
 
+// CloseAllGracefully closes every active session with the same
+// cancel-first graceful sequence as Close (cancel → save → EOF → grace
+// → SIGKILL). The frontend calls this once on page load so sessions
+// orphaned by a page refresh (their windows are gone but the backend
+// still holds the handles) are reclaimed — otherwise resume_session
+// keeps failing with "Session is already active" until the backend is
+// restarted. History is preserved up to each session's cancel point.
+func (m *Manager) CloseAllGracefully() {
+	m.mu.Lock()
+	items := make([]*Session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		items = append(items, s)
+	}
+	m.sessions = make(map[string]*Session)
+	m.mu.Unlock()
+	for _, s := range items {
+		s.closeGracefully()
+		log.Printf("[session] closed %s (reclaimed on page load)", s.ID)
+	}
+}
+
 // CreateConfig configures a new session.
 type CreateConfig struct {
 	ID           string // also names the session dir

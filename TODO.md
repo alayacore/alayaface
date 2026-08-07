@@ -70,6 +70,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P30 系统菜单移除 Plans 入口（用户："系统菜单里不需要plans了"）：Plans manager 整体删除（overlay/消息/状态/`fsDeleteFile` 端口/`PlanFileInfo`）；plan 只经会话内 `[Plan: …]` 状态条重开；菜单保留"打开的 plan 窗口"切换列表 | [x] |
 | P31 修复重启后 plan 状态丢失（用户反馈）：planMetas 重建扫描仍按 P27 旧布局找 `plans/*.meta.json`，而 P28 后 meta 在 `plans/<planId>/<planId>.meta.json` → 扫描永远读不到 → 重启后 planMetas 为空；改为从 plans/ 列表的子目录直接构造 meta 路径 + 过滤 `..`；并把扫描与文件选择器的 home 列表串行化（消除未标记 fs_list_dir 结果的竞态） | [x] |
 | P32 用户驱动的 UI/CI 一轮：S 形贝塞尔（两控制点反向）+ 祖先链连线（聚焦 D 点亮 A→…→D 全部父边，淡色）；消息区覆盖式滚动条（隐藏原生滚动条 → 消息列与输入框永远同宽）；Session Manager 列表按钮统一尺寸；启动不再自动开空 session（欢迎屏，按需自开）；GitHub CI 增加 Tauri `cargo build` + 完整 E2E job（Go 后端 + fakecore + 无头 Chrome）；修复 restart-e2e 后端重启端口竞态 | [x] |
+| P33 修复页面刷新后 resume 报 "Session is already active"（用户反馈）：刷新后前端会话注册表清空，但后端仍持有旧页面的会话句柄 → resume_session 一直拒绝，只能重启 Go 进程；新增 `close_all_sessions` RPC（Go+Rust 对称，优雅关闭=历史保留），前端 init 时调用一次回收孤儿会话；restart-e2e 新增「页面刷新」阶段回归 | [x] |
 | R 系列 | Plan 重构：模型自主子流程 + 递归（自动创建 / 回填自动继续 / 重跑级联 / 状态条 / 超时移除）——**详见 REFACTOR.md** | 进行中 |
 
 ## P24 — 输出注入（{{tX.output}}）
@@ -429,6 +430,39 @@ plan-e2e + restart-e2e）。
 - [x] 验证：Elm 219 / Rust 43 / Go -race 8 包 / make e2e（两个脚本）全绿；
 - [x] 文档：plan-mode.md（§4 启动说明、§7.1 祖先链 + S 形、§12 P32 行）、
       TODO 本表、manual-acceptance Startup 段新增 5 项。
+
+---
+
+## P33 — 修复：页面刷新后 resume 报 "Session is already active"（用户反馈）
+
+用户：**"页面刷新后，session的resume会报错：Session is already active。需要重启Go
+进程才可以。这个不对"**。
+
+**根因**：会话句柄（alayacore 子进程）属于「后端进程」生命周期，而会话窗口属于
+「页面」生命周期。浏览器刷新后，旧页面的 Elm 注册表清空（`model.sessions` 空），
+但 Go 后端仍持有旧页面的所有会话句柄（`session.Manager` 不为空）；`resume_session`
+按「目录已激活」拒绝（这是防双击 resume 的不变量）→ Session Manager 里 Resume 一
+直报 "Session is already active"，直到重启 Go 进程把句柄清掉。WS 断开只注销客户端，
+不会关会话（有意为之：服务端不因网络闪断杀会话）。
+
+**修复（回收孤儿会话）**：
+- 新 RPC `close_all_sessions`（Go `CloseAllSessions` + Rust `close_all_sessions`，
+  注册 handlers.go / lib.rs）：优雅关闭**所有**活跃会话 —— 复用 `close_session`
+  的 cancel-first 序列（cancel → save → EOF → ≤5s 宽限 → SIGKILL），**历史保留到
+  取消点**（与手动关窗口一致；不走 shutdown 的硬杀 `CloseAll`）。Go 侧新增
+  `Manager.CloseAllGracefully`（快照后逐个 `closeGracefully`，日志标注 reclaimed on
+  page load）；
+- 前端：Ports 新增 `closeAllSessions` + bridge.js 透传（fire-and-forget）+ Main.elm
+  init 的 `Cmd.batch` 首项调用 —— **每次页面加载**都先回收上一页的孤儿句柄
+  （Tauri 启动时无会话 → no-op，无害）；
+- 边界：init 时用户立即点 New Session 与 close_all 互不冲突（close_all 只关旧
+  句柄）；刷新后 Session Manager 打开时机远晚于回收（人类操作），竞态窗口可忽略；
+- 测试：Go 集成测试 `TestIntegrationCloseAllSessionsReclaimsOnPageLoad`（两个会话
+  激活 → close_all → 旧 id close 报 not found → resume 恢复可用 = 用户报告路径）；
+  restart-e2e 新增 **Phase 1.5 页面刷新**：跑完 plan 后 `page.reload()`（同一后端）
+  → Session Manager → Resume 来源会话（断言可点、无 already active）→ `[Plan: …]`
+  状态条出现；Elm 219 / Rust 43 / Go -race 全绿 + make e2e 两脚本 ALL PASS；
+- 文档：go-backend.md 命令表 + TODO 本表。
 
 ---
 

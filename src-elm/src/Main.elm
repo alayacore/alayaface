@@ -90,7 +90,11 @@ init _ =
       , homeDir = ""
       }
     , Cmd.batch
-        [ Ports.listPresets {}
+        [ -- Reclaim orphaned sessions from a previous page (refresh):
+          -- without this, resume_session would keep failing with
+          -- "Session is already active" until the backend restarts.
+          Ports.closeAllSessions {}
+        , Ports.listPresets {}
         , Ports.fsHomeDir {}
         , Task.attempt GotContainerSize (Dom.getElement "main-content")
         ]

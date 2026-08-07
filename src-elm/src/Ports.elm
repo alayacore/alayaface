@@ -41,6 +41,7 @@ port module Ports exposing
     , resumeSession
     , listSessionDirs
     , deleteSessionDir
+    , closeAllSessions
     , setNodeConnection
     , setPlanConnection
     , onSessionCreated
@@ -122,6 +123,12 @@ port forkSession : { sourceSessionId : String, historyId : String } -> Cmd msg
 port resumeSession : { sessionId : String, workDir : Maybe String, planId : Maybe String, nodeId : Maybe String, originSessionId : Maybe String } -> Cmd msg
 port listSessionDirs : {} -> Cmd msg
 port deleteSessionDir : { sessionId : String, planId : Maybe String, nodeId : Maybe String, originSessionId : Maybe String } -> Cmd msg
+
+-- Reclaim orphaned sessions after a page refresh: the backend still
+-- holds handles for sessions whose windows died with the old page, so
+-- resume_session would keep failing with "Session is already active".
+-- The frontend fires this once on init (graceful close, history kept).
+port closeAllSessions : {} -> Cmd msg
 
 -- Node↔session connection curve (P19): Elm tells bridge.js which pair to
 -- connect (Nothing = hide). bridge.js measures the DOM and draws a bezier.

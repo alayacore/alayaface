@@ -274,6 +274,17 @@ func CloseSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	return writeResult(w, nil)
 }
 
+// CloseAllSessions gracefully closes every active session. The
+// frontend calls this once on page load so sessions orphaned by a page
+// refresh (their windows are gone but the backend still holds the
+// handles) are reclaimed — otherwise resume_session keeps failing with
+// "Session is already active" until the backend is restarted. History
+// is saved up to each session's cancel point (same as close_session).
+func CloseAllSessions(h *Handler, w http.ResponseWriter, r *http.Request) error {
+	h.Sessions.CloseAllGracefully()
+	return writeResult(w, nil)
+}
+
 // ListSessionDirs lists session directories, newest first.
 func ListSessionDirs(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	sessionsDir := filepath.Join(dirs.AlayafaceDir(), "sessions")
