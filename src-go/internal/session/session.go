@@ -257,15 +257,21 @@ func (m *Manager) Close(id string) error {
 // we only poll Connected() to learn the child has gone. Calling Wait
 // here would race with that path (os/exec forbids concurrent Waits).
 func (s *Session) closeGracefully() {
-	// 1. Cancel the active task first (fire-and-forget — SendCmd does not
-	//    block for the CO reply; errors are ignored).
-	_, _ = s.SendCmd("cancel", "")
+	// The whole cancel → save → EOF sequence runs under the stdin lock
+	// so a concurrent SendPrompt/WriteFrames can neither interleave
+	// between the CI frames nor be mid-write when the pipe closes
+	// (which would leave a partial TLV frame on the wire).
+	s.stdinMu.Lock()
+	// 1. Cancel the active task first (fire-and-forget — no CO wait;
+	//    errors ignored).
+	_, _ = s.sendCmdLocked("cancel", "")
 	// 2. Ask alayacore to persist the conversation (best-effort: a dead
 	//    child produces a write error, which is ignored).
-	_, _ = s.SendCmd("save", "")
+	_, _ = s.sendCmdLocked("save", "")
 	// 3. EOF: close the stdin pipe. With no active task (canceled), the
 	//    child exits immediately.
 	_ = s.Stdin.Close()
+	s.stdinMu.Unlock()
 	// 4. Wait for the reader to observe the natural exit (stdout EOF →
 	//    disconnect → killOnce reaps the child).
 	deadline := time.Now().Add(gracefulCloseTimeout)
@@ -309,18 +315,30 @@ func (s *Session) WriteFrames(frames []tlv.Frame) error {
 }
 
 // SendCmd sends a CI (command input) frame and returns the generated call ID.
-// The call ID → name mapping is registered BEFORE the frame is written —
-// the CO reply can arrive as soon as the CI frame is flushed.
 func (s *Session) SendCmd(name, input string) (string, error) {
+	s.stdinMu.Lock()
+	defer s.stdinMu.Unlock()
+	return s.sendCmdLocked(name, input)
+}
+
+// sendCmdLocked sends a CI frame while stdinMu is held. The call ID →
+// name mapping is registered BEFORE the frame is written — the CO reply
+// can arrive as soon as the CI frame is flushed.
+func (s *Session) sendCmdLocked(name, input string) (string, error) {
 	id := uuid.NewString()
 	s.PendingCmds.Store(id, name)
 	payload, err := json.Marshal(tlv.CmdMsg{ID: id, Name: name, Input: input})
 	if err != nil {
 		return "", err
 	}
-	if err := s.WriteFrame(tlv.TagCmdInput, string(payload)); err != nil {
+	if err := tlv.WriteFrame(s.Stdin, tlv.TagCmdInput, string(payload)); err != nil {
 		s.PendingCmds.Delete(id)
 		return "", err
 	}
+	preview := payload
+	if len(preview) > 200 {
+		preview = preview[:200]
+	}
+	log.Printf("[tlv] >> %s %s %db %s", s.ID, tlv.TagCmdInput, len(payload), preview)
 	return id, nil
 }
