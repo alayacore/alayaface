@@ -13,6 +13,7 @@ import Html.Events as Ev
 import Json.Decode as D
 import Dict exposing (Dict)
 import Set exposing (Set)
+import Time
 import Markdown
 import App.Types exposing (..)
 import App.Update exposing (SessionDir, decodeSessionDir, helpItems, nextCopyName)
@@ -328,6 +329,8 @@ viewSessionManagerOverlay model =
         viewOverlay CloseSessionManager
             [ Html.div [ Attr.class "sel-page" ]
                 [ Html.div [ Attr.class "sel-page-title" ] [ Html.text "Session Manager" ]
+                , Html.div [ Attr.class "sel-page-status" ]
+                    [ Html.text "Resume re-opens a saved session (its history is replayed from disk)." ]
                 , case model.sessionManagerError of
                     Just err ->
                         Html.div [ Attr.class "sel-page-status sel-page-status-error" ] [ Html.text err ]
@@ -340,15 +343,46 @@ viewSessionManagerOverlay model =
                   else
                     Html.div [ Attr.class "sel-page-list" ]
                         (List.map (\dir ->
+                            let
+                                active =
+                                    isSessionDirActive model dir.id
+
+                                canResume =
+                                    not active && dir.hasSessionFile
+                            in
                             Html.div
                                 [ Attr.class "sel-page-item" ]
-                                [ Html.span [ Attr.class "sel-page-item-name" ] [ Html.text dir.id ]
+                                [ Html.div [ Attr.class "sel-page-item-main" ]
+                                    [ Html.span
+                                        [ Attr.class "sel-page-item-name"
+                                        , Attr.title dir.id
+                                        ]
+                                        [ Html.text (String.left 8 dir.id) ]
+                                    , Html.span [ Attr.class "sel-page-item-sub" ]
+                                        [ Html.text (formatEpoch dir.createdAt) ]
+                                    , if active then
+                                        Html.span [ Attr.class "sel-page-item-sub sel-page-item-active" ] [ Html.text "· active" ]
+
+                                      else if not dir.hasSessionFile then
+                                        Html.span [ Attr.class "sel-page-item-sub" ] [ Html.text "· no history" ]
+
+                                      else
+                                        Html.text ""
+                                    ]
                                 , Html.button
                                     [ Attr.class "confirm-page-btn confirm-page-btn-allow"
                                     , Ev.onClick (ResumeSession dir.id)
-                                    , Attr.style "padding" "4px 10px"
-                                    , Attr.style "font-size" "0.75rem"
-                                    , Attr.style "min-width" "auto"
+                                    , Attr.disabled (not canResume)
+                                    , Attr.title
+                                        (if active then
+                                            "Session is already open"
+
+                                         else if not dir.hasSessionFile then
+                                            "No session history on disk"
+
+                                         else
+                                            "Re-open this session (replays its history)"
+                                        )
                                     ]
                                     [ Html.text "Resume" ]
                                 , Html.button
@@ -1131,6 +1165,67 @@ viewMessage model session planIndex msg =
             viewMsgBody model session.id msg
         , viewPlanStatusBar model session.id planIndex
         ]
+
+
+{-| Whether the on-disk session directory is currently open (either its
+own session id is live, or a resumed session was created from it — the
+resume map is newId → originalDirId).
+-}
+isSessionDirActive : Model -> String -> Bool
+isSessionDirActive model dirId =
+    Dict.member dirId model.sessions
+        || (Dict.values model.planResumedFrom |> List.member dirId)
+
+
+pad : Int -> String
+pad n =
+    if n < 10 then
+        "0" ++ String.fromInt n
+
+    else
+        String.fromInt n
+
+
+monthNum : Time.Month -> Int
+monthNum m =
+    case m of
+        Time.Jan -> 1
+        Time.Feb -> 2
+        Time.Mar -> 3
+        Time.Apr -> 4
+        Time.May -> 5
+        Time.Jun -> 6
+        Time.Jul -> 7
+        Time.Aug -> 8
+        Time.Sep -> 9
+        Time.Oct -> 10
+        Time.Nov -> 11
+        Time.Dec -> 12
+
+
+{-| Format a Unix-seconds timestamp (as returned by list_session_dirs) as
+"YYYY-MM-DD HH:mm" in UTC.
+-}
+formatEpoch : String -> String
+formatEpoch s =
+    case String.toInt s of
+        Just sec ->
+            let
+                p =
+                    Time.millisToPosix (sec * 1000)
+            in
+            String.fromInt (Time.toYear Time.utc p)
+                ++ "-"
+                ++ pad (monthNum (Time.toMonth Time.utc p))
+                ++ "-"
+                ++ pad (Time.toDay Time.utc p)
+                ++ " "
+                ++ pad (Time.toHour Time.utc p)
+                ++ ":"
+                ++ pad (Time.toMinute Time.utc p)
+
+        Nothing ->
+            ""
 
 
 {-| R3: the plan status bar under the assistant message that auto-created

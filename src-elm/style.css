@@ -919,6 +919,8 @@ body {
   .confirm-page-input { background: #e8e8ee; border-color: #ccc; color: #555; }
 }
 
+.confirm-page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
 /* ─── File Picker Page (inside Overlay) ──────────────────────────────── */
 
 .fp-page {
@@ -1444,6 +1446,7 @@ body {
   width: 100%;
   font-family: "Courier New", monospace;
 }
+.sel-page-item-sub.sel-page-item-active { color: #4ade80; }
 .sel-page-item-selected .sel-page-item-sub { color: rgba(255,255,255,0.75); }
 
 .sel-page-item-check {
