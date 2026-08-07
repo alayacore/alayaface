@@ -1,6 +1,6 @@
-# TODO: Plan Mode（AlayaFace）
+# TODO: Plan Mode (AlayaFace)
 
-Tracking file for the **Plan Mode** feature (任务规划 → DAG → 执行/重试)。
+Tracking file for the **Plan Mode** feature (task planning → DAG → execution/retry).
 If interrupted, the next agent should read `docs/plan-mode.md` first, then
 continue from the first unchecked item in this file.
 
@@ -60,544 +60,652 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P14 Concurrency selector in the plan header | [x] |
 | P15 Automated headless-browser E2E + 4 real bugs found & fixed | [x] |
 | P16 Per-plan work dir isolation + task timeouts | [x] |
-| P22 Plan Session role-lock + no builtin tools + **真模型验证（用户实测完整 run 跑通）** | [x] |
-| P24 Output injection `{{tX.output}}`（TaskDone 记录输出 → run.json 持久化 → 下游 prompt 替换 → 详情面板） | [x] |
-| P25 Close_session cancel-first（Stop/关窗口立即取消任务，不等 drain 跑完；历史保存到取消点） | [x] |
-| P26 plan JSON 顶层 `"type": "alayaface-plan"` 标志（按钮只认显式标志，普通 ```json 不误触发；**必填无兼容**——缺失/错误值直接报错） | [x] |
-| P27 连线升级 + session 目录层级：plan↔所属 session 连线（锚到可见的 `[Plan: …]` 按钮）；两条连线实线加粗 + 双控制点贝塞尔；`sessions/<planId>/<nodeId>/<uuid>/` 嵌套（顶层=纯普通会话） | [x] |
-| P28 Plan 归属 Session（用户决策：导入是早期遗留物，整体移除）：plan 文档/meta/run/work/节点子会话全部收进 `sessions/<来源session>/plans/<planId>/`，删除顶层 `plans/` 根；Plans manager 单页（从 planMetas 索引列，无 Browse/导入）；meta origin 记 on-disk 会话 id，绑定按 live id 解析 | [x] |
-| P29 清理全部"向后兼容"代码（用户：都是没用的）：删 session 目录 legacy 回退链（只认 P28 路径）、Plan/Meta lenient 解码（origin/planIndex 必填、删 messageId、origin 收紧为非 Maybe）、Legacy config 种子修复（heal 整块移除）、恒真 `has_session_file` 字段 | [x] |
-| P30 系统菜单移除 Plans 入口（用户："系统菜单里不需要plans了"）：Plans manager 整体删除（overlay/消息/状态/`fsDeleteFile` 端口/`PlanFileInfo`）；plan 只经会话内 `[Plan: …]` 状态条重开；菜单保留"打开的 plan 窗口"切换列表 | [x] |
-| P31 修复重启后 plan 状态丢失（用户反馈）：planMetas 重建扫描仍按 P27 旧布局找 `plans/*.meta.json`，而 P28 后 meta 在 `plans/<planId>/<planId>.meta.json` → 扫描永远读不到 → 重启后 planMetas 为空；改为从 plans/ 列表的子目录直接构造 meta 路径 + 过滤 `..`；并把扫描与文件选择器的 home 列表串行化（消除未标记 fs_list_dir 结果的竞态） | [x] |
-| P32 用户驱动的 UI/CI 一轮：S 形贝塞尔（两控制点反向）；~~祖先链连线~~（**用户澄清后移除**——DAG 内部节点已有连线，不再额外画；plan 窗口激活只连所属会话 `[Plan: …]`）；消息区覆盖式滚动条（隐藏原生滚动条 → 消息列与输入框永远同宽）；Session Manager 列表按钮统一尺寸；启动不再自动开空 session（欢迎屏，按需自开）；GitHub CI 增加 Tauri `cargo build` + 完整 E2E job（Go 后端 + fakecore + 无头 Chrome）；修复 restart-e2e 后端重启端口竞态 | [x] |
-| P33 修复页面刷新后 resume 报 "Session is already active"（用户反馈）：刷新后前端会话注册表清空，但后端仍持有旧页面的会话句柄 → resume_session 一直拒绝，只能重启 Go 进程；新增 `close_all_sessions` RPC（Go+Rust 对称，优雅关闭=历史保留），前端 init 时调用一次回收孤儿会话；restart-e2e 新增「页面刷新」阶段回归 | [x] |
-| P34 关闭 session 时级联关闭其子项（用户要求）：关掉来源 session 窗口 → 它拥有的 plans（meta origin 匹配）全部停跑（StopRun 防重生）+ 关掉各 plan 的节点会话窗口 + 关掉 plan 窗口；节点会话自己的子 plan（递归）同样级联；DeleteSession（Session Manager 删除）同样级联；纯逻辑 `Plan.Meta.plansOwnedBySession` 抽出可测；plan-e2e 新增 8c 级联回归 | [x] |
-| P35 关闭 plan window 时级联关闭其下节点会话（用户反馈："关闭plan window的时候，他下面的session window没有被关闭"）：**第一版只处理了活跃 run（InProgress/Paused 才停跑关会话），终态 plan 下经点击节点 resume 打开的节点会话窗口没被关（用户实测仍未修复）**；改为 PlanClose 无条件关闭所有绑定到该 plan 节点的**存活**会话窗口（`nodeSessionIdsForPlan`：planNodeSessions 直接绑定 + planResumedFrom 恢复窗口，过滤非存活避免 "Session not found" 噪音），活跃 run 仍先 StopRun 防重生，终态 run 不重停（保住状态条 Completed）；plan-e2e 新增 8e（Stopped plan + resume 打开的 t1 窗口 → 关 plan ✕ → t1 关闭）与 8d（活跃 run） | [x] |
-| R 系列 | Plan 重构：模型自主子流程 + 递归（自动创建 / 回填自动继续 / 重跑级联 / 状态条 / 超时移除）——**详见 REFACTOR.md**（R1–R5 全部完成，见本表下方清单） | [x] |
+| P17 Plans manager Browse tab (file-browser import) | [x] |
+| P18 Node-session resume: keep the on-disk dir id as the binding | [x] |
+| P19 Node ↔ session connection curve (focus → plan second layer + bezier) | [x] |
+| P20 runtime.conf seeding fix (alayacore key:value format, not JSON) | [x] |
+| P21 Config files: empty shells only (alayacore auto-creates) | [x] |
+| P22 Plan Session role-lock + no builtin tools + **real-model validation (user ran a full plan)** | [x] |
+| P23 Plan Stop closes the run's node session windows too | [x] |
+| P24 Output injection `{{tX.output}}` (TaskDone records output → run.json persistence → downstream prompt replacement → detail panel) | [x] |
+| P25 close_session cancel-first (Stop/window close immediately cancels the task; history saved up to the cancel point) | [x] |
+| P26 plan JSON top-level `"type": "alayaface-plan"` marker (the button only recognizes the explicit marker; **required, no compat** — missing/wrong value errors out) | [x] |
+| P27 Connection-curve upgrade + session-dir hierarchy: plan↔owning-session curve (anchored to the visible `[Plan: …]` button); both curves solid + thicker with a 2-control-point bezier; `sessions/<planId>/<nodeId>/<uuid>/` nesting (top level = plain sessions only) | [x] |
+| P28 Plans live INSIDE the owning session (user decision: import was an early-design leftover — removed): plan document/meta/run/work/node sessions all under `sessions/<origin>/plans/<planId>/`, top-level `plans/` root deleted; Plans manager single view (indexed from planMetas, no Browse/import); meta origin records the on-disk session id, bindings resolve live ids | [x] |
+| P29 Remove ALL backward-compat code (user: it is all useless): session-dir legacy fallback chain (only P28 paths), Plan/Meta lenient decode (origin/planIndex required, messageId removed, origin non-Maybe), Legacy config-seed heal (whole block removed), always-true `has_session_file` field | [x] |
+| P30 Remove the Plans entry from the system menu (user: the system menu doesn't need plans): Plans manager deleted entirely (overlay/msgs/state/fsDeleteFile port/PlanFileInfo); plans reopen only via the session's `[Plan: …]` status bar; menu keeps the open-plan-window switcher | [x] |
+| P31 Fix plan run state lost after restart (user report): planMetas rebuild still scanned the old P27 layout `plans/*.meta.json`, while P28 stores meta at `plans/<planId>/<planId>.meta.json` → scan found zero metas → planMetas empty after restart; build meta paths directly from the plans/ subdir listing + filter `..`; serialize the scan with the file-picker's home listing (untagged fs_list_dir race) | [x] |
+| P32 User-driven UI/CI round: S-shaped bezier (two control points on opposite sides); ~~ancestor-chain curves~~ **removed per user clarification** (the DAG already draws node↔node edges — no extra lines; an active plan window connects only to its owning session's `[Plan: …]`); overlay scrollbar (native scrollbar hidden → message column stays exactly as wide as the prompt input); uniform Session Manager list buttons; no auto-created session at startup (welcome screen, user opens on demand); GitHub CI extended — Tauri `cargo build` + full E2E job (Go backend + fakecore + headless Chrome); restart-e2e port-race fix | [x] |
+| P33 Fix "Session is already active" after page refresh (user report): refresh orphans the backend's session handles → resume keeps failing until the Go process restarts; new `close_all_sessions` RPC (Go+Rust, graceful cancel-first close, history preserved) fired once on page load; restart-e2e gained a page-refresh phase | [x] |
+| P34 Cascade close (user request): closing a session window also closes everything it owns, recursively — its plans (meta origin) are stopped (StopRun → no respawn), their node sessions closed, plan windows closed; sub-plans of node sessions cascade the same way; `DeleteSession` cascades too; pure lookup `Plan.Meta.plansOwnedBySession`; plan-e2e gained a cascade step | [x] |
+| P35 Plan-window close cascades down (user report, twice): closing a plan window (✕) closes **every live node session window bound to its nodes under ANY run status** — active runs (InProgress/Paused) are stopped first (no respawn); terminal runs are not re-stopped (status bar keeps Completed/FailedRun/Stopped) but their open node-session windows (e.g. resumed from disk under a Stopped plan) are closed directly via `nodeSessionIdsForPlan`; sub-plans cascade through CloseSession; plan-e2e gained 8e + 8d | [x] |
+| R series | Plan refactor: model-autonomous sub-flows + recursion (auto-create / feedback auto-continue / re-run cascade / status bar / timeout removal) — **see REFACTOR.md** (R1–R5 all complete, see checklist below) | [x] |
 
-## P24 — 输出注入（{{tX.output}}）
+## P24 — Output injection ({{tX.output}})
 
-用户真模型 run 实测暴露：下游任务（如 t4）需要上游 t1/t2/t3 的产出，
-但 v1 prompt 自包含 → 模型只能重搜/瞎编。真模型 run 也确认了任务输出
-确实落盘到 per-plan work 目录（模型用 write_file 写 `work/` 下文件），
-但文件命名无固定约定 → 注入采用「最终回答文本」而非猜文件名。
+A real-model run exposed: downstream tasks (e.g. t4) need the outputs of
+upstream t1/t2/t3, but v1 prompts are self-contained → the model re-searches
+or makes things up. The real-model run also confirmed task outputs land in
+the per-plan work dir (the model writes files into `work/`), but file naming
+has no fixed convention → injection uses the **final answer text** rather than
+guessing file names.
 
-- [x] `Plan/Inject.elm`（新纯模块）：`injectOutputs : Dict String String
-      -> String -> String` 替换 `{{<taskId>.output}}`（精确匹配无空格；
-      未知 id / 无输出 → 中文占位提示，原始模板绝不泄漏给模型；无
-      `.output}}` 的 `{{` 原样保留）；
-- [x] `NodeRunState.output : Maybe String`：TaskDone 成功时记录（会话
-      最后一条非空 assistant 文本，Update 层 `lastAssistantOutput` 从
-      `model.sessions` 提取，帧有序 AT 先于 SM task-done）；失败/重试
-      不记录；StartRun 重跑清空；
-- [x] runner：`TaskDone sid isError (Maybe String)` 三参事件；
-      `bindSession` 生成 `SendPrompt` 时经 `outputsOf run`（Succeeded 且
-      有输出）注入 —— 节点只在依赖全 Succeeded 后调度，注入时机成立；
-- [x] run.json codec：`output` 字段 encode + lenient decode（缺省
-      Nothing，兼容旧文件）→ resume/静默恢复后下游仍能注入；
-- [x] UI：节点详情面板新增 Output 区（无记录显示占位）；
-- [x] 规划器教学：`planSystemPrompt` 规则改为「下游需要上游产出时用
-      {{t1.output}} 引用（仅限已声明依赖的任务）」；
-- [x] 测试：`PlanInjectTest`（10 例）+ runner 6 例（成功记录/失败不记录/
-      下游注入/缺失占位/未知 id 占位/重 Run 清空）+ codec roundtrip +
-      lenient → **Elm 172**；
-- [x] E2E：fixture t2 prompt 引用 `{{t1.output}}`；fakecore `streamReply`
-      追加回显收到的 prompt（`Received prompt: ...`，成为节点最终回答）
-      → e2e 断言 t2 会话含 t1 输出文本（`research the topic and
-      summarize findings`）+ 注入标签 + 无原始模板；`make e2e` ALL PASS
-      （含新步骤 7c：注入断言 + 关 t2 后曲线隐藏）；
-- [x] 文档：docs/plan-mode.md §5 表、新增 §8.6、§10 持久化、§13 决策、
-      §12 进度表。
+- [x] `Plan/Inject.elm` (new pure module): `injectOutputs : Dict String String
+      -> String -> String` replaces `{{<taskId>.output}}` (exact match, no
+      spaces; unknown id / no output → Chinese placeholder text, the raw
+      template never leaks to the model; `{{` without `.output}}` is kept);
+- [x] `NodeRunState.output : Maybe String`: recorded on TaskDone success (the
+      last non-empty assistant text of the session; Update layer
+      `lastAssistantOutput` extracts from `model.sessions`; frame order: AT
+      before SM task-done); failures/retries don't record; StartRun clears;
+- [x] runner: `TaskDone sid isError (Maybe String)` three-arg event;
+      `bindSession` generates `SendPrompt` with injection via `outputsOf run`
+      (nodes only schedule after all deps Succeeded, so injection timing holds);
+- [x] run.json codec: `output` field encode + lenient decode (missing →
+      Nothing, old files compatible) → resume/silent-restore still injects;
+- [x] UI: node detail panel gains an Output area (placeholder when none);
+- [x] planner teaching: `planSystemPrompt` rule — "downstream needs upstream
+      output → reference it with {{t1.output}} (only for declared deps)";
+- [x] tests: `PlanInjectTest` (10 cases) + runner 6 cases (success records /
+      failure doesn't / downstream injects / missing placeholder / unknown id
+      placeholder / re-Run clears) + codec roundtrip + lenient → **Elm 172**;
+- [x] E2E: fixture t2 prompt references `{{t1.output}}`; fakecore `streamReply`
+      echoes the received prompt (`Received prompt: ...`, becomes the node's
+      final answer) → e2e asserts t2's session contains t1's output text
+      (`research the topic and summarize findings`) + injection label + no raw
+      template; `make e2e` ALL PASS (incl. new step 7c: injection assertion +
+      curve hidden after closing t2);
+- [x] docs: plan-mode.md §5 table, new §8.6, §10 persistence, §13 decisions,
+      §12 progress.
 
-## P25 — close_session cancel-first（Stop 能真正停掉所有节点）
+## P25 — close_session cancel-first (Stop really stops every node)
 
-用户实测反馈：**Stop 无法停止所有 Node**。排查确认：P12 的优雅关闭
-语义是 EOF → alayacore `drainUntilTaskDone()` **把当前任务跑完再保存
-退出**——手动关窗口想保存没问题，但 Stop 是"立刻停"，不该等任务
-跑完（任务 ≤5s 宽限内能跑完就完整跑完，用户看到 Stop 后节点仍在执行）。
+User report: **Stop cannot stop all nodes**. Investigation: P12's graceful
+close semantics were EOF → alayacore `drainUntilTaskDone()` runs the current
+task to completion then saves and exits — fine for manual window close, but
+Stop means "stop now" and must not wait for the task (task ≤5s grace could
+finish fully; the user saw nodes still executing after clicking Stop).
 
-用户决策：**不要向后兼容，一定要发 cancel**（alayacore 原生命令，
-C1 安全：`cancelTask` → `activeTask.cancel()` → 任务经 `taskResultCh`
-→ `handleTaskDone` **自动保存到取消点** → 历史不丢太多）。
+User decision: **no backward compat, always send cancel** (native alayacore
+command, C1-safe: `cancelTask` → `activeTask.cancel()` → the task completes
+through `taskResultCh` → `handleTaskDone` **auto-saves up to the cancel
+point** → history is not lost much).
 
-- [x] Go `closeGracefully`：**cancel → save → EOF → 宽限 → SIGKILL**
-      （cancel 为 fire-and-forget，SendCmd 不阻塞等 CO；错误忽略）；
-      `kill_child` 路径保持 EOF 宽限（无 stdin 句柄，无法发 cancel）；
-- [x] Rust `close_child_gracefully_with_timeout` 对称：同一 stdin mutex
-      锁内先写 cancel 帧再写 save 帧再 EOF；
-- [x] fakecore 挂起模式：hang-once 不再 `sleep(30s)` 阻塞主循环——挂起
-      期间继续读 stdin、吞掉 UE、响应 CI `cancel`（回 task-done 帧 +
-      CO，退出挂起）——模拟真实 alayacore"任务卡住但命令循环活着"
-      （alayacore cancel 走 cancelReqCh，不依赖输入管道）；
-- [x] 测试：Rust 更新（断言 cancel 帧先于 save 帧到达子进程 stdin）；
-      Go 新增 `TestIntegrationCloseCancelsHungTask`（挂起任务 close 后
-      <3s 退出——cancel 中断挂起，而非等 30s+宽限）；Go -race 全绿；
-- [x] E2E：fakecore 挂起模式 + Stop 步骤（t3 挂起 → Stop → 窗口关闭、
-      badge Stopped）ALL PASS；
-- [x] 文档：plan-mode.md §8.3（重写为 cancel-first）/§10/§13、README、
-      manual-acceptance §5。
+- [x] Go `closeGracefully`: **cancel → save → EOF → grace → SIGKILL**
+      (cancel is fire-and-forget, SendCmd doesn't block for CO; errors
+      ignored); `kill_child` keeps the EOF-grace path (no stdin handle,
+      cannot send cancel);
+- [x] Rust `close_child_gracefully_with_timeout` symmetric: inside the same
+      stdin mutex lock — cancel frame, then save frame, then EOF;
+- [x] fakecore hang mode: hang-once no longer `sleep(30s)` blocking the main
+      loop — during the hang it keeps reading stdin, swallows UE, answers CI
+      `cancel` (task-done frame + CO, exits hang) — mimics real alayacore
+      "task stuck but command loop alive" (alayacore cancel goes through
+      cancelReqCh, not the input pipe);
+- [x] tests: Rust updated (asserts cancel frame arrives at child stdin before
+      save); Go new `TestIntegrationCloseCancelsHungTask` (hung task exits
+      <3s after close — cancel interrupts the hang, not 30s+grace); Go -race
+      green;
+- [x] E2E: fakecore hang mode + Stop step (t3 hangs → Stop → window closes,
+      badge Stopped) ALL PASS;
+- [x] docs: plan-mode.md §8.3 (rewritten cancel-first)/§10/§13, README,
+      manual-acceptance §5.
 
-## P26 — plan JSON 顶层 type 标志（alayaface-plan）
+## P26 — plan JSON top-level type marker (alayaface-plan)
 
-用户提议：普通消息里出现 ```json 代码块也会触发 Create Plan 按钮（误报），
-加一个顶层标志更保险。**后续修正（用户指示）：不向后兼容，格式不对直接
-报错** —— `type` 标志必填，缺失也拒绝（不再 lenient 兼容旧文件）。
+User proposal: ordinary messages containing ```json code blocks also trigger
+the Create Plan button (false positive); a top-level marker is safer.
+**Later correction (user instruction): no backward compat — a wrong format is
+an error** — the `type` marker is required; missing is also rejected (no more
+lenient compat with old files).
 
-- [x] `Plan.Types.planTypeMarker = "alayaface-plan"` + `Plan.planType : Maybe String`：
-      decode lenient（缺失 → Nothing）；**validate 必填**：缺失 →
-      `Missing top-level "type": "alayaface-plan" marker`，值错误 →
-      `Not an AlayaFace plan: ...`；`encodePlan` 总是写
-      `"type": "alayaface-plan"`（保存/导出/重新生成都带标志）；
-- [x] `Plan.Detect.hasPlanTypeMarker`：块内容顶层 `type` 解码 == marker；
-      Update 层 AT 检测在 `extractPlanJson` 之后要求 marker == True 才插入
-      `pendingPlanOffers` —— 普通 ```json 代码示例不再出按钮；
-- [x] Plan Session `planSystemPrompt`：JSON 示例加 `"type": "alayaface-plan"`
-      + 规则「顶层必须包含该标志，否则框架不识别」；
-- [x] 测试：PlanTypesTest +3（encode 带标志 / **缺失标志拒绝** / 错误值
-      拒绝）；全部既有测试 JSON 补齐标志；PlanDetectTest +5（精确标志
-      true / 无标志 false / 错误值 false / 无效 JSON false / 非对象 false）
-      → **Elm 180**；
-- [x] E2E：fakecore fixture 带标志 → Create Plan offer 正常出现；Browse
-      导入的 importedPlan 带标志 → 打开成功；**新增** legacy-no-marker.json
-      （无标志）→ 管理器显示 `Missing top-level "type"...` 且不开窗口；
-      ALL PASS；
-- [x] 文档：plan-mode.md §5 schema/字段表（type 必填）、§6.7、§12、§13 已确认。
-
----
-
-## P27 — 连线升级 + session 目录层级
-
-用户三项要求：
-1. **Plan 窗口 ↔ 所属 session 连线**：plan 窗口激活时，用一条线把它和
-   创建它的 session（meta.json origin）连起来；session 里可见的
-   `[Plan: <planId>]` 按钮作为锚点（按钮不可见/滚出视野时退回窗口边）。
-2. **实线加粗 + 双控制点贝塞尔**：session↔node 与 plan↔session 两条连线
-   都是实线（去掉 dasharray）、更粗（stroke-width 3），贝塞尔用 2 个
-   独立控制点（cubic `C`），更强的 bow + 切向对齐 → 更平滑。
-3. **session 目录层级**：plan 子会话嵌套到
-   `sessions/<planId>/<nodeId>/<uuid>/`，保证 `sessions/` 顶层只可能是
-   普通（非 plan）会话。
-
-### 1+2 前端（bridge.js + Elm）
-- [x] `App/NodeConnection.elm`：新增 `PlanConnection {planId, sessionId}` +
-      `liveSessionForOrigin`（origin 会话 live id 解析：原 id 或 resume 的新 id）；
-- [x] Model 新增 `planConnection : Maybe PlanConnection`；`planConnectionFor planId`
-      从 planMetas.origin 解析（Update.elm）；
-- [x] 新 port `setPlanConnection` + bridge.js `.plan-connection-overlay`（第二个
-      SVG overlay）；`curvePath(from,to)` 共享：**2 个独立控制点** cubic +
-      `bow = clamp(20,80, dist*0.18)`；z-index = 两窗口 z 的较大者（都盖住）；
-- [x] 显示时机：plan 激活（addPlanWindow/PlanActivate/PlanStatusOpen）设置 +
-      port 发出；session 聚焦（activateSessionModel/ActivateSession 幂等分支/
-      SessionCreated resume 分支）清空；PlanClose/CloseSession/DeleteSession
-      按 planId/sessionId 清空；
-- [x] CSS：`.node-connection-curve`/`.plan-connection-curve` 实线 + width 3；
-- [x] bridge.js 锚点：session 端优先找会话内 `[Plan: <planId>]` 按钮
-      （可见且与会话内容区相交）→ 锚到按钮中心；否则退回窗口边；
-- [x] 测试：NodeConnectionTest +5（liveSessionForOrigin）；Elm 213 全绿。
-
-### 3 后端 session 目录层级（Rust + Go 双端对称）
-- [x] `dirs.SanitizeDirComponent` / `sanitize_dir_component`：非 `[A-Za-z0-9_-]`
-      字符（含 `.`）→ `_`，空 → `p`；确定性（create/resume 同映射，`.`→`_`
-      使 `..` 无法逃逸 sessions 根）；
-- [x] `CreatePlanSessionDirFrom` / `create_session_dir_nested`：
-      `sessions/<planId>/<nodeId>/<uuid>/`（共用 `createSessionDirIn` 拷贝 config）；
-- [x] `create_session` / `resume_session` / `delete_session_dir` 增加可选
-      `planId`/`nodeId`：有 → 嵌套路径，无 → 顶层（普通会话不变）；
-- [x] `list_session_dirs`：只列顶层**直接含 session.alaya** 的目录
-      → 管理器永远不出现 plan 子会话；
-- [x] 前端：Ports/bridge.js 透传 planId/nodeId；`nodeSessionArgsIn` 填节点
-      会话；普通创建/管理器 resume 传 Nothing；
-- [x] 测试：Go `TestSanitizeDirComponent` + `TestCreatePlanSessionDirFromNests` +
-      `TestIntegrationNestedPlanSessionDir`（create 嵌套/管理器隐藏/嵌套
-      resume 成功/扁平 resume 失败/嵌套 delete）；Rust 同名 2 例；全绿；
-- [x] E2E：4b 断言 plan↔session 曲线可见 + 锚到按钮 + 实线 width≥3 + node
-      曲线互斥；7b 断言 node 曲线实线加粗 + plan 曲线隐藏；5d 断言
-      `sessions/<planId>/{t1,t2,t3}/<uuid>` 层级；ALL PASS；
-- [x] 文档：plan-mode.md §7.1（两条曲线）、新增 §8.7、TODO 本表。
+- [x] `Plan.Types.planTypeMarker = "alayaface-plan"` + `Plan.planType : Maybe String`:
+      lenient decode (missing → Nothing); **validate requires it**: missing →
+      `Missing top-level "type": "alayaface-plan" marker`, wrong value →
+      `Not an AlayaFace plan: ...`; `encodePlan` always writes
+      `"type": "alayaface-plan"` (save/export/re-generate all carry it);
+- [x] `Plan.Detect.hasPlanTypeMarker`: decodes the block's top-level `type`;
+      Update-layer AT detection requires marker == True after
+      `extractPlanJson` before inserting `pendingPlanOffers` — plain ```json
+      examples no longer show the button;
+- [x] Plan Session `planSystemPrompt`: JSON example gains
+      `"type": "alayaface-plan"` + rule "the top level must contain this
+      marker, otherwise the framework does not recognize it";
+- [x] tests: PlanTypesTest +3 (encode carries the marker / **missing marker
+      rejected** / wrong value rejected); all existing test JSON gained the
+      marker; PlanDetectTest +5 (exact marker true / no marker false / wrong
+      value false / invalid JSON false / non-object false) → **Elm 180**;
+- [x] E2E: fakecore fixture carries the marker → Create Plan offer appears
+      normally; imported plan (Browse) carries the marker → opens; **new**
+      legacy-no-marker.json (no marker) → the manager shows
+      `Missing top-level "type"...` and no window opens; ALL PASS;
+- [x] docs: plan-mode.md §5 schema/field table (type required), §6.7, §12, §13.
 
 ---
 
-## P28 — Plan 归属 Session + 移除导入（用户决策）
+## P27 — Connection-curve upgrade + session-dir hierarchy
 
-用户：**"Plan为什么不放在Session目录下，一个Plan必定是属于一个session吧？——
-我认为这是早期设计的遗留物，我们不需要plan的'导入'功能，与之相关的UI也是不需要的"**。
-决策：Plan 全部收进它的来源 session 目录；Browse/导入及其 UI 整体删除。
+User's three requests:
+1. **Plan window ↔ owning session curve**: when the plan window is active,
+   draw a line to the session that created it (meta.json origin); the
+   session's visible `[Plan: <planId>]` button is the anchor (falls back to
+   the window edge when the button is invisible/scrolled out).
+2. **Solid thicker + 2-control-point bezier**: both session↔node and
+   plan↔session curves are solid (no dasharray), thicker (stroke-width 3),
+   cubic bezier with 2 independent control points, stronger bow + tangent
+   alignment → smoother.
+3. **session-dir hierarchy**: plan node sessions nested at
+   `sessions/<planId>/<nodeId>/<uuid>/`, so `sessions/` top level can only be
+   plain (non-plan) sessions.
 
-### 新目录结构
+### 1+2 frontend (bridge.js + Elm)
+- [x] `App/NodeConnection.elm`: new `PlanConnection {planId, sessionId}` +
+      `liveSessionForOrigin` (origin-session live-id resolution: the original
+      id or a resume's fresh id);
+- [x] Model gains `planConnection : Maybe PlanConnection`;
+      `planConnectionFor planId` resolves from planMetas.origin (Update.elm);
+- [x] new port `setPlanConnection` + bridge.js `.plan-connection-overlay`
+      (second SVG overlay); shared `curvePath(from,to)`: **2 independent
+      control points** cubic + `bow = clamp(20,80, dist*0.18)`; z-index = the
+      larger of the two windows' z (above both);
+- [x] show timing: plan activation (addPlanWindow/PlanActivate/PlanStatusOpen)
+      sets it + port; session focus (activateSessionModel/ActivateSession
+      idempotent branch/SessionCreated resume branch) clears it;
+      PlanClose/CloseSession/DeleteSession clear by planId/sessionId;
+- [x] CSS: `.node-connection-curve`/`.plan-connection-curve` solid + width 3;
+- [x] bridge.js anchoring: session side prefers the `[Plan: <planId>]`
+      button inside the session (visible + intersecting the session panel's
+      content area) → anchor to its center; otherwise window edge;
+- [x] tests: NodeConnectionTest +5 (liveSessionForOrigin); Elm 213 green.
+
+### 3 backend session-dir hierarchy (Rust + Go symmetric)
+- [x] `dirs.SanitizeDirComponent` / `sanitize_dir_component`: non
+      `[A-Za-z0-9_-]` chars (incl. `.`) → `_`, empty → `p`; deterministic
+      (create/resume same mapping, `.`→`_` means `..` cannot escape the
+      sessions root);
+- [x] `CreatePlanSessionDirFrom` / `create_session_dir_nested`:
+      `sessions/<planId>/<nodeId>/<uuid>/` (shared
+      `createSessionDirIn` copies config);
+- [x] `create_session` / `resume_session` / `delete_session_dir` gain optional
+      `planId`/`nodeId`: present → nested path, absent → top level (plain
+      sessions unchanged);
+- [x] `list_session_dirs`: lists only top-level dirs that DIRECTLY contain
+      `session.alaya` → the manager never shows plan child sessions;
+- [x] frontend: Ports/bridge.js pass planId/nodeId; `nodeSessionArgsIn` fills
+      node sessions; plain create/manager resume pass Nothing;
+- [x] tests: Go `TestSanitizeDirComponent` + `TestCreatePlanSessionDirFromNests`
+      + `TestIntegrationNestedPlanSessionDir` (nested create/manager hidden/
+      nested resume ok/flat resume fails/nested delete); Rust same 2 cases;
+      all green;
+- [x] E2E: 4b asserts plan↔session curve visible + anchored to the button +
+      solid width≥3 + node-curve exclusivity; 7b asserts node curve solid +
+      thick + plan curve hidden; 5d asserts
+      `sessions/<planId>/{t1,t2,t3}/<uuid>` hierarchy; ALL PASS;
+- [x] docs: plan-mode.md §7.1 (two curves), new §8.7, TODO this table.
+
+---
+
+## P28 — Plans live under the owning session + import removed (user decision)
+
+User: **"Why isn't a plan stored under its session's directory? A plan must
+belong to a session, right? — I think import is an early-design leftover; we
+don't need the 'import' feature, nor its UI."**
+Decision: everything about a plan goes under its source session's dir; the
+Browse/import feature and its UI are deleted.
+
+### New directory layout
 ```
 ~/.alayaface/sessions/
-  <uuid>/                  ← 普通会话（顶层永远不是 plan 子会话）
+  <uuid>/                  ← plain sessions (top level is never a plan child)
     session.alaya / config/
-    plans/<planId>/        ← 该会话产生的 plan（0..N）
+    plans/<planId>/        ← plans created by this session (0..N)
       <planId>.json / .meta.json / .run.json
-      work/                ← per-plan 工作目录
-      <nodeId>/<uuid>/     ← 节点子会话
+      work/                ← per-plan working dir
+      <nodeId>/<uuid>/     ← node child sessions
 ```
-顶层 `plans/` 根删除；没有导入 → 每个 plan 必有 meta.json origin。
+The top-level `plans/` root is deleted; no import → every plan has a
+meta.json origin.
 
-- [x] 后端（Rust+Go 对称）：`create_session`/`resume_session`/`delete_session_dir`
-      新增可选 `originSessionId`（+ 已有 planId/nodeId）→ 嵌套路径
-      `sessions/<San(origin)>/plans/<San(planId)>/<San(nodeId)>/<uuid>`；
-      resume/delete 直接按 P28 路径解析（**无任何 legacy 回退**）；
-- [x] `dirs.CreatePlanSessionDirFrom`/`create_session_dir_nested` 新签名
-      （originSessionId, planId, nodeId, uuid, preset）+ 顶层 doc 布局更新；
-- [x] 前端路径：`plansDir` → `sessionsDir` + `planDirIn`/`planDirOf`/
-      `planFilePathOf`/`planOriginSessionId`/`onDiskSessionId`（Update.elm）；
-      PlanSaveReady 写入 `sessions/<originDiskId>/plans/<planId>/`，origin
-      记 **on-disk 会话 id**（resume 的 fresh id 经 planResumedFrom 回解）；
-- [x] planMetas 索引重建改为两级扫描：`fs_list_dir(sessions/)` → 各会话
-      `plans/` → 读每个 `*.meta.json`（新字段 planMetaDirQueue/
-      planMetaDirListing）；planId 从文件名提取；
-- [x] 绑定/回填按 live id 解析：`planMetaForMessage`（View）、
-      `messageBoundToPlan`、`feedbackCompletedPlan`（NC.liveSessionForOrigin）
-      —— resume/重启后状态条、防重、反馈仍命中；
-- [x] Plans manager 单页：列表直接来自 planMetas（无 fs_list_dir）；
-      删除时同步 drop planMetas + 关窗口（pendingDelete）；
+- [x] backend (Rust+Go symmetric): `create_session`/`resume_session`/
+      `delete_session_dir` gain optional `originSessionId` (with existing
+      planId/nodeId) → nested path
+      `sessions/<San(origin)>/plans/<San(planId)>/<San(nodeId)>/<uuid>`;
+      resume/delete resolve directly by P28 paths (**no legacy fallback**);
+- [x] `dirs.CreatePlanSessionDirFrom`/`create_session_dir_nested` new signature
+      (originSessionId, planId, nodeId, uuid, preset) + top-level doc layout
+      update;
+- [x] frontend paths: `plansDir` → `sessionsDir` + `planDirIn`/`planDirOf`/
+      `planFilePathOf`/`planOriginSessionId`/`onDiskSessionId` (Update.elm);
+      PlanSaveReady writes into `sessions/<originDiskId>/plans/<planId>/`;
+      origin records the **on-disk session id** (resume fresh ids resolved
+      back via planResumedFrom);
+- [x] planMetas index rebuild is two-level: `fs_list_dir(sessions/)` → each
+      session's `plans/` → read each `*.meta.json` (new fields
+      planMetaDirQueue/planMetaDirListing); planId extracted from file name;
+- [x] binding/feedback resolve by live id: `planMetaForMessage` (View),
+      `messageBoundToPlan`, `feedbackCompletedPlan`
+      (NC.liveSessionForOrigin) — status bar, anti-duplicate, feedback still
+      hit after resume/restart;
+- [x] Plans manager single view: list directly from planMetas (no
+      fs_list_dir); delete drops planMetas + closes windows (pendingDelete);
       `PlanManagerTab`/`PlanManagerBrowser*`/`PlanManagerSwitchTab`/
-      `planBrowserPick`/`initPlanBrowser` 全部移除；
-- [x] `planWinKeyForPath` 简化为文件名；FsResolvePathResult 去掉 Browse 分支；
-- [x] Ports/bridge.js：createSession/resumeSession/deleteSessionDir 透传
-      originSessionId；
-- [x] 测试：Go `TestSanitizeDirComponent`/`TestCreatePlanSessionDirFromNests`
-      （新签名）+ `TestIntegrationNestedPlanSessionDir`（origin 嵌套创建、
-      管理器只列普通会话、嵌套 resume、**无 origin/planId 解析失败**、
-      嵌套删除）；Rust dirs.rs 两例更新；Elm 213 全绿；e2e 5d 断言
-      `sessions/<origin>/plans/<planId>/{t1,t2,t3}/<uuid>` + plan 文档/
-      meta/run 都在会话目录内 + manager 无 Browse 页 + work dir 新路径；
-- [x] 文档：plan-mode.md §7.2（单页管理器）、§8.7（P28 重写）、§12；
-      TODO 本表；go-backend.md 命令表 + 布局注记；manual-acceptance 5c。
+      `planBrowserPick`/`initPlanBrowser` all removed;
+- [x] `planWinKeyForPath` simplified to the file name; FsResolvePathResult
+      drops the Browse branch;
+- [x] Ports/bridge.js: createSession/resumeSession/deleteSessionDir pass
+      originSessionId;
+- [x] tests: Go `TestSanitizeDirComponent`/`TestCreatePlanSessionDirFromNests`
+      (new signature) + `TestIntegrationNestedPlanSessionDir` (origin-nested
+      create, manager lists only plain sessions, nested resume, **missing
+      origin/planId fails to resolve**, nested delete); Rust dirs.rs 2 cases
+      updated; Elm 213 green; e2e 5d asserts
+      `sessions/<origin>/plans/<planId>/{t1,t2,t3}/<uuid>` + plan document/
+      meta/run all inside the session dir + manager has no Browse page + work
+      dir new path;
+- [x] docs: plan-mode.md §7.2 (single-view manager), §8.7 (P28 rewrite), §12;
+      TODO this table; go-backend.md command table + layout note;
+      manual-acceptance 5c.
 
 ---
 
-## P29 — 清理全部"向后兼容"代码（用户：都是没用的）
+## P29 — Remove ALL backward-compat code (user: it is all useless)
 
-用户：**"不用迁移，另外检查下项目里的'向后兼容'代码，他们都是没用的"**。
-逐项审计并移除 4 类：
+User: **"No migration needed. Also audit the project for 'backward-compat'
+code — it's all useless."** Four categories audited and removed:
 
-- [x] **Session 目录 legacy 回退链**（Go `resolveSessionDir` / Rust
-      `resolve_session_dir` 的 P27/扁平路径）：改为 `planSessionDirFor` /
-      `plan_session_dir_for` 直接构造 P28 路径（plan 会话）或顶层（普通
-      会话），**无回退**；集成测试删除 LEGACY fallback 1/2 两段；
-- [x] **Plan/Meta.elm lenient 解码**：origin 必填（严格）、planIndex 必填
-      （删 `-1` 兜底）、`messageId` 死字段（encode 从不写）从 `Origin`
-      类型移除；`PlanMeta.origin` 由 `Maybe Origin` 收紧为 `Origin`（无导入
-      = 必有 origin），所有消费点（planDirOf/planOriginSessionId/
-      messageBoundToPlan/planConnectionFor/feedbackCompletedPlan/
-      找节点会话、View 两处）直接访问；`decodeMeta` 全字段严格；
-      PlanMetaTest 改为严格断言（缺 origin/planIndex/created_at 拒绝）；
-- [x] **Legacy config 种子修复**（Go `HealLegacyConfigSeeds` +
+- [x] **Session-dir legacy fallback chain** (Go `resolveSessionDir` / Rust
+      `resolve_session_dir` P27/flat paths): now `planSessionDirFor` /
+      `plan_session_dir_for` builds the P28 path directly (plan sessions) or
+      top level (plain sessions), **no fallback**; integration tests removed
+      the LEGACY fallback 1/2 segments;
+- [x] **Plan/Meta.elm lenient decode**: origin required (strict), planIndex
+      required (removed `-1` default), dead `messageId` field (encoder never
+      wrote it) removed from `Origin`; `PlanMeta.origin` tightened from
+      `Maybe Origin` to `Origin` (no import = every plan has an origin), all
+      consumers simplified (planDirOf/planOriginSessionId/
+      messageBoundToPlan/planConnectionFor/feedbackCompletedPlan/node-session
+      lookup, View 2 sites); `decodeMeta` fully strict; PlanMetaTest strict
+      (missing origin/planIndex/created_at rejected);
+- [x] **Legacy config-seed heal** (Go `HealLegacyConfigSeeds` +
       `LegacyRuntimeConfEmpty/Comment` + `LegacyModelConfSeed` / Rust
-      `heal_legacy_config_seeds` + `LEGACY_*`）：整块移除（ensure() 不再
-      扫描清除），对应测试（Go `TestHealsLegacyConfigSeeds` / Rust
-      `heals_legacy_config_seeds`）删除；
-- [x] **`has_session_file` 恒真字段**（P27 列表过滤后已无意义）：Go
-      `SessionDirInfo` / Rust `SessionDirInfo` / 前端 `SessionDir` 解码器
-      + View 三处（canResume、"· no history"、Resume 提示）全部移除；
-- [x] 保留（非向后兼容，属运行鲁棒性）：binary 解析回退、graceful-close
-      SIGKILL 兜底、probe fallback、NUL 前缀 raw 帧回退；plan schema 的
-      可选字段默认值（模型可能省略，属输入归一化，validate 兜底）；
-      P26 type 标志的"无兼容"本来就是收紧方向；
-- [x] 验证：Elm 213 / Rust 43（-1 heal 测试）/ Go -race 8 包 / e2e ALL
-      PASS；文档（plan-mode.md §8.7、go-backend.md 命令表/注记、TODO）同步。
+      `heal_legacy_config_seeds` + `LEGACY_*` + ensure() scans): whole block
+      removed, matching tests deleted (Go `TestHealsLegacyConfigSeeds` / Rust
+      `heals_legacy_config_seeds`);
+- [x] **Always-true `has_session_file` field** (meaningless after P27's
+      listing filter): Go `SessionDirInfo` / Rust `SessionDirInfo` / frontend
+      `SessionDir` decoder + View 3 usages (canResume, "· no history",
+      Resume hint) removed;
+- [x] Kept (robustness, not compat): binary-resolution fallback, graceful-close
+      SIGKILL fallback, probe fallback, NUL-prefix raw-frame fallback; plan
+      schema optional-field defaults (model may omit them — input
+      normalization, validate catches); P26's marker tightening direction;
+- [x] verification: Elm 213 / Rust 43 (-1 heal test) / Go -race 8 pkgs / e2e
+      ALL PASS; docs (plan-mode.md §8.7, go-backend.md command table/notes,
+      TODO) synced.
 
 ---
 
-## P30 — 系统菜单移除 Plans 入口（用户：不需要 plans 了）
+## P30 — Remove the Plans entry from the system menu (user: not needed)
 
-用户：**"系统菜单里不需要plans了"**。Plans manager 的唯一入口就是菜单
-里的 Plans 项，且 plan 已归属 session（经会话内 `[Plan: …]` 状态条重开，
-重启后仍可用）→ 管理器整体删除：
+User: **"The system menu doesn't need plans."** The Plans manager's only
+entry was the menu's Plans item, and plans now belong to sessions (reopened
+via the session's `[Plan: …]` status bar, works after restart) → the manager
+is deleted entirely:
 
-- [x] 菜单：viewGlobalMenu 删除 "🕸 Plans" 项（OpenPlanManager）；保留
-      "打开的 plan 窗口"切换列表（viewGlobalMenuPlan，多窗口切换用）；
-- [x] View：删除 viewPlanManagerOverlay / viewPlanSavedTab /
-      planFileListFromMetas / viewPlanFile（含 `PlanFileInfo`）；
-      打开 plan 的解析失败/读取失败改走 setPlanErrors（窗口内报错，
-      不再弹管理器）；
-- [x] Types/Update：删除 OpenPlanManager/ClosePlanManager/
-      PlanManagerOpen/PlanManagerDelete/PlanManagerSetFilter 消息、
-      PlanManagerState + planManager 字段、FsDeleteResult handler、
-      refreshPlanList（本已 no-op）；删除 `fsDeleteFile`/`onFsDeleteResult`
-      端口 + bridge.js handler（唯一使用者是管理器；后端 fs_delete_file
-      命令保留为通用 fs API）；
-- [x] e2e：第 9 步改为断言菜单**没有** Plans 项（plan 经状态条重开仍由
-      第 6 步覆盖）；ALL PASS；
-- [x] 文档：plan-mode.md §7.1/§7.2（管理器移除说明）/§12、TODO 本表。
-
----
-
-## P31 — 修复：重启后 plan 执行状态丢失（用户反馈）
-
-用户：**"重新启动后，似乎plan的执行状态弄丢了？"**。用
-`e2e/restart-e2e.mjs`（新建：建 plan → 跑完 → 重启后端 → resume 来源会话
-→ 状态条重开 plan → 断言 badge/nodes）复现并定位。
-
-**根因**：P28 把 plan 文件收进 `plans/<planId>/<planId>.meta.json`（plan
-自己的子目录），但 planMetas 索引重建的两级扫描还按 P27 旧布局找
-`plans/*.meta.json`（直接平铺）——`plans/` 里只有 planId 子目录（全是
-dir），所以 meta 列表永远为空、不发任何读取 → **重启后 planMetas 为空**
-→ `[Plan: …]` 状态条不渲染、plan 打不开（表现为"状态丢了"）。此前 e2e
-从未重启，planMetas 都是运行中由 PlanSaveReady 实时填充，因此没暴露。
-
-**修复（Update.elm）**：
-- 扫描第 2 级（`sessions/<uuid>/plans` 列表）改为：每个**子目录**即一个
-  plan，直接构造 meta 路径 `<plansDir>/<planId>/<planId>.meta.json`
-  （无需第三级扫描）；过滤 `..`/`.`（fs_list_dir 会给非 `/` 目录加 `..`，
-  旧代码把 `sessions/../plans` 也列了进去——无害但浪费）；
-- 顺带消除一个潜在竞态：`FsHomeDirResult` 原来同批发出
-  `fs_list_dir(home)`（文件选择器）和 `fs_list_dir(sessions)`（扫描），
-  两个结果无路径标签、无法区分——home 结果先到会被扫描分支吃掉导致
-  扫描错位。新增 `planMetaScanPending`：等 home 列表被文件选择器分支
-  消费后再启动扫描（串行化，无同批竞态）。
-
-- [x] 验证：`e2e/restart-e2e.mjs` ALL PASS（重启 → resume 来源会话 →
-      `[Plan: …]` 出现 → 重开 plan → badge Completed + 3 节点 succeeded）；
-      `make e2e` 现在连跑 plan-e2e + restart-e2e；Elm 213 / Rust 43 /
-      Go -race 8 包全绿；
-- [x] 文档：TODO 本表。
+- [x] menu: viewGlobalMenu drops "🕸 Plans" (OpenPlanManager); keeps the
+      "open plan windows" switcher list (viewGlobalMenuPlan);
+- [x] View: deletes viewPlanManagerOverlay / viewPlanSavedTab /
+      planFileListFromMetas / viewPlanFile (incl. `PlanFileInfo`);
+      plan open/parse failures now surface via setPlanErrors (in-window, no
+      manager popup);
+- [x] Types/Update: removes OpenPlanManager/ClosePlanManager/
+      PlanManagerOpen/PlanManagerDelete/PlanManagerSetFilter msgs,
+      PlanManagerState + planManager field, FsDeleteResult handler,
+      refreshPlanList (already no-op); removes `fsDeleteFile`/`onFsDeleteResult`
+      ports + bridge.js handler (only consumer was the manager; the backend
+      fs_delete_file command stays as a general fs API);
+- [x] e2e: step 9 now asserts the menu has NO Plans item (plan reopen via the
+      status bar still covered by step 6); ALL PASS;
+- [x] docs: plan-mode.md §7.1/§7.2 (manager removal note)/§12, TODO this table.
 
 ---
 
-## P32 — 用户驱动的 UI/CI 一轮（曲线/滚动条/按钮/启动/CI）
+## P31 — Fix: plan run state lost after restart (user report)
 
-用户五项要求：
-1. **祖先链连线**：存在 A-B-C-D 依赖链时，D 被选中（其会话聚焦）后，前面的
-   parents 线（A→B、B→C、C→D）也要显示 —— 不再只画会话↔D 一条线。
-2. **S 形贝塞尔**：连线要有 2 个反向弧度（两个控制点分居旅行线两侧），更好看。
-3. **滚动条不影响宽度**：消息区出现滚动条会让消息列变窄、与 Prompt Input 不
-   同宽 —— 改为覆盖式滚动条（悬浮在文本上，不占布局宽度）。
-4. **Session Overlay 按钮大小一致**：Resume 用默认大按钮、Delete 用小号内联
-   样式 → 统一成一个尺寸。
-5. **启动不自动开空 session**：去掉 init 里的 `create_session`；用户需要时
-   自行 ⚙ → New Session。
+User: **"After restarting, the plan's execution state seems to be lost?"**
+Reproduced with `e2e/restart-e2e.mjs` (new: create plan → run to completion →
+restart the backend → resume the origin session → status-bar reopen → assert
+badge/nodes).
 
-外加 **CI 支持 Tauri + Elm**（用户问"Github CI能把tauri和elm这部分也支持了
-吗"）：ci.yml 本已有 go/elm/rust 三 job → 增强为 rust job 加 `cargo build`
-（完整 Tauri 编译）+ 新增 e2e job（Go 后端 + fakecore + 无头 Chrome 跑
-plan-e2e + restart-e2e）。
+**Root cause**: P28 moved plan files into `plans/<planId>/<planId>.meta.json`
+(the plan's own subdir), but the planMetas index rebuild still scanned the
+old P27 layout for `plans/*.meta.json` (flat) — `plans/` contains only planId
+subdirs (all dirs), so the meta list was always empty and no reads were
+issued → **planMetas empty after restart** → the `[Plan: …]` status bar never
+renders and the plan cannot be reopened (looks like "state lost"). E2E never
+restarted before, so planMetas were always populated live by PlanSaveReady —
+the gap never surfaced.
 
-### 1+2 连线（bridge.js + Elm）
-- [x] ~~祖先链连线~~ **（用户澄清后已整体移除）**：P32 初版实现了
-      `NodeConnection.ancestors`/`ancestorEdges`（传递父闭包）+ bridge 多路径池
-      （聚焦 D 时在节点卡之间额外画 A→B/B→C/C→D 淡色曲线）。用户指正：
-      **"plan window 在 active 的时候，需要连到它所属的那个 [Plan: xxxx]xxxx；
-      它内部的 node 之间本身就已经有连线了，不需要你再加额外的连线"** ——
-      DAG 画布本来就画着节点依赖边，额外曲线是重复的；已删除
-      （NodeConnection.elm 的 ancestors 字段与函数、Update 的 withAncestors、
-      bridge 路径池、`.node-connection-curve-ancestor` CSS、6 个单测）；
-      连线模型回归 P19（会话↔节点卡单条曲线）+ P27（plan 窗口↔所属会话
-      `[Plan: …]` 按钮）两条，不多画；
-- [x] bridge.js `curvePath`：**S 形** —— c1 偏移 +bow、c2 偏移 **-bow**
-      （控制点在旅行线两侧 → 两个反向弧度，曲线在中点穿过直线）；
-      计划↔会话曲线共用同一 curvePath，同样变 S 形；
-- [x] 测试：NodeConnectionTest 恢复 213（ancestor 6 例删除）；**Elm 213** 全绿；
+**Fix (Update.elm)**:
+- The level-2 scan (`sessions/<uuid>/plans` listing) now treats every
+  **subdir** as a plan and builds the meta path directly
+  `<plansDir>/<planId>/<planId>.meta.json` (no third-level scan); filters
+  `..`/`.` (fs_list_dir prepends `..` for non-`/` dirs — the old code listed
+  `sessions/../plans` too; harmless but wasteful);
+- Also eliminated a latent race: `FsHomeDirResult` used to batch
+  `fs_list_dir(home)` (file picker) with `fs_list_dir(sessions)` (scan) — the
+  two results are untagged and indistinguishable; if the home result arrived
+  first it was eaten by the scan branch and misrouted. New
+  `planMetaScanPending`: the scan starts only after the home listing was
+  consumed by the file-picker branch (serialized, no same-batch race).
 
-### 3 覆盖式滚动条（bridge.js + style.css）
-- [x] CSS：`.messages` 隐藏原生滚动条（`scrollbar-width: none` +
-      `::-webkit-scrollbar { display: none }`）→ 消息列宽度恒定 = 输入框宽度；
-      新增 `.overlay-scrollbar`（absolute right 4px，top/bottom 12px）+
-      `.overlay-scrollbar-thumb`（6px 圆角条，hover/dragging 加深，浅色主题适配）；
-- [x] bridge.js：`attachOverlayScrollbar` 每个 `.messages` 注入一个覆盖滚动条；
-      滚动/ResizeObserver/MutationObserver 三处驱动 `updateOverlayScrollbar`
-      （scrollHeight>clientHeight 才显示；thumb 高度 ∝ 视口/内容比，位置 ∝
-      scrollTop）；thumb 拖拽 + 轨道点击跳转 + 原生滚轮保留；sendScroll 原有
-      Elm 滚动状态上报不变；
-
-### 4 Session Manager 按钮统一（View.elm + style.css）
-- [x] 新增 `.sel-page-item-btn`（padding 6px 14px、min-width 76px、
-      font-size 0.8rem）+ allow/deny 配色类；Resume/Delete 两个按钮都换成
-      这套类，删除 Delete 的内联小号样式 → 每行两个按钮尺寸一致；
-
-### 5 启动不自动开空 session（Main.elm / Update.elm / View.elm / Types.elm）
-- [x] Main.elm init 删除 `Ports.createSession …`（原来启动即建一个空会话）；
-      删除死字段 `initializing`/`initError`（Types.elm 字段、Update.elm
-      SessionCreated 里 `initializing = False`、View.elm 的 Connecting 分支）；
-- [x] `viewNoSessionPanel` 改为常显欢迎屏：logo + "No session open — use ⚙
-      New Session to start"（新加 `.no-sessions` CSS）；
-- [x] 菜单 New Session / 计划自动创建 / 重启恢复均不受影响（CreateSession 仍
-      带 planSystemPrompt；e2e 本来就是显式点 New Session，注释同步更新）；
-- [x] e2e 顺带修复 restart-e2e 的后端重启竞态：kill SIGTERM 后原来只睡 800ms，
-      旧服务器优雅关会话期间仍占着端口 → 新进程 bind 失败、页面连到将死的旧
-      服务器 → 改为 `waitExit(server, 15s)` 等旧进程真正退出再 startServer；
-      plan-e2e + restart-e2e ALL PASS（restart 偶发失败根治）；
-
-### CI（.github/workflows/ci.yml）
-- [x] rust job 增加 `cargo build`（完整 Tauri 应用编译，不只 cargo test）；
-- [x] 新增 `e2e` job：setup-go + setup-node + 全局 elm → `elm make` 产出
-      elm.js → `npm install`（e2e/）→ `node plan-e2e.mjs` + `node
-      restart-e2e.mjs`（ubuntu-latest 自带 /usr/bin/google-chrome，无需下载）；
-- [x] 验证：Elm 219 / Rust 43 / Go -race 8 包 / make e2e（两个脚本）全绿；
-- [x] 文档：plan-mode.md（§4 启动说明、§7.1 祖先链 + S 形、§12 P32 行）、
-      TODO 本表、manual-acceptance Startup 段新增 5 项。
+- [x] verification: `e2e/restart-e2e.mjs` ALL PASS (restart → resume origin →
+      `[Plan: …]` appears → reopen → badge Completed + 3 nodes succeeded);
+      `make e2e` now runs plan-e2e + restart-e2e; Elm 213 / Rust 43 /
+      Go -race 8 pkgs green;
+- [x] docs: TODO this table.
 
 ---
 
-## P33 — 修复：页面刷新后 resume 报 "Session is already active"（用户反馈）
+## P32 — User-driven UI/CI round (curves/scrollbar/buttons/startup/CI)
 
-用户：**"页面刷新后，session的resume会报错：Session is already active。需要重启Go
-进程才可以。这个不对"**。
+User's five requests:
+1. **Ancestor-chain lines**: with an A-B-C-D dependency chain, when D is
+   selected its parent lines (A→B, B→C, C→D) should also show — not just the
+   session↔D curve.
+2. **S-shaped bezier**: lines should have 2 reverse arcs (two control points
+   on opposite sides of the travel line) — prettier.
+3. **Scrollbar must not affect width**: the message column should stay exactly
+   as wide as the Prompt Input; make the scrollbar overlay (float over the
+   content, consume no layout width).
+4. **Session Overlay buttons uniform**: Resume used the big default,
+   Delete used small inline styles → unify to one size.
+5. **No auto-created session at startup**: drop init's `create_session`; the
+   user opens one via ⚙ → New Session when needed.
 
-**根因**：会话句柄（alayacore 子进程）属于「后端进程」生命周期，而会话窗口属于
-「页面」生命周期。浏览器刷新后，旧页面的 Elm 注册表清空（`model.sessions` 空），
-但 Go 后端仍持有旧页面的所有会话句柄（`session.Manager` 不为空）；`resume_session`
-按「目录已激活」拒绝（这是防双击 resume 的不变量）→ Session Manager 里 Resume 一
-直报 "Session is already active"，直到重启 Go 进程把句柄清掉。WS 断开只注销客户端，
-不会关会话（有意为之：服务端不因网络闪断杀会话）。
+Plus **CI for Tauri + Elm** (user asked "can GitHub CI cover the tauri and
+elm parts too?"): ci.yml already had go/elm/rust jobs → enhanced with
+`cargo build` (full Tauri compile) in the rust job + a new e2e job (Go
+backend + fakecore + headless Chrome running plan-e2e + restart-e2e).
 
-**修复（回收孤儿会话）**：
-- 新 RPC `close_all_sessions`（Go `CloseAllSessions` + Rust `close_all_sessions`，
-  注册 handlers.go / lib.rs）：优雅关闭**所有**活跃会话 —— 复用 `close_session`
-  的 cancel-first 序列（cancel → save → EOF → ≤5s 宽限 → SIGKILL），**历史保留到
-  取消点**（与手动关窗口一致；不走 shutdown 的硬杀 `CloseAll`）。Go 侧新增
-  `Manager.CloseAllGracefully`（快照后逐个 `closeGracefully`，日志标注 reclaimed on
-  page load）；
-- 前端：Ports 新增 `closeAllSessions` + bridge.js 透传（fire-and-forget）+ Main.elm
-  init 的 `Cmd.batch` 首项调用 —— **每次页面加载**都先回收上一页的孤儿句柄
-  （Tauri 启动时无会话 → no-op，无害）；
-- 边界：init 时用户立即点 New Session 与 close_all 互不冲突（close_all 只关旧
-  句柄）；刷新后 Session Manager 打开时机远晚于回收（人类操作），竞态窗口可忽略；
-- 测试：Go 集成测试 `TestIntegrationCloseAllSessionsReclaimsOnPageLoad`（两个会话
-  激活 → close_all → 旧 id close 报 not found → resume 恢复可用 = 用户报告路径）；
-  restart-e2e 新增 **Phase 1.5 页面刷新**：跑完 plan 后 `page.reload()`（同一后端）
-  → Session Manager → Resume 来源会话（断言可点、无 already active）→ `[Plan: …]`
-  状态条出现；Elm 219 / Rust 43 / Go -race 全绿 + make e2e 两脚本 ALL PASS；
-- 文档：go-backend.md 命令表 + TODO 本表。
+### 1+2 curves (bridge.js + Elm)
+- [x] ~~ancestor-chain curves~~ **removed after user clarification**: the P32
+      first cut implemented `NodeConnection.ancestors`/`ancestorEdges`
+      (transitive parent closure) + a bridge path pool (extra faint
+      A→B/B→C/C→D curves between node cards when D's session is focused).
+      User corrected: **"when the plan window is active it should connect to
+      its owning [Plan: xxxx]xxxx; the nodes inside it already have
+      connections — no extra lines needed."** The DAG canvas already draws
+      node↔node dependency edges, so the extra curves were duplicates.
+      Reverted (NodeConnection.elm fields/functions, Update withAncestors,
+      bridge path pool, `.node-connection-curve-ancestor` CSS, 6 unit tests);
+      the connection model is back to exactly two curves, no extras:
+      P19 session↔node card, P27 plan window↔owning `[Plan: …]` button;
+- [x] bridge.js `curvePath`: **S-shape** — c1 offset +bow, c2 offset **-bow**
+      (control points on opposite sides → two reverse arcs crossing the
+      straight line at the midpoint); the plan↔session curve shares it;
+- [x] tests: NodeConnectionTest back to 213 (6 ancestor cases removed);
+      **Elm 213** green;
 
----
+### 3 overlay scrollbar (bridge.js + style.css)
+- [x] CSS: `.messages` hides the native scrollbar (`scrollbar-width: none` +
+      `::-webkit-scrollbar { display: none }`) → the message column width is
+      constant = the input bar's width; new `.overlay-scrollbar` (absolute
+      right 4px, top/bottom 12px) + `.overlay-scrollbar-thumb` (6px rounded,
+      darker on hover/dragging, light-theme variant);
+- [x] bridge.js: `attachOverlayScrollbar` injects one overlay scrollbar per
+      `.messages`; driven by scroll / ResizeObserver / MutationObserver →
+      `updateOverlayScrollbar` (visible only when scrollable; thumb height ∝
+      viewport/content ratio, position ∝ scrollTop); thumb drag + track click
+      + native wheel preserved; the existing Elm scroll-state port is
+      unchanged;
 
-## P34 — 关闭 session 级联关闭其子项（用户要求）
+### 4 Session Manager buttons uniform (View.elm + style.css)
+- [x] new `.sel-page-item-btn` (padding 6px 14px, min-width 76px,
+      font-size 0.8rem) + allow/deny color classes; Resume and Delete both
+      use them; Delete's inline small overrides removed → both buttons in a
+      row are the same size;
 
-用户：**"when a session window got closed, its children (plans, sessions of
-plans) should also be closed"**。
+### 5 no auto-created session at startup (Main/Update/View/Types)
+- [x] Main.elm init drops `Ports.createSession …` (previously spawned an
+      empty session window); dead `initializing`/`initError` fields removed
+      (Types field, Update SessionCreated `initializing = False`, View
+      Connecting branch);
+- [x] `viewNoSessionPanel` always shows the welcome screen: logo + "No
+      session open — use ⚙ New Session to start" (new `.no-sessions` CSS);
+- [x] menu New Session / plan auto-create / restart restore unaffected
+      (CreateSession still passes planSystemPrompt; e2e always clicked New
+      Session explicitly — comment updated);
+- [x] e2e: fixed restart-e2e's backend-restart race — after `kill SIGTERM`
+      it only slept 800ms; the old server held the port while gracefully
+      closing sessions → the new process failed to bind and the page talked
+      to the dying server; now `waitExit(server, 15s)` waits for the old
+      process to truly exit before starting the new one; plan-e2e +
+      restart-e2e ALL PASS (intermittent restart failure fixed);
 
-**语义**：会话 → plan（meta origin 归属）→ 节点会话（planNodeSessions 绑定），
-且节点会话可以再拥有子 plan（R 系列递归）→ 关闭任一会话窗口时，它下面的整棵
-子树全部关闭：
-
-- 每个子 plan：**先 StopRun**（节点置 Canceled → `closeAndClear` 对每个有绑定
-  会话的节点发 `CloseSessionFor` → 关窗口 + 杀进程；**防止 runner 重生新会话**）
-  → 再 `PlanClose`（关 plan 窗口、清队列/连接曲线）；
-- 节点会话的关闭经 `CloseSessionFor → update (CloseSession sid)` **递归**进入
-  同一级联（子 plan 的子 plan…）；树深有限（每个会话只关一次，删除即出表），
-  无环；
-- 级联中关闭的节点会话不会误发 SessionDisconnected（StopRun 已清 sessionId，
-  `findPlanIdBySession` 找不到 → runnerFailCmd 为空）；**手动**关闭仍走原逻辑
-  （Running 节点 → disconnect → 失败重试）；
-- `DeleteSession`（Session Manager 删除目录，磁盘上本就包含 plans/ 子树）同样
-  先级联关窗口/进程再删目录。
-
-**实现**：
-- `Plan/Meta.elm`（纯模块，可测）：`plansOwnedBySession : Dict String PlanMeta
-  -> String -> List String`（按 meta.origin.sessionId 求会话拥有的 plan id）；
-- `App/Update.elm`：`closeSessionChildren`（磁盘 id 解析 → 子 plan 列表 →
-  foldl `closeChildPlan`）；`closeChildPlan` = `update (PlanClose planId)`
-  （P35 起 PlanClose 自带停跑+关节点会话）；`CloseSession` 与 `DeleteSession`
-  处理入口先跑级联；
-- 测试：PlanMetaTest +4（多 plan 归属 / 其他会话排除 / 未知会话空 / 空索引空）；
-  **Elm 217** 全绿；
-- E2E：plan-e2e 新增 **8c**——重新 Run（t3 挂起，先清 hang marker）→ 来源会话
-  ✕ 关闭 → 断言 plan 窗口消失 + `/t3` 节点窗口消失 + 等 1.5s **无重生**；
-  plan-e2e + restart-e2e ALL PASS；Rust 43 / Go -race 8 包全绿；
-- 文档：TODO 本表。
-
----
-
-## P35 — 关闭 plan window 级联关闭其下节点会话（用户反馈）
-
-用户：**"关闭plan window的时候，他下面的session window没有被关闭"**。
-P34 只做了会话→plan 方向的级联；plan → 节点会话方向缺失（旧行为：关 plan
-窗口不停节点会话，文档明确写了"Closing the plan window does not stop running
-node sessions"）。用户要求对称：关 plan 窗口也要关掉它下面的节点会话窗口。
-
-**实现（PlanClose 改造，第二版）**：
-- `nodeSessionIdsForPlan planId model`：收集绑定到该 plan 节点的**存活**会话窗口
-  —— `planNodeSessions`（sid → "planId/nodeId" 直接绑定）+ `planResumedFrom`
-  （live → orig，orig 属于该 plan 的恢复窗口）；**过滤非存活 id**（窗口已关、
-  后端句柄已被 resume 替换 → 再关只有 "Session not found" 噪音）；
-- `PlanClose planId` 三步骤：① run 为 InProgress/Paused → 先 `runStepIn
-  StopRun`（防重生 + 关 closeAndClear 认识的会话）；② 对 `nodeSessionIdsForPlan`
-  逐个 `update (CloseSession sid)`（**无条件** —— 终态 plan 下 resume 打开的
-  节点会话窗口同样关闭；其子 plan 经 CloseSession 递归级联）；③ 移除 plan 窗口；
-- **终态（Completed/FailedRun/Stopped/NotStarted）不重停 run**：重停会把
-  `planRunStatuses` 里的 Completed 覆盖成 Stopped、破坏状态条（e2e 断言状态条
-  显示 Completed）；完成自动关窗（R4 的 `Task.perform PlanClose`）不受影响；
-- `closeChildPlan`（P34）直接委托 `update (PlanClose planId)`（停跑+关会话
-  内聚在 PlanClose 一处）；
-- E2E：plan-e2e 新增 **8e**（用户报告场景：Stopped plan → 点击 t1 节点 resume
-  出会话窗口 → 关 plan ✕ → 断言 plan 窗口与 `/t1` 窗口都消失）+ **8d**（活跃
-  run：Run → t3 挂起 → 关 plan ✕ → t3 窗口消失 + 无重生），两段之间经 `[Plan: …]`
-  状态条重开 plan；ALL PASS；
-- 验证：Elm 217 / Rust 43 / Go -race 8 包 / plan-e2e + restart-e2e ALL PASS；
-- 文档：plan-mode.md §7.1（P35 段）、TODO 本表。
+### CI (.github/workflows/ci.yml)
+- [x] rust job gains `cargo build` (full Tauri app compile, not just test);
+- [x] new `e2e` job: setup-go + setup-node + global elm → `elm make` builds
+      elm.js → `npm install` (e2e/) → `node plan-e2e.mjs` + `node
+      restart-e2e.mjs` (ubuntu-latest ships /usr/bin/google-chrome, no
+      download);
+- [x] verification: Elm 213 / Rust 43 / Go -race 8 pkgs / make e2e (both
+      scripts) green;
+- [x] docs: plan-mode.md (§4 startup note, §7.1 ancestor removal + S-shape,
+      §12 P32 row), TODO this table, manual-acceptance Startup +5 items.
 
 ---
 
-## R 系列 — Plan 重构：模型自主子流程 + 递归
+## P33 — Fix: "Session is already active" after page refresh (user report)
 
-> **核心文档：`REFACTOR.md`**（完整设计 + 阶段流程 + 已确认决策 D1–D15）。
-> 中断恢复：读 REFACTOR.md → 本清单 → 从第一个 `[ ]` 继续。
-> 每阶段完成：全量测试 → 提交 → push 三 remote（origin/gitee/org）。
+User: **"After refreshing the page, session resume errors with 'Session is
+already active'. Only restarting the Go process helps. That's wrong."**
 
-### R1 基础：schema 与纯逻辑（Plan/Types + Runner）
-- [x] Plan/Types.elm：删 `defaultTimeoutSeconds`/`timeoutSeconds` 字段与 validate 校验
-      （decode 忽略未知字段 → 旧 plan 文件带 timeout 照常打开）；NodeStatus 新增
-      `WaitingForPlan`（nodeStatusToString/FromString `"waiting_for_plan"`）；
-- [x] Plan/Runner.elm：删 `Tick`/`checkTimeouts`/`timeoutNode`；TaskDone 事件加
-      `delegated : Bool`（Update 层按"最后消息含 plan JSON"判定传入）；
-      WaitingForPlan 迁移：TaskDone+delegated → WaitingForPlan；`ResumeDelegatedNode`
-      回填继续 → Running；等待中 Stop → Canceled；等待中手动 TaskDone(非委托) →
-      Succeeded；等待中 TaskDone error → 忽略保持等待；
-- [x] 测试：删超时 5 例（runner）+ 3 例（schema timeout）；加 WaitingForPlan 迁移 7 例
-      + codec roundtrip 1 例；Elm 180 全绿；Rust 42 / Go -race 8 包不受影响
+**Root cause**: session handles (alayacore children) belong to the **backend
+process** lifecycle, while session windows belong to the **page** lifecycle.
+After a refresh the new page's Elm registry is empty (`model.sessions` is
+empty), but the Go backend still holds every old page's session handles
+(`session.Manager` non-empty); `resume_session` rejects by "dir already
+active" (the double-resume guard) → Session Manager Resume keeps failing
+until the Go process dies. WS disconnect only unregisters the client, it does
+not close sessions (by design: the server must not kill sessions on a
+transient network drop).
 
-### R2 检测与自动创建
-- [x] App/Update.elm：pendingPlanOffers 改造为自动创建（检测即创建，不弹按钮）；
-      解析失败错误内联到原消息（injectPlanErrorIntoSession）；
-- [x] planSystemPrompt 重写（去角色锁，建议性）+ 所有 session 创建注入
-      （普通会话 + 节点会话 = 递归入口）；
-- [x] 删除 Plan Session：菜单入口、CreatePlanSession Msg、planSessionPending、
-      planSessionIds、[Plan] 标题、Plan Session 的 builtinTools=""；
-- [x] fakecore：planMode 触发改为 prompt 含 "plan" 关键词；E2E：New Session 流程 +
-      自动创建断言 + t3 hang marker 预置（超时移除后第一次 run 不挂起）+ 删 t3
-      超时断言；E2E ALL PASS；
-- [x] 重放跳过检测（防重复创建）→ R3 随 meta.json 绑定实现（见 R3 首条）
+**Fix (reclaim orphaned sessions)**:
+- new RPC `close_all_sessions` (Go `CloseAllSessions` + Rust
+  `close_all_sessions`, registered in handlers.go / lib.rs): gracefully
+  closes **every** active session — the same cancel-first sequence as
+  close_session (cancel → save → EOF → ≤5s grace → SIGKILL), **history
+  preserved to the cancel point** (not the shutdown hard-kill `CloseAll`).
+  Go gains `Manager.CloseAllGracefully` (snapshot then `closeGracefully`
+  each, log "reclaimed on page load");
+- frontend: Ports `closeAllSessions` + bridge.js pass-through
+  (fire-and-forget) + Main.elm init first command — **every page load**
+  reclaims the previous page's orphaned handles (Tauri startup: no sessions →
+  no-op, harmless);
+- edge cases: an immediate New Session click does not conflict with
+  close_all (it only closes old handles); the Session Manager is opened far
+  later than the reclaim (human action), so the race window is negligible;
+- tests: Go integration `TestIntegrationCloseAllSessionsReclaimsOnPageLoad`
+  (two active sessions → close_all → old ids report not found → resume works
+  again = the user's path); restart-e2e gained **Phase 1.5 page refresh**:
+  after the plan completes, `page.reload()` (same backend) → Session Manager
+  → Resume the origin session (assert clickable, no already-active) →
+  `[Plan: …]` status bar appears; Elm 219 / Rust 43 / Go -race green + make
+  e2e both scripts ALL PASS;
+- docs: go-backend.md command table + TODO this table.
 
-### R3 回填 + 状态条 + 持久化
-- [x] **重放跳过检测**（R2 遗留）：messageBoundToPlan（meta origin 绑定查重）；
-- [x] meta.json codec（Plan/Meta.elm：origin/feedbacks/created_at）+ 自动创建写 origin；
-- [x] 状态条组件（View + CSS + PlanStatusOpen）：消息下 plan 绑定（名称/状态/打开）；
-- [x] 回填：feedbackCompletedPlan（Completed → 节点 output 汇总 + [Plan: xxx] →
-      发 origin 会话自动继续；节点会话 → ResumeDelegatedNode；Failed/Stopped 零回填；
-      写 feedbacks）；
-- [x] [Plan: xxx] 链接渲染（viewTextWithPlanLinks → PlanStatusOpen）；
-- [x] 重启恢复：fsHomeDir 扫描 meta.json 队列读取 → planMetas；fs_list_dir 缺失目录
-      返回空（Rust+Go）；fakecore msgSeq 递增 echo id；
-- [x] 测试：PlanMetaTest +3；E2E 回填/状态条断言；Elm 183 / Rust 42 / Go -race /
-      E2E ALL PASS
+---
 
-### R4 关闭规则 + 重跑级联
-- [x] closeAndClear：Succeeded 也关节点窗口（保留 lastSessionId 绑定，点击 resume 回看）；
-      WaitingForPlan 不关（等子 plan）；
-- [x] Plan Completed → 先回填 → 自动关 Plan 窗口（Task.perform PlanClose）；Failed/Stopped
-      保留；planRunStatuses（内存缓存 run 状态，窗口关后状态条仍显示真实状态）；
-- [x] 重跑（RestartRun 事件 + PlanRunRestart Msg + restartPlanCascade）：跳过 Succeeded；
-      未完成节点重置（Blocked → Pending 可再调度）；WaitingForPlan 节点不重置 →
-      subPlansOfPlan（meta origin 反查）级联重跑子 plan（planId 不变，无限下钻）；
-      状态条 [重新执行]（Failed/Stopped/Paused 时显示）；
-- [x] 顺带修复潜伏 bug：run.json 恢复的节点 nodeId=""（encode 未写 node_id）→
-      allDepsSucceeded 失效 → 恢复的 run 无法调度（Load run 续跑也受影响）——
-      decode 时用 dict key 补 nodeId；
-- [x] fakecore：[Plan 结果] 前缀总是正常回复（回填含节点输出关键词不误判 marker 场景）；
-- [x] E2E 重写：run 完成判定用状态条（plan 窗口自动关）；run.json 断言重试证据；
-      节点点击 → resume（成功节点窗口已关）；8b Stop 保留（t3 挂起 → Stop → 窗口关闭）；
-      ALL PASS；Elm 183 / Rust 42 / Go -race 全绿
+## P34 — Cascade close: a session's children (user request)
+
+User: **"When a session window got closed, its children (plans, sessions of
+plans) should also be closed."**
+
+**Semantics**: session → plans (meta origin) → node sessions
+(planNodeSessions), and a node session can own sub-plans (R-series
+recursion) → closing any session window closes its whole subtree:
+
+- each child plan: **StopRun first** (nodes → Canceled → `closeAndClear`
+  emits `CloseSessionFor` per bound session → window + process closed;
+  **the runner cannot respawn anything**) → then `PlanClose` (window,
+  create queue, connection curves);
+- node sessions close through the same `CloseSessionFor → update
+  (CloseSession sid)` path → **recursive** (sub-plans of sub-plans…); the
+  tree is finite (each session closes once, removed on close), no cycles;
+- cascade-closed node sessions do NOT emit a spurious SessionDisconnected
+  (StopRun cleared their sessionId → `findPlanIdBySession` finds nothing →
+  runnerFailCmd empty); **manual** node-session closes keep the old
+  fail→retry behavior;
+- `DeleteSession` (Session Manager delete; the on-disk dir contains the
+  whole `plans/` subtree) cascades too — windows/processes close before the
+  dir is removed.
+
+**Implementation**:
+- `Plan/Meta.elm` (pure, testable): `plansOwnedBySession : Dict String
+  PlanMeta -> String -> List String` (plans whose meta.origin.sessionId
+  matches);
+- `App/Update.elm`: `closeSessionChildren` (disk-id resolution → child plan
+  list → foldl `closeChildPlan`); `closeChildPlan` = `update (PlanClose
+  planId)` (P35 moved the stop+close logic into PlanClose); `CloseSession`
+  and `DeleteSession` run the cascade first;
+- tests: PlanMetaTest +4 (multi-plan ownership / other sessions excluded /
+  unknown session empty / empty index empty); **Elm 217** green;
+- E2E: plan-e2e gained **8c** — re-Run (t3 hangs, hang marker cleared first)
+  → close the ORIGIN session (✕) → assert the plan window and `/t3` node
+  window are gone + nothing respawns after 1.5s; plan-e2e + restart-e2e ALL
+  PASS; Rust 43 / Go -race 8 pkgs green;
+- docs: TODO this table.
+
+---
+
+## P35 — Plan-window close cascades down to node sessions (user report, twice)
+
+User: **"Closing the plan window does not close the session windows below
+it."** The first P35 attempt only stopped active runs (InProgress/Paused)
+and relied on closeAndClear's CloseSessionFor — but node sessions can also
+be open under TERMINAL runs (e.g. a session resumed from disk under a
+Stopped/FailedRun plan for review); closing the plan window there closed
+nothing. The user confirmed it was still broken.
+
+**Fix (PlanClose, three steps)**:
+1. run InProgress/Paused → StopRun first (no respawn; closeAndClear closes
+   the sessions it knows);
+2. close **every LIVE session window bound to the plan's nodes,
+   unconditionally** — `nodeSessionIdsForPlan` collects direct bindings
+   (`planNodeSessions` sid → "planId/nodeId") + resumed windows
+   (`planResumedFrom` live → orig, orig bound to the plan), filtered to live
+   ids only (a closed binding's backend handle was already replaced by
+   resume — closing it again would only log "Session not found") →
+   `update (CloseSession sid)` each (their sub-plans cascade through
+   CloseSession);
+3. remove the plan window.
+Terminal runs are NOT re-stopped (would overwrite `planRunStatuses` e.g.
+Completed → Stopped and break the status bar — R4's auto-close after
+completion still works).
+
+**Implementation**:
+- `nodeSessionIdsForPlan : String -> Model -> List String` (Update.elm);
+- `closeChildPlan` (P34) delegates to `update (PlanClose planId)` — the
+  stop+close logic lives in one place;
+- E2E: plan-e2e gained **8e** (the exact reported case: Stopped plan → click
+  t1 → its session resumes from disk (window opens) → close the plan window
+  ✕ → the `/t1` window closes) + **8d** (active run: Run → t3 hangs → plan ✕
+  → t3 gone + no respawn); both phases reopen the plan via the `[Plan: …]`
+  status bar; ALL PASS;
+- verification: Elm 217 / Rust 43 / Go -race 8 pkgs / plan-e2e +
+  restart-e2e ALL PASS;
+- docs: plan-mode.md §7.1 (P35 paragraph), §12 P35 row, TODO this table,
+  manual-acceptance cascade item.
+
+---
+
+## R series — Plan refactor: model-autonomous sub-flows + recursion
+
+> **Core document: `REFACTOR.md`** (full design + phase flow + confirmed
+> decisions D1–D15).
+> Interruption recovery: read REFACTOR.md → this checklist → continue from
+> the first `[ ]`.
+> Each phase: full tests → commit → push three remotes (origin/gitee/org).
+
+### R1 foundation: schema + pure logic (Plan/Types + Runner)
+- [x] Plan/Types.elm: removed `defaultTimeoutSeconds`/`timeoutSeconds` fields
+      and validate checks (decode ignores unknown fields → old plan files
+      with timeout open normally); NodeStatus gains `WaitingForPlan`
+      (nodeStatusToString/FromString `"waiting_for_plan"`);
+- [x] Plan/Runner.elm: removed `Tick`/`checkTimeouts`/`timeoutNode`; TaskDone
+      event gains `delegated : Bool` (the Update layer decides from "last
+      message contains plan JSON"); WaitingForPlan transitions: TaskDone+
+      delegated → WaitingForPlan; `ResumeDelegatedNode` (feedback continue) →
+      Running; Stop while waiting → Canceled; manual TaskDone (non-delegated)
+      while waiting → Succeeded; TaskDone error while waiting → ignored,
+      stays waiting;
+- [x] tests: removed 5 timeout cases (runner) + 3 (schema timeout); added 7
+      WaitingForPlan transition cases + 1 codec roundtrip; Elm 180 green;
+      Rust 42 / Go -race 8 pkgs unaffected
+
+### R2 detection + auto-create
+- [x] App/Update.elm: pendingPlanOffers reworked into **auto-create**
+      (detect → create immediately, no button); parse-failure errors inline
+      into the original message (injectPlanErrorIntoSession);
+- [x] planSystemPrompt rewritten (no role lock, advisory) + injected into ALL
+      session creates (plain sessions + node sessions = recursion entry);
+- [x] deleted Plan Session: menu entry, CreatePlanSession Msg,
+      planSessionPending, planSessionIds, [Plan] title, Plan Session's
+      builtinTools="";
+- [x] fakecore: planMode trigger changed to prompt containing "plan"
+      keyword; E2E: New Session flow + auto-create assertion + t3 hang marker
+      pre-seeded (first run must not hang after timeout removal) + deleted t3
+      timeout assertion; E2E ALL PASS;
+- [x] replay-suppression (prevent duplicate create) → implemented in R3 with
+      meta.json binding (see R3 first item)
+
+### R3 feedback + status bar + persistence
+- [x] **replay-suppression** (R2 leftover): messageBoundToPlan (meta origin
+      binding dedup);
+- [x] meta.json codec (Plan/Meta.elm: origin/feedbacks/created_at) +
+      auto-create writes origin;
+- [x] status-bar component (View + CSS + PlanStatusOpen): plan binding under
+      the message (name/status/open);
+- [x] feedback: feedbackCompletedPlan (Completed → node-output summary +
+      [Plan: xxx] → send to the origin session to auto-continue; node session
+      → ResumeDelegatedNode; Failed/Stopped zero feedback; writes feedbacks);
+- [x] [Plan: xxx] link rendering (viewTextWithPlanLinks → PlanStatusOpen);
+- [x] restart restore: fsHomeDir scans meta.json queue reads → planMetas;
+      fs_list_dir returns empty for missing dirs (Rust+Go); fakecore msgSeq
+      increments echo ids;
+- [x] tests: PlanMetaTest +3; E2E feedback/status-bar assertions; Elm 183 /
+      Rust 42 / Go -race / E2E ALL PASS
+
+### R4 close rules + re-run cascade
+- [x] closeAndClear: Succeeded also closes the node window (lastSessionId
+      binding kept, click resumes for review); WaitingForPlan not closed
+      (waits for the sub-plan);
+- [x] Plan Completed → feedback first → plan window auto-closes
+      (Task.perform PlanClose); Failed/Stopped kept; planRunStatuses (memory
+      cache — status bar shows the real status after the window closes);
+- [x] re-run (RestartRun event + PlanRunRestart Msg + restartPlanCascade):
+      skips Succeeded; unfinished nodes reset (Blocked → Pending so it
+      re-schedules); WaitingForPlan nodes NOT reset → subPlansOfPlan (meta
+      origin reverse lookup) cascades to sub-plans (planId unchanged, unbounded
+      descent); status bar [re-run] (shown for Failed/Stopped/Paused);
+- [x] fixed a latent bug along the way: run.json-restored nodes had
+      nodeId="" (encode never wrote node_id) → allDepsSucceeded broke →
+      restored runs could not schedule (Load run affected too) — decode now
+      fills nodeId from the dict key;
+- [x] fakecore: the `[Plan result]` prefix always replies normally (feedback
+      containing node-output keywords must not trip the marker scenario);
+- [x] E2E rewrite: run completion judged via the status bar (plan window
+      auto-closes); run.json asserts retry evidence; node click → resume
+      (succeeded windows already closed); 8b Stop kept (t3 hangs → Stop →
+      window closed); ALL PASS; Elm 183 / Rust 42 / Go -race green
 
 ### R5 cleanup + docs + real-core bug fix
-- [x] **Real-core bug fix (boot-frame gate, commit b0a58b8)**: alayacore emits
-      `SM task in_progress:false` at session start (before any prompt) →
-      `planEventFromFrame` mistook it for TaskDone → node marked Succeeded (empty
-      output) → closeAndClear immediately CloseSessionFor (cancel-first) →
-      "Canceled right after the first prompt", run completed in milliseconds.
+- [x] **Real-core bug fix (boot-frame gate, commit b0a58b8)**: alayacore
+      emits `SM task in_progress:false` at session start (before any prompt)
+      → `planEventFromFrame` mistook it for TaskDone → node marked Succeeded
+      (empty output) → closeAndClear immediately CloseSessionFor (cancel-first)
+      → "Canceled right after the first prompt", run completed in milliseconds.
       Fix: `Model.planTaskStarted : Set String` gate (TaskDone only dispatched
       for sessions that saw in_progress:true); cleaned up in CloseSession;
       fakecore mirrors the frame sequence (boot with in_progress:false +
@@ -607,290 +715,339 @@ node sessions"）。用户要求对称：关 plan 窗口也要关掉它下面的
 - [x] E2E full rewrite (done in R4, commit 4bc7456): fixture t3 keeps hang-once
       (for Stop); E2E pre-seeds the t3 hang marker (first run succeeds
       instantly); recursion/feedback/status-bar/re-run-cascade steps;
-- [x] 死代码清理（P22 残余、plan-offer-btn CSS）；Time.every 订阅删除 ——
-      commit `20d10a5` 已完成（Main.elm 无 Time.every、无 Create Plan offer 按钮
-      残留；`.plan-offer`/`.plan-offer-btn` 为状态条活代码）；
-- [x] 文档：docs/plan-mode.md（§5/§6.7/§7/§8.5 超时移除/§13、§6.4 boot 帧门控）、README、
-      docs/manual-acceptance.md —— commit `b7c9b6a` 已完成（英文新章节）；
-- [x] 全量验证：Elm / Rust / Go -race / make e2e 全绿 → 提交 → push 三 remote ——
-      R1–R5 commit（e934235/7672815/51077ea/4bc7456/b0a58b8）已全部提交并推送
+- [x] dead-code cleanup (P22 leftovers, plan-offer-btn CSS); Time.every
+      subscription removed — commit `20d10a5` (Main.elm has no Time.every, no
+      Create-Plan offer button remains; `.plan-offer`/`.plan-offer-btn` are
+      live status-bar code);
+- [x] docs: docs/plan-mode.md (§5/§6.7/§7/§8.5 timeout removal/§13, §6.4 boot
+      frame gate), README, docs/manual-acceptance.md — commit `b7c9b6a`
+      (English new sections);
+- [x] full verification: Elm / Rust / Go -race / make e2e green → committed →
+      pushed to three remotes (R1–R5 commits e934235/7672815/51077ea/
+      4bc7456/b0a58b8 all in history and pushed)
 
-## P11 — 第二轮审查：创建队列串行化 + 创建失败恢复
+## P11 — Review pass 2: create-queue serialization + create-failure recovery
 
-- [x] **create_session 失败死锁**：此前失败只在 bridge console.error，Elm
-      永远收不到 SessionCreated → `planCreating` 永远不释放 → 后续所有
-      创建（runner + 用户）全部排队卡死（如节点 preset 无效时整个 run
-      挂起）。新增 `onSessionCreateError` 端口（Ports+bridge+Main）+
-      `SessionCreateError` Msg + Runner `SessionCreateFailed` 事件
-      （Starting 节点按失败处理 → 自动重试/最终 Failed，不再悬挂）；
-- [x] **用户创建与 runner 创建竞态（根治）**：会话创建改为**统一串行队列**
-      `planCreateQueue : List CreateTask`（`RunnerCreate planId nodeId` /
-      `UserCreate "normal" | "plan"`），`planCreating : Maybe CreateTask`；
-      用户点击 New Session/Plan Session 在 runner 创建期间自动排队，
-      SessionCreated 按标记区分：RunnerCreate→绑定节点，UserCreate→只激活
-      并排空队列 → 用户会话永远不会被误绑到 runner 节点；
-- [x] **runner 会话不抢焦点**：SessionCreated 中 runner 创建不激活/不聚焦
-      （用户在看 DAG，点节点才打开）；`pendingSwitchOnCreate` 仅被非
-      runner 会话消费（resume/用户创建不被 runner 会话偷走）；
-- [x] **planResumeNode 消费加守卫**：仅非 runner 会话消费，runner 会话
-      不会错误重绑；
-- [x] **fs 列表污染**：run.json 每次 step 都会写 → FsWriteResult 触发
-      refreshPlanList（plans 目录 list）→ 管理器未打开时结果落入文件
-      选择器分支污染其列表 → 仅管理器打开时才刷新；
-- [x] 测试：Elm 128（新增 SessionCreateFailed 3 例：Starting 失败→Waiting
-      重试、非 Starting 忽略、耗尽→Failed）；Rust 35；Go 全绿。
+- [x] **create_session failure deadlock**: failures only logged to
+      bridge console.error, Elm never got SessionCreated → `planCreating`
+      never released → every later create (runner + user) queued forever
+      (e.g. an invalid node preset hung the whole run). Added
+      `onSessionCreateError` port (Ports+bridge+Main) + `SessionCreateError`
+      Msg + Runner `SessionCreateFailed` event (Starting nodes fail → auto
+      retry / eventually Failed, no hanging);
+- [x] **user-create vs runner-create race (root fix)**: session creation is
+      a **single serialized queue** `planCreateQueue : List CreateTask`
+      (`RunnerCreate planId nodeId` / `UserCreate "normal"`), `planCreating :
+      Maybe CreateTask`; a user's New Session click queues behind in-flight
+      runner creates; SessionCreated dispatches by tag: RunnerCreate → bind
+      the node, UserCreate → activate only and drain the queue → a user
+      session can never be misbound to a runner node;
+- [x] **runner sessions don't steal focus**: SessionCreated for runner
+      creates does not activate/focus (the user is watching the DAG and
+      clicks nodes to open); `pendingSwitchOnCreate` consumed only by
+      non-runner creates (resume/user creates are not stolen by runner
+      sessions);
+- [x] **planResumeNode consumption guarded**: only non-runner sessions
+      consume it; runner sessions never re-bind by mistake;
+- [x] **fs listing pollution**: run.json is rewritten every step →
+      FsWriteResult triggered refreshPlanList (plans dir listing) → when the
+      manager was closed the result fell into the file-picker branch and
+      polluted its list → refresh only when the manager is open;
+- [x] tests: Elm 128 (new SessionCreateFailed 3 cases: Starting fail →
+      Waiting retry, non-Starting ignored, exhausted → Failed); Rust 35;
+      Go green.
 
-## P12 — 优雅关闭 + 死代码清理 + 验收文档（无 GUI 轮次）
+## P12 — Graceful close + dead-code cleanup + acceptance doc (no GUI round)
 
-- [x] **close_session 优雅关闭（v2 backlog → 已实现）**：alayacore 只读
-      核实（save CI 空参数→session.alaya；EOF+活动任务→drainUntilTaskDone
-      跑完并 handleTaskDone 自动保存后退出；EOF+无任务→直接退出；rawio
-      无 SIGINT 处理，EOF 是唯一优雅退出信号）。实现：save CI → 关 stdin
-      （EOF）→ 等 ≤5s 自然退出 → SIGKILL 兜底（双后端对称）：
-  - [x] Rust `alayacore.rs`：`close_child_gracefully`（try_lock 写 save
-        帧→槽位置 None 关管道→宽限等待→SIGKILL）+ `kill_child` 改
-        「先 EOF 宽限 3s 再杀」；`SessionHandle.stdin` 改
-        `Arc<tokio::sync::Mutex<Option<ChildStdin>>>`（close 时真正
-        EOF，不依赖 Arc 计数）；io.rs/mod.rs 写方对 None 返回
-        "Session is disconnected"；
-  - [x] Go `session.go`：`closeGracefully`（SendCmd save → Stdin.Close →
-        轮询 Connected() 等 reader 观察自然退出 → 超时 kill）——
-        **不自己调 cmd.Wait()**（os/exec 禁并发 Wait，-race 实测告警，
-        收割统一归 reader 的 killOnce）；`core.go` KillChild 同步改
-        宽限式；
-  - [x] fakecore 新增 `save` 命令（写 session.alaya 标记）→ 集成测试
-        `TestIntegrationGracefulCloseSavesSession`（close 后文件含
-        saved 标记 + 二次 close 报 Session not found）；
-  - [x] Rust 单测 +4（save 帧到达子进程 stdin / 倔强子进程超时被杀 /
-        kill_child 先宽限自然退出 / 已死子进程不 panic）→ Rust 39；
-  - [x] 已知限制：宽限内没跑完的长任务仍被 SIGKILL（save 已先行落盘）；
-- [x] **死代码清理**：`PlanWindow.creating`/`createQueue` 遗留字段删除
-      （P7 全局化后无用，仅声明+初始化无引用）；Elm 128 保持全绿；
-- [x] **验收文档**：新增 `docs/manual-acceptance.md`（GUI 可用时的完整
-      冒烟清单：Plan Session→Create Plan→Run→节点绑定→重试→优雅关闭→
-      presets→回归；含已知限制说明）；
-- [x] 文档同步：docs/plan-mode.md（§8.3 优雅关闭、§10 持久化、§13 默认值、
-      §14 参考）、docs/go-backend.md（close_session 行 + killChild 说明）、
-      README（优雅关闭段落）；
-- [x] 测试：Elm 128 / Rust 39 / Go 全绿（-race）。
-- [ ] MANUAL smoke（GUI 环境，照 docs/manual-acceptance.md 执行）
+- [x] **close_session graceful close (v2 backlog → implemented)**: alayacore
+      verified read-only (save CI with empty args → session.alaya; EOF +
+      active task → drainUntilTaskDone finishes it and handleTaskDone
+      auto-saves then exits; EOF + no task → exits immediately; rawio has no
+      SIGINT handling — EOF is the only graceful-exit signal). Implemented:
+      save CI → close stdin (EOF) → wait ≤5s natural exit → SIGKILL fallback
+      (dual backend symmetric):
+  - [x] Rust `alayacore.rs`: `close_child_gracefully` (try_lock writes save
+        frame → slot to None closes the pipe → grace wait → SIGKILL) +
+        `kill_child` changed to "EOF grace 3s then kill"; `SessionHandle.stdin`
+        → `Arc<tokio::sync::Mutex<Option<ChildStdin>>>` (close really EOFs,
+        not Arc-count dependent); io.rs/mod.rs writers return "Session is
+        disconnected" for None;
+  - [x] Go `session.go`: `closeGracefully` (SendCmd save → Stdin.Close →
+        poll Connected() for natural exit → timeout kill) — **does not call
+        cmd.Wait() itself** (os/exec forbids concurrent Wait, -race warned;
+        reaping owned by the reader's killOnce); `core.go` KillChild changed
+        to the grace style;
+  - [x] fakecore gains a `save` command (writes a session.alaya marker) →
+        integration test `TestIntegrationGracefulCloseSavesSession` (file
+        contains the saved marker after close; second close reports
+        "Session not found");
+  - [x] Rust unit tests +4 (save frame reaches child stdin / stubborn child
+        killed on timeout / kill_child lets it exit naturally first / dead
+        child doesn't panic) → Rust 39;
+  - [x] known limitation: a long task not finished within the grace window is
+        still SIGKILLed (save already hit disk first);
+- [x] **dead-code cleanup**: `PlanWindow.creating`/`createQueue` leftover
+      fields removed (globalized in P7; declared+initialized only, no
+      references); Elm 128 stays green;
+- [x] **acceptance doc**: new `docs/manual-acceptance.md` (complete smoke
+      checklist for GUI use: Plan Session → Create Plan → Run → node bind →
+      retry → graceful close → presets → regression; known limitations
+      included);
+- [x] docs sync: docs/plan-mode.md (§8.3 graceful close, §10 persistence,
+      §13 defaults, §14 references), docs/go-backend.md (close_session row +
+      killChild note), README (graceful-close paragraph);
+- [x] tests: Elm 128 / Rust 39 / Go all green (-race).
+- [ ] MANUAL smoke (GUI env, per docs/manual-acceptance.md)
 
-## P13 — 历史尝试会话列表（attempt_session_ids）
+## P13 — Attempt-session history list (attempt_session_ids)
 
-P9 遗留：重试后 `lastSessionId` 被新会话替换，失败那次尝试的会话目录
-虽在磁盘上却不可达（只能经 last_session_id 看最近一次）。
+P9 leftover: after a retry, `lastSessionId` was replaced by the new session;
+the failed attempt's session dir exists on disk but is unreachable (only the
+latest via last_session_id).
 
-- [x] `NodeRunState` 新增 `attemptSessions : List String`：**所有**绑定过该
-      节点的会话 id（去重、顺序保留）；`bindSession` 时追加；重试/Stop/
-      重新 Run 都**不**清空（跨 run 保留，旧会话目录仍在，可随时
-      `resume_session` 回看）；只有全新 RunState 才为空；
-- [x] run.json codec：`attempt_session_ids` 编码 + lenient 解码（elm/json
-      无 map9 → 嵌套 map2 叠加，旧文件缺字段 → []，兼容 P12 之前的文件）；
-- [x] UI：节点详情面板新增「历史会话 (N)」列表（短 id 按钮，monospace）；
-      点击 → `PlanOpenAttemptSession planId nodeId sid`：
-      - 会话存活 → ActivateSession 聚焦；
-      - 已关闭 → `resume_session` + pendingSwitchOnCreate 聚焦 +
-        planResumeOwner 错误路由；**planResumeNode = Nothing** —— 与
-        PlanOpenNodeSession 不同，历史视图**不重绑**节点，当前活跃绑定
-        不被破坏；
-- [x] 测试：runner（跨重试累积 [s1,s2]、重复绑定不重复、重新 Run 保留
-      历史）+ codec roundtrip（attempt_session_ids 双节点断言）+ lenient
-      （缺字段 → []）；Elm 131 全绿；
-- [x] 文档同步：docs/plan-mode.md §10（三字段持久化）；TODO 进度表；
-      docs/manual-acceptance.md 增补历史会话验收项。
+- [x] `NodeRunState` gains `attemptSessions : List String`: **all** session
+      ids ever bound to the node (dedup, order kept); `bindSession` appends;
+      retry/Stop/re-Run do NOT clear (kept across runs — old session dirs
+      still exist, resumable anytime); only a fresh RunState is empty;
+- [x] run.json codec: `attempt_session_ids` encoded + lenient decode (elm/json
+      has no map9 → nested map2 stacking; old files missing the field → [],
+      compatible with pre-P12 files);
+- [x] UI: node detail panel gains "History sessions (N)" list (short-id
+      buttons, monospace); click → `PlanOpenAttemptSession planId nodeId sid`:
+      - session alive → ActivateSession focus;
+      - closed → `resume_session` + pendingSwitchOnCreate focus +
+        planResumeOwner error routing; **planResumeNode = Nothing** — unlike
+        PlanOpenNodeSession, the history view does NOT re-bind the node, the
+        current active binding is untouched;
+- [x] tests: runner (accumulates [s1,s2] across retries, no duplicate rebinds,
+      re-Run keeps history) + codec roundtrip (attempt_session_ids two-node
+      assertion) + lenient (missing → []); Elm 131 green;
+- [x] docs sync: plan-mode.md §10 (three persisted fields); TODO progress
+      table; docs/manual-acceptance.md history-session item.
 
-## P14 — Plan 头部并发度选择器
+## P14 — Concurrency selector in the plan header
 
-- [x] `PlanViewState.concurrencyInput`（留空 = 用 plan JSON 的 concurrency）；
-      头部控件行新增数字输入框（1–8，title 提示默认值）；
-- [x] 纯函数 `Plan.Types.parseConcurrency : String -> Maybe Int`：trim、
-      无效/空 → Nothing（回退 plan 默认），有效整数 clamp 1–8（0→1，
-      99→8）；导出 + 6 例单测；
-- [x] `PlanRunStartAt` 两条路径（首次 Run / 完成后重 Run）都应用覆盖：
-      `{ baseRun | concurrency = c }`（重 Run 保留旧 run 状态，节点状态
-      由 StartRun 复位，仅替换 concurrency）；`PlanSetConcurrency` Msg
-      经 updateActivePlanWin 写回；
-- [x] 文档同步：TODO 进度表（P5 遗留项销项）；docs/manual-acceptance.md
-      增补并发输入验收项；
-- [x] 测试：Elm 137（+6 parseConcurrency）全绿。
+- [x] `PlanViewState.concurrencyInput` (empty = use the plan JSON's
+      concurrency); the header controls row gains a number input (1–8,
+      title hints the default);
+- [x] pure function `Plan.Types.parseConcurrency : String -> Maybe Int`:
+      trim, invalid/empty → Nothing (falls back to the plan default), valid
+      integer clamped 1–8 (0→1, 99→8); exported + 6 unit cases;
+- [x] both `PlanRunStartAt` paths (first Run / re-Run after completion) apply
+      the override: `{ baseRun | concurrency = c }` (re-Run keeps the old run
+      state, node statuses reset by StartRun, only concurrency replaced);
+      `PlanSetConcurrency` Msg written back via updateActivePlanWin;
+- [x] docs sync: TODO progress table (P5 leftover closed); docs/manual-
+      acceptance.md concurrency item;
+- [x] tests: Elm 137 (+6 parseConcurrency) green.
 
-## P15 — 无头浏览器 E2E 自动化 + 真实 bug 修复（不需要 GUI/真模型）
+## P15 — Headless-browser E2E automation + real bug fixes (no GUI/real model)
 
-回答「一定要人来测吗」：**不需要**。单测已全自动；manual-acceptance 的
-核心 GUI 流程也可全自动——用 **fakecore 当假模型**（我们自己的脚本化
-alayacore 替身）+ **系统 Chrome 无头** + Go 后端，跑真实 DOM。
+Answering "does a human have to test?": **No.** Unit tests are fully
+automatic; the core GUI flow in manual-acceptance can also be fully
+automated — with **fakecore as the fake model** (our scriptable alayacore
+stand-in) + **system Chrome headless** + the Go backend, driving the real DOM.
 
-- [x] `e2e/plan-e2e.mjs`（node + puppeteer-core，零模型依赖）：
-      ⚙ → New Plan Session → prompt → fakecore 回 fenced plan JSON →
-      Create Plan offer → Plan 窗口 DAG → 并发覆盖 → Run → t1/t2/t3
-      Succeeded（t2 首次失败经 marker 自动重试）→ runLog 断言重试 →
-      点 t1 节点 → 会话激活且显示回复 → 截图 5 张 → 清理；`make e2e`；
-- [x] fakecore 扩展（协议合规 + 场景脚本）：
-      - 接受 `--system`/`--builtin-tools`（此前未知 flag 会启动失败）；
-      - `--system` 非空（= Plan Session）→ 首个 UE 回完整 AT 帧带
-        fenced plan JSON；
-      - `streamReply` 补发 `SM task in_progress=false` 结束帧（此前
-        runner 永远收不到 TaskDone —— 单测外的缺口）；
-      - `fail-once` 场景：prompt 含 "fail-once" → 按 prompt 哈希的共享
-        marker（tmp）首进程回 task_error、重试进程成功 —— 跨进程
-        模拟「失败一次后自动重试成功」；
-      - Ar/At 用不同 history_id（此前共用 "hist-1"，违反真实协议）；
-- [x] **E2E 抓到的 4 个真实 bug（单测覆盖不到）**：
-  1. **fs_home_dir 从未在 init 获取**：首次 Create Plan 时 homeDir="" →
-     保存到 `/.alayaface/...` 500 → 修复：`Main.elm` init 加
-     `Ports.fsHomeDir {}`（Tauri 同样受益）；
-  2. **WriteActivePreset 固定 tmp 名**：init 播种与 create_session 的
-     Ensure 并发 → rename 竞态 500 → 修复：tmp 名唯一（pid+nanos），
-     Rust+Go 对称；
-  3. **Elm `historyContents` 按 history_id 共享、不区分 At/Ar**：同 id
-     跨 role 时 At delta 丢失 → assistant 消息为空（fakecore 共用
-     "hist-1" 暴露；真实 alayacore id 唯一所以单测构造不出）→ 修复：
-     key 加 tag 前缀（防御）+ fakecore 协议合规；
-  4. fakecore 缺 SM task 结束帧（见上）；
-- [x] 文档：README「Automated E2E」段、TODO、Makefile `make e2e`；
-- [x] 测试：Elm 137 / Rust 39 / Go 8 包（-race）全绿；`make e2e` 全过
-      （6 个 PASS + 5 张截图）。
-- [ ] 可选：真实模型 E2E（OpenAI 兼容 API key 或本地 .gguf）—— 需要
-      用户提供其一；不做也不阻塞（fakecore 已覆盖协议+UI 全链路）。
+- [x] `e2e/plan-e2e.mjs` (node + puppeteer-core, zero model dependency):
+      ⚙ → New Plan Session → prompt → fakecore replies with fenced plan JSON →
+      Create Plan offer → Plan window DAG → concurrency override → Run →
+      t1/t2/t3 Succeeded (t2 fails once via marker, auto-retry) → runLog
+      asserts the retry → click t1 node → session activates and shows the
+      reply → 5 screenshots → cleanup; `make e2e`;
+- [x] fakecore extensions (protocol-compliant + scenario scripting):
+      - accepts `--system`/`--builtin-tools` (previously unknown flags made
+        it fail to start);
+      - `--system` non-empty (= Plan Session) → first UE replies a full AT
+        frame with fenced plan JSON;
+      - `streamReply` now appends the `SM task in_progress=false` end frame
+        (previously the runner never got TaskDone — a gap outside unit
+        tests);
+      - `fail-once` scenario: prompt contains "fail-once" → shared marker
+        keyed by prompt hash (tmp); first process replies task_error, the
+        retry process succeeds — cross-process simulation of "fails once,
+        auto-retry succeeds";
+      - Ar/At use different history_ids (previously both "hist-1", violating
+        the real protocol);
+- [x] **4 real bugs caught by E2E (unit tests can't reach)**:
+  1. **fs_home_dir was never fetched in init**: first Create Plan had
+     homeDir="" → saved to `/.alayaface/...` 500 → fix: `Main.elm` init adds
+     `Ports.fsHomeDir {}` (Tauri benefits too);
+  2. **WriteActivePreset fixed tmp name**: init seeding + create_session's
+     Ensure ran concurrently → rename race 500 → fix: unique tmp name
+     (pid+nanos), Rust+Go symmetric;
+  3. **Elm `historyContents` keyed by history_id, not distinguishing At/Ar**:
+     same id across roles lost At deltas → empty assistant messages (fakecore
+     sharing "hist-1" exposed it; real alayacore ids are unique so unit tests
+     couldn't construct it) → fix: tag-prefixed keys (defensive) + fakecore
+     protocol compliance;
+  4. fakecore lacked the SM task end frame (see above);
+- [x] docs: README "Automated E2E" section, TODO, Makefile `make e2e`;
+- [x] tests: Elm 137 / Rust 39 / Go 8 pkgs (-race) green; `make e2e` all
+      passed (6 PASS + 5 screenshots).
+- [ ] optional: real-model E2E (OpenAI-compatible API key or local .gguf) —
+      needs the user to provide one; not blocking (fakecore covers the
+      protocol + UI end to end).
 
-## P16 — per-plan 工作目录隔离 + 任务超时（用户确认的两项）
+## P16 — Per-plan work-dir isolation + task timeouts (user-confirmed pair)
 
-### 目录隔离（§8.4）
-- [x] `create_session` / `resume_session` 加可选 `workDir`（Rust+Go）：
-      非空 → 后端 MkdirAll + spawn 设子进程 cwd（`Command::current_dir`
-      / `cmd.Dir`，纯 AlayaFace 侧、C1 安全）；fork/probe/普通会话不传
-      （向后兼容）；
-- [x] Elm：`planWorkDir planId model` = `plans/<planId>/work`；
-      `nodeSessionArgsIn` 传 workDir；plan 节点 resume（PlanOpenNodeSession /
-      PlanOpenAttemptSession）传 workDir；普通 resume 不传；Ports+bridge
-      带 workDir 字段；
-- [x] fakecore 启动 SM 帧上报 `cwd`（测试可断言）；
-- [x] 测试：Go `TestSpawnWorkDir`（spawn cwd）+ `TestIntegrationSessionWorkDir`
-      （create/resume 带 workDir → cwd 匹配；不带 → 后端 cwd）+ Rust 机制级
-      `spawn_current_dir_mechanism` + E2E 断言 `plans/<planId>/work` 存在；
-- [x] 文档：plan-mode §8.4/§13、go-backend 命令表、README、manual-acceptance。
+### Directory isolation (§8.4)
+- [x] `create_session` / `resume_session` gain optional `workDir` (Rust+Go):
+      non-empty → backend MkdirAll + spawn sets the child cwd
+      (`Command::current_dir` / `cmd.Dir`, AlayaFace-side only, C1-safe);
+      fork/probe/plain sessions don't pass it (backward compatible);
+- [x] Elm: `planWorkDir planId model` = `plans/<planId>/work`;
+      `nodeSessionArgsIn` passes workDir; plan-node resume
+      (PlanOpenNodeSession / PlanOpenAttemptSession) passes workDir; plain
+      resume doesn't; Ports+bridge carry the workDir field;
+- [x] fakecore boot SM frame reports `cwd` (assertable in tests);
+- [x] tests: Go `TestSpawnWorkDir` (spawn cwd) + `TestIntegrationSessionWorkDir`
+      (create/resume with workDir → cwd matches; without → backend cwd) +
+      Rust mechanism-level `spawn_current_dir_mechanism` + E2E asserts
+      `plans/<planId>/work` exists;
+- [x] docs: plan-mode §8.4/§13, go-backend command table, README,
+      manual-acceptance.
 
-### 任务超时（§8.5）
-- [x] schema：`default_timeout_seconds`（计划级）+ `timeout_seconds`
-      （节点级覆盖），缺省无超时；validate ≥1；`effectiveTimeoutSeconds`
-      导出；codec roundtrip；
-- [x] Runner：`Tick Int` 事件（app 层 `Time.every 1000ms` 单订阅喂所有
-      InProgress plan）；schedule 在节点进入 Starting 时设 `startedAt`
-      （超时从启动计，覆盖 create_session 挂起）；`checkTimeouts` →
-      `failNode "Timeout after Ns"`（复用关闭+重试/终态路径）；
-- [x] 测试：Elm runner 5 例（超时→Waiting+close+retry / 未到 no-op /
-      无超时永不 / 节点覆盖默认 / 超时→重试→成功闭环）+ schema 3 例
-      （decode/roundtrip/非法值）→ Elm 145；
-- [x] E2E：fakecore `hang-once`（挂起 30s，marker 跨进程）→ t3 首次挂起
-      → 5s 超时 → 自动重试成功（runLog 断言 t3 waiting + attempts [1]）；
-      E2E 全过；
-- [x] 文档：plan-mode §5 schema/§8.5/§13、TODO、README、manual-acceptance。
-- [x] 测试：Elm 145 / Rust 40 / Go 8 包（-race）全绿；`make e2e` 全过。
+### Task timeouts (§8.5)
+- [x] schema: `default_timeout_seconds` (plan level) + `timeout_seconds`
+      (node override), default no timeout; validate ≥1; `effectiveTimeoutSeconds`
+      exported; codec roundtrip;
+- [x] Runner: `Tick Int` event (app-level `Time.every 1000ms` single
+      subscription feeds all InProgress plans); schedule sets `startedAt`
+      when a node enters Starting (timeout counts from launch, covers
+      create_session hangs); `checkTimeouts` → `failNode "Timeout after Ns"`
+      (reuses the close+retry/terminal path);
+- [x] tests: Elm runner 5 cases (timeout → Waiting+close+retry / not reached
+      no-op / no timeout never / node overrides default / timeout → retry →
+      success loop) + schema 3 cases (decode/roundtrip/invalid) → Elm 145;
+- [x] E2E: fakecore `hang-once` (hangs 30s, marker across processes) → t3
+      hangs first → 5s timeout → auto-retry succeeds (runLog asserts t3
+      waiting + attempts [1]); E2E all passed;
+- [x] docs: plan-mode §5 schema/§8.5/§13, TODO, README, manual-acceptance.
+- [x] tests: Elm 145 / Rust 40 / Go 8 pkgs (-race) green; `make e2e` all
+      passed.
 
-## P10 — 全面审查修复（评审轮）
+## P10 — Comprehensive review fixes (review round)
 
-- [x] **Stop + 退避计时器 bug**：Stop 后迟到的自动重试会复活 Canceled 节点并
-      重新激活 Stopped run → 新增 `RetryTick`（自动 tick 只 Waiting→Pending，
-      不复活/不激活）与 `RetryNode`（手动重试，可复活）分离；
-- [x] **ScheduleRetry 重复计时器**：原每个 step 对每个 Waiting 节点都发
-      一次 → 改为仅节点**刚进入** Waiting 时发一次（与 step 输入态比较，
-      修正 finishStep 拿到事件后状态导致去重失效的问题）；
-- [x] **孤儿会话泄漏**：Stop/关闭 plan 窗口与 in-flight create 竞争时，
-      创建的会话无人绑定、窗口/进程泄漏 → `PlanBindSession` 检测绑定失败
-      （节点非 Running）即关闭该会话（窗口+进程）；
-- [x] **Stop/PlanClose 未清创建队列** → 现在按 planId 过滤
-      `planCreateQueue`；
-- [x] **resume 失败未清 planResumeNode** → 后续任意 SessionCreated 会把
-      无关会话错误绑定到该节点 → 成功/失败路径都清理
-      `planResumeOwner`/`planResumeNode`；
-- [x] **静默自动恢复覆盖新 run 竞态**：打开 plan 后立刻点 Run，迟到的
-      run.json 恢复会覆盖新 run → 仅当窗口尚无 run 时才静默恢复；
-- [x] **open/import 失败 UX**：错误显示在 Plans 管理器（而不是创建一个
-      错误窗口）；
-- [x] 清理死代码（Runner.isTerminal 未使用）；`toolConfirm="allow"` 语义
-      加注释（alayacore 的 --tool-confirm 是「需确认的工具名列表」，
-      "allow" 匹配不到任何工具 = 全部自动放行；有安全提示）；
-- [x] 验证过无问题的项：session id(UUID) vs plan key 无冲突；fs 命令双后端
-      parity；run.json 双字段 roundtrip；重放渲染完整性（HandlersTest）；
-- [x] 测试：Elm 125（新增 stop+tick 不复活、手动 Retry 复活、单次重试
-      计时器、Canceled 绑定不发 prompt）；Rust 35；Go 全绿。
+- [x] **Stop + backoff-timer bug**: a late auto-retry after Stop revived a
+      Canceled node and re-activated a Stopped run → new `RetryTick` (auto
+      tick only Waiting→Pending, never revives/activates) separated from
+      `RetryNode` (manual retry, may revive);
+- [x] **ScheduleRetry duplicate timers**: previously emitted per step for
+      every Waiting node → now only when a node NEWLY enters Waiting
+      (compared with the step's input state; fixed finishStep seeing the
+      post-event state which broke dedup);
+- [x] **orphan session leak**: Stop/closing a plan window racing an in-flight
+      create left a session nobody binds — window/process leaked →
+      `PlanBindSession` detects a failed bind (node not Running) and closes
+      that session (window+process);
+- [x] **Stop/PlanClose didn't clear the create queue** → now filtered by
+      planId (`planCreateQueue`);
+- [x] **resume failure didn't clear planResumeNode** → any later SessionCreated
+      could misbind an unrelated session to the node → `planResumeOwner`/
+      `planResumeNode` cleared on both success and failure paths;
+- [x] **silent auto-restore overriding a new run race**: clicking Run right
+      after opening a plan, a late run.json restore would overwrite the new
+      run → silent restore only when the window has no run yet;
+- [x] **open/import failure UX**: errors shown in the Plans manager (instead
+      of creating an error window);
+- [x] dead code cleaned (Runner.isTerminal unused); `toolConfirm="allow"`
+      semantics commented (alayacore's --tool-confirm is a "tools requiring
+      confirmation" list; "allow" matches nothing = everything auto-approved;
+      security note);
+- [x] verified non-issues: session id (UUID) vs plan key no collision; fs
+      commands dual-backend parity; run.json two-field roundtrip; replay
+      rendering completeness (HandlersTest);
+- [x] tests: Elm 125 (new stop+tick no-revive, manual Retry revives,
+      single retry timer, Canceled bind doesn't send prompt); Rust 35; Go
+      green.
 
-## P9 — 失败/停止节点的会话不再丢失（lastSessionId）
+## P9 — Failed/stopped node sessions no longer lost (lastSessionId)
 
-评审反馈：点击 node 打开的 session 内容不完整 / 有的 session 丢失。
+Review feedback: clicking a node opened an incomplete session / some sessions
+were lost.
 
-排查结论：
-- 内容完整性：alayacore 在每次任务结束（handleTaskDone）时把**完整会话**
-  写入 `session.alaya`（先保存、后发 task-done 帧），resume 时按序重放
-  UT/AT/AF/UF/AR（带 history id）。新增 HandlersTest 验证 UI 能把重放的
-  完整历史（用户 prompt/助手文本/工具调用/工具结果/最终回答）全部渲染；
-  仅「app 在任务进行中被杀」会丢失进行中的那一轮（alayacore 保存时机
-  限制，C1 不改 alayacore）。
-- session 丢失根因：`closeAndClear` 对 Failed/Waiting/Canceled 节点**清空
-  sessionId** → run.json 无绑定 → 重启后点击节点只剩详情面板，会话目录
-  虽在却无法找回。
+Investigation:
+- completeness: alayacore writes the **full session** to `session.alaya` at
+  every task end (handleTaskDone: save first, then the task-done frame);
+  resume replays UT/AT/AF/UF/AR in order (with history ids). New HandlersTest
+  verifies the UI renders the full replayed history (user prompt/assistant
+  text/tool call/tool result/final answer); only "app killed mid-task" loses
+  the in-flight round (alayacore save timing; C1: don't change alayacore).
+- session-loss root cause: `closeAndClear` **cleared sessionId** for
+  Failed/Waiting/Canceled nodes → run.json had no binding → after restart a
+  node click showed only the detail panel; the session dir existed but was
+  unreachable.
 
-修复：
-- [x] `NodeRunState` 新增 `lastSessionId`：关闭会话时保留（`session_id`
-      清空避免重复 close，`last_session_id` 持久化到 run.json，codec
-      lenient 兼容旧文件）；`bindSession` 同时写两者；重跑时两者清空；
-- [x] `PlanOpenNodeSession` 优先级：sessionId（活）→ sessionId（死，
-      resume）→ lastSessionId（resume，失败/停止节点的会话可回看）→
-      详情面板；
-- [x] resume 成功后（resume_session 每次发新 UUID）经 `planResumeNode`
-      在 SessionCreated 中把节点**重新绑定**到新 id（`rebindNodeSession`），
-      再次点击直接聚焦，不再报 "Session is already active"；
-- [x] 测试：runner（失败保留 lastSessionId、重跑清空）、codec roundtrip
-      （last_session_id）、HandlersTest 重放渲染；Elm 121 全绿。
+Fix:
+- [x] `NodeRunState` gains `lastSessionId`: kept when the session closes
+      (`session_id` cleared to avoid double-close, `last_session_id`
+      persisted to run.json, codec lenient with old files); `bindSession`
+      writes both; re-run clears both;
+- [x] `PlanOpenNodeSession` priority: sessionId (alive) → sessionId (dead,
+      resume) → lastSessionId (resume, failed/stopped sessions reviewable) →
+      detail panel;
+- [x] after a successful resume (resume_session hands out a new UUID each
+      time) the node is **re-bound** to the new id via `planResumeNode` in
+      SessionCreated (`rebindNodeSession`) — clicking again focuses directly,
+      no more "Session is already active";
+- [x] tests: runner (failure keeps lastSessionId, re-run clears), codec
+      roundtrip (last_session_id), HandlersTest replay rendering; Elm 121
+      green.
 
-## P8 — 节点 ↔ 会话绑定（点击节点打开对应 session）
+## P8 — Node ↔ session binding (click a node to open its session)
 
-- [x] 节点点击改为 `PlanOpenNodeSession planId nodeId`：
-      sessionId 存活 → `ActivateSession` 聚焦；已关闭/重启后 → 自动
-      `resume_session` 从磁盘恢复（`pendingSwitchOnCreate` 聚焦，恢复失败
-      错误显示在 plan 窗口顶部，经 `planResumeOwner` 路由）；
-      无 session（Failed/Blocked/Canceled）→ 节点详情面板；
-- [x] 打开/导入 plan 窗口时**静默自动恢复** `<plan>.run.json`
-      （`PlanReadTarget.continueRun=False`，best-effort：无文件/损坏忽略），
-      恢复各节点状态与 `session_id` 绑定 —— 点击任意已运行节点即可重新
-      打开其会话；`Load run`（continueRun=True）保持原语义（恢复后继续执行）；
-- [x] 会话窗口标题显示绑定标记 `[Plan · planId/nodeId]`
-      （`planNodeSessions : Dict String String`，绑定于 PlanBindSession /
-      PlanOpenNodeSession 恢复时，CloseSession/DeleteSession 移除）；
-- [x] 文档同步（docs/plan-mode.md §7.1/§10）；Elm 118 全绿（run-state
-      codec 已断言 sessionId roundtrip）。
+- [x] node click → `PlanOpenNodeSession planId nodeId`: sessionId alive →
+      `ActivateSession` focus; closed/after-restart → automatic
+      `resume_session` from disk (`pendingSwitchOnCreate` focuses; restore
+      errors shown at the top of the plan window via `planResumeOwner`);
+      no session (Failed/Blocked/Canceled) → node detail panel;
+- [x] opening/importing a plan window **silently auto-restores**
+      `<plan>.run.json` (`PlanReadTarget.continueRun=False`, best-effort: no
+      file/corrupt ignored), restoring node states + `session_id` bindings —
+      clicking any already-run node reopens its session; `Load run`
+      (continueRun=True) keeps its semantics (restore then continue);
+- [x] session window title shows the binding marker `[Plan · planId/nodeId]`
+      (`planNodeSessions : Dict String String`, bound at PlanBindSession /
+      PlanOpenNodeSession restore, removed at CloseSession/DeleteSession);
+- [x] docs sync (docs/plan-mode.md §7.1/§10); Elm 118 green (run-state codec
+      asserts sessionId roundtrip).
 
-## P7 — Plan windows + runner prompt dispatch fix（评审反馈）
+## P7 — Plan windows + runner prompt dispatch fix (review feedback)
 
-- [x] **Plan 界面改为独立窗口**（不再是 overlay）：`planWindows : Dict
-      String PlanWindow` + `planOrder` + `planActiveId`，每个窗口自带
-      `view`/`run`/`runPath`/`runLog`/`selectedNode`/`creating`/`createQueue`/
-      `resumePath`；窗口可拖动/缩放/关闭（复用 `windowPositions` + drag/
-      resize 机制，新增 `PlanWindowDragStart`/`PlanResizeStart`/`PlanActivate`/
-      `PlanClose`）；多 plan 可同时打开、独立运行；
-- [x] **系统菜单（⚙）列出所有打开的 plan**（名称 + 运行状态），点击置顶激活
-      （`viewGlobalMenuPlan`）；Plans 管理器保留为 launcher（open/delete/import）；
-- [x] **Run 后节点会话为空的问题已修复**：`Plan/Runner.elm` 从未生成
-      `SendPrompt` effect（只定义了类型/处理端），导致会话创建并绑定为
-      `Running` 后 prompt 从未发送。现在 `bindSession`（Starting→Running）
-      恰好发出一次 `SendPrompt`；测试覆盖（绑定发 prompt、重复绑定不发、
-      全生命周期 create→bind→prompt→done）；
-- [x] **第二轮修复（仍空窗口）**：修复后 SendPrompt 虽已生成，但
-      `runStepIn` 用 step **前**的旧 run 状态应用 effects → `nodePromptIn`
-      按 sessionId 查 prompt 返回空串被丢弃。修复：① effects 改为在
-      step **后**状态上应用（runStepIn 先更新窗口 run 再 dispatch）；
-      ② `SendPrompt` 改为携带 prompt 文本（runner 绑定会话时从 plan
-      解析），Update 层不再依赖查表，杜绝此类丢失；新增测试
-      “SendPrompt carries the exact plan prompt”；Elm 测试 118；
-- [x] 手动关闭节点会话窗口 → 注入 `SessionDisconnected`（防 runner 悬挂）；
-- [x] `planCreating`/`planCreateQueue` 升级为 `(planId, nodeId)` 全局串行，
-      `SessionCreated` → `PlanBindSession ts planId nodeId sid` 无歧义绑定；
-      runner 事件（TaskDone/Error/Disconnect）按 sessionId 路由到所属窗口
-      （`findPlanIdBySession`）；
-- [x] FsReadResult 改为 `planReadTarget`（planId/path/isResume）路由：
-      打开/导入 → 新建或聚焦窗口；Load run → 恢复该窗口 run 并 ContinueRun；
-- [x] 文档同步（docs/plan-mode.md §7.1/偏差说明、README）；
-- [x] 测试：Elm 117（新增 prompt dispatch 3 例）。
+- [x] **Plan UI is an independent window** (no longer an overlay):
+      `planWindows : Dict String PlanWindow` + `planOrder` + `planActiveId`,
+      each window owns `view`/`run`/`runPath`/`runLog`/`selectedNode`/
+      `creating`/`createQueue`/`resumePath`; draggable/resizable/closable
+      (reuses `windowPositions` + drag/resize machinery; new
+      `PlanWindowDragStart`/`PlanResizeStart`/`PlanActivate`/`PlanClose`);
+      multiple plans open at once, running independently;
+- [x] **system menu (⚙) lists all open plans** (name + run status), click
+      raises/activates (`viewGlobalMenuPlan`); the Plans manager stays as the
+      launcher (open/delete/import);
+- [x] **empty node session after Run fixed**: `Plan/Runner.elm` never
+      generated the `SendPrompt` effect (only defined the type/handler), so
+      after create+bind=Running the prompt was never sent. Now `bindSession`
+      (Starting→Running) emits exactly one `SendPrompt`; tests cover (bind
+      sends, duplicate bind doesn't, full lifecycle create→bind→prompt→done);
+- [x] **second fix (still empty windows)**: after the first fix SendPrompt
+      was generated but `runStepIn` applied effects against the PRE-step run
+      state → `nodePromptIn` looked the prompt up by sessionId and got "" and
+      dropped it. Fix: ① effects applied on the POST-step state (runStepIn
+      updates the window run first, then dispatches); ② `SendPrompt` carries
+      the prompt text (resolved by the runner at bind time from the plan) —
+      the Update layer no longer re-looks-up, eliminating this loss; new test
+      "SendPrompt carries the exact plan prompt"; Elm 118;
+- [x] manually closing a node session window → injects `SessionDisconnected`
+      (prevents runner hanging);
+- [x] `planCreating`/`planCreateQueue` upgraded to global `(planId, nodeId)`
+      serialization; `SessionCreated` → `PlanBindSession ts planId nodeId sid`
+      unambiguous binding; runner events (TaskDone/Error/Disconnect) routed to
+      the owning window by session id (`findPlanIdBySession`);
+- [x] FsReadResult → `planReadTarget` (planId/path/isResume) routing:
+      open/import → new-or-focus window; Load run → restore that window's run
+      and ContinueRun;
+- [x] docs sync (docs/plan-mode.md §7.1/deviations, README);
+- [x] tests: Elm 117 (new prompt dispatch 3 cases).
 
 ## Design decisions (defaults, see docs/plan-mode.md §13)
 
@@ -1023,7 +1180,7 @@ alayacore 替身）+ **系统 Chrome 无头** + Go 后端，跑真实 DOM。
       when it has one else detail panel; Retry node button; failure
       history in detail panel
 - [x] fakecore/E2E: task_error → retry → success, parallel windows, node
-      click opens window — 已由 P15 起的 plan-e2e 全自动覆盖（GUI env 条目过时）
+      click opens window — automated by plan-e2e since P15 (GUI-env item obsolete)
 - [x] `elm-test` green
 
 ## P4.5 — create_session preset/builtinTools + settings.conf + seed presets
@@ -1122,7 +1279,8 @@ reusing the multimodal picker machinery (file list + fuzzy matching).
       active (fs_list_dir owned by the browser); tab switch re-requests
 - [x] Tests: elm-test 145 green; cargo/go unchanged (frontend-only change)
 - [x] Manual GUI smoke: ⚙ → Plans → Browse → navigate/filter → click a plan
-      JSON → opens Plan window —— **P28 已删除 Browse/导入（用户决策），条目过时**
+      JSON → opens Plan window —— **Browse/import removed in P28 (user
+      decision), item obsolete**
 
 ---
 
@@ -1178,12 +1336,10 @@ session window edge to the node card.
       branch sets the connection + z-pairing when the resumed session
       becomes active (node click → resume → curve immediately)
 - [x] Clear sites: CloseSession / DeleteSession / PlanClose / PlanActivate
-- [x] View: `data-session` / `data-plan` attributes for JS lookup
-- [x] bridge.js: fixed SVG overlay on `<body>` (outside Elm vdom), rAF
-      loop measuring `.session-panel` + `.plan-node` rects, bezier with
-      perpendicular bow, anchor on session edge nearest the node, hides
-      when the node is scrolled out of the plan window; z-index matches
-      the plan window (above plan via DOM order, below session = planZ+1)
+      (plan window raised → node curve hides, plan curve takes over);
+      JS hides it when the node is scrolled out of the plan window;
+      z-index matches the plan window (above plan via DOM order, below
+      session = planZ+1)
 - [x] Tests: NodeConnectionTest (11) — labels, resumed resolution, slash
       node ids, unbound/unknown; elm-test 156 green
 - [x] E2E: connection overlay visible + session z = plan z + 1 after
@@ -1269,8 +1425,8 @@ required" noise) + runtime.conf (proper key:value, no "{}" parse error).
 
 ## P22 — Plan Session: role-lock prompt + no builtin tools (planner can't execute)
 
-Bug report: the Plan Session "经常忘记自己的职责", executing the task
-directly instead of emitting the plan JSON.
+Bug report: the Plan Session "keeps forgetting its role", executing the
+task directly instead of emitting the plan JSON.
 
 Root cause: alayacore sends TWO system messages — its default ("execute
 the user's task with tools") FIRST, then our `--system` planner
@@ -1279,9 +1435,9 @@ model both heard "do the work" and physically could.
 
 Fix (two layers):
 - [x] Rewrite `planSystemPrompt` (App/Update.elm): role-locked
-      ("规划器不是执行器"), explicit prohibitions (never execute, never
-      use tools, only ONE ```json block), handles "直接做" requests by
-      still planning, follow-ups answer plan questions only
+      ("the planner is not the executor"), explicit prohibitions (never
+      execute, never use tools, only ONE ```json block), handles "just do
+      it" requests by still planning, follow-ups answer plan questions only
 - [x] Plan Sessions spawn with `builtinTools=""` → NO builtin tools:
       the planner physically cannot search/read/write/execute
 - [x] Backend tri-state `builtin_tools` (P6-documented v2 semantics,
@@ -1295,17 +1451,18 @@ Fix (two layers):
 - [x] Tests: elm 156 / Rust 42 / Go -race all pkgs / make e2e ALL PASS
       (e2e server log shows `with --builtin-tools=<none>` for the Plan
       Session, runner sessions unaffected)
-- [x] Real-model validation: 用户用实际模型（Qwen+DeepSeek 组合）实测
-      完整 run 跑通（t1/t2/t3 Succeeded，模型正常产出、work 目录落盘
-      真实文件）；Plan Session 只吐 JSON 的行为用户实测可用；遗留：真
-      模型下 Plan Session 的 JSON 输出质量未自动化（需要真实 API key，
-      e2e 用 fakecore 覆盖协议层）
+- [x] Real-model validation: the user ran a full plan with real models
+      (Qwen + DeepSeek combo): t1/t2/t3 Succeeded, real output produced,
+      real files landed in the work dir; Plan Session emitting only JSON
+      verified by the user; leftover: real-model plan JSON quality not
+      automated (needs a real API key; e2e covers the protocol layer with
+      fakecore)
 
 ---
 
 ## P23 — Plan Stop closes the run's node session windows too
 
-Question: "点击 Stop，是不是所有 session 都应该停止？" — design answer:
+Question: "Does clicking Stop stop every session?" — design answer:
 Stop stops every in-flight node session OWNED BY THIS plan's run (kill
 the alayacore process AND close its window); it does NOT stop succeeded
 nodes' sessions (keep them viewable), other plans' sessions, plain chat
@@ -1328,7 +1485,8 @@ windows, making Stop look like it didn't stop anything.
       intercept coordinate clicks)
 - [x] Tests: elm 156 / Rust 42 / Go -race all pkgs / make e2e ALL PASS
 - [x] Manual GUI: Stop mid-run → all running node windows close, plan
-      badge Stopped —— 已由 E2E 8b 自动覆盖（t3 挂起 → Stop → 窗口关闭 + badge Stopped）
+      badge Stopped — covered by e2e 8b (t3 hangs → Stop → window closed +
+      badge Stopped)
 
 ---
 
@@ -1365,8 +1523,8 @@ Fix:
 
 ## P25 — Replay marker must NOT be removed on the first SM
 
-Follow-up bug report: "打开 f36895fd 这个 session，他的 plan 依旧自动被
-打开了" — P24 (id move) was NOT sufficient. Verified against the REAL
+Follow-up bug report: "opening session f36895fd still auto-opens its
+plan" — P24 (id move) was NOT sufficient. Verified against the REAL
 binary with a throwaway driver (`src-go/cmd/alayadump`, deleted after):
 alayacore emits SIX boot SM frames first (`version`, `task`
 in_progress:false, `model_list`, `model`, `reasoning`, `video_config`)
@@ -1398,8 +1556,9 @@ replaces the P25 heuristic (remove on user SendPrompt).
       v0.62.4)
 - [x] Tests: elm 208 / Rust 42 / Go -race all pkgs / make e2e ALL PASS
 - [x] Manual GUI: open an old session with a plan message → no duplicate
-      window; after ready, a live plan message still auto-creates ——
-      已由 E2E 自动覆盖（resume 重放不重复建窗 + live plan 立即自动打开）
+      window; after ready, a live plan message still auto-creates —
+      covered by e2e (resume replay does not duplicate the window + live
+      plan auto-opens immediately)
 
 ---
 
@@ -1408,10 +1567,12 @@ replaces the P25 heuristic (remove on user SendPrompt).
 - Never edit `../alayacore` — tool set = spawn params only.
 - JSON contract: snake_case returns, camelCase args, null keys must exist,
   error messages capitalized & identical across Rust/Go.
-- `--builtin-tools` tri-state (P22): `null`/未指定 = preset 默认，"" 有效值
-  = 不传 flag = alayacore 全开；**显式空串 = 无内置工具**（Plan Session 用
-  这个让规划器无法执行）。创建会话参数 `builtinTools`: `null` | `"a,b"` |
-  `""` 三种值语义不同，bridge.js 必须保真传空串（不能 `|| null`）。
+- `--builtin-tools` tri-state (P22): `null`/unspecified = preset default;
+  "" as the EFFECTIVE setting = don't pass the flag = alayacore all-on;
+  **explicit empty string = no builtin tools** (Plan Session used this so
+  the planner cannot execute). create_session's `builtinTools` arg has three
+  distinct meanings (`null` | `"a,b"` | `""`) — bridge.js must pass the
+  empty string faithfully (never `|| null`).
 - Don't pass preset dir as `configPath` in create_session — breaks
   resume_session (needs session_dir/config); use the `preset` param instead.
 - settings.conf is per-preset and NOT copied into session dirs.
