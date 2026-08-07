@@ -1517,13 +1517,7 @@ update msg model =
 
                                 cmds =
                                     if session.atBottom then
-                                        Cmd.batch
-                                            [ Ports.scrollToBottom { sessionId = ev.sessionId }
-                                            , if model.activeId == Just ev.sessionId then
-                                                Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ ev.sessionId))
-                                              else
-                                                Cmd.none
-                                            ]
+                                        Ports.scrollToBottom { sessionId = ev.sessionId }
                                     else
                                         Cmd.none
                             in
@@ -1562,11 +1556,7 @@ update msg model =
 
                                               else
                                                 Nothing
-                                            , if (msgCountChanged && session.atBottom || mcpJustCompleted) && model.activeId == Just ev.sessionId then
-                                                Just (Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ ev.sessionId)))
-
-                                              else
-                                                Nothing
+                                            , Nothing
                                             ]
                                         )
 
@@ -2034,10 +2024,9 @@ update msg model =
                     ( model, Cmd.none )
         SwitchSession id ->
             if model.activeId == Just id then
-                -- Already active: just focus the input, no z-index bump
-                ( model
-                , Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ id))
-                )
+                -- Already active: clicking inside the window again must
+                -- NOT steal focus (it clears the user's text selection).
+                ( model, Cmd.none )
             else
                 let
                     ( m, c ) =

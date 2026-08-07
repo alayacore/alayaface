@@ -231,6 +231,30 @@ try {
   assert(statusBars.some(t => t.includes('Completed')), 'status bar shows Completed, got: ' + JSON.stringify(statusBars));
   console.log('PASS: R3 feedback sent to origin session + plan status bar shows Completed');
 
+  // ── 5c. Text selection survives mouseup (no focus steal) ──────────
+  // Regression: clicking inside the active session window used to fire
+  // Ev.onClick SwitchSession, whose "already active" branch re-focused
+  // the input (Dom.focus) — clearing the user's text selection on
+  // mouseup. Select a message and assert the selection is kept.
+  const selBox = await page.$$eval('.message-assistant .message-content', els => {
+    const el = els.find(e => (e.textContent || '').length > 20);
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: r.left + 20, y: r.top + 10, w: Math.min(r.width - 40, 120) };
+  });
+  assert(selBox, 'no selectable assistant message found');
+  await page.mouse.move(selBox.x, selBox.y);
+  await page.mouse.down();
+  await page.mouse.move(selBox.x + selBox.w, selBox.y + 8, { steps: 5 });
+  await page.mouse.up();
+  await sleep(200);
+  const selKept = await page.evaluate(() => {
+    const s = window.getSelection();
+    return !!(s && !s.isCollapsed && s.toString().length > 0);
+  });
+  assert(selKept, 'text selection cleared after mouseup (focus steal bug)');
+  console.log('PASS: message text selection survives mouseup (no focus steal)');
+
   // Per-plan working directory: node sessions were spawned with
   // ~/.alayaface/plans/<planId>/work as their cwd (created by backend).
   const plansRoot = path.join(home, '.alayaface', 'plans');
