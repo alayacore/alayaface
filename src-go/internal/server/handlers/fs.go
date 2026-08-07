@@ -211,12 +211,39 @@ func guessMime(path string) string {
 	}
 }
 
+// File-size caps for the fs commands. Reading a file fully into memory
+// (data URIs base64-encode it, ~1.33×) and shipping it over IPC/WS must
+// not OOM the backend or flood the hub — a multi-GB media file would
+// otherwise be loaded whole.
+const (
+	// maxDataUriFileSize caps fs_read_file_data_uri (media preview):
+	// plenty for images/audio and short video.
+	maxDataUriFileSize = 64 << 20 // 64 MiB
+	// maxTextFileSize caps fs_read_file_text (plan/run JSON, configs).
+	maxTextFileSize = 16 << 20 // 16 MiB
+)
+
+// checkFileSize verifies a file is within limit before reading it whole.
+func checkFileSize(path string, limit int64) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("Cannot read file: %w", err)
+	}
+	if fi.Size() > limit {
+		return fmt.Errorf("Cannot read file: file too large (%d bytes, limit %d MiB)", fi.Size(), limit>>20)
+	}
+	return nil
+}
+
 // FsReadFileDataUri reads a file and returns it as a data URI string.
 func FsReadFileDataUri(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	var args struct {
 		Path string `json:"path"`
 	}
 	if err := decodeArgs(r, &args); err != nil {
+		return err
+	}
+	if err := checkFileSize(args.Path, maxDataUriFileSize); err != nil {
 		return err
 	}
 	data, err := os.ReadFile(args.Path)
@@ -261,6 +288,9 @@ func FsReadFileText(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		Path string `json:"path"`
 	}
 	if err := decodeArgs(r, &args); err != nil {
+		return err
+	}
+	if err := checkFileSize(args.Path, maxTextFileSize); err != nil {
 		return err
 	}
 	text, err := os.ReadFile(args.Path)

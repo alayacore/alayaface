@@ -171,10 +171,31 @@ fn guess_mime(path: &std::path::Path) -> &str {
     }
 }
 
+/// File-size caps for the fs commands (mirrors Go). Reading a file fully
+/// into memory (data URIs base64-encode it, ~1.33×) and shipping it over
+/// IPC must not OOM the backend — a multi-GB media file would otherwise
+/// be loaded whole.
+const MAX_DATA_URI_FILE_SIZE: u64 = 64 << 20; // 64 MiB
+const MAX_TEXT_FILE_SIZE: u64 = 16 << 20; // 16 MiB
+
+/// Verify a file is within `limit` before reading it whole.
+fn check_file_size(path: &std::path::Path, limit: u64) -> Result<(), String> {
+    let meta = std::fs::metadata(path).map_err(|e| format!("Cannot read file: {}", e))?;
+    if meta.len() > limit {
+        return Err(format!(
+            "Cannot read file: file too large ({} bytes, limit {} MiB)",
+            meta.len(),
+            limit >> 20
+        ));
+    }
+    Ok(())
+}
+
 /// Read a file and return it as a data URI string.
 #[command]
 pub async fn fs_read_file_data_uri(path: String) -> Result<String, String> {
     let p = std::path::Path::new(&path);
+    check_file_size(p, MAX_DATA_URI_FILE_SIZE)?;
     let data = std::fs::read(p)
         .map_err(|e| format!("Cannot read file: {}", e))?;
     let mime = guess_mime(p);
@@ -205,7 +226,9 @@ pub async fn fs_write_file_text(
 /// Read a UTF-8 text file. Used by Plan Mode to load plan/run JSON.
 #[command]
 pub async fn fs_read_file_text(path: String) -> Result<String, String> {
-    std::fs::read_to_string(&path).map_err(|e| format!("Cannot read file: {}", e))
+    let p = std::path::Path::new(&path);
+    check_file_size(p, MAX_TEXT_FILE_SIZE)?;
+    std::fs::read_to_string(p).map_err(|e| format!("Cannot read file: {}", e))
 }
 
 /// Delete a file. Used by Plan Mode to remove saved plans.
@@ -297,6 +320,36 @@ mod tests {
         let path = file.to_string_lossy().to_string();
         let err = fs_delete_file(path).await.unwrap_err();
         assert_eq!(err, "Cannot delete file: Path does not exist");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn read_file_rejects_oversized_files() {
+        let dir = temp_path("oversize");
+        // Sparse files via set_len — no multi-MB writes.
+        let big = dir.join("big.bin");
+        let f = std::fs::File::create(&big).unwrap();
+        f.set_len(MAX_DATA_URI_FILE_SIZE + 1).unwrap();
+        drop(f);
+        let err = fs_read_file_data_uri(big.to_string_lossy().to_string())
+            .await
+            .unwrap_err();
+        assert!(err.contains("file too large"), "data URI oversized: {err}");
+
+        let big_text = dir.join("big.txt");
+        let f = std::fs::File::create(&big_text).unwrap();
+        f.set_len(MAX_TEXT_FILE_SIZE + 1).unwrap();
+        drop(f);
+        let err = fs_read_file_text(big_text.to_string_lossy().to_string())
+            .await
+            .unwrap_err();
+        assert!(err.contains("file too large"), "text oversized: {err}");
+
+        // Small files still read fine.
+        let small = dir.join("small.txt");
+        std::fs::write(&small, "hello").unwrap();
+        let out = fs_read_file_text(small.to_string_lossy().to_string()).await.unwrap();
+        assert_eq!(out, "hello");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
