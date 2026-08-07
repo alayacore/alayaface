@@ -14,7 +14,7 @@ tests =
             \_ ->
                 let
                     meta =
-                        { origin = Just { sessionId = "s-1", messageId = "hist-1" }
+                        { origin = Just { sessionId = "s-1", planIndex = 2, messageId = Nothing }
                         , feedbacks = [ { at = 100, status = "completed", text = "done", planId = "p-1" } ]
                         , createdAt = 50
                         }
@@ -28,11 +28,23 @@ tests =
                 case decoded of
                     Ok m2 ->
                         Expect.all
-                            [ \m -> Expect.equal (Just { sessionId = "s-1", messageId = "hist-1" }) m.origin
+                            [ \m -> Expect.equal (Just { sessionId = "s-1", planIndex = 2, messageId = Nothing }) m.origin
                             , \m -> Expect.equal 1 (List.length m.feedbacks)
                             , \m -> Expect.equal 50 m.createdAt
                             ]
                             m2
+
+                    Err e ->
+                        Expect.fail ("decode failed: " ++ D.errorToString e)
+        , test "legacy origin (messageId, no planIndex) decodes with planIndex -1" <|
+            \_ ->
+                case D.decodeString M.decodeMeta """{ "origin": { "sessionId": "s-1", "messageId": "hist-1" }, "created_at": 1 }""" of
+                    Ok m ->
+                        -- planIndex -1 never matches a real message, but
+                        -- sessionId survives so feedback routing still works.
+                        Expect.equal
+                            (Just { sessionId = "s-1", planIndex = -1, messageId = Just "hist-1" })
+                            m.origin
 
                     Err e ->
                         Expect.fail ("decode failed: " ++ D.errorToString e)

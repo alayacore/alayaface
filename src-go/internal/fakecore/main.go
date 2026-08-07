@@ -257,7 +257,6 @@ func main() {
 
 	reader := bufio.NewReader(os.Stdin)
 	staged := 0
-	firstPrompt := true
 	for {
 		frame, err := tlv.ReadFrame(reader)
 		if err != nil || frame == nil {
@@ -293,14 +292,15 @@ func main() {
 						// like "hang-once" that trigger marker scenarios) —
 						// it must ALWAYS get a normal reply.
 						streamReply()
-					case planMode && firstPrompt && strings.Contains(stagedText, "plan"):
+					case planMode && strings.Contains(stagedText, "plan"):
 						// R2: EVERY session now carries the planner hint
 						// (--system). The fake answers with a fenced plan
-						// JSON only when the user prompt actually asks for
-						// planning — node task prompts (fixture) do NOT
-						// contain "plan", so nodes complete normally.
+						// JSON whenever the user prompt asks for planning
+						// (node task prompts — the fixture — do NOT
+						// contain "plan", so nodes complete normally).
+						// Every "plan" prompt gets one (multi-plan
+						// sessions exercise plan-index binding).
 						planReply()
-						firstPrompt = false
 					case strings.Contains(stagedText, "hang-once"):
 						hangOnceReply()
 					case strings.Contains(stagedText, "fail-once"):

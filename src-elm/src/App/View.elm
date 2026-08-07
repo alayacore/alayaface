@@ -22,6 +22,7 @@ import Session.FilePicker as FP
 import Fuzzy
 import Plan.Types as PT
 import Plan.Meta as PM
+import Plan.Detect
 import Plan.View
 import Overlay.ConfirmTool
 import Overlay.Settings
@@ -1017,7 +1018,7 @@ viewChatArea model session =
                 [ Attr.class "messages"
                 , Attr.attribute "data-session" session.id
                 ]
-                (List.map (viewMessage model session) session.messages
+                (viewMessages model session
 
                     ++ [ Html.div [] [] ]
                 )
@@ -1034,8 +1035,44 @@ viewChatArea model session =
         ]
 
 
-viewMessage : Model -> T.SessionState -> T.Message -> Html Msg
-viewMessage model session msg =
+{-| Render the message list, threading the session's plan index: every
+message whose content is a detected plan message (same predicate as the
+auto-create detector) bumps the index, and the status bar looks up the
+binding by (sessionId, planIndex) — the order of plan messages in a
+session is stable, unlike message ids.
+-}
+viewMessages : Model -> T.SessionState -> List (Html Msg)
+viewMessages model session =
+    let
+        step msg ( idx, acc ) =
+            let
+                isPlan =
+                    Plan.Detect.isPlanMessage msg.content
+
+                idx2 =
+                    if isPlan then
+                        idx + 1
+
+                    else
+                        idx
+
+                -- Only plan messages look up a binding (0 never matches).
+                msgIdx =
+                    if isPlan then
+                        idx2
+
+                    else
+                        0
+            in
+            ( idx2, viewMessage model session msgIdx msg :: acc )
+    in
+    List.foldl step ( 0, [] ) session.messages
+        |> Tuple.second
+        |> List.reverse
+
+
+viewMessage : Model -> T.SessionState -> Int -> T.Message -> Html Msg
+viewMessage model session planIndex msg =
     let
         isCursor =
             case model.cursorMsgId of
@@ -1092,7 +1129,7 @@ viewMessage model session msg =
 
           else
             viewMsgBody model session.id msg
-        , viewPlanStatusBar model session.id msg.id
+        , viewPlanStatusBar model session.id planIndex
         ]
 
 
@@ -1102,9 +1139,9 @@ name + run status; [Open] focuses the window (or opens from disk after a
 restart). Failed/Stopped plans show the status too; the [Re-run] action
 arrives with the R4 re-run cascade.
 -}
-viewPlanStatusBar : Model -> String -> String -> Html Msg
-viewPlanStatusBar model sid messageId =
-    case planMetaForMessage model sid messageId of
+viewPlanStatusBar : Model -> String -> Int -> Html Msg
+viewPlanStatusBar model sid planIndex =
+    case planMetaForMessage model sid planIndex of
         Just ( planId, _ ) ->
             let
                 name =
@@ -1141,10 +1178,11 @@ viewPlanStatusBar model sid messageId =
             Html.text ""
 
 
-{-| The meta whose origin.messageId matches (the plan bound to a message).
+{-| The plan whose meta origin binds (sessionId, planIndex) — the plan
+auto-created from that session's Nth plan message.
 -}
-planMetaForMessage : Model -> String -> String -> Maybe ( String, PM.PlanMeta )
-planMetaForMessage model sid messageId =
+planMetaForMessage : Model -> String -> Int -> Maybe ( String, PM.PlanMeta )
+planMetaForMessage model sid planIndex =
     Dict.foldl
         (\planId meta acc ->
             case acc of
@@ -1154,10 +1192,11 @@ planMetaForMessage model sid messageId =
                 Nothing ->
                     case meta.origin of
                         Just o ->
-                            -- Message ids are per-session sequences, so the
-                            -- binding must match BOTH the session and the
-                            -- message id.
-                            if o.sessionId == sid && o.messageId == messageId then
+                            -- Binding is session + plan index (the order of
+                            -- plan messages in a session is stable; message
+                            -- ids are per-session implementation details and
+                            -- deliberately not used for matching).
+                            if o.sessionId == sid && o.planIndex == planIndex then
                                 Just ( planId, meta )
 
                             else

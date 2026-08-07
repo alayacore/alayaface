@@ -1,6 +1,7 @@
 module Plan.Detect exposing
     ( extractPlanJson
     , hasPlanTypeMarker
+    , isPlanMessage
     )
 
 {-| Detect a plan JSON document inside assistant message text.
@@ -33,6 +34,21 @@ hasPlanTypeMarker text =
             t == PT.planTypeMarker
 
         Err _ ->
+            False
+
+
+{-| Whether a full assistant message content is a detected plan message
+(fenced ```json block + explicit type marker). Shared by the auto-create
+detection and the status-bar rendering so the "plan index" (which plan
+of this session a message is) is counted with the same predicate.
+-}
+isPlanMessage : String -> Bool
+isPlanMessage content =
+    case extractPlanJson content of
+        Just raw ->
+            hasPlanTypeMarker raw
+
+        Nothing ->
             False
 
 extractPlanJson : String -> Maybe String

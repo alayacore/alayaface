@@ -17,18 +17,25 @@ module Plan.Meta exposing
       "created_at": 172...
     }
 
-- `origin` — the session (and its message id) whose assistant message
-  triggered the auto-create. Used by feedback (send the plan result back
-  to the origin session) and by the status-bar binding (messageId →
-  planId) after restarts.
+- `origin` — the session (and its plan INDEX within that session) whose
+  assistant message triggered the auto-create. Message ids are NOT used
+  for matching: they are per-session implementation details (alayacore
+  HistoryID) that can differ across cores/restores, while the order of
+  plan messages in a session is stable (append-only). planIndex = which
+  plan message of that session (1-based, counted with the same
+  isPlanMessage predicate as the detector). Used by feedback (send the
+  plan result back to the origin session) and by the status-bar binding
+  (sessionId + planIndex → planId) after restarts.
 - `feedbacks` — every completed/stopped run's feedback entry (success:
   the summary text that was sent; failed/stopped runs record nothing to
   the conversation but keep a status entry here so a reopened session
   can render the status bar and the `[Plan: xxx]` link).
 - `created_at` — creation timestamp.
 
-The decoder is lenient (missing origin → Nothing) so meta files from
-before the R-series still open.
+The decoder is lenient (missing origin → Nothing; legacy origin without
+planIndex decodes to planIndex -1 — never matches a real message, so old
+bindings simply don't render a status bar; feedback routing still works
+because it only needs sessionId).
 -}
 
 import Json.Decode as D
@@ -37,7 +44,8 @@ import Json.Encode as E
 
 type alias Origin =
     { sessionId : String
-    , messageId : String
+    , planIndex : Int
+    , messageId : Maybe String
     }
 
 
@@ -71,7 +79,7 @@ encodeMeta m =
                 Just o ->
                     E.object
                         [ ( "sessionId", E.string o.sessionId )
-                        , ( "messageId", E.string o.messageId )
+                        , ( "planIndex", E.int o.planIndex )
                         ]
 
                 Nothing ->
@@ -98,9 +106,17 @@ decodeMeta =
     D.map3 PlanMeta
         (D.oneOf
             [ D.field "origin"
-                (D.map2 Origin
+                (D.map3 Origin
                     (D.field "sessionId" D.string)
-                    (D.field "messageId" D.string)
+                    -- Legacy meta files (pre plan-index) have no
+                    -- planIndex: decode to -1 so they never match a
+                    -- real message (feedback still works via sessionId).
+                    (D.oneOf [ D.field "planIndex" D.int, D.succeed -1 ])
+                    (D.oneOf
+                        [ D.field "messageId" D.string |> D.map Just
+                        , D.succeed Nothing
+                        ]
+                    )
                 )
                 |> D.map Just
             , D.succeed Nothing
