@@ -65,6 +65,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P25 Close_session cancel-first（Stop/关窗口立即取消任务，不等 drain 跑完；历史保存到取消点） | [x] |
 | P26 plan JSON 顶层 `"type": "alayaface-plan"` 标志（按钮只认显式标志，普通 ```json 不误触发；**必填无兼容**——缺失/错误值直接报错） | [x] |
 | P27 连线升级 + session 目录层级：plan↔所属 session 连线（锚到可见的 `[Plan: …]` 按钮）；两条连线实线加粗 + 双控制点贝塞尔；`sessions/<planId>/<nodeId>/<uuid>/` 嵌套（顶层=纯普通会话） | [x] |
+| P28 Plan 归属 Session（用户决策：导入是早期遗留物，整体移除）：plan 文档/meta/run/work/节点子会话全部收进 `sessions/<来源session>/plans/<planId>/`，删除顶层 `plans/` 根；Plans manager 单页（从 planMetas 索引列，无 Browse/导入）；meta origin 记 on-disk 会话 id，绑定按 live id 解析 | [x] |
 | R 系列 | Plan 重构：模型自主子流程 + 递归（自动创建 / 回填自动继续 / 重跑级联 / 状态条 / 超时移除）——**详见 REFACTOR.md** | 进行中 |
 
 ## P24 — 输出注入（{{tX.output}}）
@@ -206,6 +207,59 @@ C1 安全：`cancelTask` → `activeTask.cancel()` → 任务经 `taskResultCh`
       曲线互斥；7b 断言 node 曲线实线加粗 + plan 曲线隐藏；5d 断言
       `sessions/<planId>/{t1,t2,t3}/<uuid>` 层级；ALL PASS；
 - [x] 文档：plan-mode.md §7.1（两条曲线）、新增 §8.7、TODO 本表。
+
+---
+
+## P28 — Plan 归属 Session + 移除导入（用户决策）
+
+用户：**"Plan为什么不放在Session目录下，一个Plan必定是属于一个session吧？——
+我认为这是早期设计的遗留物，我们不需要plan的'导入'功能，与之相关的UI也是不需要的"**。
+决策：Plan 全部收进它的来源 session 目录；Browse/导入及其 UI 整体删除。
+
+### 新目录结构
+```
+~/.alayaface/sessions/
+  <uuid>/                  ← 普通会话（顶层永远不是 plan 子会话）
+    session.alaya / config/
+    plans/<planId>/        ← 该会话产生的 plan（0..N）
+      <planId>.json / .meta.json / .run.json
+      work/                ← per-plan 工作目录
+      <nodeId>/<uuid>/     ← 节点子会话
+```
+顶层 `plans/` 根删除；没有导入 → 每个 plan 必有 meta.json origin。
+
+- [x] 后端（Rust+Go 对称）：`create_session`/`resume_session`/`delete_session_dir`
+      新增可选 `originSessionId`（+ 已有 planId/nodeId）→ 嵌套路径
+      `sessions/<San(origin)>/plans/<San(planId)>/<San(nodeId)>/<uuid>`；
+      `resume`/`delete` 用 `resolveSessionDir` 回退链：P28 → P27
+      （`sessions/<planId>/<nodeId>/<sid>`）→ 扁平（旧数据可恢复）；
+- [x] `dirs.CreatePlanSessionDirFrom`/`create_session_dir_nested` 新签名
+      （originSessionId, planId, nodeId, uuid, preset）+ 顶层 doc 布局更新；
+- [x] 前端路径：`plansDir` → `sessionsDir` + `planDirIn`/`planDirOf`/
+      `planFilePathOf`/`planOriginSessionId`/`onDiskSessionId`（Update.elm）；
+      PlanSaveReady 写入 `sessions/<originDiskId>/plans/<planId>/`，origin
+      记 **on-disk 会话 id**（resume 的 fresh id 经 planResumedFrom 回解）；
+- [x] planMetas 索引重建改为两级扫描：`fs_list_dir(sessions/)` → 各会话
+      `plans/` → 读每个 `*.meta.json`（新字段 planMetaDirQueue/
+      planMetaDirListing）；planId 从文件名提取；
+- [x] 绑定/回填按 live id 解析：`planMetaForMessage`（View）、
+      `messageBoundToPlan`、`feedbackCompletedPlan`（NC.liveSessionForOrigin）
+      —— resume/重启后状态条、防重、反馈仍命中；
+- [x] Plans manager 单页：列表直接来自 planMetas（无 fs_list_dir）；
+      删除时同步 drop planMetas + 关窗口（pendingDelete）；
+      `PlanManagerTab`/`PlanManagerBrowser*`/`PlanManagerSwitchTab`/
+      `planBrowserPick`/`initPlanBrowser` 全部移除；
+- [x] `planWinKeyForPath` 简化为文件名；FsResolvePathResult 去掉 Browse 分支；
+- [x] Ports/bridge.js：createSession/resumeSession/deleteSessionDir 透传
+      originSessionId；
+- [x] 测试：Go `TestSanitizeDirComponent`/`TestCreatePlanSessionDirFromNests`
+      （新签名）+ `TestIntegrationNestedPlanSessionDir`（origin 嵌套创建、
+      管理器只列普通会话、嵌套 resume、P27/扁平 legacy 回退、嵌套删除）；
+      Rust dirs.rs 两例更新；Elm 213 全绿；e2e 5d 断言
+      `sessions/<origin>/plans/<planId>/{t1,t2,t3}/<uuid>` + plan 文档/
+      meta/run 都在会话目录内 + manager 无 Browse 页 + work dir 新路径；
+- [x] 文档：plan-mode.md §7.2（单页管理器）、§8.7（P28 重写）、§12；
+      TODO 本表；go-backend.md 命令表 + 布局注记；manual-acceptance 5c。
 
 ---
 

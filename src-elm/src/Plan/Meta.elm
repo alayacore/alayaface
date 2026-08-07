@@ -64,11 +64,12 @@ type alias PlanMeta =
     }
 
 
-{-| The meta file path for a plan id (same directory as the plan file).
+{-| The meta file path for a plan id (same directory as the plan file —
+the plan's own dir under its owning session).
 -}
 metaPathFor : String -> String -> String
-metaPathFor plansDir planId =
-    plansDir ++ "/" ++ planId ++ ".meta.json"
+metaPathFor planDir planId =
+    planDir ++ "/" ++ planId ++ ".meta.json"
 
 
 encodeMeta : PlanMeta -> E.Value

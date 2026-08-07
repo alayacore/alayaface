@@ -118,9 +118,64 @@ bufferPendingEvent model sessionId raw =
 
 -- PLAN MODE HELPERS
 
-plansDir : String -> String
-plansDir home =
-    home ++ "/.alayaface/plans"
+-- Session dir root: ~/.alayaface/sessions. Plans live INSIDE their
+-- owning session's dir (sessions/<originSessionId>/plans/<planId>/), so
+-- there is no top-level plans/ root anymore.
+sessionsDir : String -> String
+sessionsDir home =
+    home ++ "/.alayaface/sessions"
+
+
+-- The plan's directory under its owning session:
+-- sessions/<originSessionId>/plans/<planId>
+planDirIn : String -> String -> String -> String
+planDirIn home originSessionId planId =
+    sessionsDir home ++ "/" ++ originSessionId ++ "/plans/" ++ planId
+
+
+{-| The plan's on-disk directory, resolved from the planMetas index: the
+origin session's ON-DISK id (resumes get fresh live ids whose dir does
+not exist — the plan must live under the original dir id, which is what
+PlanSaveReady records).
+-}
+planDirOf : Model -> String -> Maybe String
+planDirOf model planId =
+    case Dict.get planId model.planMetas of
+        Just meta ->
+            case meta.origin of
+                Just origin ->
+                    Just (planDirIn model.homeDir origin.sessionId planId)
+
+                Nothing ->
+                    Nothing
+
+        Nothing ->
+            Nothing
+
+
+{-| The plan's JSON file path (<planDir>/<planId>.json).
+-}
+planFilePathOf : Model -> String -> Maybe String
+planFilePathOf model planId =
+    Maybe.map (\d -> d ++ "/" ++ planId ++ ".json") (planDirOf model planId)
+
+
+{-| The owning session's ON-DISK id for a plan (meta origin). Plan node
+sessions are created/resumed nested under this session's dir.
+-}
+planOriginSessionId : Model -> String -> Maybe String
+planOriginSessionId model planId =
+    Dict.get planId model.planMetas
+        |> Maybe.andThen .origin
+        |> Maybe.map .sessionId
+
+
+{-| The on-disk session id for a LIVE session id: resumes hand out FRESH
+ids whose own dir does not exist — map back through planResumedFrom.
+-}
+onDiskSessionId : Model -> String -> String
+onDiskSessionId model sid =
+    Dict.get sid model.planResumedFrom |> Maybe.withDefault sid
 
 
 planDirEntryDecoder : D.Decoder { name : String, isDir : Bool }
@@ -146,61 +201,16 @@ fsReadOkDecoder =
 
 
 refreshPlanList : Model -> Cmd Msg
-refreshPlanList model =
-    if model.homeDir == "" then
-        Ports.fsHomeDir {}
-
-    else if model.planManager.tab == PlanTabBrowse then
-        -- The Browse tab owns fs_list_dir while active; a stray plans-dir
-        -- listing would land in its branch of FsListDirResult.
-        Cmd.none
-
-    else
-        Ports.fsListDir { path = plansDir model.homeDir }
+refreshPlanList _ =
+    -- The Plans manager lists from the planMetas index (every plan is
+    -- created by a session and has meta.json with its origin) — no fs
+    -- scan needed; planMetas updates re-render the list automatically.
+    Cmd.none
 
 
--- Initial file-browser state for the Plans manager Browse tab, rooted at
--- the user's home directory (mirrors the session file picker init).
-initPlanBrowser : String -> T.FilePickerState
-initPlanBrowser home =
-    { show = True
-    , mode = T.Local
-    , input = home ++ "/"
-    , filter = ""
-    , entries = []
-    , dir = home
-    , baseDir = home
-    , selected = 0
-    , loading = True
-    , error = Nothing
-    , savedLocalPath = ""
-    , savedUrlPath = ""
-    , pendingFileName = ""
-    }
-
-
--- Placeholder browser used before the home dir is known; FsHomeDirResult
--- fills it in (dir == "" marks "waiting for home dir").
-emptyPlanBrowser : T.FilePickerState
-emptyPlanBrowser =
-    { show = True
-    , mode = T.Local
-    , input = ""
-    , filter = ""
-    , entries = []
-    , dir = ""
-    , baseDir = ""
-    , selected = 0
-    , loading = True
-    , error = Nothing
-    , savedLocalPath = ""
-    , savedUrlPath = ""
-    , pendingFileName = ""
-    }
-
-
--- Shared open/import: set the read target and read the plan file. Used by
--- the Saved-tab Open button and the Browse-tab file picker.
+-- Shared open: set the read target and read the plan file. Used by the
+-- manager Open button and the [Plan: …] status-bar link (path comes
+-- from planFilePathOf — plans always live under their owning session).
 openPlanFile : String -> Model -> ( Model, Cmd Msg )
 openPlanFile path model =
     ( { model
@@ -214,54 +224,6 @@ openPlanFile path model =
       }
     , Ports.fsReadFileText { path = path }
     )
-
-
--- Click/Enter on a Browse-tab entry: directories navigate, files import.
--- maybeIdx = Just idx → clicked entry; Nothing → keyboard-selected entry.
-planBrowserPick : Model -> Maybe Int -> ( Model, Cmd Msg )
-planBrowserPick model maybeIdx =
-    let
-        pm =
-            model.planManager
-    in
-    case pm.browser of
-        Just fp ->
-            let
-                idx =
-                    Maybe.withDefault fp.selected maybeIdx
-
-                entries =
-                    FP.filterEntries fp
-            in
-            case List.head (List.drop idx entries) of
-                Just entry ->
-                    if entry.isDir then
-                        let
-                            ( newFp, newDir ) =
-                                FP.appendDirToInput fp entry.name
-
-                            newFp2 =
-                                { newFp | selected = idx }
-                        in
-                        ( { model | planManager = { pm | browser = Just newFp2 } }
-                        , Ports.fsResolvePath { path = newDir }
-                        )
-
-                    else
-                        let
-                            fullPath =
-                                if fp.dir == "" then
-                                    entry.name
-                                else
-                                    fp.dir ++ "/" ++ entry.name
-                        in
-                        openPlanFile fullPath model
-
-                Nothing ->
-                    ( model, Cmd.none )
-
-        Nothing ->
-            ( model, Cmd.none )
 
 
 setPlanErrors : List String -> Model -> Model
@@ -297,12 +259,18 @@ duplicate plan.
 -}
 messageBoundToPlan : Model -> String -> Int -> Bool
 messageBoundToPlan model sid planIndex =
+    let
+        -- meta origin records the session's ON-DISK id; a resumed session
+        -- renders with a fresh live id — resolve before comparing.
+        onDiskId =
+            Dict.get sid model.planResumedFrom |> Maybe.withDefault sid
+    in
     Dict.foldl
         (\_ meta acc ->
             acc
                 || (case meta.origin of
                         Just o ->
-                            o.sessionId == sid && o.planIndex == planIndex
+                            o.sessionId == onDiskId && o.planIndex == planIndex
 
                         Nothing ->
                             False
@@ -556,9 +524,9 @@ addPlanWindow key win model =
     }
 
 
-{-| Window key for a plan file path. Saved plans (under plans dir) use
-their file name; imported files get a stable slugified key so reopening
-the same file focuses the same window.
+{-| Window key for a plan file path: the plan file name minus .json
+(= the planId — plans always live at
+sessions/<origin>/plans/<planId>/<planId>.json; there is no import).
 -}
 planWinKeyForPath : String -> String
 planWinKeyForPath path =
@@ -568,19 +536,12 @@ planWinKeyForPath path =
                 |> List.reverse
                 |> List.head
                 |> Maybe.withDefault path
-
-        baseNoJson =
-            if String.endsWith ".json" base then
-                String.dropRight 5 base
-
-            else
-                base
     in
-    if String.contains ".alayaface/plans" path then
-        baseNoJson
+    if String.endsWith ".json" base then
+        String.dropRight 5 base
 
     else
-        "import-" ++ PT.slugify baseNoJson
+        base
 
 
 {-| Find the plan window whose run owns the given session id. A resumed
@@ -762,16 +723,23 @@ feedbackCompletedPlan planId now model =
                                 ++ planId
                                 ++ "]"
 
-                        -- Origin session alive → send the continuation
-                        -- prompt (auto-continue). Closed → D7 (part):
-                        -- record the feedback for later display; the
-                        -- auto-resume+continue follow-up is pending.
-                        feedbackCmd =
-                            if Dict.member origin.sessionId model.sessions then
-                                Ports.sendPrompt { sessionId = origin.sessionId, text = prefix, media = [] }
+                        -- Origin session (ON-DISK id) alive → send the
+                        -- continuation prompt (auto-continue). Resolve to
+                        -- the LIVE window id (the original if open, or
+                        -- the fresh id of a resume of it). Closed →
+                        -- D7 (part): record the feedback for later
+                        -- display; the auto-resume+continue follow-up is
+                        -- pending.
+                        liveOrigin =
+                            NC.liveSessionForOrigin model.sessions model.planResumedFrom origin.sessionId
 
-                            else
-                                Cmd.none
+                        feedbackCmd =
+                            case liveOrigin of
+                                Just liveSid ->
+                                    Ports.sendPrompt { sessionId = liveSid, text = prefix, media = [] }
+
+                                Nothing ->
+                                    Cmd.none
 
                         -- If the origin is a plan node session, resume the
                         -- waiting node so it answers based on the results.
@@ -839,16 +807,21 @@ appendMetaFeedback : String -> PM.Feedback -> Model -> ( Model, Cmd Msg )
 appendMetaFeedback planId fb model =
     case Dict.get planId model.planMetas of
         Just meta ->
-            let
-                newMeta =
-                    { meta | feedbacks = meta.feedbacks ++ [ fb ] }
+            case planDirOf model planId of
+                Just planDir ->
+                    let
+                        newMeta =
+                            { meta | feedbacks = meta.feedbacks ++ [ fb ] }
 
-                metaPath =
-                    PM.metaPathFor (plansDir model.homeDir) planId
-            in
-            ( { model | planMetas = Dict.insert planId newMeta model.planMetas }
-            , Ports.fsWriteFileText { path = metaPath, content = E.encode 2 (PM.encodeMeta newMeta), createParents = True }
-            )
+                        metaPath =
+                            PM.metaPathFor planDir planId
+                    in
+                    ( { model | planMetas = Dict.insert planId newMeta model.planMetas }
+                    , Ports.fsWriteFileText { path = metaPath, content = E.encode 2 (PM.encodeMeta newMeta), createParents = True }
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
 
         Nothing ->
             ( model, Cmd.none )
@@ -1050,6 +1023,7 @@ startNextCreateIn model =
                         , workDir = Nothing
                         , planId = Nothing
                         , nodeId = Nothing
+                        , originSessionId = Nothing
                         }
                     )
 
@@ -1068,11 +1042,13 @@ every tool auto-runs. That is exactly the runner's intent (unattended
 execution), but it means a plan task CAN auto-run risky tools — use the
 Safe preset / tools field to restrict per node.
 
-planId/nodeId tag the session as a PLAN CHILD: the backend stores its
-directory nested under sessions/<planId>/<nodeId>/ so the sessions/ top
-level only ever contains plain (non-plan) sessions.
+planId/nodeId/originSessionId tag the session as a PLAN CHILD: the
+backend stores its directory nested under
+sessions/<originSessionId>/plans/<planId>/<nodeId>/ so the sessions/ top
+level only ever contains plain (non-plan) sessions and every plan lives
+inside the session that created it.
 -}
-nodeSessionArgsIn : String -> String -> Model -> { toolConfirm : Maybe String, preset : Maybe String, builtinTools : Maybe String, systemPrompt : Maybe String, workDir : Maybe String, planId : Maybe String, nodeId : Maybe String }
+nodeSessionArgsIn : String -> String -> Model -> { toolConfirm : Maybe String, preset : Maybe String, builtinTools : Maybe String, systemPrompt : Maybe String, workDir : Maybe String, planId : Maybe String, nodeId : Maybe String, originSessionId : Maybe String }
 nodeSessionArgsIn planId nodeId model =
     let
         task =
@@ -1093,22 +1069,24 @@ nodeSessionArgsIn planId nodeId model =
     , workDir = planWorkDir planId model
     , planId = Just planId
     , nodeId = Just nodeId
+    , originSessionId = planOriginSessionId model planId
     }
 
 
 {-| Per-plan working directory for node sessions: every node of a plan
-shares ~/.alayaface/plans/<planId>/work (created by the backend on
-spawn), so tasks can exchange files within the plan while plans stay
-isolated from each other and from the backend's cwd. Nothing while the
-home dir is unknown (falls back to the backend cwd).
+shares sessions/<originSessionId>/plans/<planId>/work (created by the
+backend on spawn), so tasks can exchange files within the plan while
+plans stay isolated from each other and from the backend's cwd. Nothing
+while the plan's origin is unknown (falls back to the backend cwd).
 -}
 planWorkDir : String -> Model -> Maybe String
 planWorkDir planId model =
-    if model.homeDir == "" then
-        Nothing
+    case planDirOf model planId of
+        Just dir ->
+            Just (dir ++ "/work")
 
-    else
-        Just (plansDir model.homeDir ++ "/" ++ planId ++ "/work")
+        Nothing ->
+            Nothing
 
 
 {-| Persist the current run state to <planId>.run.json.
@@ -1317,7 +1295,7 @@ update msg model =
 
                 Nothing ->
                     ( { model | pendingSwitchOnCreate = True, showGlobalMenu = False }
-                    , Ports.createSession { toolConfirm = Nothing, preset = Nothing, builtinTools = Nothing, systemPrompt = Just planSystemPrompt, workDir = Nothing, planId = Nothing, nodeId = Nothing }
+                    , Ports.createSession { toolConfirm = Nothing, preset = Nothing, builtinTools = Nothing, systemPrompt = Just planSystemPrompt, workDir = Nothing, planId = Nothing, nodeId = Nothing, originSessionId = Nothing }
                     )
 
         SessionCreated id ->
@@ -2546,81 +2524,79 @@ update msg model =
         FsListDirResult entries ->
             if model.planMetaLoading then
                 -- R3: dedicated listing for meta.json files (planMetas
-                -- index rebuild). Collect *.meta.json paths, then read
-                -- them one at a time via the meta read queue.
+                -- index rebuild). Two-level scan:
+                --   1. sessions/ listing (planMetaDirListing == Nothing)
+                --      → build the queue of each session's plans/ dir;
+                --   2. a sessions/<uuid>/plans listing (planMetaDirListing
+                --      == Just dir) → collect *.meta.json into the read
+                --      queue.
+                -- Every *.meta.json is then read one at a time.
                 let
-                    metaFiles =
+                    parsed =
                         List.filterMap (\v -> D.decodeValue planDirEntryDecoder v |> Result.toMaybe) entries
-                            |> List.filter (\e -> not e.isDir)
-                            |> List.map .name
-                            |> List.filter (\n -> String.endsWith ".meta.json" n)
-                            |> List.sort
+                in
+                case model.planMetaDirListing of
+                    Just dir ->
+                        let
+                            metaFiles =
+                                parsed
+                                    |> List.filter (\e -> not e.isDir)
+                                    |> List.map .name
+                                    |> List.filter (\n -> String.endsWith ".meta.json" n)
+                                    |> List.sort
 
-                    paths =
-                        List.map (\n -> plansDir model.homeDir ++ "/" ++ n) metaFiles
-
-                    queue =
-                        paths
-
-                    ( m1, c1 ) =
-                        case queue of
+                            newReadQueue =
+                                model.planMetaReadQueue ++ List.map (\n -> dir ++ "/" ++ n) metaFiles
+                        in
+                        case model.planMetaDirQueue of
                             next :: rest ->
-                                ( { model | planMetaLoading = False, planMetaReading = Just next, planMetaReadQueue = rest }
-                                , Ports.fsReadFileText { path = next }
+                                ( { model
+                                    | planMetaDirQueue = rest
+                                    , planMetaDirListing = Just next
+                                    , planMetaReadQueue = newReadQueue
+                                  }
+                                , Ports.fsListDir { path = next }
+                                )
+
+                            [] ->
+                                -- All plans dirs listed: start reading.
+                                case newReadQueue of
+                                    r :: rs ->
+                                        ( { model
+                                            | planMetaDirListing = Nothing
+                                            , planMetaReading = Just r
+                                            , planMetaReadQueue = rs
+                                            , planMetaLoading = False
+                                          }
+                                        , Ports.fsReadFileText { path = r }
+                                        )
+
+                                    [] ->
+                                        ( { model | planMetaDirListing = Nothing, planMetaLoading = False }
+                                        , Cmd.none
+                                        )
+
+                    Nothing ->
+                        -- The sessions/ listing: queue every session's
+                        -- plans/ subdir (missing plans dirs list empty).
+                        let
+                            planDirs =
+                                parsed
+                                    |> List.filter .isDir
+                                    |> List.map .name
+                                    |> List.map (\n -> sessionsDir model.homeDir ++ "/" ++ n ++ "/plans")
+                        in
+                        case planDirs of
+                            next :: rest ->
+                                ( { model
+                                    | planMetaDirQueue = rest
+                                    , planMetaDirListing = Just next
+                                  }
+                                , Ports.fsListDir { path = next }
                                 )
 
                             [] ->
                                 ( { model | planMetaLoading = False }, Cmd.none )
-                in
-                ( m1, c1 )
-
-            else
-                let
-                    pm =
-                        model.planManager
-                in
-                if pm.show && pm.tab == PlanTabBrowse then
-                -- Browse tab: directory listing for plan import.
-                let
-                    parsed =
-                        List.filterMap FP.decodeDirEntry entries
-                            |> List.filter (\e -> e.name /= "..")
-                in
-                case pm.browser of
-                    Just fp ->
-                        ( { model
-                            | planManager =
-                                { pm
-                                    | browser = Just { fp | entries = parsed, loading = False, error = Nothing }
-                                }
-                          }
-                        , Cmd.none
-                        )
-
-                    Nothing ->
-                        ( model, Cmd.none )
-
-            else if pm.show then
-                -- Plan manager is listing ~/.alayaface/plans: keep only
-                -- *.json files (skip *.run.json run-state files).
-                let
-                    parsed =
-                        List.filterMap (\v -> D.decodeValue planDirEntryDecoder v |> Result.toMaybe) entries
-                            |> List.filter (\e -> not e.isDir)
-                            |> List.map .name
-                            |> List.filter (\n -> String.endsWith ".json" n && not (String.endsWith ".run.json" n))
-                            |> List.sort
-
-                    files =
-                        List.map
-                            (\n -> { name = n, path = plansDir model.homeDir ++ "/" ++ n })
-                            parsed
-                in
-                ( { model
-                    | planManager = { pm | loading = False, plans = files, error = Nothing }
-                  }
-                , Cmd.none
-                )
 
             else
                 let
@@ -2647,30 +2623,8 @@ update msg model =
             let
                 model2 =
                     { model | homeDir = home }
-
-                pm0 =
-                    model2.planManager
-
-                -- If the Plans manager's Browse tab is active and its
-                -- browser is still waiting for a home dir, initialize it.
-                needsBrowserInit =
-                    pm0.show
-                        && pm0.tab == PlanTabBrowse
-                        && (case pm0.browser of
-                                Just fp ->
-                                    fp.dir == ""
-
-                                Nothing ->
-                                    False
-                           )
-
-                model3 =
-                    if needsBrowserInit then
-                        { model2 | planManager = { pm0 | browser = Just (initPlanBrowser home) } }
-                    else
-                        model2
             in
-            ( updateActiveSession model3 (\s ->
+            ( updateActiveSession model2 (\s ->
                 let
                     fp =
                         s.filePicker
@@ -2688,19 +2642,11 @@ update msg model =
               )
             , Cmd.batch
                 [ Ports.fsListDir { path = home }
-                , if model3.planManager.show then
-                    case model3.planManager.tab of
-                        PlanTabSaved ->
-                            Ports.fsListDir { path = plansDir home }
-
-                        PlanTabBrowse ->
-                            Ports.fsListDir { path = home }
-
-                  else
-                    Cmd.none
                 , -- R3: rebuild the planMetas index from meta.json files
                   -- (status bars / feedback routing survive restarts).
-                  Ports.fsListDir { path = plansDir home }
+                  -- Two-level scan: list sessions/ → each session's
+                  -- plans/ dir → read every *.meta.json.
+                  Ports.fsListDir { path = sessionsDir home }
                 , case model.activeId of
                     Just sid ->
                         Cmd.batch
@@ -2770,7 +2716,7 @@ update msg model =
                             pm =
                                 model2.planManager
                         in
-                        ( { model2 | planManager = { pm | loading = False, error = Nothing } }
+                        ( { model2 | planManager = { pm | error = Nothing } }
                         -- Refresh the manager list only while it is open:
                         -- run.json writes happen on every runner step and
                         -- a stray fs_list_dir (plans dir) would otherwise
@@ -2807,8 +2753,17 @@ update msg model =
                                         case D.decodeString PM.decodeMeta content of
                                             Ok meta ->
                                                 let
+                                                    -- planId = the meta
+                                                    -- file name minus
+                                                    -- ".meta.json" (paths
+                                                    -- are
+                                                    -- sessions/<origin>/plans/<planId>/<planId>.meta.json).
                                                     planId =
-                                                        String.dropRight (String.length ".meta.json") (String.dropLeft (String.length (plansDir model.homeDir) + 1) path)
+                                                        String.split "/" path
+                                                            |> List.reverse
+                                                            |> List.head
+                                                            |> Maybe.withDefault path
+                                                            |> String.dropRight (String.length ".meta.json")
                                                 in
                                                 { model | planMetas = Dict.insert planId meta model.planMetas }
 
@@ -2992,10 +2947,7 @@ update msg model =
                                                                 , planManager =
                                                                     { pm
                                                                         | show = False
-                                                                        , loading = False
                                                                         , filter = ""
-                                                                        , tab = PlanTabSaved
-                                                                        , browser = Nothing
                                                                     }
                                                             }
 
@@ -3040,7 +2992,6 @@ update msg model =
                                                         , planManager =
                                                             { pm
                                                                 | show = True
-                                                                , loading = False
                                                                 , error = Just (String.join "\n" errs)
                                                             }
                                                       }
@@ -3057,7 +3008,6 @@ update msg model =
                                                 , planManager =
                                                     { pm
                                                         | show = True
-                                                        , loading = False
                                                         , error = Just error
                                                     }
                                               }
@@ -3077,9 +3027,32 @@ update msg model =
                         let
                             pm =
                                 model.planManager
+
+                            planId =
+                                pm.pendingDelete
+
+                            -- Drop the deleted plan from the index and
+                            -- close its window if it was open.
+                            m1 =
+                                case planId of
+                                    Just pid ->
+                                        { model
+                                            | planMetas = Dict.remove pid model.planMetas
+                                            , planWindows = Dict.remove pid model.planWindows
+                                            , planOrder = List.filter (\k -> k /= pid) model.planOrder
+                                            , planRunStatuses = Dict.remove pid model.planRunStatuses
+                                            , planActiveId =
+                                                if model.planActiveId == Just pid then
+                                                    Nothing
+                                                else
+                                                    model.planActiveId
+                                        }
+
+                                    Nothing ->
+                                        model
                         in
-                        ( { model | planManager = { pm | error = Nothing } }
-                        , refreshPlanList model
+                        ( { m1 | planManager = { pm | error = Nothing, pendingDelete = Nothing } }
+                        , Cmd.none
                         )
 
                     else
@@ -3087,7 +3060,7 @@ update msg model =
                             pm =
                                 model.planManager
                         in
-                        ( { model | planManager = { pm | error = Just error } }
+                        ( { model | planManager = { pm | error = Just error, pendingDelete = Nothing } }
                         , Cmd.none
                         )
 
@@ -3095,74 +3068,37 @@ update msg model =
                     ( model, Cmd.none )
 
         FsResolvePathResult result ->
-            let
-                pm =
-                    model.planManager
-            in
-            if pm.show && pm.tab == PlanTabBrowse then
-                -- Plans Browse tab: navigation happens in the import browser.
-                case pm.browser of
-                    Just fp ->
-                        case D.decodeValue resolvePathResultDecoder result of
-                            Ok rp ->
-                                if rp.exists && rp.isDir then
-                                    let
-                                        sameDir =
-                                            rp.resolved == fp.dir
-                                    in
-                                    ( { model
-                                        | planManager =
-                                            { pm
-                                                | browser = Just { fp | dir = rp.resolved, selected = 0 }
-                                            }
-                                      }
-                                    , if sameDir then
-                                        Cmd.none
-                                      else
-                                        Ports.fsListDir { path = rp.resolved }
-                                    )
+            case getActiveSession model of
+                Just s ->
+                    case D.decodeValue resolvePathResultDecoder result of
+                        Ok rp ->
+                            if rp.exists && rp.isDir then
+                                let
+                                    fp =
+                                        s.filePicker
 
-                                else
-                                    ( model, Cmd.none )
+                                    sameDir =
+                                        rp.resolved == fp.dir
+                                in
+                                ( updateActiveSession model (\sess ->
+                                    { sess
+                                        | filePicker = { fp | dir = rp.resolved, selected = 0 }
+                                    }
+                                  )
+                                , if sameDir then
+                                    Cmd.none
+                                  else
+                                    Ports.fsListDir { path = rp.resolved }
+                                )
 
-                            Err _ ->
+                            else
                                 ( model, Cmd.none )
 
-                    Nothing ->
-                        ( model, Cmd.none )
+                        Err _ ->
+                            ( model, Cmd.none )
 
-            else
-                case getActiveSession model of
-                    Just s ->
-                        case D.decodeValue resolvePathResultDecoder result of
-                            Ok rp ->
-                                if rp.exists && rp.isDir then
-                                    let
-                                        fp =
-                                            s.filePicker
-
-                                        sameDir =
-                                            rp.resolved == fp.dir
-                                    in
-                                    ( updateActiveSession model (\sess ->
-                                        { sess
-                                            | filePicker = { fp | dir = rp.resolved, selected = 0 }
-                                        }
-                                      )
-                                    , if sameDir then
-                                        Cmd.none
-                                      else
-                                        Ports.fsListDir { path = rp.resolved }
-                                    )
-
-                                else
-                                    ( model, Cmd.none )
-
-                            Err _ ->
-                                ( model, Cmd.none )
-
-                    Nothing ->
-                        ( model, Cmd.none )
+                Nothing ->
+                    ( model, Cmd.none )
 
         -- Session Manager
         OpenSessionManager ->
@@ -3186,18 +3122,17 @@ update msg model =
                 , planManager =
                     { pm
                         | show = True
-                        , loading = True
                         , error = Nothing
                         , filter = ""
-                        , tab = PlanTabSaved
-                        , browser = Nothing
                     }
               }
-            , if model.homeDir == "" then
+            , -- The list comes from planMetas (rebuilt from disk on
+              -- fs_home_dir); request home if it is still unknown.
+              if model.homeDir == "" then
                 Ports.fsHomeDir {}
 
               else
-                Ports.fsListDir { path = plansDir model.homeDir }
+                Cmd.none
             )
 
         ClosePlanManager ->
@@ -3210,8 +3145,6 @@ update msg model =
                     { pm
                         | show = False
                         , filter = ""
-                        , tab = PlanTabSaved
-                        , browser = Nothing
                     }
               }
             , Cmd.none
@@ -3221,7 +3154,22 @@ update msg model =
             openPlanFile path model
 
         PlanManagerDelete path ->
-            ( model, Ports.fsDeleteFile { path = path } )
+            -- Record the planId (file name minus .json) so FsDeleteResult
+            -- can drop it from planMetas and close its window.
+            let
+                pm =
+                    model.planManager
+
+                planId =
+                    String.split "/" path
+                        |> List.reverse
+                        |> List.head
+                        |> Maybe.withDefault path
+                        |> (\n -> if String.endsWith ".json" n then String.dropRight 5 n else n)
+            in
+            ( { model | planManager = { pm | pendingDelete = Just planId } }
+            , Ports.fsDeleteFile { path = path }
+            )
 
         PlanManagerSetFilter text ->
             let
@@ -3232,140 +3180,6 @@ update msg model =
             , Cmd.none
             )
 
-        PlanManagerSwitchTab tab ->
-            let
-                pm =
-                    model.planManager
-            in
-            case tab of
-                PlanTabSaved ->
-                    ( { model | planManager = { pm | tab = PlanTabSaved, browser = Nothing } }
-                    , refreshPlanList model
-                    )
-
-                PlanTabBrowse ->
-                    case pm.browser of
-                        Just _ ->
-                            ( { model | planManager = { pm | tab = PlanTabBrowse } }
-                            , Cmd.none
-                            )
-
-                        Nothing ->
-                            if model.homeDir == "" then
-                                ( { model
-                                    | planManager =
-                                        { pm | tab = PlanTabBrowse, browser = Just emptyPlanBrowser }
-                                  }
-                                , Ports.fsHomeDir {}
-                                )
-
-                            else
-                                ( { model
-                                    | planManager =
-                                        { pm
-                                            | tab = PlanTabBrowse
-                                            , browser = Just (initPlanBrowser model.homeDir)
-                                        }
-                                  }
-                                , Ports.fsListDir { path = model.homeDir }
-                                )
-
-        PlanManagerBrowserInput val ->
-            let
-                pm =
-                    model.planManager
-            in
-            case pm.browser of
-                Just fp ->
-                    -- Input cleared → restore to current directory path
-                    let
-                        safeVal =
-                            if val == "" then
-                                "/"
-                            else
-                                val
-
-                        ( needsResolve, resolvePath, filterText ) =
-                            FP.parsePathInput safeVal fp.dir fp.baseDir
-
-                        cmd =
-                            if needsResolve then
-                                Ports.fsResolvePath { path = resolvePath }
-                            else
-                                Cmd.none
-
-                        previewFp =
-                            { fp | input = safeVal, filter = filterText }
-
-                        filteredLen =
-                            List.length (FP.filterEntries previewFp)
-
-                        clampedIdx =
-                            if fp.selected >= filteredLen then
-                                max 0 (filteredLen - 1)
-                            else
-                                fp.selected
-                    in
-                    ( { model
-                        | planManager =
-                            { pm
-                                | browser =
-                                    Just { fp | input = safeVal, filter = filterText, selected = clampedIdx }
-                            }
-                      }
-                    , cmd
-                    )
-
-                Nothing ->
-                    ( model, Cmd.none )
-
-        PlanManagerBrowserNavigate name ->
-            let
-                pm =
-                    model.planManager
-            in
-            case pm.browser of
-                Just fp ->
-                    let
-                        ( newFp, newDir ) =
-                            FP.appendDirToInput fp name
-                    in
-                    ( { model | planManager = { pm | browser = Just newFp } }
-                    , Ports.fsResolvePath { path = newDir }
-                    )
-
-                Nothing ->
-                    ( model, Cmd.none )
-
-        PlanManagerBrowserSelect idx ->
-            let
-                pm =
-                    model.planManager
-
-                scrollCmd =
-                    case pm.browser of
-                        Just fp ->
-                            case List.head (List.drop idx (FP.filterEntries fp)) of
-                                Just e ->
-                                    Ports.scrollIntoView ("fp-item-plan-" ++ e.name)
-
-                                Nothing ->
-                                    Cmd.none
-
-                        Nothing ->
-                            Cmd.none
-            in
-            ( { model
-                | planManager = { pm | browser = Maybe.map (\fp -> { fp | selected = idx }) pm.browser }
-              }
-            , scrollCmd
-            )
-
-        PlanManagerBrowserConfirm ->
-            planBrowserPick model Nothing
-
-        PlanManagerBrowserPick idx ->
-            planBrowserPick model (Just idx)
 
         PlanOpenFromMessage sid planIndex ->
             -- Manual open of a detected-but-suppressed plan message: find
@@ -3419,8 +3233,28 @@ update msg model =
                 planId =
                     PT.slugify plan.name ++ "-" ++ String.fromInt timestamp
 
+                -- The plan lives under its owning session's ON-DISK dir:
+                -- sessions/<originSessionId>/plans/<planId>/ (resumes
+                -- hand out fresh live ids whose dirs don't exist — the
+                -- origin must be the original dir id).
+                originDiskId =
+                    maybeOrigin
+                        |> Maybe.map (.sessionId >> onDiskSessionId model)
+                        |> Maybe.withDefault ""
+
+                origin =
+                    case maybeOrigin of
+                        Just o ->
+                            Just { o | sessionId = originDiskId }
+
+                        Nothing ->
+                            Nothing
+
+                planDir =
+                    planDirIn model.homeDir originDiskId planId
+
                 path =
-                    plansDir model.homeDir ++ "/" ++ planId ++ ".json"
+                    planDir ++ "/" ++ planId ++ ".json"
 
                 content =
                     E.encode 2 (PT.encodePlan plan)
@@ -3447,13 +3281,13 @@ update msg model =
                 -- binding + feedbacks); planMetas is kept in memory for the
                 -- status bar and feedback routing.
                 meta =
-                    { origin = maybeOrigin
+                    { origin = origin
                     , feedbacks = []
                     , createdAt = timestamp
                     }
 
                 metaPath =
-                    PM.metaPathFor (plansDir model.homeDir) planId
+                    PM.metaPathFor planDir planId
 
                 m1 =
                     { model
@@ -3485,7 +3319,12 @@ update msg model =
                 )
 
             else
-                openPlanFile (plansDir model.homeDir ++ "/" ++ planId ++ ".json") model
+                case planFilePathOf model planId of
+                    Just path ->
+                        openPlanFile path model
+
+                    Nothing ->
+                        ( model, Cmd.none )
 
         PlanActivate planId ->
             if model.planActiveId == Just planId then
@@ -3844,7 +3683,7 @@ update msg model =
                                                             , planNodeSessions =
                                                                 Dict.insert sid (planId ++ "/" ++ nodeId) model.planNodeSessions
                                                           }
-                                                        , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model, planId = Just planId, nodeId = Just nodeId }
+                                                        , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model, planId = Just planId, nodeId = Just nodeId, originSessionId = planOriginSessionId model planId }
                                                         )
 
                                         Nothing ->
@@ -3870,7 +3709,7 @@ update msg model =
                                                                     , planNodeSessions =
                                                                         Dict.insert sid (planId ++ "/" ++ nodeId) model.planNodeSessions
                                                                   }
-                                                                , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model, planId = Just planId, nodeId = Just nodeId }
+                                                                , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model, planId = Just planId, nodeId = Just nodeId, originSessionId = planOriginSessionId model planId }
                                                                 )
 
                                                 Nothing ->
@@ -3913,7 +3752,7 @@ update msg model =
                             , planNodeSessions =
                                 Dict.insert sid (planId ++ "/" ++ nodeId) model.planNodeSessions
                           }
-                        , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model, planId = Just planId, nodeId = Just nodeId }
+                        , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model, planId = Just planId, nodeId = Just nodeId, originSessionId = planOriginSessionId model planId }
                         )
 
         PlanSetConcurrency text ->
@@ -4041,7 +3880,7 @@ update msg model =
                 , planResumeFrom = Just id
                 , planReplaySessions = Set.insert id model.planReplaySessions
               }
-            , Ports.resumeSession { sessionId = id, workDir = Nothing, planId = Nothing, nodeId = Nothing }
+            , Ports.resumeSession { sessionId = id, workDir = Nothing, planId = Nothing, nodeId = Nothing, originSessionId = Nothing }
             )
 
         DeleteSession id ->
@@ -4080,7 +3919,7 @@ update msg model =
             in
             ( { cleaned | sessionManagerError = Nothing }
             , Cmd.batch
-                [ Ports.deleteSessionDir { sessionId = id, planId = Nothing, nodeId = Nothing }
+                [ Ports.deleteSessionDir { sessionId = id, planId = Nothing, nodeId = Nothing, originSessionId = Nothing }
                 , if (model.nodeConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
                     Ports.setNodeConnection Nothing
 

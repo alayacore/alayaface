@@ -157,9 +157,12 @@
         systemPrompt: data.systemPrompt || null,
         workDir: data.workDir || null,
         // Plan node sessions are stored nested on disk:
-        // sessions/<planId>/<nodeId>/<uuid>/ (plain sessions omit both).
+        // sessions/<originSessionId>/plans/<planId>/<nodeId>/<uuid>/
+        // (plain sessions omit all three).
         planId: (data.planId === undefined || data.planId === null) ? null : data.planId,
         nodeId: (data.nodeId === undefined || data.nodeId === null) ? null : data.nodeId,
+        originSessionId: (data.originSessionId === undefined || data.originSessionId === null)
+          ? null : data.originSessionId,
       }).then(function (id) { app.ports.onSessionCreated.send(id); })
         .catch(function (err) {
           console.error("create_session failed:", err);
@@ -368,6 +371,7 @@
         workDir: (data && data.workDir) || null,
         planId: (data && data.planId) || null,
         nodeId: (data && data.nodeId) || null,
+        originSessionId: (data && data.originSessionId) || null,
       }).then(function (id) {
         app.ports.onSessionCreated.send(id);
         app.ports.onSessionActionResult.send({ ok: true, error: "", kind: "resume" });
@@ -393,6 +397,7 @@
         sessionId: data.sessionId,
         planId: (data && data.planId) || null,
         nodeId: (data && data.nodeId) || null,
+        originSessionId: (data && data.originSessionId) || null,
       })
         .then(function () {
           // Reflect the deletion immediately

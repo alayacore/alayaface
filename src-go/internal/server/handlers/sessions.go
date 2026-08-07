@@ -26,15 +26,16 @@ type SessionDirInfo struct {
 // CreateSession spawns a new alayacore session.
 func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	var args struct {
-		BinaryPath   string  `json:"binaryPath"`
-		ConfigPath   string  `json:"configPath"`
-		ToolConfirm  *string `json:"toolConfirm"`
-		Preset       *string `json:"preset"`
-		BuiltinTools *string `json:"builtinTools"`
-		SystemPrompt *string `json:"systemPrompt"`
-		WorkDir      *string `json:"workDir"`
-		PlanID       *string `json:"planId"`
-		NodeID       *string `json:"nodeId"`
+		BinaryPath      string  `json:"binaryPath"`
+		ConfigPath      string  `json:"configPath"`
+		ToolConfirm     *string `json:"toolConfirm"`
+		Preset          *string `json:"preset"`
+		BuiltinTools    *string `json:"builtinTools"`
+		SystemPrompt    *string `json:"systemPrompt"`
+		WorkDir         *string `json:"workDir"`
+		PlanID          *string `json:"planId"`
+		NodeID          *string `json:"nodeId"`
+		OriginSessionID *string `json:"originSessionId"`
 	}
 	if err := decodeArgs(r, &args); err != nil {
 		return err
@@ -50,17 +51,22 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	if args.Preset != nil {
 		presetName = *args.Preset
 	}
-	// Plan node sessions live NESTED under sessions/<planId>/<nodeId>/ so
-	// the sessions/ top level only ever contains plain sessions (the
-	// session manager lists only top-level dirs). Plain sessions stay at
+	// Plan node sessions live NESTED under
+	// sessions/<originSessionId>/plans/<planId>/<nodeId>/ — every plan
+	// belongs to the session that created it, and the sessions/ top
+	// level only ever contains plain sessions. Plain sessions stay at
 	// sessions/<uuid>/.
 	var sessionDir string
 	if args.PlanID != nil && strings.TrimSpace(*args.PlanID) != "" {
+		originID := ""
+		if args.OriginSessionID != nil {
+			originID = *args.OriginSessionID
+		}
 		nodeID := ""
 		if args.NodeID != nil {
 			nodeID = *args.NodeID
 		}
-		sessionDir, err = dirs.CreatePlanSessionDirFrom(sessionsDir, *args.PlanID, nodeID, id, presetName)
+		sessionDir, err = dirs.CreatePlanSessionDirFrom(sessionsDir, originID, *args.PlanID, nodeID, id, presetName)
 	} else {
 		sessionDir, err = dirs.CreateSessionDirFrom(sessionsDir, id, presetName)
 	}
@@ -152,40 +158,73 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	return writeResult(w, s.ID)
 }
 
+// resolveSessionDir locates an on-disk session directory by trying the
+// current and legacy layouts in order:
+//  1. sessions/<originSessionId>/plans/<planId>/<nodeId>/<sessionId>  (P28: plan under its session)
+//  2. sessions/<planId>/<nodeId>/<sessionId>                          (P27: plan-keyed top-level subtrees)
+//  3. sessions/<sessionId>                                            (flat, pre-hierarchy)
+// The first path that exists wins; "" components are skipped.
+func resolveSessionDir(sessionsRoot, originSessionId, planId, nodeId, sessionId string) string {
+	if strings.TrimSpace(originSessionId) != "" && strings.TrimSpace(planId) != "" {
+		d := filepath.Join(
+			sessionsRoot,
+			dirs.SanitizeDirComponent(originSessionId),
+			"plans",
+			dirs.SanitizeDirComponent(planId),
+			dirs.SanitizeDirComponent(nodeId),
+			sessionId,
+		)
+		if _, err := os.Stat(d); err == nil {
+			return d
+		}
+	}
+	if strings.TrimSpace(planId) != "" {
+		d := filepath.Join(
+			sessionsRoot,
+			dirs.SanitizeDirComponent(planId),
+			dirs.SanitizeDirComponent(nodeId),
+			sessionId,
+		)
+		if _, err := os.Stat(d); err == nil {
+			return d
+		}
+	}
+	return filepath.Join(sessionsRoot, sessionId)
+}
+
 // ResumeSession resumes an on-disk session directory.
 func ResumeSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	var args struct {
-		SessionID  string  `json:"sessionId"`
-		BinaryPath string  `json:"binaryPath"`
-		WorkDir    *string `json:"workDir"`
-		PlanID     *string `json:"planId"`
-		NodeID     *string `json:"nodeId"`
+		SessionID       string  `json:"sessionId"`
+		BinaryPath      string  `json:"binaryPath"`
+		WorkDir         *string `json:"workDir"`
+		PlanID          *string `json:"planId"`
+		NodeID          *string `json:"nodeId"`
+		OriginSessionID *string `json:"originSessionId"`
 	}
 	if err := decodeArgs(r, &args); err != nil {
 		return err
 	}
 
 	sessionsRoot := filepath.Join(dirs.AlayafaceDir(), "sessions")
-	// Plan node sessions live nested under sessions/<planId>/<nodeId>/;
-	// the frontend passes planId (+nodeId) so resume finds the on-disk
-	// dir even though the session id alone is only unique per plan.
-	// LEGACY fallback: plan sessions created before the hierarchy lived
-	// flat at sessions/<uuid>/ — if the nested dir is missing, fall back
-	// to the top level so old sessions stay resumable (creation always
-	// nests; the manager never lists plan children).
-	var sessionsDir string
-	if args.PlanID != nil && strings.TrimSpace(*args.PlanID) != "" {
-		nodeID := ""
-		if args.NodeID != nil {
-			nodeID = *args.NodeID
-		}
-		sessionsDir = filepath.Join(sessionsRoot, dirs.SanitizeDirComponent(*args.PlanID), dirs.SanitizeDirComponent(nodeID), args.SessionID)
-		if _, err := os.Stat(sessionsDir); err != nil {
-			sessionsDir = filepath.Join(sessionsRoot, args.SessionID)
-		}
-	} else {
-		sessionsDir = filepath.Join(sessionsRoot, args.SessionID)
+	// Plan node sessions are nested under the plan's owning session; the
+	// frontend passes originSessionId/planId/nodeId so resume finds the
+	// on-disk dir even though the session id alone is only unique per
+	// plan. resolveSessionDir falls back to older layouts for sessions
+	// created before this change.
+	originID := ""
+	if args.OriginSessionID != nil {
+		originID = *args.OriginSessionID
 	}
+	planID := ""
+	if args.PlanID != nil {
+		planID = *args.PlanID
+	}
+	nodeID := ""
+	if args.NodeID != nil {
+		nodeID = *args.NodeID
+	}
+	sessionsDir := resolveSessionDir(sessionsRoot, originID, planID, nodeID, args.SessionID)
 	sessionFile := filepath.Join(sessionsDir, "session.alaya")
 	configDir := filepath.Join(sessionsDir, "config")
 
@@ -310,26 +349,31 @@ func ListSessionDirs(h *Handler, w http.ResponseWriter, r *http.Request) error {
 // on-disk session directory.
 func DeleteSessionDir(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	var args struct {
-		SessionID string  `json:"sessionId"`
-		PlanID    *string `json:"planId"`
-		NodeID    *string `json:"nodeId"`
+		SessionID       string  `json:"sessionId"`
+		PlanID          *string `json:"planId"`
+		NodeID          *string `json:"nodeId"`
+		OriginSessionID *string `json:"originSessionId"`
 	}
 	if err := decodeArgs(r, &args); err != nil {
 		return err
 	}
 	_ = h.Sessions.Close(args.SessionID)
 	sessionsRoot := filepath.Join(dirs.AlayafaceDir(), "sessions")
-	// Plan node sessions are nested; optional planId/nodeId locate them.
-	var sessionDir string
-	if args.PlanID != nil && strings.TrimSpace(*args.PlanID) != "" {
-		nodeID := ""
-		if args.NodeID != nil {
-			nodeID = *args.NodeID
-		}
-		sessionDir = filepath.Join(sessionsRoot, dirs.SanitizeDirComponent(*args.PlanID), dirs.SanitizeDirComponent(nodeID), args.SessionID)
-	} else {
-		sessionDir = filepath.Join(sessionsRoot, args.SessionID)
+	// Plan node sessions are nested; originSessionId/planId/nodeId locate
+	// them (resolveSessionDir also tries the older layouts).
+	originID := ""
+	if args.OriginSessionID != nil {
+		originID = *args.OriginSessionID
 	}
+	planID := ""
+	if args.PlanID != nil {
+		planID = *args.PlanID
+	}
+	nodeID := ""
+	if args.NodeID != nil {
+		nodeID = *args.NodeID
+	}
+	sessionDir := resolveSessionDir(sessionsRoot, originID, planID, nodeID, args.SessionID)
 	if _, err := os.Stat(sessionDir); err == nil {
 		if err := os.RemoveAll(sessionDir); err != nil {
 			return fmt.Errorf("Cannot delete %s: %w", sessionDir, err)

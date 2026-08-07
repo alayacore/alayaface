@@ -87,10 +87,12 @@ port onStatus : (E.Value -> msg) -> Sub msg
 
 -- Outbound commands (Elm → Tauri via JS bridge)
 
--- planId/nodeId (optional): plan NODE sessions are created/resumed
--- nested under sessions/<planId>/<nodeId>/ on disk; plain sessions omit
+-- originSessionId/planId/nodeId (optional): plan NODE sessions are
+-- created/resumed nested under
+-- sessions/<originSessionId>/plans/<planId>/<nodeId>/ on disk (every
+-- plan lives inside the session that created it); plain sessions omit
 -- them and stay at sessions/<uuid>/ (top level = never a plan child).
-port createSession : { toolConfirm : Maybe String, preset : Maybe String, builtinTools : Maybe String, systemPrompt : Maybe String, workDir : Maybe String, planId : Maybe String, nodeId : Maybe String } -> Cmd msg
+port createSession : { toolConfirm : Maybe String, preset : Maybe String, builtinTools : Maybe String, systemPrompt : Maybe String, workDir : Maybe String, planId : Maybe String, nodeId : Maybe String, originSessionId : Maybe String } -> Cmd msg
 port closeSession : { sessionId : String } -> Cmd msg
 port sendPrompt : { sessionId : String, text : String, media : List E.Value } -> Cmd msg
 port cancelTask : { sessionId : String } -> Cmd msg
@@ -119,9 +121,9 @@ port confirmTool : { sessionId : String, id : String, allowed : Bool } -> Cmd ms
 port sendMcpDecline : { sessionId : String, server : String } -> Cmd msg
 port sendMcpCancel : { sessionId : String } -> Cmd msg
 port forkSession : { sourceSessionId : String, historyId : String } -> Cmd msg
-port resumeSession : { sessionId : String, workDir : Maybe String, planId : Maybe String, nodeId : Maybe String } -> Cmd msg
+port resumeSession : { sessionId : String, workDir : Maybe String, planId : Maybe String, nodeId : Maybe String, originSessionId : Maybe String } -> Cmd msg
 port listSessionDirs : {} -> Cmd msg
-port deleteSessionDir : { sessionId : String, planId : Maybe String, nodeId : Maybe String } -> Cmd msg
+port deleteSessionDir : { sessionId : String, planId : Maybe String, nodeId : Maybe String, originSessionId : Maybe String } -> Cmd msg
 
 -- Node↔session connection curve (P19): Elm tells bridge.js which pair to
 -- connect (Nothing = hide). bridge.js measures the DOM and draws a bezier.

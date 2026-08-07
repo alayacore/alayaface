@@ -660,16 +660,17 @@ func TestIntegrationSessionWorkDir(t *testing.T) {
 
 // ─── Nested plan-session directories ────────────────────────────────
 
-// Plan node sessions (create_session with planId/nodeId) must be stored
-// NESTED under sessions/<planId>/<nodeId>/ so the sessions/ top level
-// only ever contains plain (non-plan) sessions. The session manager
-// (list_session_dirs) must not show plan dirs, resume must find the
-// nested dir, and delete must remove it.
+// Plan node sessions (create_session with planId/nodeId/originSessionId)
+// must be stored NESTED under sessions/<originSessionId>/plans/<planId>/<nodeId>/
+// — every plan lives inside the session that created it, and the
+// sessions/ top level only ever contains plain sessions. The session
+// manager (list_session_dirs) must not show plan dirs, resume must find
+// the nested dir (with legacy fallbacks), and delete must remove it.
 func TestIntegrationNestedPlanSessionDir(t *testing.T) {
 	e := newTestEnv(t, "")
 	sessionsRoot := filepath.Join(dirs.AlayafaceDir(), "sessions")
 
-	// Plain session stays at the top level. session.alaya is written by
+	// Plain sessions stay at the top level. session.alaya is written by
 	// the core on boot, so wait for the boot SM before asserting.
 	plainSid := e.createSession(t)
 	e.waitEvent(t, "tlv-frame", func(p map[string]any) bool {
@@ -681,26 +682,40 @@ func TestIntegrationNestedPlanSessionDir(t *testing.T) {
 	}
 	e.rpcOK(t, "close_session", map[string]any{"sessionId": plainSid})
 
-	// Plan node session goes NESTED (id with '/' + spaces exercises the
-	// sanitizer; create and resume must agree on the mapping).
-	workDir := filepath.Join(dirs.AlayafaceDir(), "plans", "demo 1", "work")
+	// The ORIGIN session (a plain chat session that created the plan).
+	originSid := e.createSession(t)
+	e.waitEvent(t, "tlv-frame", func(p map[string]any) bool {
+		js, _ := p["json"].(map[string]any)
+		return p["session_id"] == originSid && p["tag"] == "SM" && js != nil && js["type"] == "task"
+	})
+
+	// Plan node session goes NESTED under the ORIGIN session's dir (id
+	// with '/' + spaces exercises the sanitizer; create and resume must
+	// agree on the mapping).
+	workDir := filepath.Join(sessionsRoot, originSid, "plans", "demo 1", "work")
 	body := e.rpcOK(t, "create_session", map[string]any{
 		"binaryPath": "", "configPath": "", "toolConfirm": nil,
-		"workDir": workDir, "planId": "demo 1", "nodeId": "t1/x",
+		"workDir": workDir, "planId": "demo 1", "nodeId": "t1/x", "originSessionId": originSid,
 	})
 	var sid string
 	if err := json.Unmarshal(body, &sid); err != nil {
 		t.Fatalf("create_session: %s", body)
 	}
-	nestedDir := filepath.Join(sessionsRoot, "demo_1", "t1_x", sid)
+	nestedDir := filepath.Join(sessionsRoot, originSid, "plans", "demo_1", "t1_x", sid)
 	// The nested DIR (with config/) is created synchronously; the
 	// session.alaya appears once the core boots.
 	if _, err := os.Stat(filepath.Join(nestedDir, "config")); err != nil {
 		t.Fatalf("plan session not nested at %s: %v", nestedDir, err)
 	}
-	// Top level must NOT contain the plan session id.
+	// Top level must NOT contain the plan session id or a plan dir.
 	if _, err := os.Stat(filepath.Join(sessionsRoot, sid)); err == nil {
 		t.Fatal("plan child session must not live at the sessions top level")
+	}
+	if _, err := os.Stat(filepath.Join(sessionsRoot, "demo_1")); err == nil {
+		t.Fatal("plan dir must not live at the sessions top level")
+	}
+	if _, err := os.Stat(workDir); err != nil {
+		t.Fatalf("per-plan work dir not created: %v", err)
 	}
 	e.waitEvent(t, "tlv-frame", func(p map[string]any) bool {
 		js, _ := p["json"].(map[string]any)
@@ -710,21 +725,27 @@ func TestIntegrationNestedPlanSessionDir(t *testing.T) {
 		t.Fatalf("nested session.alaya missing: %v", err)
 	}
 
-	// list_session_dirs shows only top-level SESSION dirs (not plan dirs).
+	// list_session_dirs shows only top-level SESSION dirs (the two plain
+	// sessions) — never plan dirs or plan child sessions.
 	var dirs1 []map[string]any
 	body = e.rpcOK(t, "list_session_dirs", map[string]any{})
 	if err := json.Unmarshal(body, &dirs1); err != nil {
 		t.Fatalf("list_session_dirs: %s", body)
 	}
-	if len(dirs1) != 1 || dirs1[0]["id"] != plainSid {
-		t.Fatalf("list_session_dirs = %v, want only the plain session %s", dirs1, plainSid)
+	ids := map[string]bool{}
+	for _, d := range dirs1 {
+		ids[d["id"].(string)] = true
+	}
+	if len(dirs1) != 2 || !ids[plainSid] || !ids[originSid] {
+		t.Fatalf("list_session_dirs = %v, want the two plain sessions %s/%s", dirs1, plainSid, originSid)
 	}
 
-	// Resume with planId/nodeId finds the nested dir (close the live
-	// session first — double-resume of the same dir is rejected).
+	// Resume with originSessionId/planId/nodeId finds the nested dir
+	// (close the live session first — double-resume is rejected).
 	e.rpcOK(t, "close_session", map[string]any{"sessionId": sid})
 	body = e.rpcOK(t, "resume_session", map[string]any{
-		"sessionId": sid, "binaryPath": "", "workDir": workDir, "planId": "demo 1", "nodeId": "t1/x",
+		"sessionId": sid, "binaryPath": "", "workDir": workDir,
+		"planId": "demo 1", "nodeId": "t1/x", "originSessionId": originSid,
 	})
 	var newID string
 	if err := json.Unmarshal(body, &newID); err != nil {
@@ -735,23 +756,42 @@ func TestIntegrationNestedPlanSessionDir(t *testing.T) {
 	}
 	e.rpcOK(t, "close_session", map[string]any{"sessionId": newID})
 
-	// Resume WITHOUT planId must NOT find it (proves the lookup is
-	// nested-aware, not a flat fallback).
+	// Resume WITHOUT originSessionId/planId must NOT find it (the lookup
+	// is nested-aware, not a flat fallback).
 	e.rpcErr(t, "resume_session", map[string]any{"sessionId": sid, "binaryPath": ""})
 
-	// LEGACY fallback: a pre-hierarchy plan session lives flat at the top
-	// level — resuming it WITH planId falls back to sessions/<uuid>.
+	// LEGACY fallback 1 (P27 layout): a plan-keyed top-level subtree
+	// sessions/<planId>/<nodeId>/<sid> — resumable with planId only.
+	legacyPlanDir := filepath.Join(sessionsRoot, "legacy_plan", "t1")
+	legacySid := "legacy-sess-1"
+	if _, err := dirs.CreateSessionDirFrom(legacyPlanDir, legacySid, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyPlanDir, legacySid, "session.alaya"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	body = e.rpcOK(t, "resume_session", map[string]any{
-		"sessionId": plainSid, "binaryPath": "", "planId": "legacy-plan", "nodeId": "t1",
+		"sessionId": legacySid, "binaryPath": "", "planId": "legacy_plan", "nodeId": "t1",
 	})
 	var legacyID string
 	if err := json.Unmarshal(body, &legacyID); err != nil {
-		t.Fatalf("legacy flat resume: %s", body)
+		t.Fatalf("legacy P27 resume: %s", body)
 	}
 	e.rpcOK(t, "close_session", map[string]any{"sessionId": legacyID})
 
-	// Delete with planId/nodeId removes the nested dir.
-	e.rpcOK(t, "delete_session_dir", map[string]any{"sessionId": sid, "planId": "demo 1", "nodeId": "t1/x"})
+	// LEGACY fallback 2 (flat): a pre-hierarchy plan session lives at
+	// sessions/<uuid> — resumable WITH origin+plan args.
+	body = e.rpcOK(t, "resume_session", map[string]any{
+		"sessionId": plainSid, "binaryPath": "", "planId": "legacy-plan", "nodeId": "t1", "originSessionId": originSid,
+	})
+	var flatID string
+	if err := json.Unmarshal(body, &flatID); err != nil {
+		t.Fatalf("legacy flat resume: %s", body)
+	}
+	e.rpcOK(t, "close_session", map[string]any{"sessionId": flatID})
+
+	// Delete with originSessionId/planId/nodeId removes the nested dir.
+	e.rpcOK(t, "delete_session_dir", map[string]any{"sessionId": sid, "planId": "demo 1", "nodeId": "t1/x", "originSessionId": originSid})
 	if _, err := os.Stat(nestedDir); err == nil {
 		t.Fatal("nested plan session dir not deleted")
 	}

@@ -13,9 +13,12 @@
 //	    <uuid>/            — PLAIN sessions only (top level is never a plan child)
 //	      config/          — copy of the active preset's config (minus settings.conf)
 //	      session.alaya
-//	    <planId>/          — Plan Mode: one subtree per plan (sanitized id)
-//	      <nodeId>/        — one subtree per plan node (sanitized id)
-//	        <uuid>/        — the node's session dir (config/ + session.alaya)
+//	      plans/           — plans created by this session (0..N)
+//	        <planId>/      — one subtree per plan (sanitized id)
+//	          <planId>.json / .meta.json / .run.json
+//	          work/        — per-plan working directory
+//	          <nodeId>/    — one subtree per plan node (sanitized id)
+//	            <uuid>/    — the node's session dir (config/ + session.alaya)
 //
 // Port of src-tauri/src/dirs.rs.
 package dirs
@@ -324,12 +327,19 @@ func SanitizeDirComponent(s string) string {
 }
 
 // CreatePlanSessionDirFrom creates a PLAN NODE session directory nested
-// under sessions/<planId>/<nodeId>/<uuid>/, so the sessions/ top level
-// only ever contains plain (non-plan) sessions. planId/nodeId are
-// sanitized with SanitizeDirComponent; preset selects the config
-// template like CreateSessionDirFrom.
-func CreatePlanSessionDirFrom(sessionsDir, planId, nodeId, uuid, preset string) (string, error) {
-	parent := filepath.Join(sessionsDir, SanitizeDirComponent(planId), SanitizeDirComponent(nodeId))
+// under sessions/<originSessionId>/plans/<planId>/<nodeId>/<uuid>/, so
+// the sessions/ top level only ever contains plain (non-plan) sessions
+// and every plan lives inside the session that created it. All id
+// components are sanitized with SanitizeDirComponent; preset selects the
+// config template like CreateSessionDirFrom.
+func CreatePlanSessionDirFrom(sessionsDir, originSessionId, planId, nodeId, uuid, preset string) (string, error) {
+	parent := filepath.Join(
+		sessionsDir,
+		SanitizeDirComponent(originSessionId),
+		"plans",
+		SanitizeDirComponent(planId),
+		SanitizeDirComponent(nodeId),
+	)
 	return createSessionDirIn(parent, uuid, preset)
 }
 

@@ -205,20 +205,24 @@ func TestCreatePlanSessionDirFromNests(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		sessionDir, err := CreatePlanSessionDirFrom(sessions, "demo plan/x", "t1", "uuid-1", "")
+		sessionDir, err := CreatePlanSessionDirFrom(sessions, "sess-1", "demo plan/x", "t1", "uuid-1", "")
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := filepath.Join(sessions, "demo_plan_x", "t1", "uuid-1")
+		want := filepath.Join(sessions, "sess-1", "plans", "demo_plan_x", "t1", "uuid-1")
 		if sessionDir != want {
 			t.Fatalf("nested session dir = %q, want %q", sessionDir, want)
 		}
 		if _, err := os.Stat(filepath.Join(sessionDir, "config", "model.conf")); err != nil {
 			t.Errorf("config not copied into nested dir: %v", err)
 		}
-		// Top level must NOT contain the session uuid (only the plan dir).
+		// Top level must NOT contain the session uuid (only the session
+		// dirs, each holding plans/ inside).
 		if _, err := os.Stat(filepath.Join(sessions, "uuid-1")); err == nil {
 			t.Error("plan child session must not live at the sessions top level")
+		}
+		if _, err := os.Stat(filepath.Join(sessions, "demo_plan_x")); err == nil {
+			t.Error("plan dir must not live at the sessions top level (must be under its session)")
 		}
 	})
 }

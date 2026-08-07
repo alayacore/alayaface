@@ -904,37 +904,16 @@ viewPlanExport pv =
 viewPlanManagerOverlay : Model -> Html Msg
 viewPlanManagerOverlay model =
     if model.planManager.show then
-        let
-            pm =
-                model.planManager
-        in
         viewOverlay ClosePlanManager
             [ Html.div [ Attr.class "sel-page" ]
                 [ Html.div [ Attr.class "sel-page-title" ] [ Html.text "Plans" ]
-                , Html.div [ Attr.class "plan-tabs" ]
-                    [ Html.button
-                        [ Attr.class ("plan-tab" ++ (if pm.tab == PlanTabSaved then " plan-tab-active" else ""))
-                        , Ev.onClick (PlanManagerSwitchTab PlanTabSaved)
-                        ]
-                        [ Html.text "Saved" ]
-                    , Html.button
-                        [ Attr.class ("plan-tab" ++ (if pm.tab == PlanTabBrowse then " plan-tab-active" else ""))
-                        , Ev.onClick (PlanManagerSwitchTab PlanTabBrowse)
-                        ]
-                        [ Html.text "Browse" ]
-                    ]
-                , case pm.error of
+                , case model.planManager.error of
                     Just err ->
                         Html.div [ Attr.class "sel-page-status sel-page-status-error" ] [ Html.text err ]
 
                     Nothing ->
                         Html.text ""
-                , case pm.tab of
-                    PlanTabSaved ->
-                        viewPlanSavedTab model
-
-                    PlanTabBrowse ->
-                        viewPlanBrowseTab model
+                , viewPlanSavedTab model
                 ]
             ]
 
@@ -942,42 +921,71 @@ viewPlanManagerOverlay model =
         Html.text ""
 
 
+{-| The saved-plans list is derived from the planMetas index — every
+plan is created by a session and lives under it
+(sessions/<origin>/plans/<planId>/), so no directory scan is needed.
+-}
+planFileListFromMetas : Model -> List PlanFileInfo
+planFileListFromMetas model =
+    Dict.foldl
+        (\planId meta acc ->
+            case meta.origin of
+                Just origin ->
+                    { name = planId
+                    , path =
+                        model.homeDir
+                            ++ "/.alayaface/sessions/"
+                            ++ origin.sessionId
+                            ++ "/plans/"
+                            ++ planId
+                            ++ "/"
+                            ++ planId
+                            ++ ".json"
+                    }
+                        :: acc
+
+                Nothing ->
+                    acc
+        )
+        []
+        model.planMetas
+        |> List.sortBy .name
+        |> List.reverse
+
+
 viewPlanSavedTab : Model -> Html Msg
 viewPlanSavedTab model =
     let
-        pm =
-            model.planManager
-
         term =
-            String.trim pm.filter
+            String.trim model.planManager.filter
 
         visible =
             if String.isEmpty term then
-                pm.plans
+                planFileListFromMetas model
 
             else
                 List.filter
                     (\info -> Fuzzy.fuzzyMatch (String.toLower term) (String.toLower info.name))
-                    pm.plans
+                    (planFileListFromMetas model)
     in
     Html.div []
         [ Html.div [ Attr.class "plan-filter-row" ]
             [ Html.input
                 [ Attr.class "sel-page-input"
-                , Attr.placeholder "Filter saved plans…"
-                , Attr.value pm.filter
+                , Attr.placeholder "Filter plans…"
+                , Attr.value model.planManager.filter
                 , Ev.onInput PlanManagerSetFilter
                 ]
                 []
             ]
-        , if pm.loading then
+        , if model.planMetaLoading then
             Html.div [ Attr.class "sel-page-status" ] [ Html.text "Loading…" ]
 
           else if List.isEmpty visible then
             Html.div [ Attr.class "sel-page-status" ]
                 [ Html.text
                     (if String.isEmpty term then
-                        "No plans yet. Ask a session to output a ```json plan block, or browse to import a file."
+                        "No plans yet. Ask a session to output a plan."
 
                      else
                         "No plans match your filter."
@@ -988,32 +996,6 @@ viewPlanSavedTab model =
             Html.div [ Attr.class "sel-page-list" ]
                 (List.map viewPlanFile visible)
         ]
-
-
-viewPlanBrowseTab : Model -> Html Msg
-viewPlanBrowseTab model =
-    case model.planManager.browser of
-        Just fp ->
-            Overlay.FilePicker.view
-                { sessionId = "plan"
-                , entries = FP.filterEntries fp
-                , input = fp.input
-                , filter = fp.filter
-                , selected = fp.selected
-                , mode = T.Local
-                , loading = fp.loading
-                , title = "Import Plan File"
-                , placeholder = "Type a path or filter files…"
-                , noOp = NoOp
-                , onInput = PlanManagerBrowserInput
-                , onConfirm = PlanManagerBrowserConfirm
-                , onPick = PlanManagerBrowserPick
-                , onUrlConfirm = NoOp
-                , onToggleMode = NoOp
-                }
-
-        Nothing ->
-            Html.div [ Attr.class "sel-page-status" ] [ Html.text "Loading…" ]
 
 
 viewPlanFile : PlanFileInfo -> Html Msg
@@ -1293,6 +1275,18 @@ auto-created from that session's Nth plan message.
 -}
 planMetaForMessage : Model -> String -> Int -> Maybe ( String, PM.PlanMeta )
 planMetaForMessage model sid planIndex =
+    -- meta origin records the session's ON-DISK id (plans live under it);
+    -- the rendered session may be a resume with a fresh live id — resolve
+    -- sid back to the on-disk id before comparing.
+    let
+        onDiskId =
+            case Dict.get sid model.planResumedFrom of
+                Just orig ->
+                    orig
+
+                Nothing ->
+                    sid
+    in
     Dict.foldl
         (\planId meta acc ->
             case acc of
@@ -1306,7 +1300,7 @@ planMetaForMessage model sid planIndex =
                             -- plan messages in a session is stable; message
                             -- ids are per-session implementation details and
                             -- deliberately not used for matching).
-                            if o.sessionId == sid && o.planIndex == planIndex then
+                            if o.sessionId == onDiskId && o.planIndex == planIndex then
                                 Just ( planId, meta )
 
                             else

@@ -75,12 +75,21 @@
 - [ ] Referencing a nonexistent task id (e.g. `{{t9.output}}`) → the downstream prompt contains an English placeholder notice, not the raw template
 - [ ] Reopen the app → open the plan → silently restore and re-Run unfinished tasks → downstream nodes still inject (upstream Succeeded nodes don't rerun; output restored from run.json)
 
-## 5c. Session Directory Hierarchy (P27)
+## 5c. Session Directory Hierarchy (P27/P28)
 
-- [ ] After a Run, plan node sessions live at `~/.alayaface/sessions/<planId>/<nodeId>/<uuid>/` (config/ + session.alaya inside), NOT at the top level
-- [ ] `~/.alayaface/sessions/` top level contains only plain (non-plan) sessions + plan subtrees — no plan child uuid directly
+- [ ] After a Run, the plan lives INSIDE the session that created it:
+      `~/.alayaface/sessions/<originSessionId>/plans/<planId>/` containing
+      `<planId>.json`, `<planId>.meta.json`, `<planId>.run.json`, `work/`
+      and `<nodeId>/<uuid>/` node session dirs — nothing at a top-level
+      `plans/` root
+- [ ] `~/.alayaface/sessions/` top level contains only plain (non-plan)
+      sessions — no plan dir / plan child uuid directly
 - [ ] Session Manager never lists plan child sessions (only plain sessions)
-- [ ] Click a node (resume) after the app restarts → still reopens the session (nested dir found via planId/nodeId)
+- [ ] Click a node (resume) after the app restarts → still reopens the session (nested dir found via originSessionId/planId/nodeId)
+- [ ] Plans manager is a single view (no Browse/import tab); it lists every
+      plan (from the planMetas index) with Open/Delete; the status bar
+      under the plan message still binds after the origin session was
+      resumed/reopened (origin = on-disk session id, resolved to live)
 
 ## 5. Graceful Close (P25 cancel-first)
 

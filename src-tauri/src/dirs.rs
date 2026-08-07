@@ -11,9 +11,15 @@
 //!         settings.conf    — AlayaFace-owned (tool_confirm etc.); NOT copied into sessions
 //!         themes/          (auto-created by alayacore when missing)
 //!     sessions/
-//!       <uuid>/
+//!       <uuid>/            — PLAIN sessions only (top level is never a plan child)
 //!         config/          — copy of the active preset's config (minus settings.conf)
 //!         session.alaya    (created by alayacore)
+//!         plans/           — plans created by this session (0..N)
+//!           <planId>/      — one subtree per plan (sanitized id)
+//!             <planId>.json / .meta.json / .run.json
+//!             work/        — per-plan working directory
+//!             <nodeId>/    — one subtree per plan node (sanitized id)
+//!               <uuid>/    — the node's session dir (config/ + session.alaya)
 
 use std::path::PathBuf;
 
@@ -280,17 +286,22 @@ pub fn sanitize_dir_component(s: &str) -> String {
 }
 
 /// Create a PLAN NODE session directory nested under
-/// sessions/<planId>/<nodeId>/<uuid>/, so the sessions/ top level only
-/// ever contains plain (non-plan) sessions. planId/nodeId are sanitized
-/// with `sanitize_dir_component`. Mirrors Go CreatePlanSessionDirFrom.
+/// sessions/<originSessionId>/plans/<planId>/<nodeId>/<uuid>/, so the
+/// sessions/ top level only ever contains plain (non-plan) sessions and
+/// every plan lives inside the session that created it. All id
+/// components are sanitized with `sanitize_dir_component`. Mirrors Go
+/// CreatePlanSessionDirFrom.
 pub fn create_session_dir_nested(
     sessions_dir: &PathBuf,
+    origin_session_id: &str,
     plan_id: &str,
     node_id: &str,
     uuid: &str,
     preset: &str,
 ) -> Result<PathBuf, String> {
     let parent = sessions_dir
+        .join(sanitize_dir_component(origin_session_id))
+        .join("plans")
         .join(sanitize_dir_component(plan_id))
         .join(sanitize_dir_component(node_id));
     create_session_dir_in(&parent, uuid, preset)
@@ -542,12 +553,14 @@ mod tests {
             let (config, sessions) = ensure().unwrap();
             std::fs::write(config.join("model.conf"), "name: \"Real\"\n").unwrap();
 
-            let dir = create_session_dir_nested(&sessions, "demo plan/x", "t1", "uuid-1", "").unwrap();
-            let want = sessions.join("demo_plan_x").join("t1").join("uuid-1");
+            let dir = create_session_dir_nested(&sessions, "sess-1", "demo plan/x", "t1", "uuid-1", "").unwrap();
+            let want = sessions.join("sess-1").join("plans").join("demo_plan_x").join("t1").join("uuid-1");
             assert_eq!(dir, want);
             assert!(dir.join("config").join("model.conf").exists());
-            // The session uuid must NOT appear at the top level.
+            // Neither the session uuid nor the plan id may appear at the
+            // sessions top level (the plan lives under its session).
             assert!(!sessions.join("uuid-1").exists());
+            assert!(!sessions.join("demo_plan_x").exists());
         });
     }
 }

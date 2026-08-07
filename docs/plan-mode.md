@@ -69,15 +69,14 @@ Add **Plan Mode** to AlayaFace: let the model decompose a large task into a
 ## 4. Overall Architecture & Data Flow
 
 ```
-[Planner Session] model generates DAG JSON       ← recommended entry: ⚙ menu → New Plan Session
-        │  (a) ```json code block in the AT message (main path)   (normal sessions work too, user describes the format)
-        │  (b) write_file into ~/.alayaface/plans/*.json (listed by the Plans manager)
+[Planner Session] model generates DAG JSON       ← recommended entry: ⚙ menu → New Session
+        │  (a) ```json code block in the AT message (main path)
         ▼
 Plan.Detect extracts → plan window AUTO-CREATES (R2, no button)
         ▼
 Plan.Types decode + normalize + validate (unique ids / deps exist / acyclic)
         ▼
-Save to ~/.alayaface/plans/<planId>.json     ← requirement: JSON writable to file
+Save to ~/.alayaface/sessions/<originSessionId>/plans/<planId>/<planId>.json
         ▼
 Open Plan window (SVG DAG; nodes clickable)
         ▼
@@ -294,7 +293,7 @@ E2E covers the gate.
   replayed history content → **ready SM**. NO fallback: cores without the
   ready SM are unsupported (a resumed session's later LIVE plan messages
   would never auto-create). `isSessionReady` in App/Update.elm.
-- decode/validate (`type` **required**: missing or wrong value rejected, no backward compat) → normalize → generate planId → `fs_write_file_text` writes `~/.alayaface/plans/<planId>.json` → opens the Plan window.
+- decode/validate (`type` **required**: missing or wrong value rejected, no backward compat) → normalize → generate planId → `fs_write_file_text` writes `sessions/<originSessionId>/plans/<planId>/<planId>.json` (the plan lives inside the session that created it) → opens the Plan window.
 
 ---
 
@@ -303,7 +302,7 @@ E2E covers the gate.
 ### 7.1 Plan Window (independent window, like a session window)
 - Each opened plan is an **independent draggable/resizable window** (reusing the session window panel/drag/resize/z-order machinery), not an overlay; multiple plans can be open at once;
 - Window title bar: `Plan — <name>` + close button; inside: plan name + goal + run status badge + **Run / Pause / Stop / Retry** + **Load run** + **Export JSON**;
-- **The system menu (⚙) lists all open plan windows** (name + run status); clicking raises/activates one; the Plans manager (overlay) browses/opens/deletes/imports `~/.alayaface/plans/*.json`;
+- **The system menu (⚙) lists all open plan windows** (name + run status); clicking raises/activates one; the Plans manager (overlay) lists/opens/deletes plans (from the planMetas index — plans live under their owning session, no import);
 - Canvas: HTML/CSS DAG; rounded-rect node cards, colors by status (gray=ready, blue=running, green=succeeded, red=failed, orange=retrying, dashed=blocked/canceled);
 - Node cards: `title`, status icon, retry badge `xN`, preset badge, hover shows the latest failure reason;
 - **Clicking a node (node ↔ session binding)**:
@@ -333,9 +332,15 @@ E2E covers the gate.
 - Closing the plan window does not stop running node sessions (run.json keeps flushing; Load run can restore); manually closing a node session window injects a disconnect event into the runner → the node fails and retries.
 
 ### 7.2 Plans Manager (overlay, modeled on the Session Manager)
-- Two tabs:
-  - **Saved**: lists `~/.alayaface/plans/*.json` (filtering out `*.run.json`), with a fuzzy filter input (`Fuzzy.fuzzyMatch`); actions: Open (renders DAG), Delete;
-  - **Browse**: file browser, **reusing the multimodal file picker** (`Overlay.FilePicker.view` + `Session.FilePicker` pure logic + `Fuzzy.elm`): directory navigation (fs_resolve_path / fs_list_dir), fuzzy filtering, click to enter a directory, click/Enter to import a plan JSON (via the `PlanReadTarget` + fs_read_file_text flow, from anywhere);
+- **Single view (P28: the Browse/import tab was removed** — every plan is
+  created by a session and lives under it, so importing external plan
+  files is no longer supported):
+  - lists all plans **from the planMetas index** (no directory scan):
+    name = planId, action **Open** (renders the DAG from
+    `sessions/<origin>/plans/<planId>/<planId>.json`) and **Delete**
+    (removes the file, drops the planMetas entry, closes the window);
+  - fuzzy filter input (`Fuzzy.fuzzyMatch`); "Loading…" while the
+    planMetas index rebuild is in flight;
 - Entry: a **Plans** item in the global menu (existing `showGlobalMenu` system).
 
 ### 7.3 Runner Sessions
@@ -447,14 +452,15 @@ process" stays v2 (resume the child).
 startup dir. Parallel nodes clobber each other's files, plans pollute each
 other, and the backend cwd gets written into.
 
-**Solution**: **per-plan working directory** `~/.alayaface/plans/<planId>/work/`
-— all node sessions of one plan share it (file-passing mode still works: t1
-writes a file, t4 can read it), plans can't see each other's files, and the
-backend cwd stays clean. Normal sessions / fork / probe don't pass it (keep the
+**Solution**: **per-plan working directory**
+`sessions/<originSessionId>/plans/<planId>/work/` — all node sessions of
+one plan share it (file-passing mode still works: t1 writes a file, t4
+can read it), plans can't see each other's files, and the backend cwd
+stays clean. Normal sessions / fork / probe don't pass it (keep the
 backend cwd, backward compatible).
 
 - `create_session` / `resume_session` gain an optional `workDir`: non-empty → backend `MkdirAll` + spawn with child cwd (Rust `Command::current_dir` / Go `cmd.Dir` — **pure AlayaFace-side change, C1-safe**, alayacore is unaware);
-- Plan Mode node sessions derive `planWorkDir planId model` in Elm (when homeDir is known) and pass it on both create and resume;
+- Plan Mode node sessions derive `planWorkDir planId model` in Elm (from the planMetas origin) and pass it on both create and resume;
 - Tests: Go integration (create/resume with workDir → fakecore boot frame reports `cwd`, asserted to match; without → backend cwd) + Rust mechanism-level (current_dir applies) + E2E (after Run, assert `plans/<planId>/work` exists).
 
 ### 8.5 Task Timeout (P16 — REMOVED in R1)
@@ -508,58 +514,85 @@ non-empty assistant text in the session):
   prompt references `{{t1.output}}`; fakecore echoes the received prompt →
   assert t2's session contains t1's output text and no raw template).
 
-### 8.7 Session Directory Hierarchy (P27)
+### 8.7 Session Directory Hierarchy & Plan Ownership (P27→P28)
 
 **Problem**: every session (plain chats AND plan node sessions) lived
-flat in `~/.alayaface/sessions/<uuid>/`. A plan's child sessions were
-indistinguishable from plain sessions on disk, so any tool iterating the
-top level (Session Manager list, backups, manual browsing) had to know
-about plan metadata to tell them apart.
+flat in `~/.alayaface/sessions/<uuid>/`, and plan documents lived in a
+separate top-level `plans/` root. Plan child sessions were
+indistinguishable from plain sessions on disk, and plans appeared
+independent of the session that created them (P27 nested the node
+sessions under plan-keyed subtrees, but kept plan FILES in `plans/`).
 
-**Solution**: plan node sessions are created NESTED — a top-level entry
-under `sessions/` is guaranteed to be a plain (non-plan) session:
+**P28 decision (user)**: a plan is not an independently importable
+artifact — it always comes FROM a session. So **every plan lives inside
+the session that created it**, and the plan "import" feature (Browse tab
++ related UI/logic) was **removed**:
 
 ```
 ~/.alayaface/sessions/
-  <uuid>/                  ← plain sessions ONLY (top level = never a plan child)
-  <planId>/                ← one subtree per plan (sanitized id)
-    <nodeId>/              ← one subtree per node (sanitized id)
-      <uuid>/              ← the node session (config/ + session.alaya)
+  <uuid>/                  ← PLAIN sessions ONLY (top level = never a plan child)
+    session.alaya / config/
+    plans/                 ← plans created by this session (0..N)
+      <planId>/            ← one subtree per plan (sanitized id)
+        <planId>.json      ← plan document
+        <planId>.meta.json ← runtime metadata (origin = THIS session, on-disk id)
+        <planId>.run.json  ← run state
+        work/              ← per-plan working directory
+        <nodeId>/          ← one subtree per plan node (sanitized id)
+          <uuid>/          ← the node's session dir (config/ + session.alaya)
 ```
 
+There is **no top-level `plans/` root** anymore.
+
 - **create_session** / **resume_session** / **delete_session_dir** gain
-  optional `planId` + `nodeId` arguments (frontend passes both for node
-  sessions, omits them for plain sessions):
-  - `create_session` with planId → `sessions/<planId>/<nodeId>/<uuid>/`;
+  optional `originSessionId` + `planId` + `nodeId` arguments (the
+  frontend passes all three for node sessions, none for plain sessions):
+  - `create_session` with planId → `sessions/<originSessionId>/plans/<planId>/<nodeId>/<uuid>/`;
     without → `sessions/<uuid>/` (unchanged);
-  - `resume_session` with planId → resolves `sessions/<planId>/<nodeId>/<sessionId>/`
-    (the resumed session keeps its fresh-id semantics and the ORIGINAL
-    on-disk dir, P18); without → top-level (Session Manager resume);
-    **legacy fallback**: pre-hierarchy plan sessions (flat at
-    `sessions/<uuid>/`) stay resumable — nested dir missing → fall back
-    to the top level (creation always nests; the manager never lists
-    plan children);
-  - `delete_session_dir` with planId → removes the nested dir;
-- **Sanitization**: plan/node ids may contain `/`, spaces, etc. (node ids
-  may contain `/` by schema) → `SanitizeDirComponent` / `sanitize_dir_component`
-  map every char outside `[A-Za-z0-9_-]` to `_` (including `.`, so an id of
-  `..` can never escape the sessions dir), empty → `p`. **Deterministic**:
-  create and resume apply the same mapping, so both sides always agree;
-- **list_session_dirs** (Session Manager) now lists ONLY top-level dirs
-  that directly contain `session.alaya` — plan subtrees never appear, and
-  a listed entry is by construction not a plan child session;
-- Frontend: `Ports.createSession`/`resumeSession` carry `planId`/`nodeId`
-  (`nodeSessionArgsIn` fills them for runner nodes; plain creates pass
-  Nothing); bridge.js passes them through to the backend;
+  - `resume_session` resolves via a fallback chain
+    (`resolveSessionDir` / `resolve_session_dir`):
+    1. `sessions/<originSessionId>/plans/<planId>/<nodeId>/<sessionId>` (P28);
+    2. `sessions/<planId>/<nodeId>/<sessionId>` (P27 legacy);
+    3. `sessions/<sessionId>` (flat, pre-hierarchy legacy);
+    the resumed session keeps its fresh-id semantics and the ORIGINAL
+    on-disk dir (P18);
+  - `delete_session_dir` uses the same resolution;
+- **Plan file paths** (frontend): `planDirOf` / `planFilePathOf` derive
+  them from `planMetas[planId].origin.sessionId` — the **on-disk** origin
+  id (PlanSaveReady resolves a fresh resume id back through
+  `planResumedFrom` first, so a plan created from a RESUMED session still
+  lands under the real session dir); the Plans manager lists plans from
+  the planMetas index (no directory scan), and the meta.json index
+  rebuild is a two-level scan: `sessions/` → each session's `plans/` →
+  every `*.meta.json` (`planMetaDirQueue` / `planMetaDirListing`);
+- **Sanitization**: origin/plan/node ids may contain `/`, spaces, etc.
+  (node ids may contain `/` by schema) → `SanitizeDirComponent` /
+  `sanitize_dir_component` map every char outside `[A-Za-z0-9_-]` to `_`
+  (including `.`, so an id of `..` can never escape the sessions dir),
+  empty → `p`. **Deterministic**: create and resume apply the same
+  mapping, so both sides always agree;
+- **list_session_dirs** (Session Manager) lists ONLY top-level dirs that
+  directly contain `session.alaya` — plan subtrees never appear, and a
+  listed entry is by construction not a plan child session;
+- **Removed**: the Plans manager Browse tab (file-picker import),
+  `PlanManagerTab`, `PlanManagerBrowser*` / `PlanManagerSwitchTab`
+  messages, `planBrowserPick`, and the plan-manager `fs_list_dir` usage;
+- **UI binding**: meta.json origin records the session's on-disk id;
+  status-bar / feedback / replay-guard lookups resolve a rendered
+  (possibly resumed) live id back to the on-disk id
+  (`planMetaForMessage`, `messageBoundToPlan`, `feedbackCompletedPlan` →
+  `NC.liveSessionForOrigin`), so the binding survives resume/restart;
 - Dual-backend parity: Go (`internal/dirs`, `handlers/sessions.go`) and
   Rust (`src-tauri/src/dirs.rs`, `commands/sessions.rs`) implement the
-  same layout and sanitizer;
+  same layout, sanitizer and fallback chain;
 - Tests: Go `TestSanitizeDirComponent` / `TestCreatePlanSessionDirFromNests` /
-  `TestIntegrationNestedPlanSessionDir` (create→nested, manager hides plan
-  dirs, nested resume works, flat resume fails, nested delete) + Rust
+  `TestIntegrationNestedPlanSessionDir` (create→nested under the origin,
+  manager hides plan dirs, nested resume works, P27 + flat legacy
+  fallbacks, nested delete) + Rust
   `sanitize_dir_component_maps_to_safe_names` /
   `create_session_dir_nested_keeps_plan_children_out_of_top_level` + E2E
-  (asserts `sessions/<planId>/{t1,t2,t3}/<uuid>` after a run).
+  (asserts `sessions/<origin>/plans/<planId>/{t1,t2,t3}/<uuid>`, plan
+  document/meta/run inside the session dir, no Browse/import tab).
 
 ---
 
@@ -627,7 +660,8 @@ under `sessions/` is guaranteed to be a plain (non-plan) session:
 | P24 | output injection `{{tX.output}}` (§8.6: TaskDone records output → run.json persistence → downstream SendPrompt replacement → detail panel display) | ✅ done |
 | P25 | close_session cancel-first (§8.3: Stop/close window immediately cancels the task, history saved up to the cancel point) | ✅ done |
 | P26 | plan JSON top-level `"type": "alayaface-plan"` marker (§5/§6.7: the button only recognizes the explicit marker; **required, no compat** — missing/wrong value errors out) | ✅ done |
-| P27 | connection curves upgraded (§7.1: plan↔owning-session curve anchored to the visible `[Plan: …]` button; both curves solid + thicker with a 2-control-point bezier) + session dir hierarchy (§8.7: `sessions/<planId>/<nodeId>/<uuid>/`, top level = plain sessions only) | ✅ done |
+| P27 | connection curves upgraded (§7.1: plan↔owning-session curve anchored to the visible `[Plan: …]` button; both curves solid + thicker with a 2-control-point bezier) + session dir hierarchy (§8.7: node sessions nested, top level = plain sessions only) | ✅ done |
+| P28 | plans live INSIDE the session that created them (§8.7: `sessions/<origin>/plans/<planId>/` — document/meta/run/work/node sessions; no top-level `plans/` root); **import removed** (§7.2: single-view manager over the planMetas index, no Browse tab); meta origin = on-disk session id, bindings resolve live ids | ✅ done |
 
 > Implementation deviations: the DAG renders in pure HTML/CSS (absolute-positioned
 > divs + orthogonal connectors) because elm/svg isn't in the offline package

@@ -3,12 +3,17 @@
 //
 // Flow:
 //   1. build fakecore + Go server (fresh HOME), start both
-//   2. Chrome headless → ⚙ → New Plan Session → send a prompt
-//   3. fakecore answers with a fenced plan JSON → Create Plan offer
-//   4. Create Plan → Plan window DAG → set concurrency → Run
+//   2. Chrome headless → ⚙ → New Session → send a prompt
+//   3. fakecore answers with a fenced plan JSON → plan auto-creates
+//   4. Plan window DAG → set concurrency → Run
 //   5. t1 ok → t2 fails once (marker) → auto-retry → ok → t3 ok → Completed
 //   6. Node detail: t2 shows failure history + ≥2 attempt sessions
 //   7. Click t1 node → its session window activates and shows the reply
+//
+// P28: plans live INSIDE the session that created them
+// (sessions/<origin>/plans/<planId>/ — document/meta/run/work + node
+// sessions); the Plans manager is a single view over the planMetas index
+// (no Browse/import tab).
 //
 // Screenshots land in the artifact dir; ALL PASS printed on success.
 
@@ -336,38 +341,49 @@ try {
   console.log('PASS: message text selection survives mouseup (no focus steal)');
 
   // Per-plan working directory: node sessions were spawned with
-  // ~/.alayaface/plans/<planId>/work as their cwd (created by backend).
-  const plansRoot = path.join(home, '.alayaface', 'plans');
-  const workDirs = readdirSync(plansRoot)
-    .filter(n => n.startsWith('e2e-demo-'))
-    .map(n => path.join(plansRoot, n, 'work'))
-    .filter(existsSync);
+  // sessions/<origin>/plans/<planId>/work as their cwd (created by the
+  // backend). Plans live INSIDE the session that created them.
+  const sessionsRoot = path.join(home, '.alayaface', 'sessions');
+  const findPlanDirs = () => {
+    const out = [];
+    for (const sess of readdirSync(sessionsRoot)) {
+      const plans = path.join(sessionsRoot, sess, 'plans');
+      if (!existsSync(plans)) continue;
+      for (const pd of readdirSync(plans)) out.push(path.join(plans, pd));
+    }
+    return out;
+  };
+  const planDirs = findPlanDirs();
+  const workDirs = planDirs.map(d => path.join(d, 'work')).filter(existsSync);
   assert(workDirs.length >= 1, 'plan work dir exists, found: ' + JSON.stringify(workDirs));
+  assert(planDirs.length === 1, 'exactly one plan dir under sessions/, got: ' + JSON.stringify(planDirs));
   console.log('PASS: plan work dir isolated:', workDirs[0]);
 
   // ── 5d. Session directory hierarchy ───────────────────────────────
-  // Plan node sessions must be NESTED under sessions/<planId>/<nodeId>/
-  // so the sessions/ top level only ever contains plain (non-plan)
-  // sessions. The origin (plain) session stays at the top level; the
-  // plan subtree holds one dir per node, each containing session dirs.
-  const sessionsRoot = path.join(home, '.alayaface', 'sessions');
+  // Plan node sessions are nested under
+  // sessions/<originSessionId>/plans/<planId>/<nodeId>/ so the sessions/
+  // top level only ever contains plain (non-plan) sessions. The origin
+  // (plain) session stays at the top level; its plans/ subtree holds the
+  // plan document + work + one dir per node, each containing session
+  // dirs.
   const sessTop = readdirSync(sessionsRoot).filter(n => !n.startsWith('.'));
-  const planSubDirs = sessTop.filter(n => n.startsWith('e2e-demo-'));
-  assert(planSubDirs.length >= 1, 'plan session subtree under sessions/, got: ' + JSON.stringify(sessTop));
-  for (const pd of planSubDirs) {
-    const nodeDirs = readdirSync(path.join(sessionsRoot, pd));
-    for (const nd of nodeDirs) {
-      const uuids = readdirSync(path.join(sessionsRoot, pd, nd)).filter(n => !n.startsWith('.'));
-      assert(uuids.length >= 1, pd + '/' + nd + ': contains session dir(s), got: ' + JSON.stringify(uuids));
-    }
-    assert(['t1', 't2', 't3'].every(n => nodeDirs.includes(n)),
-      pd + ': node subdirs t1/t2/t3, got: ' + JSON.stringify(nodeDirs));
+  const planDir = planDirs[0];
+  const planId = path.basename(planDir);
+  assert(planId.startsWith('e2e-demo-'), 'plan dir named by planId, got: ' + planId);
+  assert(existsSync(path.join(planDir, planId + '.json')), 'plan document inside its session dir');
+  assert(existsSync(path.join(planDir, planId + '.meta.json')), 'plan meta inside its session dir');
+  const nodeDirs = readdirSync(planDir).filter(n => !n.startsWith('.') && !n.endsWith('.json') && n !== 'work');
+  for (const nd of nodeDirs) {
+    const uuids = readdirSync(path.join(planDir, nd)).filter(n => !n.startsWith('.'));
+    assert(uuids.length >= 1, planId + '/' + nd + ': contains session dir(s), got: ' + JSON.stringify(uuids));
   }
-  // Top-level entries: plan subtrees + the plain origin session — no
-  // plan child uuid may appear directly under sessions/.
-  const topUuids = sessTop.filter(n => !n.startsWith('e2e-demo-'));
-  assert(topUuids.length >= 1, 'plain origin session remains at top level, got: ' + JSON.stringify(sessTop));
-  console.log('PASS: session dir hierarchy — plan children nested, top level = plain sessions only');
+  assert(['t1', 't2', 't3'].every(n => nodeDirs.includes(n)),
+    planId + ': node subdirs t1/t2/t3, got: ' + JSON.stringify(nodeDirs));
+  // Top-level entries: plain session uuids only (the plan lives under
+  // its origin session — no plan dir / plan child uuid at the top).
+  assert(sessTop.every(n => !n.startsWith('e2e-demo-')), 'no plan dir at the sessions top level, got: ' + JSON.stringify(sessTop));
+  assert(sessTop.length >= 1, 'plain origin session remains at top level, got: ' + JSON.stringify(sessTop));
+  console.log('PASS: session dir hierarchy — plan + node sessions nested under sessions/<origin>/plans/<planId>/');
 
   // ── 6. Retry evidence: t2 failed once and auto-retried ─────────────
   // (The plan window auto-closed on completion — reopen it via the
@@ -381,12 +397,9 @@ try {
   });
   await waitFor('.plan-page', 10000);
   await sleep(500);
-  const runJson = readdirSync(plansRoot)
-    .filter(n => n.startsWith('e2e-demo-') && n.endsWith('.run.json'))
-    .map(n => path.join(plansRoot, n))
-    .filter(existsSync)
-    .map(f => JSON.parse(readFileSync(f, 'utf8')))[0];
-  assert(runJson, 'run.json exists for the e2e plan');
+  const runJsonPath = path.join(planDir, planId + '.run.json');
+  assert(existsSync(runJsonPath), 'run.json exists for the e2e plan at ' + runJsonPath);
+  const runJson = JSON.parse(readFileSync(runJsonPath, 'utf8'));
   console.log('run.json status:', runJson.status, 'concurrency:', runJson.concurrency);
   const t2n = runJson.nodes && runJson.nodes.t2;
   assert(t2n && t2n.attempts === 1, 'run.json: t2 attempted once (auto-retry), got: ' + JSON.stringify(t2n));
@@ -495,8 +508,10 @@ try {
     // window or plan file from it (planReplaySessions suppression).
     const winCount = await page.$$eval('.plan-page', els => els.length);
     assert(winCount === 1, label + ': no duplicate plan window auto-created, got: ' + winCount);
-    const planFiles = readdirSync(plansRoot).filter(n =>
-      n.startsWith('e2e-demo-') && n.endsWith('.json') && !n.endsWith('.run.json') && !n.endsWith('.meta.json'));
+    const planFiles = findPlanDirs().filter(d => {
+      const n = path.basename(d);
+      return n.startsWith('e2e-demo-') && existsSync(path.join(d, n + '.json'));
+    });
     assert(planFiles.length === 1, label + ': no duplicate plan file, got: ' + JSON.stringify(planFiles));
     console.log('PASS: ' + label + ' — session reopened (' + activeTitle + '), no error, no duplicate plan');
     await assertConnection(label + ' — curve back after resume');
@@ -563,104 +578,43 @@ try {
   await shot(page, '05e-stop-after.png');
   console.log("PASS: Plan Stop closed the run's node session windows (badge Stopped)");
 
-  // ── 9. Plans manager: Saved fuzzy filter + Browse-tab file import ──
-  // Write plan JSONs at the fake home root (the Browse tab starts there):
-  // one WITH the type marker (imports fine), one WITHOUT it (P26: no
-  // backward compatibility — must be rejected with an error in the
-  // manager, no window opens).
-  const importedName = 'imported-via-browse';
-  const importedPlan = {
-    type: 'alayaface-plan',
-    schema_version: 1,
-    name: 'Imported Via Browse',
-    goal: 'Plan imported from a file via the Browse tab',
-    concurrency: 1,
-    default_max_attempts: 2,
-    tasks: [{ id: 'n1', title: 'Only Task', prompt: 'do the thing', depends_on: [], max_attempts: 2 }]
-  };
-  writeFileSync(path.join(home, importedName + '.json'), JSON.stringify(importedPlan, null, 2));
-  const legacyName = 'legacy-no-marker';
-  const legacyPlan = {
-    schema_version: 1,
-    name: 'Legacy No Marker',
-    goal: 'must be rejected',
-    concurrency: 1,
-    default_max_attempts: 2,
-    tasks: [{ id: 'n1', title: 'Only Task', prompt: 'do the thing', depends_on: [], max_attempts: 2 }]
-  };
-  writeFileSync(path.join(home, legacyName + '.json'), JSON.stringify(legacyPlan, null, 2));
-
-  // Open ⚙ → Plans (Saved tab default).
+  // ── 9. Plans manager: single view listing plans from the planMetas
+  // index (P28: the Browse/import tab was removed — every plan is
+  // created by a session and lives under its session's dir).
+  // Open ⚙ → Plans.
   await page.click('.global-menu-btn');
   await waitFor('.global-menu-panel');
   assert(await clickByText('.global-menu-item', 'Plans'), 'Plans menu item');
-  await waitFor('.plan-tab', 10000);
+  await waitFor('.plan-filter-row', 10000);
   await sleep(500);
   await shot(page, '06-plans-manager-saved.png');
 
-  // Saved tab: the plan created earlier via Create Plan must be listed.
+  // The plan created earlier via Create Plan must be listed (from the
+  // planMetas index — no directory scan).
   const savedNames = await page.$$eval('.sel-page-item-name', els => els.map(e => e.textContent));
-  assert(savedNames.some(n => n.startsWith('e2e-demo-')), 'Saved tab lists the created plan, got: ' + JSON.stringify(savedNames));
+  assert(savedNames.some(n => n.startsWith('e2e-demo-')), 'Plans manager lists the created plan, got: ' + JSON.stringify(savedNames));
 
-  // Saved fuzzy filter: unmatched term → "No plans match".
+  // Fuzzy filter: unmatched term → "No plans match".
   await page.type('.plan-filter-row input', 'zzz-no-such-plan', { delay: 1 });
   await sleep(200);
   const savedStatuses = await page.$$eval('.sel-page-status', els => els.map(e => e.textContent));
-  assert(savedStatuses.some(s => s.includes('No plans match')), 'Saved filter no-match status, got: ' + JSON.stringify(savedStatuses));
+  assert(savedStatuses.some(s => s.includes('No plans match')), 'filter no-match status, got: ' + JSON.stringify(savedStatuses));
   await page.evaluate(() => {
     const i = document.querySelector('.plan-filter-row input');
     if (i) { i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); }
   });
   await sleep(200);
-  console.log('PASS: Saved tab lists plans and fuzzy-filters');
-
-  // Switch to Browse tab: file browser rooted at home dir.
-  assert(await clickByText('.plan-tab', 'Browse'), 'Browse tab button');
-  await waitFor('#fp-page-input-plan', 10000);
-  await sleep(700);
-  await shot(page, '07-plans-manager-browse.png');
-  const browseEntries = await page.$$eval('.fp-page-item-name', els => els.map(e => e.textContent));
-  assert(browseEntries.includes(importedName + '.json'), 'Browse tab lists the importable plan, got: ' + JSON.stringify(browseEntries));
-
-  // Browser fuzzy filter: unmatched → "No files found".
-  await page.type('#fp-page-input-plan', 'zzz-nope', { delay: 1 });
-  await sleep(250);
-  const browseStatuses = await page.$$eval('.fp-page-status', els => els.map(e => e.textContent));
-  assert(browseStatuses.some(s => s.includes('No files found')), 'Browse filter no-match status, got: ' + JSON.stringify(browseStatuses));
-  // Clear the filter suffix (back to "<home>/") so all entries show again.
+  // P28: the Browse/import tab is gone.
+  const browseTabs = await page.$$eval('.plan-tab', els => els.length);
+  assert(browseTabs === 0, 'Browse/import UI removed from the Plans manager, got: ' + browseTabs);
+  console.log('PASS: Plans manager lists plans + fuzzy-filters (no Browse/import tab)');
+  await shot(page, '07-plans-manager-single.png');
+  // Close the manager overlay before the next step.
   await page.evaluate(() => {
-    const i = document.querySelector('#fp-page-input-plan');
-    if (i) { i.value = i.value.slice(0, i.value.length - 8); i.dispatchEvent(new Event('input', { bubbles: true })); }
+    const b = document.querySelector('.overlay .overlay-close');
+    if (b) b.click();
   });
-  await sleep(250);
-
-  // ── 9b. A plan file WITHOUT the type marker is rejected (P26: no
-  // backward compatibility) — the error shows in the Plans manager and
-  // no plan window opens.
-  await page.evaluate((name) => {
-    const items = [...document.querySelectorAll('.fp-page-item')];
-    const it = items.find(el => el.querySelector('.fp-page-item-name')?.textContent === name + '.json');
-    if (it) it.click();
-  }, legacyName);
-  await sleep(700);
-  const legacyErr = await page.$$eval('.sel-page-status-error', els => els.map(e => e.textContent));
-  assert(legacyErr.some(t => t.includes('type')), 'legacy file without the marker rejected in the manager, got: ' + JSON.stringify(legacyErr));
-  console.log('PASS: plan file without the type marker is rejected (no backward compat):', JSON.stringify(legacyErr));
-
-  // Click the plan file (WITH marker) → imported → a NEW plan window with
-  // node n1 opens.
-  await page.evaluate((name) => {
-    const items = [...document.querySelectorAll('.fp-page-item')];
-    const it = items.find(el => el.querySelector('.fp-page-item-name')?.textContent === name + '.json');
-    if (it) it.click();
-  }, importedName);
-  await page.waitForFunction(() => {
-    const ids = [...document.querySelectorAll('.plan-node-id')].map(e => e.textContent);
-    return ids.includes('n1');
-  }, { timeout: 30000 });
-  await sleep(800);
-  await shot(page, '08-imported-plan-window.png');
-  console.log('PASS: Browse tab imported the plan file (new Plan window with node n1)');
+  await sleep(300);
 
   // ── 9. Auto-open is immediate for live plans (R6 playback-aware) ──
   // A LIVE plan message auto-opens right away (no settle delay), even if

@@ -23,6 +23,7 @@ pub async fn create_session(
     work_dir: Option<String>,
     plan_id: Option<String>,
     node_id: Option<String>,
+    origin_session_id: Option<String>,
     sessions: State<'_, SessionMap>,
     model_cache: State<'_, ModelCache>,
 ) -> Result<String, String> {
@@ -31,13 +32,15 @@ pub async fn create_session(
     let bin = resolve_binary(&binary_path);
     let session_id = Uuid::new_v4().to_string();
     let preset_name = preset.unwrap_or_default();
-    // Plan node sessions live NESTED under sessions/<planId>/<nodeId>/ so
-    // the sessions/ top level only ever contains plain sessions (the
-    // session manager lists only top-level dirs). Plain sessions stay at
+    // Plan node sessions live NESTED under
+    // sessions/<originSessionId>/plans/<planId>/<nodeId>/ — every plan
+    // belongs to the session that created it, and the sessions/ top
+    // level only ever contains plain sessions. Plain sessions stay at
     // sessions/<uuid>/.
     let session_dir = match &plan_id {
         Some(pid) if !pid.trim().is_empty() => dirs::create_session_dir_nested(
             &sessions_dir,
+            origin_session_id.as_deref().unwrap_or(""),
             pid,
             node_id.as_deref().unwrap_or(""),
             &session_id,
@@ -117,6 +120,41 @@ pub async fn create_session(
     }).await
 }
 
+/// Locate an on-disk session directory by trying the current and legacy
+/// layouts in order (first existing path wins; "" components skipped):
+///  1. sessions/<originSessionId>/plans/<planId>/<nodeId>/<sessionId>  (P28)
+///  2. sessions/<planId>/<nodeId>/<sessionId>                          (P27)
+///  3. sessions/<sessionId>                                            (flat)
+fn resolve_session_dir(
+    sessions_root: &std::path::Path,
+    origin_session_id: &str,
+    plan_id: &str,
+    node_id: &str,
+    session_id: &str,
+) -> std::path::PathBuf {
+    if !origin_session_id.trim().is_empty() && !plan_id.trim().is_empty() {
+        let nested = sessions_root
+            .join(dirs::sanitize_dir_component(origin_session_id))
+            .join("plans")
+            .join(dirs::sanitize_dir_component(plan_id))
+            .join(dirs::sanitize_dir_component(node_id))
+            .join(session_id);
+        if nested.exists() {
+            return nested;
+        }
+    }
+    if !plan_id.trim().is_empty() {
+        let p27 = sessions_root
+            .join(dirs::sanitize_dir_component(plan_id))
+            .join(dirs::sanitize_dir_component(node_id))
+            .join(session_id);
+        if p27.exists() {
+            return p27;
+        }
+    }
+    sessions_root.join(session_id)
+}
+
 #[tauri::command]
 pub async fn resume_session(
     app: AppHandle,
@@ -125,31 +163,23 @@ pub async fn resume_session(
     work_dir: Option<String>,
     plan_id: Option<String>,
     node_id: Option<String>,
+    origin_session_id: Option<String>,
     sessions: State<'_, SessionMap>,
     model_cache: State<'_, ModelCache>,
 ) -> Result<String, String> {
     let sessions_root = dirs::alayaface_dir().join("sessions");
-    // Plan node sessions are nested under sessions/<planId>/<nodeId>/;
-    // the frontend passes planId (+nodeId) so resume finds the on-disk
-    // dir even though the session id alone is only unique per plan.
-    // LEGACY fallback: plan sessions created before the hierarchy lived
-    // flat at sessions/<uuid>/ — if the nested dir is missing, fall back
-    // to the top level so old sessions stay resumable (creation always
-    // nests; the manager never lists plan children).
-    let sessions_dir = match &plan_id {
-        Some(pid) if !pid.trim().is_empty() => {
-            let nested = sessions_root
-                .join(dirs::sanitize_dir_component(pid))
-                .join(dirs::sanitize_dir_component(node_id.as_deref().unwrap_or("")))
-                .join(&session_id);
-            if nested.exists() {
-                nested
-            } else {
-                sessions_root.join(&session_id)
-            }
-        }
-        _ => sessions_root.join(&session_id),
-    };
+    // Plan node sessions are nested under the plan's owning session; the
+    // frontend passes originSessionId/planId/nodeId so resume finds the
+    // on-disk dir even though the session id alone is only unique per
+    // plan. resolve_session_dir falls back to older layouts for sessions
+    // created before this change.
+    let sessions_dir = resolve_session_dir(
+        &sessions_root,
+        origin_session_id.as_deref().unwrap_or(""),
+        plan_id.as_deref().unwrap_or(""),
+        node_id.as_deref().unwrap_or(""),
+        &session_id,
+    );
     let session_file = sessions_dir.join("session.alaya");
     let config_dir = sessions_dir.join("config");
 
@@ -261,20 +291,22 @@ pub async fn delete_session_dir(
     session_id: String,
     plan_id: Option<String>,
     node_id: Option<String>,
+    origin_session_id: Option<String>,
     sessions: State<'_, SessionMap>,
 ) -> Result<(), String> {
     // Close if running
     let _ = session::close(&session_id, &sessions).await;
 
     let sessions_root = dirs::alayaface_dir().join("sessions");
-    // Plan node sessions are nested; optional planId/nodeId locate them.
-    let session_dir = match &plan_id {
-        Some(pid) if !pid.trim().is_empty() => sessions_root
-            .join(dirs::sanitize_dir_component(pid))
-            .join(dirs::sanitize_dir_component(node_id.as_deref().unwrap_or("")))
-            .join(&session_id),
-        _ => sessions_root.join(&session_id),
-    };
+    // Plan node sessions are nested; originSessionId/planId/nodeId locate
+    // them (resolve_session_dir also tries the older layouts).
+    let session_dir = resolve_session_dir(
+        &sessions_root,
+        origin_session_id.as_deref().unwrap_or(""),
+        plan_id.as_deref().unwrap_or(""),
+        node_id.as_deref().unwrap_or(""),
+        &session_id,
+    );
     if session_dir.exists() {
         std::fs::remove_dir_all(&session_dir)
             .map_err(|e| format!("Cannot delete {:?}: {}", session_dir, e))?;

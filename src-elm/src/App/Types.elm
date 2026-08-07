@@ -24,7 +24,6 @@ module App.Types exposing
     , emptyPlanWindow
     , PlanReadTarget
     , CreateTask(..)
-    , PlanManagerTab(..)
     )
 
 {-| Application-level model, message, and editor/window types.
@@ -88,13 +87,21 @@ type alias Model =
     , appHeight : Int
       -- Plan Mode
     , planWindows : Dict String PlanWindow
-    -- Runtime metadata (plans/<planId>.meta.json): origin session/message
-    -- binding + feedbacks. Keyed by planId; used for the message status
-    -- bar and feedback routing. Rebuilt from disk on session open (R3).
+    -- Runtime metadata (sessions/<origin>/plans/<planId>/<planId>.meta.json):
+    -- origin session/message binding + feedbacks. Keyed by planId; used
+    -- for the message status bar and feedback routing. Rebuilt from disk
+    -- on session open (R3): sessions/ is listed, then each session's
+    -- plans/ dir, then every *.meta.json is read.
     , planMetas : Dict String PM.PlanMeta
     -- Loading state for planMetas: a dedicated fs_list_dir/fs_read chain
     -- that bypasses planReadTarget (single-slot) and the manager UI.
     , planMetaLoading : Bool
+    -- Two-level dir scan: planMetaDirQueue holds the remaining
+    -- sessions/<uuid>/plans dirs to list; planMetaDirListing is the dir
+    -- whose listing the next FsListDirResult belongs to (Nothing + empty
+    -- queue while loading = waiting for the sessions/ listing).
+    , planMetaDirQueue : List String
+    , planMetaDirListing : Maybe String
     -- The meta.json path currently being read (head of the rebuild
     -- chain); planMetaReadQueue holds the remaining paths.
     , planMetaReading : Maybe String
@@ -302,12 +309,6 @@ type Msg
     | PlanManagerOpen String
     | PlanManagerDelete String
     | PlanManagerSetFilter String
-    | PlanManagerSwitchTab PlanManagerTab
-    | PlanManagerBrowserInput String
-    | PlanManagerBrowserNavigate String
-    | PlanManagerBrowserSelect Int
-    | PlanManagerBrowserConfirm
-    | PlanManagerBrowserPick Int
     -- (sessionId, planIndex): which plan message of the session (1-based,
     -- counted with Plan.Detect.isPlanMessage). Message ids are NOT used
     -- for binding — they are per-session implementation details.
@@ -534,37 +535,24 @@ emptyPlanView =
     }
 
 
--- Which tab of the Plans manager overlay is shown.
-type PlanManagerTab
-    = PlanTabSaved
-    | PlanTabBrowse
-
-
--- Plans manager overlay state.
+-- Plans manager overlay state (single view: saved plans from the
+-- planMetas index — every plan is created by a session, no import).
 type alias PlanManagerState =
     { show : Bool
-    , loading : Bool
-    , plans : List PlanFileInfo
     , error : Maybe String
-    -- Saved-tab fuzzy filter
+    -- Saved-list fuzzy filter
     , filter : String
-    , tab : PlanManagerTab
-    -- Browse-tab file browser for importing a plan JSON from anywhere.
-    -- Reuses Session.Types.FilePickerState + Session.FilePicker logic and
-    -- Overlay.FilePicker.view, exactly like the multimodal attach picker.
-    , browser : Maybe T.FilePickerState
+    -- planId of an in-flight delete (FsDeleteResult attributes it)
+    , pendingDelete : Maybe String
     }
 
 
 emptyPlanManager : PlanManagerState
 emptyPlanManager =
     { show = False
-    , loading = False
-    , plans = []
     , error = Nothing
     , filter = ""
-    , tab = PlanTabSaved
-    , browser = Nothing
+    , pendingDelete = Nothing
     }
 
 
