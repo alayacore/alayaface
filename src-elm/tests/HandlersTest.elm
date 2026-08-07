@@ -86,6 +86,16 @@ msgContent s =
             ""
 
 
+msgHistoryId : SessionState -> Maybe String
+msgHistoryId s =
+    case List.reverse s.messages |> List.head of
+        Just m ->
+            m.historyId
+
+        Nothing ->
+            Nothing
+
+
 -- A session with one tool call started (AF).
 withToolCall : SessionState
 withToolCall =
@@ -286,6 +296,118 @@ tests =
                         , \st -> Expect.equal True (List.any (\m -> m.toolName == Just "read_file") st.messages)
                         , \st -> Expect.equal True (List.any (\m -> m.content == "found 42 rows") st.messages)
                         , \st -> Expect.equal True (List.any (\m -> m.content == "Done. 42 rows collected.") st.messages)
+                        ]
+                        s
+            ]
+        , describe "plan-result continuation insertion (R3 feedback echo)"
+            [ test "appends the [Plan Result] user echo and reply without touching earlier messages" <|
+                \_ ->
+                    let
+                        planJson =
+                            "```json\n{\"type\":\"alayaface-plan\",\"schema_version\":1,\"name\":\"P\",\"tasks\":[]}\n```"
+
+                        s =
+                            emptySession "s1"
+                                |> applyFrame (textFrame "UT" (Just "1") "make a plan")
+                                |> applyFrame (textFrame "AT" (Just "2") planJson)
+                                -- plan runs, completes: feedback prompt is
+                                -- echoed as a NEW user message (hid 3) and
+                                -- the model's continuation as AT (hid 4).
+                                |> applyFrame (textFrame "UT" (Just "3") "[Plan Result] The plan has completed. Results:\n\n## t1\nok\n\n[Plan: p1]")
+                                |> applyFrame (textFrame "AT" (Just "4") "The plan finished; here is the outcome.")
+                    in
+                    Expect.all
+                        [ \st -> Expect.equal 4 (List.length st.messages)
+                        , \st ->
+                            Expect.equal
+                                [ "make a plan", planJson, "[Plan Result] The plan has completed. Results:\n\n## t1\nok\n\n[Plan: p1]", "The plan finished; here is the outcome." ]
+                                (List.map .content st.messages)
+                        , \st -> Expect.equal False (List.any (\m -> m.isError) st.messages)
+                        ]
+                        s
+            , test "earlier user/assistant messages survive when the plan reply streams deltas" <|
+                \_ ->
+                    let
+                        planJson =
+                            "```json\n{\"type\":\"alayaface-plan\",\"schema_version\":1,\"name\":\"P\",\"tasks\":[]}\n```"
+
+                        -- Real alayacore in delta mode: At carries chunks
+                        -- via the DeltaEvent port (accumulated per
+                        -- history id), AT is an empty terminator.
+                        delta v =
+                            { sessionId = "s1"
+                            , historyId = "4"
+                            , content = v
+                            , tag = "At"
+                            }
+
+                        s0 =
+                            emptySession "s1"
+                                |> applyFrame (textFrame "UT" (Just "1") "make a plan")
+                                |> applyFrame (textFrame "AT" (Just "2") planJson)
+                                |> applyFrame (textFrame "UT" (Just "3") "[Plan Result] done")
+
+                        s =
+                            H.handleDeltaEvent (H.handleDeltaEvent s0 (delta "The plan ")) (delta "finished.")
+                    in
+                    Expect.all
+                        [ \st -> Expect.equal 4 (List.length st.messages)
+                        , \st -> Expect.equal "The plan finished." (msgContent st)
+                        , \st -> Expect.equal True (List.any (\m -> m.content == planJson) st.messages)
+                        , \st -> Expect.equal True (List.any (\m -> m.content == "make a plan") st.messages)
+                        ]
+                        s
+            , test "same role+historyId replaces content in place (idempotent replay), never appends" <|
+                \_ ->
+                    let
+                        -- This is the ONLY code path that can overwrite an
+                        -- earlier message: handleCompleteFrame /
+                        -- handleDeltaEvent key on (role, historyId). Under
+                        -- normal operation alayacore never reuses a history
+                        -- id in the same process, so this only fires on
+                        -- replay (same content, harmless) or after a
+                        -- restart whose restored counter is stale (new
+                        -- reply reusing an old id → earlier message
+                        -- overwritten).
+                        s =
+                            emptySession "s1"
+                                |> applyFrame (textFrame "UT" (Just "1") "hello")
+                                |> applyFrame (textFrame "AT" (Just "2") "first answer")
+                                |> applyFrame (textFrame "AT" (Just "2") "second answer")
+                    in
+                    Expect.all
+                        [ \st -> Expect.equal 2 (List.length st.messages)
+                        , \st ->
+                            Expect.equal
+                                [ "hello", "second answer" ]
+                                (List.map .content st.messages)
+                        ]
+                        s
+            , test "merges the feedback echo into a still-last user message (known edge: prompt sent while plan ran)" <|
+                \_ ->
+                    let
+                        planJson =
+                            "```json\n{\"type\":\"alayaface-plan\",\"schema_version\":1,\"name\":\"P\",\"tasks\":[]}\n```"
+
+                        -- The user typed a follow-up while the plan was
+                        -- running and the model had not replied yet, so the
+                        -- last message is User when the feedback echo lands:
+                        -- the echo is merged into that message (multi-part
+                        -- echo behavior), NOT appended as its own message.
+                        s =
+                            emptySession "s1"
+                                |> applyFrame (textFrame "UT" (Just "1") "make a plan")
+                                |> applyFrame (textFrame "AT" (Just "2") planJson)
+                                |> applyFrame (textFrame "UT" (Just "3") "meanwhile, check X")
+                                |> applyFrame (textFrame "UT" (Just "4") "[Plan Result] done")
+                    in
+                    Expect.all
+                        [ \st -> Expect.equal 3 (List.length st.messages)
+                        , \st ->
+                            Expect.equal
+                                [ "make a plan", planJson, "meanwhile, check X\n\n[Plan Result] done" ]
+                                (List.map .content st.messages)
+                        , \st -> Expect.equal (Just "4") (msgHistoryId st)
                         ]
                         s
             ]
