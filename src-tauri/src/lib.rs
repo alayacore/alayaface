@@ -71,6 +71,8 @@ pub fn run() {
             commands::set_active_preset,
             commands::get_global_settings,
             commands::sync_global_settings,
+            commands::get_global_config,
+            commands::sync_global_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -39,7 +39,7 @@ The on-disk schema (see docs/plan-mode.md §5):
       "schema_version": 1,
       "name": "...",
       "goal": "...",
-      "concurrency": 2,
+      "concurrency": 8,
       "default_max_attempts": 3,
       "tasks": [
         { "id": "t1", "title": "...", "prompt": "...",
@@ -69,7 +69,7 @@ schemaVersion =
 
 defaultConcurrency : Int
 defaultConcurrency =
-    2
+    8
 
 
 defaultMaxAttempts : Int
@@ -335,14 +335,18 @@ unknownKeyErrors =
         )
 
 
-{-| Parse raw plan JSON text: decode, then normalize + validate.
-Errors are a readable list (all problems found, not just the first);
-unknown/misspelled fields are reported too (a typo would otherwise be
-silently ignored and change the plan's behavior).
+{-| Parse raw plan JSON text: repair model-typical JSON quirks, then
+decode, normalize and validate. Errors are a readable list (all problems
+found, not just the first); unknown/misspelled fields are reported too
+(a typo would otherwise be silently ignored and change the plan's
+behavior).
 -}
 parsePlan : String -> Result (List String) Plan
-parsePlan text =
+parsePlan rawText =
     let
+        text =
+            repairJson rawText
+
         unknownErrs =
             D.decodeString unknownKeyErrors text
                 |> Result.withDefault []
@@ -362,6 +366,84 @@ parsePlan text =
 
         Err err ->
             Err (D.errorToString err :: unknownErrs)
+
+
+{-| Escape RAW control characters (newline, tab, ...) that appear inside
+JSON string literals — models routinely write a long string with real
+line breaks instead of `\n` escapes, which makes the whole document
+invalid JSON and would silently kill detection (the marker check) and
+parsing. Outside strings, whitespace control chars are legal JSON and
+are left untouched; already-valid documents pass through unchanged.
+-}
+repairJson : String -> String
+repairJson text =
+    String.toList text
+        |> List.foldl repairJsonStep ( False, False, [] )
+        |> (\( _, _, out ) -> String.fromList (List.reverse out))
+
+
+repairJsonStep : Char -> ( Bool, Bool, List Char ) -> ( Bool, Bool, List Char )
+repairJsonStep c ( inString, escaped, out ) =
+    if escaped then
+        -- a character escaped by a backslash: copy verbatim
+        ( inString, False, c :: out )
+
+    else if c == '\\' && inString then
+        ( inString, True, c :: out )
+
+    else if c == '"' then
+        ( not inString, False, c :: out )
+
+    else if inString && Char.toCode c < 0x20 then
+        -- raw control char inside a string: escape it
+        ( inString, False, List.reverse (escapeControl c) ++ out )
+
+    else
+        ( inString, False, c :: out )
+
+
+escapeControl : Char -> List Char
+escapeControl c =
+    case c of
+        '\n' ->
+            [ '\\', 'n' ]
+
+        '\r' ->
+            [ '\\', 'r' ]
+
+        '\t' ->
+            [ '\\', 't' ]
+
+        -- backspace (0x08) / form feed (0x0C): Elm has no \b / \f escapes
+        c2 ->
+            if c2 == Char.fromCode 8 then
+                [ '\\', 'b' ]
+
+            else if c2 == Char.fromCode 12 then
+                [ '\\', 'f' ]
+
+            else
+                [ '\\', 'u' ] ++ String.toList (hex4 (Char.toCode c2))
+
+
+{-| 4-digit lowercase hex of an int (e.g. 10 → "000a").
+-}
+hex4 : Int -> String
+hex4 n =
+    String.fromList
+        (List.map
+            (\shift -> hexDigit (modBy 16 (n // (16 ^ shift))))
+            [ 3, 2, 1, 0 ]
+        )
+
+
+hexDigit : Int -> Char
+hexDigit d =
+    if d < 10 then
+        Char.fromCode (Char.toCode '0' + d)
+
+    else
+        Char.fromCode (Char.toCode 'a' + d - 10)
 
 
 {-| Normalize defaults and validate. Returns the normalized plan on

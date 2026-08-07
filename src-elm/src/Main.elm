@@ -56,6 +56,8 @@ init _ =
       , defaultModelsEditor = emptyDefaultModelsEditor
       , mcpEditor = emptyMcpEditor
       , settingsEditor = emptySettingsEditor
+      , globalConfig = emptyGlobalConfig
+      , globalConfigEditor = emptyGlobalConfigEditor
       , presets = []
       , activePreset = ""
       , presetManager = emptyPresetManager
@@ -98,6 +100,7 @@ init _ =
           Ports.closeAllSessions {}
         , Ports.listPresets {}
         , Ports.fsHomeDir {}
+        , Ports.getGlobalConfig {}
         , Task.attempt GotContainerSize (Dom.getElement "main-content")
         ]
     )
@@ -129,6 +132,8 @@ subscriptions model =
         , Ports.onDefaultMcpSyncResult (\raw -> McpSyncResult raw)
         , Ports.onGlobalSettingsList (\raw -> SettingsListResult raw)
         , Ports.onGlobalSettingsSyncResult (\raw -> SettingsSyncResult raw)
+        , Ports.onGlobalConfigGet (\raw -> GlobalConfigGetResult raw)
+        , Ports.onGlobalConfigSync (\raw -> GlobalConfigSyncResult raw)
         , Ports.onPresetsList (\raw -> PresetsListResult raw)
         , Ports.onPresetActionResult (\raw -> PresetActionResult raw)
         , Ports.onSessionCreated (\id -> SessionCreated id)

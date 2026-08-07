@@ -18,23 +18,72 @@ Rules:
   - content is trimmed; an empty block returns Nothing.
 -}
 
-import Json.Decode as D
 import Plan.Types as PT
 
 
-{-| Whether the text (the content of a ```json block) explicitly carries
-the AlayaFace plan marker (`"type": "alayaface-plan"`). Only such blocks
-get a Create Plan offer — an ordinary ```json code sample in a normal
-chat (no marker) never triggers the button.
+{-| Whether the text (the content of a ```json block) carries the AlayaFace
+plan marker (`"type": "alayaface-plan"`). Only such blocks get a Create
+Plan offer — an ordinary ```json code sample in a normal chat (no marker)
+never triggers the button.
+
+Lenient by design: the marker is read TEXTUALLY (locate the `"type"` key
+and compare its string value) instead of requiring the whole document to
+parse. Models routinely emit plan JSON that is slightly invalid — e.g.
+raw newlines inside a long string (JSON forbids them unescaped) — and
+such a plan must still be RECOGNIZED so the framework can repair it or
+report the parse error, instead of silently dropping the message (no
+link, no window, no explanation). Only an exact key+value pair counts.
 -}
 hasPlanTypeMarker : String -> Bool
 hasPlanTypeMarker text =
-    case D.decodeString (D.field "type" D.string) text of
-        Ok t ->
-            t == PT.planTypeMarker
+    case typeValue text of
+        Just v ->
+            v == PT.planTypeMarker
 
-        Err _ ->
+        Nothing ->
             False
+
+
+{-| The string value of the first `"type"` key in the text (if any).
+Textual scan: find `"type"`, then `:`, then the next quoted string.
+Whitespace between `:` and the value is tolerated; already-valid JSON is
+not required (that is the point).
+-}
+typeValue : String -> Maybe String
+typeValue text =
+    case String.indexes "\"type\"" text |> List.head of
+        Nothing ->
+            Nothing
+
+        Just keyStart ->
+            let
+                afterKey =
+                    String.dropLeft (keyStart + 6) text
+            in
+            case String.indexes ":" afterKey |> List.head of
+                Nothing ->
+                    Nothing
+
+                Just colonIdx ->
+                    let
+                        afterColon =
+                            String.dropLeft (colonIdx + 1) afterKey
+                    in
+                    case String.indexes "\"" afterColon |> List.head of
+                        Nothing ->
+                            Nothing
+
+                        Just quoteIdx ->
+                            let
+                                raw =
+                                    String.dropLeft (quoteIdx + 1) afterColon
+                            in
+                            case String.indexes "\"" raw |> List.head of
+                                Nothing ->
+                                    Nothing
+
+                                Just endIdx ->
+                                    Just (String.left endIdx raw)
 
 
 {-| Whether a full assistant message content is a detected plan message

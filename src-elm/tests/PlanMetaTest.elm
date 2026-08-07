@@ -5,6 +5,7 @@ import Expect
 import Json.Decode as D
 import Json.Encode as E
 import Plan.Meta as M
+import Plan.Types as PT
 import Test exposing (Test, describe, test)
 
 
@@ -17,6 +18,7 @@ tests =
                     meta =
                         { origin = { sessionId = "s-1", planIndex = 2 }
                         , feedbacks = [ { at = 100, status = "completed", text = "done", planId = "p-1" } ]
+                        , depth = 2
                         , createdAt = 50
                         }
 
@@ -31,6 +33,7 @@ tests =
                         Expect.all
                             [ \m -> Expect.equal { sessionId = "s-1", planIndex = 2 } m.origin
                             , \m -> Expect.equal 1 (List.length m.feedbacks)
+                            , \m -> Expect.equal 2 m.depth
                             , \m -> Expect.equal 50 m.createdAt
                             ]
                             m2
@@ -39,7 +42,7 @@ tests =
                         Expect.fail ("decode failed: " ++ D.errorToString e)
         , test "strict: missing origin is rejected (every plan has one)" <|
             \_ ->
-                case D.decodeString M.decodeMeta """{ "created_at": 7 }""" of
+                case D.decodeString M.decodeMeta """{ "created_at": 7, "depth": 1 }""" of
                     Ok _ ->
                         Expect.fail "meta without origin must be rejected"
 
@@ -47,15 +50,23 @@ tests =
                         Expect.pass
         , test "strict: missing planIndex is rejected" <|
             \_ ->
-                case D.decodeString M.decodeMeta """{ "origin": { "sessionId": "s-1" }, "created_at": 7 }""" of
+                case D.decodeString M.decodeMeta """{ "origin": { "sessionId": "s-1" }, "created_at": 7, "depth": 1 }""" of
                     Ok _ ->
                         Expect.fail "origin without planIndex must be rejected"
 
                     Err _ ->
                         Expect.pass
+        , test "strict: missing depth is rejected (no legacy fallback)" <|
+            \_ ->
+                case D.decodeString M.decodeMeta """{ "origin": { "sessionId": "s-1", "planIndex": 1 }, "feedbacks": [], "created_at": 7 }""" of
+                    Ok _ ->
+                        Expect.fail "meta without depth must be rejected"
+
+                    Err _ ->
+                        Expect.pass
         , test "strict: missing created_at is rejected" <|
             \_ ->
-                case D.decodeString M.decodeMeta """{ "origin": { "sessionId": "s-1", "planIndex": 1 }, "feedbacks": [] }""" of
+                case D.decodeString M.decodeMeta """{ "origin": { "sessionId": "s-1", "planIndex": 1 }, "feedbacks": [], "depth": 1 }""" of
                     Ok _ ->
                         Expect.fail "meta without created_at must be rejected"
 
@@ -80,6 +91,72 @@ tests =
                     M.plansOwnedBySession Dict.empty "sess-a"
                         |> Expect.equal []
             ]
+        , describe "recursion depth"
+            [ test "top-level plan (no plan owns its origin session) → depth 1" <|
+                \_ ->
+                    M.depthForOrigin sampleMetas Dict.empty "sess-a"
+                        |> Expect.equal 1
+            , test "plan created by a node session of a depth-1 plan → depth 2" <|
+                \_ ->
+                    let
+                        runStates =
+                            Dict.fromList
+                                [ ( "p-1", Dict.fromList [ ( "n1", nodeBoundTo "sess-a" ) ] ) ]
+                    in
+                    M.depthForOrigin sampleMetas runStates "sess-a"
+                        |> Expect.equal 2
+            , test "multi-level chain: depth-2 parent → depth 3" <|
+                \_ ->
+                    let
+                        metas =
+                            Dict.fromList
+                                [ ( "p-1", metaOfDepth "sess-a" 1 )
+                                , ( "p-2", metaOfDepth "sess-n1" 2 )
+                                ]
+
+                        runStates =
+                            Dict.fromList
+                                [ ( "p-1", Dict.fromList [ ( "n1", nodeBoundTo "sess-a" ) ] )
+                                , ( "p-2", Dict.fromList [ ( "n1", nodeBoundTo "sess-n1" ) ] )
+                                ]
+                    in
+                    M.depthForOrigin metas runStates "sess-n1"
+                        |> Expect.equal 3
+            , test "a closed node session still matches via lastSessionId" <|
+                \_ ->
+                    let
+                        closedNode =
+                            nodeBoundTo "sess-a"
+
+                        closed =
+                            { closedNode | sessionId = Nothing, lastSessionId = Just "sess-a" }
+
+                        runStates =
+                            Dict.fromList
+                                [ ( "p-1", Dict.fromList [ ( "n1", closed ) ] ) ]
+                    in
+                    M.depthForOrigin sampleMetas runStates "sess-a"
+                        |> Expect.equal 2
+            , test "depthOf defaults to 1 for unknown plans (conservative)" <|
+                \_ ->
+                    M.depthOf sampleMetas "nope"
+                        |> Expect.equal 1
+            , test "shouldInjectPlanPrompt: at or under the limit → inject" <|
+                \_ ->
+                    Expect.all
+                        [ \() -> Expect.equal True (M.shouldInjectPlanPrompt 1 8)
+                        , \() -> Expect.equal True (M.shouldInjectPlanPrompt 8 8)
+                        , \() -> Expect.equal False (M.shouldInjectPlanPrompt 9 8)
+                        ]
+                        ()
+            , test "shouldAutoRun: only sub-plans (depth > 1)" <|
+                \_ ->
+                    Expect.all
+                        [ \() -> Expect.equal False (M.shouldAutoRun 1)
+                        , \() -> Expect.equal True (M.shouldAutoRun 2)
+                        ]
+                        ()
+            ]
         ]
 
 
@@ -94,7 +171,29 @@ sampleMetas =
 
 metaOf : String -> M.PlanMeta
 metaOf sessionId =
+    metaOfDepth sessionId 1
+
+
+metaOfDepth : String -> Int -> M.PlanMeta
+metaOfDepth sessionId depth =
     { origin = { sessionId = sessionId, planIndex = 1 }
     , feedbacks = []
+    , depth = depth
     , createdAt = 1
+    }
+
+
+nodeBoundTo : String -> PT.NodeRunState
+nodeBoundTo sid =
+    { nodeId = "n1"
+    , status = PT.WaitingForPlan
+    , attempts = 1
+    , maxAttempts = 3
+    , sessionId = Just sid
+    , lastSessionId = Just sid
+    , attemptSessions = [ sid ]
+    , failures = []
+    , startedAt = Nothing
+    , finishedAt = Nothing
+    , output = Nothing
     }

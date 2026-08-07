@@ -26,6 +26,11 @@ port module Ports exposing
     , syncGlobalSettings
     , onGlobalSettingsList
     , onGlobalSettingsSyncResult
+      -- Global config overlay (cross-preset)
+    , getGlobalConfig
+    , syncGlobalConfig
+    , onGlobalConfigGet
+    , onGlobalConfigSync
       -- Presets
     , listPresets
     , copyPreset
@@ -114,6 +119,10 @@ port listGlobalSettings : { preset : String } -> Cmd msg
 port syncGlobalSettings : { preset : String, toolConfirm : String, builtinTools : String } -> Cmd msg
 port onGlobalSettingsList : (E.Value -> msg) -> Sub msg
 port onGlobalSettingsSyncResult : (E.Value -> msg) -> Sub msg
+port getGlobalConfig : {} -> Cmd msg
+port syncGlobalConfig : { recursionLimit : Int } -> Cmd msg
+port onGlobalConfigGet : (E.Value -> msg) -> Sub msg
+port onGlobalConfigSync : (E.Value -> msg) -> Sub msg
 port listPresets : {} -> Cmd msg
 port copyPreset : { source : String, name : String } -> Cmd msg
 port renamePreset : { oldName : String, newName : String } -> Cmd msg

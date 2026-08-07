@@ -318,6 +318,42 @@
         });
     });
 
+    on("getGlobalConfig", function () {
+      transport.invoke("get_global_config")
+        .then(function (res) {
+          app.ports.onGlobalConfigGet.send({
+            ok: true,
+            recursion_limit: (res && typeof res.recursion_limit === "number") ? res.recursion_limit : 8,
+            error: "",
+          });
+        })
+        .catch(function (err) {
+          app.ports.onGlobalConfigGet.send({
+            ok: false, recursion_limit: 8,
+            error: String((err && err.message) || err),
+          });
+        });
+    });
+
+    on("syncGlobalConfig", function (data) {
+      transport.invoke("sync_global_config", {
+        config: JSON.stringify({ recursion_limit: data.recursionLimit }),
+      })
+        .then(function (res) {
+          app.ports.onGlobalConfigSync.send({
+            ok: true,
+            recursion_limit: (res && typeof res.recursion_limit === "number") ? res.recursion_limit : data.recursionLimit,
+            error: "",
+          });
+        })
+        .catch(function (err) {
+          app.ports.onGlobalConfigSync.send({
+            ok: false, recursion_limit: data.recursionLimit,
+            error: String((err && err.message) || err),
+          });
+        });
+    });
+
     on("listPresets", function () {
       transport.invoke("list_presets")
         .then(function (presets) {

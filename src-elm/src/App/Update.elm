@@ -194,6 +194,17 @@ planOriginSessionId model planId =
         |> Maybe.map (.origin >> .sessionId)
 
 
+{-| Every open plan's run-state nodes, keyed by planId (empty dict for
+windows without a run). Feed to the pure depth helpers in Plan.Meta —
+the run state records which sessions belong to which plan's nodes.
+-}
+runStatesOf : Model -> Dict String (Dict String PT.NodeRunState)
+runStatesOf model =
+    Dict.map
+        (\_ win -> win.run |> Maybe.map .nodes |> Maybe.withDefault Dict.empty)
+        model.planWindows
+
+
 {-| The on-disk session id for a LIVE session id: resumes hand out FRESH
 ids whose own dir does not exist — map back through planResumedFrom.
 -}
@@ -912,7 +923,7 @@ Plan format (output exactly one ```json code block, then stop and wait for the p
   "schema_version": 1,
   "name": "plan name",
   "goal": "goal description",
-  "concurrency": 2,
+  "concurrency": 8,
   "default_max_attempts": 3,
   "tasks": [
     { "id": "t1", "title": "subtask title", "prompt": "complete, self-contained instruction", "depends_on": [], "preset": "Default", "max_attempts": 3 }
@@ -992,6 +1003,53 @@ runStepIn planId now ev model =
 
         Nothing ->
             ( model, Cmd.none )
+
+
+{-| Initialize the run state for a fresh run of the given plan window
+(fresh RunState on first run; a re-run keeps the existing state — its
+node statuses are reset by StartRun) and apply the header concurrency
+override. Shared by the manual Run button and the sub-plan auto-run.
+-}
+startRunIn : String -> Int -> Model -> Model
+startRunIn planId ts model =
+    case Dict.get planId model.planWindows of
+        Just win ->
+            case win.view.plan of
+                Just plan ->
+                    let
+                        baseRun =
+                            Maybe.withDefault
+                                (PT.emptyRunState (PT.slugify plan.name ++ "-" ++ String.fromInt ts) plan)
+                                win.run
+
+                        run =
+                            case PT.parseConcurrency win.view.concurrencyInput of
+                                Just c ->
+                                    { baseRun | concurrency = c }
+
+                                Nothing ->
+                                    baseRun
+
+                        win2 =
+                            case win.run of
+                                Just _ ->
+                                    { win | run = Just run }
+
+                                Nothing ->
+                                    { win
+                                        | run = Just run
+                                        , runPath = Maybe.map runPathFor win.view.path
+                                        , selectedNode = Nothing
+                                        , runLog = []
+                                    }
+                    in
+                    { model | planWindows = Dict.insert planId win2 model.planWindows }
+
+                Nothing ->
+                    model
+
+        Nothing ->
+            model
 
 
 {-| R3: a plan just completed — send the results summary back to the
@@ -1319,8 +1377,12 @@ startNextCreateIn model =
 
 {-| Session-creation args for a runner node: toolConfirm=allow (auto-
 approve tools so tasks don't stall) plus the node's preset/tools
-overrides (Nothing = preset defaults / all tools). No planner system
-prompt — runner sessions execute tasks, not plans.
+overrides (Nothing = preset defaults / all tools). Node sessions carry
+the plan system prompt ONLY while the plan is within the global
+recursion limit (plan.depth ≤ recursion_limit, default 8): over the
+limit the prompt is omitted so the model stops delegating — that is how
+recursion is bounded. (This is the only gate; resume_session re-applies
+the persisted spawn args, so the decision is made once at creation.)
 
 NOTE: alayacore's --tool-confirm is a list of tool names that REQUIRE
 confirmation; "allow" matches no real tool, so nothing is confirmed →
@@ -1345,13 +1407,21 @@ nodeSessionArgsIn planId nodeId model =
                 |> Maybe.withDefault []
                 |> List.filter (\t -> t.id == nodeId)
                 |> List.head
+
+        depth =
+            PM.depthOf model.planMetas planId
+
+        systemPrompt =
+            if PM.shouldInjectPlanPrompt depth model.globalConfig.recursionLimit then
+                Just planSystemPrompt
+
+            else
+                Nothing
     in
     { toolConfirm = Just "allow"
     , preset = task |> Maybe.andThen .preset
     , builtinTools = task |> Maybe.andThen .tools
-    -- Fixed plan mode (D2): node sessions also get the planner hint, so
-    -- a node model may itself delegate to a sub-plan (recursion).
-    , systemPrompt = Just planSystemPrompt
+    , systemPrompt = systemPrompt
     , workDir = planWorkDir planId model
     , planId = Just planId
     , nodeId = Just nodeId
@@ -3417,7 +3487,27 @@ update msg model =
                         Err errs ->
                             -- R2: invalid detected plan — report inline in
                             -- the originating session (no window is created).
-                            ( injectPlanErrorIntoSession errs sid model2, Cmd.none )
+                            -- The marker check is lenient, so this also fires
+                            -- for models whose plan JSON could not be repaired:
+                            -- show the reason AND, if the origin session is a
+                            -- plan NODE (already marked WaitingForPlan by the
+                            -- lenient delegation judgment), complete the node —
+                            -- otherwise the run hangs waiting for a feedback
+                            -- that never comes.
+                            let
+                                m1 =
+                                    injectPlanErrorIntoSession errs sid model2
+                            in
+                            case findPlanIdBySession m1 sid of
+                                Just pid ->
+                                    ( m1
+                                    , Task.perform
+                                        (\t -> PlanRunFrame t (R.TaskDone sid False (lastAssistantOutput m1 sid) False))
+                                        (Task.map Time.posixToMillis Time.now)
+                                    )
+
+                                Nothing ->
+                                    ( m1, Cmd.none )
 
                 Nothing ->
                     ( model, Cmd.none )
@@ -3465,11 +3555,17 @@ update msg model =
                     }
 
                 -- R3: write runtime metadata next to the plan file (origin
-                -- binding + feedbacks); planMetas is kept in memory for the
-                -- status bar and feedback routing.
+                -- binding + feedbacks + recursion depth); planMetas is kept
+                -- in memory for the status bar, feedback routing and the
+                -- recursion checks. depth = parent.depth + 1 when the origin
+                -- session is a plan node's session, else 1 (top-level).
+                depth =
+                    PM.depthForOrigin model.planMetas (runStatesOf model) originDiskId
+
                 meta =
                     { origin = origin
                     , feedbacks = []
+                    , depth = depth
                     , createdAt = timestamp
                     }
 
@@ -3484,12 +3580,24 @@ update msg model =
             let
                 m2 =
                     addPlanWindow planId win1 m1
+
+                -- Sub-plans (depth > 1) run immediately: the parent node
+                -- is WaitingForPlan and the R-series design is model-
+                -- autonomous recursion. Only the top-level plan waits for
+                -- the user's Run click.
+                autoRunCmd =
+                    if PM.shouldAutoRun depth then
+                        Task.perform (\t -> PlanAutoRunStart planId t) (Task.map Time.posixToMillis Time.now)
+
+                    else
+                        Cmd.none
             in
             ( m2
             , Cmd.batch
                 [ Ports.fsWriteFileText { path = path, content = content, createParents = True }
                 , Ports.fsWriteFileText { path = metaPath, content = E.encode 2 (PM.encodeMeta meta), createParents = True }
                 , Ports.setPlanConnection m2.planConnection
+                , autoRunCmd
                 ]
             )
 
@@ -3675,48 +3783,11 @@ update msg model =
         PlanRunStartAt ts ->
             let
                 m1 =
-                    case ( model.planActiveId, getPlanWin model ) of
-                        ( Just pid, Just win ) ->
-                            case win.view.plan of
-                                Just plan ->
-                                    let
-                                        -- Fresh run state on first Run; for a
-                                        -- re-run keep the existing state (its
-                                        -- node statuses are reset by StartRun).
-                                        baseRun =
-                                            Maybe.withDefault
-                                                (PT.emptyRunState (PT.slugify plan.name ++ "-" ++ String.fromInt ts) plan)
-                                                win.run
+                    case model.planActiveId of
+                        Just pid ->
+                            startRunIn pid ts model
 
-                                        -- Header concurrency override wins over
-                                        -- the plan JSON (empty/invalid → plan).
-                                        run =
-                                            case PT.parseConcurrency win.view.concurrencyInput of
-                                                Just c ->
-                                                    { baseRun | concurrency = c }
-
-                                                Nothing ->
-                                                    baseRun
-
-                                        win2 =
-                                            case win.run of
-                                                Just _ ->
-                                                    { win | run = Just run }
-
-                                                Nothing ->
-                                                    { win
-                                                        | run = Just run
-                                                        , runPath = Maybe.map runPathFor win.view.path
-                                                        , selectedNode = Nothing
-                                                        , runLog = []
-                                                    }
-                                    in
-                                    { model | planWindows = Dict.insert pid win2 model.planWindows }
-
-                                Nothing ->
-                                    model
-
-                        _ ->
+                        Nothing ->
                             model
             in
             case model.planActiveId of
@@ -3725,6 +3796,12 @@ update msg model =
 
                 Nothing ->
                     ( model, Cmd.none )
+
+        -- Sub-plans auto-run right after creation (depth > 1); the
+        -- window is fresh (win.run == Nothing), so this is exactly the
+        -- same start as a manual Run click on the active window.
+        PlanAutoRunStart planId ts ->
+            runStepIn planId ts R.StartRun (startRunIn planId ts model)
 
         PlanRunPause ->
             case model.planActiveId of
@@ -4662,6 +4739,150 @@ update msg model =
                         in
                         ( { model
                             | settingsEditor =
+                                { ed
+                                    | syncing = False
+                                    , error = Just res.error
+                                }
+                          }
+                        , Cmd.none
+                        )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        -- Global config overlay (cross-preset)
+        OpenGlobalConfig ->
+            ( { model
+                | globalConfigEditor =
+                    { emptyGlobalConfigEditor
+                        | show = True
+                        , loading = True
+                    }
+                , showGlobalMenu = False
+              }
+            , Ports.getGlobalConfig {}
+            )
+
+        CloseGlobalConfig ->
+            let
+                ed =
+                    model.globalConfigEditor
+            in
+            if ed.syncing then
+                -- Do not allow closing while a sync is in flight
+                ( model, Cmd.none )
+
+            else
+                ( { model | globalConfigEditor = emptyGlobalConfigEditor }
+                , Cmd.none
+                )
+
+        SetRecursionLimit val ->
+            let
+                ed =
+                    model.globalConfigEditor
+            in
+            ( { model
+                | globalConfigEditor =
+                    { ed
+                        | input = val
+                        , error = Nothing
+                    }
+              }
+            , Cmd.none
+            )
+
+        GlobalConfigSave ->
+            let
+                ed =
+                    model.globalConfigEditor
+            in
+            case String.toInt (String.trim ed.input) of
+                Just n ->
+                    if n < 1 then
+                        ( { model
+                            | globalConfigEditor =
+                                { ed
+                                    | error = Just "Recursion limit must be >= 1"
+                                }
+                          }
+                        , Cmd.none
+                        )
+
+                    else
+                        ( { model
+                            | globalConfigEditor =
+                                { ed
+                                    | syncing = True
+                                    , error = Nothing
+                                }
+                          }
+                        , Ports.syncGlobalConfig { recursionLimit = n }
+                        )
+
+                Nothing ->
+                    ( { model
+                        | globalConfigEditor =
+                            { ed
+                                | error = Just "Recursion limit must be a positive integer"
+                            }
+                      }
+                    , Cmd.none
+                    )
+
+        GlobalConfigGetResult raw ->
+            case D.decodeValue globalConfigGetResultDecoder raw of
+                Ok res ->
+                    let
+                        ed =
+                            model.globalConfigEditor
+                    in
+                    if res.ok then
+                        ( { model
+                            | globalConfig =
+                                { recursionLimit = res.recursionLimit }
+                            , globalConfigEditor =
+                                { ed
+                                    | loading = False
+                                    , input = String.fromInt res.recursionLimit
+                                    , error = Nothing
+                                }
+                          }
+                        , Cmd.none
+                        )
+
+                    else
+                        ( { model
+                            | globalConfigEditor =
+                                { ed
+                                    | loading = False
+                                    , error = Just res.error
+                                }
+                          }
+                        , Cmd.none
+                        )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        GlobalConfigSyncResult raw ->
+            case D.decodeValue globalConfigSyncResultDecoder raw of
+                Ok res ->
+                    if res.ok then
+                        ( { model
+                            | globalConfig = { recursionLimit = res.recursionLimit }
+                            , globalConfigEditor = emptyGlobalConfigEditor
+                          }
+                        , Cmd.none
+                        )
+
+                    else
+                        let
+                            ed =
+                                model.globalConfigEditor
+                        in
+                        ( { model
+                            | globalConfigEditor =
                                 { ed
                                     | syncing = False
                                     , error = Just res.error
@@ -5695,6 +5916,24 @@ settingsSyncResultDecoder =
     D.map2
         (\ok error -> { ok = ok, error = error })
         (D.field "ok" D.bool)
+        (D.field "error" D.string)
+
+
+globalConfigGetResultDecoder : D.Decoder { ok : Bool, recursionLimit : Int, error : String }
+globalConfigGetResultDecoder =
+    D.map3
+        (\ok recursionLimit error -> { ok = ok, recursionLimit = recursionLimit, error = error })
+        (D.field "ok" D.bool)
+        (D.field "recursion_limit" D.int)
+        (D.field "error" D.string)
+
+
+globalConfigSyncResultDecoder : D.Decoder { ok : Bool, recursionLimit : Int, error : String }
+globalConfigSyncResultDecoder =
+    D.map3
+        (\ok recursionLimit error -> { ok = ok, recursionLimit = recursionLimit, error = error })
+        (D.field "ok" D.bool)
+        (D.field "recursion_limit" D.int)
         (D.field "error" D.string)
 
 

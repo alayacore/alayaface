@@ -43,7 +43,7 @@ Upgrade Plan Mode from a "user-triggered standalone tool" to a
 | D11 | **Plan window**: when all nodes finish (Completed) → feedback first, then auto-close; Failed/Stopped keep the window (review/retry); reopening from the Plans manager / status bar / `[Plan: xxx]` link |
 | D12 | **Status bar** (replaces the Create Plan button): plan binding component under the message (name + status + [open] + [re-run]); persisted + restored after restart |
 | D13 | **Timeout mechanism removed entirely** (P16's timeout): schema fields, validate, runner Tick, app heartbeat all deleted; redesigned later once recursion stabilizes. `startedAt` kept (record only), work-dir isolation kept |
-| D14 | **Recursion unbounded** (trial period); auto-create without confirmation (trial period); multi-plan feedback executed sequentially (trial period) |
+| D14 | **Recursion bounded + sub-plans auto-run** (replaces the unbounded trial period): every plan persists a recursion depth (top-level = 1, sub-plan = parent + 1) in meta.json; a cross-preset global config overlay (`~/.alayaface/global.conf`) holds `recursion_limit` (default 8, ⚙ → Global config); node sessions of a plan with `depth > limit` get no plan system prompt (soft limit); only the top-level plan waits for the user's Run click — sub-plans auto-run at creation. Auto-create without confirmation (trial period) kept; multi-plan feedback executed sequentially (trial period) |
 | D15 | **Plan Session entry deleted** (P6/P22's menu, planSessionPending/planSessionIds, [Plan] title, builtinTools="") |
 
 ## 2. Runtime metadata storage (new decision)

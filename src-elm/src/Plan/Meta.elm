@@ -6,6 +6,11 @@ module Plan.Meta exposing
     , decodeMeta
     , metaPathFor
     , plansOwnedBySession
+    , depthOf
+    , parentPlanIdOfSession
+    , depthForOrigin
+    , shouldInjectPlanPrompt
+    , shouldAutoRun
     )
 
 {-| Runtime metadata for a plan, stored in
@@ -17,6 +22,7 @@ runtime linkage:
     {
       "origin": { "sessionId": "...", "planIndex": 1 },
       "feedbacks": [ { "at": 172..., "status": "completed", "text": "...", "planId": "..." } ],
+      "depth": 2,
       "created_at": 172...
     }
 
@@ -32,6 +38,11 @@ runtime linkage:
   the summary text that was sent; failed/stopped runs record nothing to
   the conversation but keep a status entry here so a reopened session
   can render the status bar and the `[Plan: xxx]` link).
+- `depth` — the plan's OWN recursion depth counter: 1 for a top-level
+  plan (no plan above it), parent.depth + 1 for a sub-plan (its origin
+  session is a node session of another plan). Computed once at creation
+  and persisted; sessions under a plan check it against the global
+  recursion limit (see `shouldInjectPlanPrompt` / `shouldAutoRun`).
 - `created_at` — creation timestamp.
 
 The decoder is STRICT: every plan is created by a session, so origin is
@@ -42,6 +53,7 @@ rebuild — no lenient/legacy fallbacks).
 import Dict exposing (Dict)
 import Json.Decode as D
 import Json.Encode as E
+import Plan.Types as PT
 
 
 type alias Origin =
@@ -61,6 +73,7 @@ type alias Feedback =
 type alias PlanMeta =
     { origin : Origin
     , feedbacks : List Feedback
+    , depth : Int
     , createdAt : Int
     }
 
@@ -94,13 +107,14 @@ encodeMeta m =
                 )
                 m.feedbacks
           )
+        , ( "depth", E.int m.depth )
         , ( "created_at", E.int m.createdAt )
         ]
 
 
 decodeMeta : D.Decoder PlanMeta
 decodeMeta =
-    D.map3 PlanMeta
+    D.map4 PlanMeta
         (D.field "origin"
             (D.map2 Origin
                 (D.field "sessionId" D.string)
@@ -117,6 +131,7 @@ decodeMeta =
                 )
             )
         )
+        (D.field "depth" D.int)
         (D.field "created_at" D.int)
 
 
@@ -136,3 +151,77 @@ plansOwnedBySession metas diskSessionId =
         )
         []
         metas
+
+
+-- ─── Recursion depth ───────────────────────────────────────────────
+
+{-| A plan's recursion depth: 1 for a top-level plan, parent.depth + 1
+for a sub-plan. Persisted in meta.json at creation and rebuilt with the
+planMetas index on session open, so it survives restarts. Unknown plans
+default to 1 (top-level) — the conservative direction (confirmation
+required, prompt injected).
+-}
+depthOf : Dict String PlanMeta -> String -> Int
+depthOf metas planId =
+    Dict.get planId metas
+        |> Maybe.map .depth
+        |> Maybe.withDefault 1
+
+
+{-| The id of the plan whose run binds the given session as a node.
+Run state maps planId → node run states, and each node records its
+session's ON-DISK id (sessionId, or lastSessionId once closed) — the
+same id a sub-plan's meta origin uses, so resumed sessions match too.
+Used only at plan creation, when the parent plan is open (WaitingForPlan
+nodes keep their window); a missing parent — impossible in normal flow,
+cascade close keeps the chain — falls back to top-level depth.
+-}
+parentPlanIdOfSession : Dict String (Dict String PT.NodeRunState) -> String -> Maybe String
+parentPlanIdOfSession runStates sid =
+    Dict.foldl
+        (\pid nodes acc ->
+            case acc of
+                Just _ ->
+                    acc
+
+                Nothing ->
+                    if Dict.toList nodes |> List.any (\( _, n ) -> n.sessionId == Just sid || n.lastSessionId == Just sid) then
+                        Just pid
+
+                    else
+                        Nothing
+        )
+        Nothing
+        runStates
+
+
+{-| Depth of a NEW plan whose origin is the given ON-DISK session id:
+parent.depth + 1 when that session is a plan node's session, else 1
+(top-level).
+-}
+depthForOrigin : Dict String PlanMeta -> Dict String (Dict String PT.NodeRunState) -> String -> Int
+depthForOrigin metas runStates originSid =
+    case parentPlanIdOfSession runStates originSid of
+        Just parentId ->
+            depthOf metas parentId + 1
+
+        Nothing ->
+            1
+
+
+{-| Whether a plan's node sessions get the plan system prompt: only
+within the global recursion limit (plan.depth ≤ limit). Over the limit
+the prompt is omitted so the model stops delegating — the soft recursion
+limit.
+-}
+shouldInjectPlanPrompt : Int -> Int -> Bool
+shouldInjectPlanPrompt depth limit =
+    depth <= limit
+
+
+{-| Whether a plan runs without user confirmation: only sub-plans
+(depth > 1) auto-run; the top-level plan is the single user gate.
+-}
+shouldAutoRun : Int -> Bool
+shouldAutoRun depth =
+    depth > 1

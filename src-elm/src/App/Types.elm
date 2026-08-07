@@ -13,6 +13,10 @@ module App.Types exposing
     , emptyMcpEditor
     , SettingsEditor
     , emptySettingsEditor
+    , GlobalConfig
+    , emptyGlobalConfig
+    , GlobalConfigEditor
+    , emptyGlobalConfigEditor
     , PresetInfo
     , PresetManager
     , emptyPresetManager
@@ -78,6 +82,11 @@ type alias Model =
     , defaultModelsEditor : DefaultModelsEditor
     , mcpEditor : McpEditor
     , settingsEditor : SettingsEditor
+    -- Cross-preset global config overlay (~/.alayaface/global.conf).
+    -- RecursionLimit bounds Plan Mode recursion: node sessions of a plan
+    -- whose depth exceeds it get no plan system prompt.
+    , globalConfig : GlobalConfig
+    , globalConfigEditor : GlobalConfigEditor
     , presets : List PresetInfo
     , activePreset : String
     , presetManager : PresetManager
@@ -286,6 +295,13 @@ type Msg
     | SettingsSave
     | SettingsListResult E.Value
     | SettingsSyncResult E.Value
+      -- Global config overlay (cross-preset)
+    | OpenGlobalConfig
+    | CloseGlobalConfig
+    | SetRecursionLimit String
+    | GlobalConfigSave
+    | GlobalConfigGetResult E.Value
+    | GlobalConfigSyncResult E.Value
       -- Presets
     | OpenPresetManager
     | ClosePresetManager
@@ -333,6 +349,9 @@ type Msg
       -- Plan runner
     | PlanRunStart
     | PlanRunStartAt Int
+    -- Sub-plans (depth > 1) auto-run right after creation — the
+    -- top-level plan's Run button is the single user confirmation gate.
+    | PlanAutoRunStart String Int
     | PlanRunPause
     | PlanRunResume
     | PlanRunStop
@@ -482,6 +501,38 @@ emptySettingsEditor =
     , builtinTools = ""
     , error = Nothing
     , preset = ""
+    }
+
+
+-- GLOBAL CONFIG OVERLAY
+
+type alias GlobalConfig =
+    { recursionLimit : Int
+    }
+
+
+emptyGlobalConfig : GlobalConfig
+emptyGlobalConfig =
+    { recursionLimit = 8
+    }
+
+
+type alias GlobalConfigEditor =
+    { show : Bool
+    , loading : Bool
+    , syncing : Bool
+    , input : String
+    , error : Maybe String
+    }
+
+
+emptyGlobalConfigEditor : GlobalConfigEditor
+emptyGlobalConfigEditor =
+    { show = False
+    , loading = False
+    , syncing = False
+    , input = ""
+    , error = Nothing
     }
 
 

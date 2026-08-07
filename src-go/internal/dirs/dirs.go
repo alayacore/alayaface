@@ -2,6 +2,7 @@
 //
 //	~/.alayaface/
 //	  active-preset        — name of the currently active preset
+//	  global.conf          — cross-preset global config overlay (recursion_limit etc.)
 //	  presets/
 //	    <name>/            — one config directory per preset
 //	      model.conf
@@ -52,6 +53,13 @@ func PresetsRoot() string {
 // ActivePresetFile returns the file recording the active preset name.
 func ActivePresetFile() string {
 	return filepath.Join(AlayafaceDir(), "active-preset")
+}
+
+// GlobalConfigFile returns the cross-preset global config file
+// (~/.alayaface/global.conf). Unlike settings.conf (one per preset),
+// this file applies to every preset — the global config overlay.
+func GlobalConfigFile() string {
+	return filepath.Join(AlayafaceDir(), "global.conf")
 }
 
 // ValidPresetName reports whether a preset name is a short,

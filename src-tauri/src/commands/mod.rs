@@ -10,6 +10,7 @@ pub mod fs;
 pub mod models;
 pub mod presets;
 pub mod settings;
+pub mod global_config;
 
 pub use crate::session::SessionMap;
 pub use sessions::*;
@@ -20,6 +21,7 @@ pub use fs::*;
 pub use models::*;
 pub use presets::*;
 pub use settings::*;
+pub use global_config::*;
 
 use crate::alayacore;
 use crate::tlv;

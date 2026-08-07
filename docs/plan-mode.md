@@ -121,7 +121,7 @@ session, and plan-node sessions are unaffected (no planner hint).
   "schema_version": 1,
   "name": "monthly-sales-report",
   "goal": "Produce a June sales analysis report",
-  "concurrency": 2,
+  "concurrency": 8,
   "default_max_attempts": 3,
   "tasks": [
     {
@@ -157,7 +157,7 @@ session, and plan-node sessions are unaffected (no planner hint).
 | `schema_version` | yes | Fixed 1 |
 | `name` | yes | Plan name (used for the file-name slug) |
 | `goal` | no | Overall goal, shown in the DAG view header |
-| `concurrency` | no | Parallel cap, default 2 (range 1–8) |
+| `concurrency` | no | Parallel cap, default 8 (range 1–8) |
 | `default_max_attempts` | no | Node default retry cap, default 3 |
 | `tasks[].id` | yes | Globally unique, non-empty |
 | `tasks[].title` | yes | Node title |
@@ -295,6 +295,42 @@ E2E covers the gate.
   ready SM are unsupported (a resumed session's later LIVE plan messages
   would never auto-create). `isSessionReady` in App/Update.elm.
 - decode/validate (`type` **required**: missing or wrong value rejected, no backward compat) → normalize → generate planId → `fs_write_file_text` writes `sessions/<originSessionId>/plans/<planId>/<planId>.json` (the plan lives inside the session that created it) → opens the Plan window.
+
+### 6.8 Recursion: depth, global limit, auto-run
+
+Recursion = a plan node's model answers with another plan JSON → a sub-plan
+is auto-created whose origin session is that node's session. Three rules
+bound and drive it:
+
+**Depth counting (Plan.Meta, persisted in meta.json as `depth`)** — each
+plan carries its OWN recursion depth counter, computed once at creation:
+- top-level plan (no plan above it; origin is a plain session) → `depth = 1`;
+- sub-plan (origin session is a node session of another plan) →
+  `depth = parent.depth + 1` (the parent is found via the run state:
+  `run.nodes[*].sessionId` / `lastSessionId` — ON-DISK ids, so resumed
+  sessions match too);
+- the session's recursion depth (plans above it) = `plan.depth - 1`, so a
+  top-level plan's session has recursion depth 0.
+- `depth` is **required** in meta.json (no backward compat — a meta that
+  fails to decode is skipped by the index rebuild).
+
+**Global recursion limit (global config overlay)** — `~/.alayaface/
+global.conf` (`{"recursion_limit": 8}`) is the cross-preset global config
+overlay (RPCs `get_global_config` / `sync_global_config`; edited via ⚙ →
+Global config). When a plan node session is created
+(`nodeSessionArgsIn`), the plan's `depth` is checked against the limit:
+- `depth ≤ limit` → the node session gets the plan system prompt
+  (`--system`), so its model may delegate again;
+- `depth > limit` → **no plan system prompt**: the model stops delegating.
+  This is the soft recursion limit (default 8 levels of plans).
+- `resume_session` re-applies the persisted spawn args, so the decision is
+  made once at creation and survives restarts.
+
+**Auto-run (sub-plans only)** — the top-level plan is the single user
+gate: it waits for the Run button. A sub-plan (`depth > 1`) starts
+running immediately after its window is created (`PlanAutoRunStart` →
+same `startRunIn` path as the Run button) — the parent node is
+WaitingForPlan and the R-series design is model-autonomous recursion.
 
 ---
 
@@ -704,9 +740,21 @@ There is **no top-level `plans/` root** anymore.
   **required, no backward compat** — missing or wrong value errors out directly
   (`Missing top-level "type": "alayaface-plan" marker` /
   `Not an AlayaFace plan: ...`).
+- **bounded recursion + sub-plan auto-run (user instruction, replaces D14's
+  unbounded trial period)**: every plan carries a persisted recursion depth
+  (top-level = 1, sub-plan = parent + 1, required in meta.json); a
+  cross-preset global config overlay (`~/.alayaface/global.conf`, RPCs
+  `get_global_config`/`sync_global_config`, ⚙ → Global config) holds
+  `recursion_limit` (default 8); node sessions of a plan with `depth > limit`
+  get **no plan system prompt** (soft limit — the model stops delegating);
+  **only the top-level plan needs the user's Run click — sub-plans auto-run**
+  at creation.
+  **required, no backward compat** — missing or wrong value errors out directly
+  (`Missing top-level "type": "alayaface-plan" marker` /
+  `Not an AlayaFace plan: ...`).
 
 ### Defaults (not explicitly confirmed; implemented as follows, adjustable at review)
-- `concurrency` default 2 (1–8 adjustable);
+- `concurrency` default 8 (1–8 adjustable);
 - `default_max_attempts` default 3, retry backoff 2s;
 - failure determination: SM task_error / SM error / session disconnect (**task timeouts were removed in R1** — a hung node stays Running until Stop / disconnect);
 - downstream context: prompts support upstream output injection via `{{<taskId>.output}}` (P24 implemented; §8.6); unreferenced downstream prompts stay self-contained;

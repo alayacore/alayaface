@@ -53,6 +53,9 @@ func Registry() map[string]Command {
 		// settings
 		"get_global_settings":  GetGlobalSettings,
 		"sync_global_settings": SyncGlobalSettings,
+		// global config overlay (cross-preset)
+		"get_global_config":  GetGlobalConfig,
+		"sync_global_config": SyncGlobalConfig,
 		// presets
 		"list_presets":      ListPresets,
 		"copy_preset":       CopyPreset,

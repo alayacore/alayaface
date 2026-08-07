@@ -151,20 +151,21 @@ Plan Mode turns a big task into a dependency graph that AlayaFace executes
 for you:
 
 1. **Plan**: in any session, ask the model to decompose the task and output
-   a fenced ```json block (schema in `docs/plan-mode.md` §5). A **Create
-   Plan** button appears under the message — only when the block explicitly
-   carries the top-level `"type": "alayaface-plan"` marker, so ordinary
-   ```json code samples never trigger it.
+   a fenced ```json block (schema in `docs/plan-mode.md` §5). The plan is
+   auto-created when the block explicitly carries the top-level
+   `"type": "alayaface-plan"` marker, so ordinary ```json code samples never
+   trigger it.
 2. **Save**: the plan is validated (unique ids, deps exist, no cycles),
-   normalized, and written to `~/.alayaface/plans/<name>.json` (Plans
-   manager in the ⚙ menu: open / delete / import / export).
+   normalized, and written to `~/.alayaface/sessions/<originSessionId>/plans/<planId>/<planId>.json`
+   (every plan lives inside the session that created it).
 3. **Run**: each plan opens in its own **window** (like a session window —
    drag / resize / close, and the ⚙ menu lists all open plans). The DAG is
-   shown in the window; **Run** launches each task in its own session window.
+   shown in the window; **Run** launches each task in its own session window
+   — the **top-level plan waits for your Run click; sub-plans auto-run**.
    **Clicking a node opens its session** (focusing it, or automatically
    resuming it from disk if it was closed / after a restart — bindings are
    persisted in `<plan>.run.json`), respecting dependencies and parallelism
-   (`concurrency`, default 2). Tasks run under their node-level `preset` /
+   (`concurrency`, default 8). Tasks run under their node-level `preset` /
    `tools` (see below) with tool confirmation auto-approved.
 4. **Retry**: failed tasks record the failure reason and attempt number
    (shown on the node and in the detail panel), auto-retry up to
@@ -177,6 +178,12 @@ for you:
 - `~/.alayaface/presets/<name>/` bundles a model list (`model.conf`), MCP
   servers (`mcp.conf`) and AlayaFace-owned `settings.conf`
   (`tool_confirm`, `builtin_tools`).
+- `~/.alayaface/global.conf` is the **cross-preset global config overlay**
+  (applies to every preset): currently `recursion_limit` (default 8) —
+  edit via ⚙ → **Global config**. Plan Mode recursion is bounded by it:
+  node sessions of a plan whose depth (top-level = 1, each sub-plan +1,
+  persisted in the plan's `meta.json`) exceeds the limit get **no plan
+  system prompt**, so the model stops creating sub-plans.
 - Built-in tools are passed to AlayaCore as `--builtin-tools=id1,id2,...`
   on session start (empty = all tools). Per preset (Settings editor) or
   per plan node (`tools` field).
@@ -184,15 +191,21 @@ for you:
   `Data`, and `Safe` (no `execute_command`). Copy/rename them in the
   Presets manager; plan nodes select one via `"preset": "Name"`.
 
+**Plan recursion is model-autonomous**: only the **top-level plan** needs
+your Run click; every **sub-plan** (a node's model outputting another plan
+JSON) is auto-created **and auto-runs** — node sessions execute with tools
+auto-approved, so the top-level Run click is the single human gate for the
+whole delegated subtree.
+
 **AlayaCore is never modified** — every capability difference is expressed
 through spawn arguments and preset config files.
 
 **Plan node sessions are isolated**: every node of a plan runs with cwd
-`~/.alayaface/plans/<planId>/work/` (created by the backend on spawn), so
-tasks exchange files within the plan while plans stay isolated from each
-other and from the backend's directory. **No task timeouts** (removed in
-the R-series refactor): a hung node stays Running until the user stops
-it or the session disconnects.
+`sessions/<originSessionId>/plans/<planId>/work/` (created by the backend
+on spawn), so tasks exchange files within the plan while plans stay
+isolated from each other and from the backend's directory. **No task
+timeouts** (removed in the R-series refactor): a hung node stays Running
+until the user stops it or the session disconnects.
 
 **Output injection**: a downstream node prompt may reference an upstream
 task's result with `{{<taskId>.output}}` (e.g. `{{t1.output}}`); when the

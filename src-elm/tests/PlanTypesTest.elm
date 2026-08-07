@@ -354,6 +354,49 @@ tests =
 
                         Ok _ ->
                             Expect.fail "should have rejected the wrong marker"
+            , test "raw newline inside a string is repaired (model-typical JSON)" <|
+                \_ ->
+                    -- The model wrote REAL line breaks inside the "prompt"
+                    -- string instead of \n escapes — invalid JSON that used
+                    -- to make the whole plan silently undetectable.
+                    -- repairJson must fix it and keep the content.
+                    let
+                        json =
+                            """{ "type": "alayaface-plan", "schema_version": 1, "name": "x", "goal": "g", "tasks": [ { "id": "t1", "title": "A", "prompt": "line1
+line2
+line3", "max_attempts": 3 } ] }"""
+                    in
+                    case P.parsePlan json of
+                        Ok plan ->
+                            case List.head plan.tasks of
+                                Just t ->
+                                    Expect.equal "line1\nline2\nline3" t.prompt
+
+                                Nothing ->
+                                    Expect.fail "missing task"
+
+                        Err errs ->
+                            Expect.fail ("repair failed: " ++ String.join "; " errs)
+            , test "raw tab inside a string is repaired" <|
+                \_ ->
+                    let
+                        json =
+                            "{ \"type\": \"alayaface-plan\", \"name\": \"x\", \"tasks\": [ { \"id\": \"t1\", \"title\": \"A\", \"prompt\": \"a\tb\" } ] }"
+                    in
+                    case P.parsePlan json of
+                        Ok plan ->
+                            Expect.pass
+
+                        Err errs ->
+                            Expect.fail ("repair failed: " ++ String.join "; " errs)
+            , test "valid JSON passes through repair unchanged" <|
+                \_ ->
+                    case P.parsePlan sampleJson of
+                        Ok plan ->
+                            Expect.equal "Monthly Report" plan.name
+
+                        Err errs ->
+                            Expect.fail ("unexpected errors: " ++ String.join "; " errs)
             ]
         , describe "slugify"
             [ test "basic slug" <|

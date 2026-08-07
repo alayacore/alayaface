@@ -101,6 +101,8 @@ One-way push (server → client), message format:
 | `sync_default_mcp` | `POST /rpc/sync_default_mcp` | `config`, `preset` | — |
 | `get_global_settings` | `POST /rpc/get_global_settings` | `preset` | `{tool_confirm, builtin_tools}` |
 | `sync_global_settings` | `POST /rpc/sync_global_settings` | `config`, `preset` | — |
+| `get_global_config` | `POST /rpc/get_global_config` | — | `{recursion_limit}` |
+| `sync_global_config` | `POST /rpc/sync_global_config` | `config` | `{recursion_limit}` (normalized) |
 | `list_presets` | `POST /rpc/list_presets` | — | `[{name, is_active}]` |
 | `copy_preset` | `POST /rpc/copy_preset` | `source`, `name` | — |
 | `rename_preset` | `POST /rpc/rename_preset` | `oldName`, `newName` | — |
@@ -201,6 +203,7 @@ src-go/
 │           ├── mcp_conf.go    #   mcp.conf parse/serialize (second half of mcp.rs)
 │           ├── presets.go
 │           ├── settings.go
+│           ├── global_config.go #   cross-preset global config overlay (~/.alayaface/global.conf)
 │           └── fs.go
 ```
 

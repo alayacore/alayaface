@@ -125,5 +125,20 @@ some code
             , test "false for a json array / non-object" <|
                 \_ ->
                     Expect.equal False (D.hasPlanTypeMarker "[1, 2, 3]")
+            , test "true even when the document is invalid JSON (raw newline in a string)" <|
+                \_ ->
+                    -- A model writing real line breaks inside a string makes
+                    -- the document unparseable; the marker must still be
+                    -- recognized so the framework repairs or reports the
+                    -- error instead of silently dropping the plan message.
+                    Expect.equal True
+                        (D.hasPlanTypeMarker "{\"type\": \"alayaface-plan\", \"prompt\": \"line1\nline2\"}")
+            , test "tolerates whitespace around the colon" <|
+                \_ ->
+                    Expect.equal True
+                        (D.hasPlanTypeMarker """{ "type"  :  "alayaface-plan" }""")
+            , test "a prose mention without the key:value pair does not count" <|
+                \_ ->
+                    Expect.equal False (D.hasPlanTypeMarker """the type is "alayaface-plan" here""")
             ]
         ]

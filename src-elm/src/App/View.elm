@@ -27,6 +27,7 @@ import Plan.Detect
 import Plan.View
 import Overlay.ConfirmTool
 import Overlay.Settings
+import Overlay.GlobalConfig
 import Overlay.PresetManager
 import Overlay.McpInit
 import Overlay.FilePicker
@@ -87,6 +88,7 @@ view model =
         , viewDefaultModelsEditorOverlay model
         , viewMcpEditorOverlay model
         , viewSettingsEditorOverlay model
+        , viewGlobalConfigOverlay model
         ]
 
 
@@ -256,6 +258,13 @@ viewGlobalMenu model =
                                 ""
                            )
                     )
+                ]
+            , Html.div
+                [ Attr.class "global-menu-item"
+                , Ev.onClick OpenGlobalConfig
+                ]
+                [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "⚙" ]
+                , Html.text "Global config"
                 ]
             , if List.isEmpty model.planOrder then
                 Html.text ""
@@ -1947,6 +1956,28 @@ viewSettingsEditorOverlay model =
                 , onBuiltinToolsInput = SetBuiltinTools
                 , onSave = SettingsSave
                 , onCancel = CloseSettingsEditor
+                }
+            ]
+    else
+        Html.text ""
+
+
+viewGlobalConfigOverlay : Model -> Html Msg
+viewGlobalConfigOverlay model =
+    let
+        ed =
+            model.globalConfigEditor
+    in
+    if ed.show then
+        viewOverlay CloseGlobalConfig
+            [ Overlay.GlobalConfig.view
+                { input = ed.input
+                , loading = ed.loading
+                , syncing = ed.syncing
+                , error = ed.error
+                , onInput = SetRecursionLimit
+                , onSave = GlobalConfigSave
+                , onCancel = CloseGlobalConfig
                 }
             ]
     else
