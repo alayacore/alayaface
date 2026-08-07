@@ -51,8 +51,6 @@ type alias Flags =
 type alias Model =
     { sessions : Dict String T.SessionState
     , activeId : Maybe String
-    , initializing : Bool
-    , initError : Maybe String
     , showSessionManager : Bool
     , sessionDirs : List E.Value
     , sessionManagerError : Maybe String

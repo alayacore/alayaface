@@ -73,6 +73,16 @@ async function startServer() {
   return s;
 }
 
+// Resolve once the child has fully exited (or after ms — the graceful
+// shutdown may close sessions for a while before the port is released).
+function waitExit(proc, ms) {
+  return new Promise((resolve) => {
+    if (proc.exitCode !== null || proc.signalCode !== null) return resolve();
+    const t = setTimeout(() => resolve(), ms);
+    proc.once('exit', () => { clearTimeout(t); resolve(); });
+  });
+}
+
 let server;
 let browser;
 
@@ -160,7 +170,10 @@ try {
   await page.close();
   await browser.close();
   server.kill('SIGTERM');
-  await sleep(800);
+  // Wait for the OLD server to release the port before starting the new
+  // one (graceful shutdown closes its sessions first; starting early made
+  // the new process fail to bind and the page talk to the dying server).
+  await waitExit(server, 15000);
   server = await startServer();
   console.log('PASS: backend restarted (same HOME)');
 

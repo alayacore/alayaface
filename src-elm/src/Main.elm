@@ -35,8 +35,6 @@ init : Flags -> ( Model, Cmd Msg )
 init _ =
     ( { sessions = Dict.empty
       , activeId = Nothing
-      , initializing = True
-      , initError = Nothing
       , showSessionManager = False
       , sessionDirs = []
       , sessionManagerError = Nothing
@@ -92,8 +90,7 @@ init _ =
       , homeDir = ""
       }
     , Cmd.batch
-        [ Ports.createSession { toolConfirm = Nothing, preset = Nothing, builtinTools = Nothing, systemPrompt = Just App.Update.planSystemPrompt, workDir = Nothing, planId = Nothing, nodeId = Nothing, originSessionId = Nothing }
-        , Ports.listPresets {}
+        [ Ports.listPresets {}
         , Ports.fsHomeDir {}
         , Task.attempt GotContainerSize (Dom.getElement "main-content")
         ]

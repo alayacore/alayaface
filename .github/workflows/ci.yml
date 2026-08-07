@@ -60,3 +60,33 @@ jobs:
       - name: Test
         run: cargo test
         working-directory: src-tauri
+      - name: Build (full Tauri app)
+        run: cargo build
+        working-directory: src-tauri
+
+  e2e:
+    name: E2E (fakecore + headless Chrome)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: src-go/go.mod
+          cache-dependency-path: src-go/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install Elm
+        run: npm install -g elm@0.19.2-0
+      - name: Build elm.js
+        run: elm make src/Main.elm --output=elm.js
+        working-directory: src-elm
+      - name: Install e2e deps
+        run: npm install
+        working-directory: e2e
+      - name: Plan E2E
+        run: node plan-e2e.mjs
+        working-directory: e2e
+      - name: Restart E2E
+        run: node restart-e2e.mjs
+        working-directory: e2e

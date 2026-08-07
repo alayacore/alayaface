@@ -18,7 +18,11 @@
 ## Startup
 
 - [ ] Tauri: `make run`; or browser: `make run-go` → http://127.0.0.1:8765/
+- [ ] **No session is auto-created at startup (P32)** — the welcome screen shows "No session open — use ⚙ New Session to start"; open one on demand
 - [ ] ⚙ menu shows: New Session / Session Manager / Presets / Settings (no Plans entry — P30)
+- [ ] Message area: when the conversation grows, the custom **overlay scrollbar** floats over the content — the message column width never changes (stays identical to the prompt input) and the scrollbar appears/disappears without shifting layout (P32)
+- [ ] Session Manager overlay: Resume / Delete buttons are **the same size** for every row (P32)
+- [ ] Focusing a session that belongs to a plan node: the curve to its node card is an **S-shape** and all **ancestor edges** above it are also drawn (fainter) — A→B→C→D lights up fully when D is focused (P32)
 
 ## 1. Plan Session + Creating a Plan (P2/P6)
 

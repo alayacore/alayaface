@@ -383,6 +383,30 @@ connectionForSession sid model =
     NC.nodeConnectionFor model.planNodeSessions model.planResumedFrom sid
 
 
+{-| Fill in the ancestor edges of a node connection from the plan's
+task graph (task id + dependsOn). The bridge draws every ancestor edge
+so that focusing node D lights up the whole A→B→C→D chain, not just the
+session↔D curve. No plan parsed / node unknown → no ancestors.
+-}
+withAncestors : Model -> NC.NodeConnection -> NC.NodeConnection
+withAncestors model conn =
+    let
+        nodes =
+            case Dict.get conn.planId model.planWindows of
+                Just win ->
+                    case win.view.plan of
+                        Just plan ->
+                            List.map (\t -> ( t.id, t.dependsOn )) plan.tasks
+
+                        Nothing ->
+                            []
+
+                Nothing ->
+                    []
+    in
+    { conn | ancestors = NC.ancestorEdges nodes conn.nodeId }
+
+
 {-| Build the active plan window ↔ owning session connection: the plan
 whose meta.json origin session is currently open (live or resumed). This
 is what makes the plan window "belong to" a session — the curve draws to
@@ -414,6 +438,9 @@ activateSessionModel model id =
     case connectionForSession id model of
         Just conn ->
             let
+                connA =
+                    withAncestors model conn
+
                 newPositions =
                     model.windowPositions
                         |> Dict.update id
@@ -425,11 +452,11 @@ activateSessionModel model id =
                 | activeId = Just id
                 , windowPositions = newPositions
                 , nextZIndex = model.nextZIndex + 2
-                , nodeConnection = Just conn
+                , nodeConnection = Just connA
                 , planConnection = Nothing
               }
             , Cmd.batch
-                [ Ports.setNodeConnection (Just conn)
+                [ Ports.setNodeConnection (Just connA)
                 , Ports.setPlanConnection Nothing
                 ]
             )
@@ -1309,7 +1336,6 @@ update msg model =
                     { model
                         | sessions = sessionsAfterBuffer
                         , activeId = newActiveId
-                        , initializing = False
                         , sessionOrder = model.sessionOrder ++ [ id ]
                         , sessionNums = Dict.insert id model.nextSessionNum model.sessionNums
                         , nextSessionNum = model.nextSessionNum + 1
@@ -1377,7 +1403,12 @@ update msg model =
                                 |> Maybe.andThen NC.parseNodeConnection
                                 |> Maybe.map
                                     (\( planId, nodeId ) ->
-                                        { sessionId = id, planId = planId, nodeId = nodeId }
+                                        withAncestors baseModel
+                                            { sessionId = id
+                                            , planId = planId
+                                            , nodeId = nodeId
+                                            , ancestors = []
+                                            }
                                     )
 
                         _ ->
@@ -4772,7 +4803,7 @@ update msg model =
                 -- The plan↔session curve yields to the session focus.
                 let
                     conn =
-                        connectionForSession id model
+                        Maybe.map (withAncestors model) (connectionForSession id model)
                 in
                 ( { model | nodeConnection = conn, planConnection = Nothing }
                 , Cmd.batch

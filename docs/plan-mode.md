@@ -65,8 +65,7 @@ Add **Plan Mode** to AlayaFace: let the model decompose a large task into a
 
 ```
 [Planner Session] model generates DAG JSON       ← recommended entry: ⚙ menu → New Session
-        │  (a) ```json code block in the AT message (main path)
-        ▼
+        │  (a) ```json code block in the AT message (main path)        ▼
 Plan.Detect extracts → plan window AUTO-CREATES (R2, no button)
         ▼
 Plan.Types decode + normalize + validate (unique ids / deps exist / acyclic)
@@ -84,6 +83,13 @@ User clicks Run ──► Plan.Runner (pure Elm state machine)
         ▼
 Node succeeds → unlocks downstream → parallel scheduling (≤ concurrency cap)
 ```
+
+> **Startup (P32)**: no session is auto-created on launch — the app starts
+> on a welcome screen ("No session open — use ⚙ New Session to start")
+> and the user opens a session whenever they need one. This also means
+> the old startup `create_session` (which used to spin up an empty
+> session window) is gone; plan auto-creation still works exactly the
+> same inside any user-created session.
 
 ### Plan Session (P6 + P22 — REMOVED in R2: fixed plan mode)
 
@@ -315,13 +321,14 @@ E2E covers the gate.
 - **Node ↔ session connection curve (P19)**: when focusing a session that belongs to a plan node —
   - that plan window is automatically raised to the **second layer** (session z = plan z + 1);
   - bridge.js draws a **bezier curve** on `<body>` (rAF measures DOM `getBoundingClientRect` every frame; follows drag/resize/scroll), from the midpoint of the session window edge nearest the node to the node card center, z-index = the plan window's value (same value + inserted later in body → above the plan, below the session);
+  - **ancestor chain (P32)**: focusing node D also lights up **every dependency edge on a path from the plan root down to D** — A→B→C→D shows all three parent curves, a diamond shows all four. The ancestor edges are computed in pure Elm (`App/NodeConnection.ancestorEdges`, transitive parent closure, cycle-safe) from the plan's task graph at connection-build time, drawn card-edge ↔ card-edge, and rendered **fainter** (`.node-connection-curve-ancestor`) so the focused session→node curve stays the visual anchor;
   - pure logic in `App/NodeConnection.elm` (`planNodeSessions` tags + P18's `planResumedFrom` resolves live ids from resumes; node ids may contain `/`);
   - disappearance: focusing a non-node session / plan window, closing or deleting that session or plan window; JS hides it automatically when the node scrolls out of the visible canvas;
 - **Plan window ↔ owning session curve (P27)**: when the plan window is **active**, a second curve connects it to the session that auto-created it (meta.json `origin`; resolved to the LIVE window via `planResumedFrom` when the origin was resumed):
   - anchored on the plan window edge nearest the session, and on the session side it targets the session's **`[Plan: <planId>]` button** (the status bar under the plan message / feedback links) **when that button is visible** — otherwise it falls back to the session window edge;
   - drawn by bridge.js as a second fixed SVG overlay (`.plan-connection-overlay`), z-index = the top of the two participant windows (above both, below anything focused above them);
   - shown while the plan is active (auto-create, `PlanActivate`, `PlanStatusOpen`); hidden when a session is focused (the node curve takes over), or the plan/session window closes;
-  - both curves share the **solid, thicker style** (`stroke-width: 3`, no dasharray) and a **cubic bezier with two independent control points** (`curvePath` in bridge.js — stronger bow, tangent-aligned control points for a smoother arc);
+  - both curves share the **solid, thicker style** (`stroke-width: 3`, no dasharray) and an **S-shaped cubic bezier** (`curvePath` in bridge.js — two independent control points offset on **opposite sides** of the travel line, so the curve arcs one way then back across the midpoint; `bow = clamp(20, 80, dist × 0.18)`);
 - Bottom: run log stream (node start/success/failure/retry events);
 - **Stop semantics (P23)**: clicking Stop = stop **all in-progress node sessions owned by this plan run** — the runner marks running/starting nodes Canceled, `closeAndClear` issues `CloseSessionFor` for every node with a bound session → **kills the alayacore process and closes the session window at once** (history stays on disk; clicking the node recovers it). **Not stopped**: succeeded nodes' sessions (kept viewable), other plans' sessions, normal sessions, planner sessions;
 - Closing the plan window does not stop running node sessions (run.json keeps flushing; Load run can restore); manually closing a node session window injects a disconnect event into the runner → the node fails and retries.
@@ -655,6 +662,7 @@ There is **no top-level `plans/` root** anymore.
 | P28 | plans live INSIDE the session that created them (§8.7: `sessions/<origin>/plans/<planId>/` — document/meta/run/work/node sessions; no top-level `plans/` root); **import removed** (§7.2: single-view manager over the planMetas index, no Browse tab); meta origin = on-disk session id, bindings resolve live ids | ✅ done |
 | P29 | removed all backward-compat code (§8.7: no session-dir fallback chain; Plan/Meta strict decode, origin non-Maybe; legacy config-seed heal removed; always-true `has_session_file` dropped) | ✅ done |
 | P30 | system-menu **Plans** entry removed (§7.1/§7.2: the whole Plans manager overlay is gone — plans reopen via the session's `[Plan: …]` status-bar link; the open-plan-window switcher list stays) | ✅ done |
+| P32 | user-driven UI/CI pass: **ancestor-chain curves** (focusing node D lights up every A→…→D parent edge, fainter) + **S-shaped bezier** (two control points on opposite sides) (§7.1); **overlay scrollbar** (native scrollbar hidden → messages stay exactly as wide as the prompt input; custom thumb floats over content, bridge.js); **uniform Session Manager list buttons**; **no auto-created session at startup** (welcome screen, user opens sessions on demand) (§4); **GitHub CI extended** — Tauri `cargo build` + full E2E job (Go backend + fakecore + headless Chrome) | ✅ done |
 
 > Implementation deviations: the DAG renders in pure HTML/CSS (absolute-positioned
 > divs + orthogonal connectors) because elm/svg isn't in the offline package

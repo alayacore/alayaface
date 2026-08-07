@@ -150,7 +150,7 @@ try {
   await sleep(600);
 
   // Send the user prompt into the NEWEST session (the one we just
-  // created; the app also auto-creates a plain session at startup).
+  // created — no session is auto-created at startup anymore).
   const planPanel = await page.$$eval('.session-panel', panels => {
     let best = null;
     let bestN = -1;

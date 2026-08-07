@@ -173,14 +173,10 @@ viewSessionPanel model id =
 viewNoSessionPanel : Model -> Html Msg
 viewNoSessionPanel model =
     Html.div [ Attr.class "chat-area chat-area-centered no-sessions" ]
-        [ if model.initializing then
-            Html.div [ Attr.class "hs-container-inline" ]
-                [ Html.div [ Attr.class "hs-logo" ] [ Html.text "AlayaFace" ]
-                , Html.div [ Attr.class "hs-tagline" ] [ Html.text "Connecting…" ]
-                ]
-
-          else
-            Html.text ""
+        [ Html.div [ Attr.class "hs-container-inline" ]
+            [ Html.div [ Attr.class "hs-logo" ] [ Html.text "AlayaFace" ]
+            , Html.div [ Attr.class "hs-tagline" ] [ Html.text "No session open — use ⚙ New Session to start" ]
+            ]
         ]
 
 
@@ -359,7 +355,7 @@ viewSessionManagerOverlay model =
                                         Html.text ""
                                     ]
                                 , Html.button
-                                    [ Attr.class "confirm-page-btn confirm-page-btn-allow"
+                                    [ Attr.class "sel-page-item-btn sel-page-item-btn-allow"
                                     , Ev.onClick (ResumeSession dir.id)
                                     , Attr.disabled (not canResume)
                                     , Attr.title
@@ -372,11 +368,9 @@ viewSessionManagerOverlay model =
                                     ]
                                     [ Html.text "Resume" ]
                                 , Html.button
-                                    [ Attr.class "confirm-page-btn confirm-page-btn-deny"
+                                    [ Attr.class "sel-page-item-btn sel-page-item-btn-deny"
                                     , Ev.onClick (DeleteSession dir.id)
-                                    , Attr.style "padding" "4px 10px"
-                                    , Attr.style "font-size" "0.75rem"
-                                    , Attr.style "min-width" "auto"
+                                    , Attr.title "Delete this session's files on disk"
                                     ]
                                     [ Html.text "Delete" ]
                                 ]

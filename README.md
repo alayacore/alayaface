@@ -231,6 +231,15 @@ This already caught real bugs that unit tests missed (see TODO.md P15).
 It does **not** cover real-model behavior — that still needs an OpenAI
 compatible API key (or a local `.gguf`) for `manual-acceptance.md`.
 
+## CI (GitHub Actions)
+
+`.github/workflows/ci.yml` runs on push to `main` and on pull requests:
+**Go** (`go vet` + `go test -race`), **Elm** (`elm make` + `elm-test`),
+**Tauri/Rust** (`cargo test` + `cargo build` — full app compile), and a
+full **E2E** job (Go backend + fakecore + headless Chrome, running both
+`plan-e2e.mjs` and `restart-e2e.mjs`). Status badge at the top of this
+file.
+
 ## TLV Protocol
 
 AlayaFace communicates with AlayaCore via TLV (Tag-Length-Value) frames

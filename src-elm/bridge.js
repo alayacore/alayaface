@@ -521,7 +521,7 @@
     var nodeConnection = null;
     var planConnection = null;
     var connSvg = null;
-    var connPath = null;
+    var connPaths = []; // one <path> per curve (ancestor edges + main)
     var planConnSvg = null;
     var planConnPath = null;
     var connRaf = 0;
@@ -532,11 +532,21 @@
       connSvg = document.createElementNS(ns, "svg");
       connSvg.setAttribute("class", "node-connection-overlay");
       connSvg.style.display = "none";
-      connPath = document.createElementNS(ns, "path");
-      connPath.setAttribute("class", "node-connection-curve");
-      connSvg.appendChild(connPath);
       document.body.appendChild(connSvg);
       return connSvg;
+    }
+
+    // Grow/shrink the path pool to exactly `n` curves.
+    function connPathsFor(n) {
+      while (connPaths.length < n) {
+        var p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        p.setAttribute("class", "node-connection-curve");
+        connSvg.appendChild(p);
+        connPaths.push(p);
+      }
+      while (connPaths.length > n) {
+        connPaths.pop().remove();
+      }
     }
 
     function ensurePlanConnSvg() {
@@ -617,11 +627,11 @@
         : { x: cx, y: rect.top };
     }
 
-    // Cubic bezier with TWO independent control points (smoother than a
-    // single-point quadratic): cp1 leaves `from` along the travel
-    // direction (pulled toward `to`), cp2 arrives at `to` from the same
-    // direction; both are offset perpendicular by `bow` so the curve
-    // arcs out of the way of the two windows.
+    // Cubic bezier with TWO independent control points, offset on
+    // OPPOSITE sides of the travel line → an "S" shape with two reverse
+    // arcs (user preference, 2025). cp1 leaves `from` pulled toward `to`
+    // and bowed one way; cp2 arrives at `to` bowed the other way; the
+    // curve crosses the straight line at its midpoint.
     function curvePath(from, to) {
       var dx = to.x - from.x, dy = to.y - from.y;
       var dist = Math.sqrt(dx * dx + dy * dy) || 1;
@@ -634,8 +644,9 @@
       var k = Math.max(0.28, Math.min(0.42, 140 / dist));
       var c1x = from.x + ux * dist * k + bx;
       var c1y = from.y + uy * dist * k + by;
-      var c2x = to.x - ux * dist * k + bx;
-      var c2y = to.y - uy * dist * k + by;
+      // Second control point on the OPPOSITE side → reverse arc.
+      var c2x = to.x - ux * dist * k - bx;
+      var c2y = to.y - uy * dist * k - by;
       return "M " + from.x.toFixed(1) + " " + from.y.toFixed(1)
         + " C " + c1x.toFixed(1) + " " + c1y.toFixed(1)
         + " " + c2x.toFixed(1) + " " + c2y.toFixed(1)
@@ -655,26 +666,65 @@
       }
       var s = connSessionPanel(nodeConnection.sessionId);
       var plan = connPlanPanel(nodeConnection.planId);
-      var n = connNodeEl(plan, nodeConnection.nodeId);
-      if (!s || !plan || !n) {
+      if (!s || !plan) {
         if (connSvg) connSvg.style.display = "none";
         return;
       }
-      var sr = s.getBoundingClientRect();
-      var nr = n.getBoundingClientRect();
       var pr = plan.getBoundingClientRect();
-      // Node scrolled out of the plan window's visible area → hide.
-      if (!rectVisibleIn(nr, pr)) {
-        if (connSvg) connSvg.style.display = "none";
+      var svg = ensureConnSvg();
+      var curves = [];
+
+      // 1. Ancestor edges: every (parent → child) edge on a path from
+      //    the plan root down to the focused node (A→B→C→D lights up
+      //    fully when D is selected). Anchored card-edge to card-edge.
+      var ancestors = nodeConnection.ancestors || [];
+      for (var i = 0; i < ancestors.length; i++) {
+        var fromEl = connNodeEl(plan, ancestors[i].from);
+        var toEl = connNodeEl(plan, ancestors[i].to);
+        if (!fromEl || !toEl) continue;
+        var fr = fromEl.getBoundingClientRect();
+        var tr = toEl.getBoundingClientRect();
+        // Both cards must be visible inside the plan window.
+        if (!rectVisibleIn(fr, pr) || !rectVisibleIn(tr, pr)) continue;
+        curves.push({
+          from: edgeAnchor(fr, tr.left + tr.width / 2, tr.top + tr.height / 2),
+          to: edgeAnchor(tr, fr.left + fr.width / 2, fr.top + fr.height / 2),
+          ancestor: true,
+        });
+      }
+
+      // 2. Main curve: focused session → its node card.
+      var n = connNodeEl(plan, nodeConnection.nodeId);
+      if (n) {
+        var nr = n.getBoundingClientRect();
+        // Node scrolled out of the plan window's visible area → skip.
+        if (rectVisibleIn(nr, pr)) {
+          var sr = s.getBoundingClientRect();
+          var nx = nr.left + nr.width / 2;
+          var ny = nr.top + nr.height / 2;
+          curves.push({
+            from: edgeAnchor(sr, nx, ny),
+            to: { x: nx, y: ny },
+            ancestor: false,
+          });
+        }
+      }
+
+      if (curves.length === 0) {
+        svg.style.display = "none";
         return;
       }
-      var svg = ensureConnSvg();
-      // Anchor on the session edge nearest the node center.
-      var nx = nr.left + nr.width / 2;
-      var ny = nr.top + nr.height / 2;
-      var from = edgeAnchor(sr, nx, ny);
-      var to = { x: nx, y: ny };
-      connPath.setAttribute("d", curvePath(from, to));
+      connPathsFor(curves.length);
+      for (var j = 0; j < curves.length; j++) {
+        var c = curves[j];
+        connPaths[j].setAttribute("d", curvePath(c.from, c.to));
+        connPaths[j].setAttribute(
+          "class",
+          c.ancestor
+            ? "node-connection-curve node-connection-curve-ancestor"
+            : "node-connection-curve"
+        );
+      }
       svg.setAttribute("width", String(window.innerWidth));
       svg.setAttribute("height", String(window.innerHeight));
       // Match the plan window's z-index: above it (same z, later in
@@ -763,7 +813,12 @@
     });
 
     // 4. Scroll tracking: send scroll data from each messages container,
-    //    tagged with its session id so Elm keeps per-session scroll state
+    //    tagged with its session id so Elm keeps per-session scroll state.
+    //    Also installs a custom OVERLAY scrollbar: the native scrollbar
+    //    is hidden via CSS so it never steals width from the messages
+    //    column (messages stay exactly as wide as the prompt input); a
+    //    thin thumb floats over the content instead (drag / track-click
+    //    supported, native wheel scrolling is untouched).
     function sendScroll(el) {
       if (!el) el = document.querySelector(".messages");
       if (el) {
@@ -777,6 +832,76 @@
         });
       }
     }
+
+    function updateOverlayScrollbar(el) {
+      var sb = el._overlaySb, thumb = el._overlayThumb;
+      if (!sb || !thumb) return;
+      var scrollable = el.scrollHeight > el.clientHeight + 1;
+      sb.style.display = scrollable ? "block" : "none";
+      if (!scrollable) return;
+      var trackH = sb.clientHeight || Math.max(1, el.clientHeight - 24);
+      var thumbH = Math.max(24, trackH * trackH / el.scrollHeight);
+      var maxTop = Math.max(0, trackH - thumbH);
+      var range = el.scrollHeight - el.clientHeight;
+      var ratio = range > 0 ? el.scrollTop / range : 0;
+      thumb.style.height = thumbH + "px";
+      thumb.style.transform = "translateY(" + (ratio * maxTop) + "px)";
+    }
+
+    function attachOverlayScrollbar(el) {
+      if (el._overlaySb) return;
+      var sb = document.createElement("div");
+      sb.className = "overlay-scrollbar";
+      var thumb = document.createElement("div");
+      thumb.className = "overlay-scrollbar-thumb";
+      sb.appendChild(thumb);
+      el.appendChild(sb);
+      el._overlaySb = sb;
+      el._overlayThumb = thumb;
+
+      var dragging = false;
+      var dragStartY = 0;
+      var dragStartScroll = 0;
+      thumb.addEventListener("mousedown", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        dragging = true;
+        dragStartY = e.clientY;
+        dragStartScroll = el.scrollTop;
+        thumb.classList.add("dragging");
+      });
+      window.addEventListener("mousemove", function (e) {
+        if (!dragging) return;
+        var range = el.scrollHeight - el.clientHeight;
+        if (range <= 0) return;
+        var trackH = sb.clientHeight || 1;
+        var thumbH = thumb.offsetHeight || 24;
+        var dy = e.clientY - dragStartY;
+        el.scrollTop = dragStartScroll + (dy / Math.max(1, trackH - thumbH)) * range;
+      });
+      window.addEventListener("mouseup", function () {
+        if (!dragging) return;
+        dragging = false;
+        thumb.classList.remove("dragging");
+      });
+      // Click on the track (not the thumb) → jump to that position.
+      sb.addEventListener("mousedown", function (e) {
+        if (e.target === thumb) return;
+        var trackH = sb.clientHeight || 1;
+        var thumbH = thumb.offsetHeight || 24;
+        var y = e.clientY - sb.getBoundingClientRect().top - thumbH / 2;
+        var range = el.scrollHeight - el.clientHeight;
+        el.scrollTop = (y / Math.max(1, trackH - thumbH)) * range;
+      });
+      el.addEventListener("scroll", function () { updateOverlayScrollbar(el); }, { passive: true });
+      // Container resize (window resize, layout change) → re-measure.
+      if (typeof ResizeObserver !== "undefined" && !el._sbResizeObs) {
+        el._sbResizeObs = new ResizeObserver(function () { updateOverlayScrollbar(el); });
+        el._sbResizeObs.observe(el);
+      }
+      updateOverlayScrollbar(el);
+    }
+
     sendScroll();
     // Listen for scroll on all present and future .messages containers
     function attachScroll() {
@@ -785,11 +910,17 @@
           el._scrollAttached = true;
           el.addEventListener("scroll", function() { sendScroll(el); }, { passive: true });
         }
+        attachOverlayScrollbar(el);
+        updateOverlayScrollbar(el);
       });
     }
     attachScroll();
-    // Check for new messages containers periodically (e.g. new sessions)
-    var scrollObserver = new MutationObserver(attachScroll);
+    // Check for new messages containers (e.g. new sessions) and keep
+    // the overlay thumbs in sync as content is added.
+    var scrollObserver = new MutationObserver(function () {
+      attachScroll();
+      document.querySelectorAll(".messages").forEach(updateOverlayScrollbar);
+    });
     scrollObserver.observe(root, { childList: true, subtree: true });
 
     // 5. Window maximize state

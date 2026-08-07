@@ -84,6 +84,23 @@ body {
   position: relative;
 }
 
+/* Welcome screen (no session open after startup — the user opens one
+   via ⚙ → New Session whenever they need it). */
+.no-sessions .hs-logo {
+  font-size: 2.2rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: #6366f1;
+}
+.no-sessions .hs-tagline {
+  margin-top: 10px;
+  font-size: 0.95rem;
+  color: #94a3b8;
+}
+@media (prefers-color-scheme: light) {
+  .no-sessions .hs-tagline { color: #64748b; }
+}
+
 /* ─── Staged media chips inside the search box ─────────────────────── */
 
 .hs-staged-row {
@@ -1494,6 +1511,27 @@ body {
 .sel-page-item-selected .sel-page-action { border-color: rgba(255,255,255,0.5); color: rgba(255,255,255,0.85); }
 .sel-page-item-selected .sel-page-action:hover:not(:disabled) { border-color: white; color: white; }
 
+/* Session Manager list buttons (Resume / Delete) — ONE consistent size
+   for both (they used to mix .confirm-page-btn defaults with per-button
+   inline overrides, hence the uneven look). */
+.sel-page-item-btn {
+  padding: 6px 14px;
+  border-radius: 4px;
+  border: none;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  min-width: 76px;
+  flex-shrink: 0;
+  transition: background 0.15s, transform 0.1s;
+}
+.sel-page-item-btn:active { transform: scale(0.97); }
+.sel-page-item-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.sel-page-item-btn-allow { background: #16a34a; color: white; }
+.sel-page-item-btn-allow:hover:not(:disabled) { background: rgba(22, 163, 74, 0.15); }
+.sel-page-item-btn-deny { background: #dc2626; color: white; }
+.sel-page-item-btn-deny:hover:not(:disabled) { background: rgba(220, 38, 38, 0.15); }
+
 .sel-page-actions {
   display: flex;
   justify-content: center;
@@ -2194,6 +2232,59 @@ body {
   stroke: #6366f1;
   stroke-width: 3;
   opacity: 0.9;
+}
+
+/* Ancestor chain edges (A→B→C→D lit up when D is focused) are drawn
+   fainter so the focused session→node curve stays the visual anchor. */
+.node-connection-curve-ancestor {
+  opacity: 0.4;
+}
+
+/* ─── Overlay scrollbar for message areas ─────────────────────────────
+   The native scrollbar is hidden so it never consumes layout width:
+   the messages column stays exactly as wide as the prompt input, and a
+   thin custom thumb floats over the content instead (bridge.js). */
+.messages {
+  scrollbar-width: none;        /* Firefox / modern Chromium */
+  -ms-overflow-style: none;     /* legacy Edge */
+}
+.messages::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.overlay-scrollbar {
+  position: absolute;
+  top: 12px;
+  right: 4px;
+  bottom: 12px;
+  width: 10px;
+  z-index: 5;
+  display: none;
+  cursor: pointer;
+}
+.overlay-scrollbar-thumb {
+  position: absolute;
+  left: 2px;
+  width: 6px;
+  border-radius: 3px;
+  background: rgba(148, 163, 184, 0.35);
+  transition: background 0.15s;
+}
+.overlay-scrollbar-thumb.dragging,
+.overlay-scrollbar:hover .overlay-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.6);
+}
+
+@media (prefers-color-scheme: light) {
+  .overlay-scrollbar-thumb {
+    background: rgba(100, 116, 139, 0.35);
+  }
+  .overlay-scrollbar-thumb.dragging,
+  .overlay-scrollbar:hover .overlay-scrollbar-thumb {
+    background: rgba(100, 116, 139, 0.6);
+  }
 }
 
 /* ─── Plan DAG view (P3) ─────────────────────────────────────────── */

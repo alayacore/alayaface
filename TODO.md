@@ -69,6 +69,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P29 清理全部"向后兼容"代码（用户：都是没用的）：删 session 目录 legacy 回退链（只认 P28 路径）、Plan/Meta lenient 解码（origin/planIndex 必填、删 messageId、origin 收紧为非 Maybe）、Legacy config 种子修复（heal 整块移除）、恒真 `has_session_file` 字段 | [x] |
 | P30 系统菜单移除 Plans 入口（用户："系统菜单里不需要plans了"）：Plans manager 整体删除（overlay/消息/状态/`fsDeleteFile` 端口/`PlanFileInfo`）；plan 只经会话内 `[Plan: …]` 状态条重开；菜单保留"打开的 plan 窗口"切换列表 | [x] |
 | P31 修复重启后 plan 状态丢失（用户反馈）：planMetas 重建扫描仍按 P27 旧布局找 `plans/*.meta.json`，而 P28 后 meta 在 `plans/<planId>/<planId>.meta.json` → 扫描永远读不到 → 重启后 planMetas 为空；改为从 plans/ 列表的子目录直接构造 meta 路径 + 过滤 `..`；并把扫描与文件选择器的 home 列表串行化（消除未标记 fs_list_dir 结果的竞态） | [x] |
+| P32 用户驱动的 UI/CI 一轮：S 形贝塞尔（两控制点反向）+ 祖先链连线（聚焦 D 点亮 A→…→D 全部父边，淡色）；消息区覆盖式滚动条（隐藏原生滚动条 → 消息列与输入框永远同宽）；Session Manager 列表按钮统一尺寸；启动不再自动开空 session（欢迎屏，按需自开）；GitHub CI 增加 Tauri `cargo build` + 完整 E2E job（Go 后端 + fakecore + 无头 Chrome）；修复 restart-e2e 后端重启端口竞态 | [x] |
 | R 系列 | Plan 重构：模型自主子流程 + 递归（自动创建 / 回填自动继续 / 重跑级联 / 状态条 / 超时移除）——**详见 REFACTOR.md** | 进行中 |
 
 ## P24 — 输出注入（{{tX.output}}）
@@ -351,6 +352,83 @@ dir），所以 meta 列表永远为空、不发任何读取 → **重启后 pla
       `make e2e` 现在连跑 plan-e2e + restart-e2e；Elm 213 / Rust 43 /
       Go -race 8 包全绿；
 - [x] 文档：TODO 本表。
+
+---
+
+## P32 — 用户驱动的 UI/CI 一轮（曲线/滚动条/按钮/启动/CI）
+
+用户五项要求：
+1. **祖先链连线**：存在 A-B-C-D 依赖链时，D 被选中（其会话聚焦）后，前面的
+   parents 线（A→B、B→C、C→D）也要显示 —— 不再只画会话↔D 一条线。
+2. **S 形贝塞尔**：连线要有 2 个反向弧度（两个控制点分居旅行线两侧），更好看。
+3. **滚动条不影响宽度**：消息区出现滚动条会让消息列变窄、与 Prompt Input 不
+   同宽 —— 改为覆盖式滚动条（悬浮在文本上，不占布局宽度）。
+4. **Session Overlay 按钮大小一致**：Resume 用默认大按钮、Delete 用小号内联
+   样式 → 统一成一个尺寸。
+5. **启动不自动开空 session**：去掉 init 里的 `create_session`；用户需要时
+   自行 ⚙ → New Session。
+
+外加 **CI 支持 Tauri + Elm**（用户问"Github CI能把tauri和elm这部分也支持了
+吗"）：ci.yml 本已有 go/elm/rust 三 job → 增强为 rust job 加 `cargo build`
+（完整 Tauri 编译）+ 新增 e2e job（Go 后端 + fakecore + 无头 Chrome 跑
+plan-e2e + restart-e2e）。
+
+### 1+2 连线（bridge.js + Elm）
+- [x] `App/NodeConnection.elm`：`NodeConnection` 增加 `ancestors : List AncestorEdge`
+      （`{from, to}` 父边列表）+ 纯函数 `ancestorEdges : List (String, List String)
+      -> String -> List AncestorEdge`（按 (id, deps) 任务表求 `nodeId` 的传递父闭包
+      —— 返回所有落在「根 → nodeId 某条路径」上的边；Set 访问集保证环上终止）；
+      `nodeConnectionFor` 构造时 `ancestors = []`；
+- [x] Update 层 `withAncestors`：从 `model.planWindows[planId].view.plan.tasks`
+      取 (id, dependsOn) → 填 `ancestors`；三处发出 `setNodeConnection (Just …)`
+      的位置（activateSessionModel / SessionCreated resume 分支 / ActivateSession
+      重断言分支）全部套用；
+- [x] bridge.js `drawNodeConnection`：路径池 `connPathsFor(n)`；先画祖先边
+      （两节点卡均可见时，卡边↔卡边锚点），再画主曲线（会话↔聚焦节点）；
+      祖先边加 `.node-connection-curve-ancestor` 类（CSS opacity 0.4 淡色）；
+- [x] bridge.js `curvePath`：**S 形** —— c1 偏移 +bow、c2 偏移 **-bow**
+      （控制点在旅行线两侧 → 两个反向弧度，曲线在中点穿过直线）；
+      计划↔会话曲线共用同一 curvePath，同样变 S 形；
+- [x] 测试：NodeConnectionTest +6（链 D→三边 / 链 B→单边 / 菱形 D→四边 /
+      根节点无边 / 未知节点无边 / 环终止不挂死）；**Elm 219** 全绿；
+
+### 3 覆盖式滚动条（bridge.js + style.css）
+- [x] CSS：`.messages` 隐藏原生滚动条（`scrollbar-width: none` +
+      `::-webkit-scrollbar { display: none }`）→ 消息列宽度恒定 = 输入框宽度；
+      新增 `.overlay-scrollbar`（absolute right 4px，top/bottom 12px）+
+      `.overlay-scrollbar-thumb`（6px 圆角条，hover/dragging 加深，浅色主题适配）；
+- [x] bridge.js：`attachOverlayScrollbar` 每个 `.messages` 注入一个覆盖滚动条；
+      滚动/ResizeObserver/MutationObserver 三处驱动 `updateOverlayScrollbar`
+      （scrollHeight>clientHeight 才显示；thumb 高度 ∝ 视口/内容比，位置 ∝
+      scrollTop）；thumb 拖拽 + 轨道点击跳转 + 原生滚轮保留；sendScroll 原有
+      Elm 滚动状态上报不变；
+
+### 4 Session Manager 按钮统一（View.elm + style.css）
+- [x] 新增 `.sel-page-item-btn`（padding 6px 14px、min-width 76px、
+      font-size 0.8rem）+ allow/deny 配色类；Resume/Delete 两个按钮都换成
+      这套类，删除 Delete 的内联小号样式 → 每行两个按钮尺寸一致；
+
+### 5 启动不自动开空 session（Main.elm / Update.elm / View.elm / Types.elm）
+- [x] Main.elm init 删除 `Ports.createSession …`（原来启动即建一个空会话）；
+      删除死字段 `initializing`/`initError`（Types.elm 字段、Update.elm
+      SessionCreated 里 `initializing = False`、View.elm 的 Connecting 分支）；
+- [x] `viewNoSessionPanel` 改为常显欢迎屏：logo + "No session open — use ⚙
+      New Session to start"（新加 `.no-sessions` CSS）；
+- [x] 菜单 New Session / 计划自动创建 / 重启恢复均不受影响（CreateSession 仍
+      带 planSystemPrompt；e2e 本来就是显式点 New Session，注释同步更新）；
+- [x] e2e 顺带修复 restart-e2e 的后端重启竞态：kill SIGTERM 后原来只睡 800ms，
+      旧服务器优雅关会话期间仍占着端口 → 新进程 bind 失败、页面连到将死的旧
+      服务器 → 改为 `waitExit(server, 15s)` 等旧进程真正退出再 startServer；
+      plan-e2e + restart-e2e ALL PASS（restart 偶发失败根治）；
+
+### CI（.github/workflows/ci.yml）
+- [x] rust job 增加 `cargo build`（完整 Tauri 应用编译，不只 cargo test）；
+- [x] 新增 `e2e` job：setup-go + setup-node + 全局 elm → `elm make` 产出
+      elm.js → `npm install`（e2e/）→ `node plan-e2e.mjs` + `node
+      restart-e2e.mjs`（ubuntu-latest 自带 /usr/bin/google-chrome，无需下载）；
+- [x] 验证：Elm 219 / Rust 43 / Go -race 8 包 / make e2e（两个脚本）全绿；
+- [x] 文档：plan-mode.md（§4 启动说明、§7.1 祖先链 + S 形、§12 P32 行）、
+      TODO 本表、manual-acceptance Startup 段新增 5 项。
 
 ---
 
