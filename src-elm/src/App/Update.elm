@@ -142,12 +142,7 @@ planDirOf : Model -> String -> Maybe String
 planDirOf model planId =
     case Dict.get planId model.planMetas of
         Just meta ->
-            case meta.origin of
-                Just origin ->
-                    Just (planDirIn model.homeDir origin.sessionId planId)
-
-                Nothing ->
-                    Nothing
+            Just (planDirIn model.homeDir meta.origin.sessionId planId)
 
         Nothing ->
             Nothing
@@ -166,8 +161,7 @@ sessions are created/resumed nested under this session's dir.
 planOriginSessionId : Model -> String -> Maybe String
 planOriginSessionId model planId =
     Dict.get planId model.planMetas
-        |> Maybe.andThen .origin
-        |> Maybe.map .sessionId
+        |> Maybe.map (.origin >> .sessionId)
 
 
 {-| The on-disk session id for a LIVE session id: resumes hand out FRESH
@@ -268,13 +262,7 @@ messageBoundToPlan model sid planIndex =
     Dict.foldl
         (\_ meta acc ->
             acc
-                || (case meta.origin of
-                        Just o ->
-                            o.sessionId == onDiskId && o.planIndex == planIndex
-
-                        Nothing ->
-                            False
-                   )
+                || (meta.origin.sessionId == onDiskId && meta.origin.planIndex == planIndex)
         )
         False
         model.planMetas
@@ -412,14 +400,9 @@ planConnectionFor : String -> Model -> Maybe NC.PlanConnection
 planConnectionFor planId model =
     case Dict.get planId model.planMetas of
         Just meta ->
-            case meta.origin of
-                Just origin ->
-                    case NC.liveSessionForOrigin model.sessions model.planResumedFrom origin.sessionId of
-                        Just liveId ->
-                            Just { planId = planId, sessionId = liveId }
-
-                        Nothing ->
-                            Nothing
+            case NC.liveSessionForOrigin model.sessions model.planResumedFrom meta.origin.sessionId of
+                Just liveId ->
+                    Just { planId = planId, sessionId = liveId }
 
                 Nothing ->
                     Nothing
@@ -710,59 +693,56 @@ feedbackCompletedPlan : String -> Int -> Model -> ( Model, Cmd Msg )
 feedbackCompletedPlan planId now model =
     case Dict.get planId model.planMetas of
         Just meta ->
-            case meta.origin of
-                Just origin ->
-                    let
-                        summary =
-                            feedbackSummary planId model
+            let
+                origin =
+                    meta.origin
 
-                        prefix =
-                            "[Plan Result] The plan has completed. Results:\n\n"
-                                ++ summary
-                                ++ "\n\n[Plan: "
-                                ++ planId
-                                ++ "]"
+                summary =
+                    feedbackSummary planId model
 
-                        -- Origin session (ON-DISK id) alive → send the
-                        -- continuation prompt (auto-continue). Resolve to
-                        -- the LIVE window id (the original if open, or
-                        -- the fresh id of a resume of it). Closed →
-                        -- D7 (part): record the feedback for later
-                        -- display; the auto-resume+continue follow-up is
-                        -- pending.
-                        liveOrigin =
-                            NC.liveSessionForOrigin model.sessions model.planResumedFrom origin.sessionId
+                prefix =
+                    "[Plan Result] The plan has completed. Results:\n\n"
+                        ++ summary
+                        ++ "\n\n[Plan: "
+                        ++ planId
+                        ++ "]"
 
-                        feedbackCmd =
-                            case liveOrigin of
-                                Just liveSid ->
-                                    Ports.sendPrompt { sessionId = liveSid, text = prefix, media = [] }
+                -- Origin session (ON-DISK id) alive → send the
+                -- continuation prompt (auto-continue). Resolve to the
+                -- LIVE window id (the original if open, or the fresh id
+                -- of a resume of it). Closed → D7 (part): record the
+                -- feedback for later display; the auto-resume+continue
+                -- follow-up is pending.
+                liveOrigin =
+                    NC.liveSessionForOrigin model.sessions model.planResumedFrom origin.sessionId
 
-                                Nothing ->
-                                    Cmd.none
+                feedbackCmd =
+                    case liveOrigin of
+                        Just liveSid ->
+                            Ports.sendPrompt { sessionId = liveSid, text = prefix, media = [] }
 
-                        -- If the origin is a plan node session, resume the
-                        -- waiting node so it answers based on the results.
-                        resumeCmd =
-                            case findPlanIdBySession model origin.sessionId of
-                                Just _ ->
-                                    Task.perform
-                                        (\t -> PlanRunFrame (Time.posixToMillis t) (R.ResumeDelegatedNode origin.sessionId))
-                                        Time.now
+                        Nothing ->
+                            Cmd.none
 
-                                Nothing ->
-                                    Cmd.none
+                -- If the origin is a plan node session, resume the
+                -- waiting node so it answers based on the results.
+                resumeCmd =
+                    case findPlanIdBySession model origin.sessionId of
+                        Just _ ->
+                            Task.perform
+                                (\t -> PlanRunFrame (Time.posixToMillis t) (R.ResumeDelegatedNode origin.sessionId))
+                                Time.now
 
-                        fb =
-                            PM.Feedback now "completed" prefix planId
+                        Nothing ->
+                            Cmd.none
 
-                        ( m1, metaCmd ) =
-                            appendMetaFeedback planId fb model
-                    in
-                    ( m1, Cmd.batch [ feedbackCmd, resumeCmd, metaCmd ] )
+                fb =
+                    PM.Feedback now "completed" prefix planId
 
-                Nothing ->
-                    ( model, Cmd.none )
+                ( m1, metaCmd ) =
+                    appendMetaFeedback planId fb model
+            in
+            ( m1, Cmd.batch [ feedbackCmd, resumeCmd, metaCmd ] )
 
         Nothing ->
             ( model, Cmd.none )
@@ -886,16 +866,11 @@ subPlansOfPlan planId model =
     in
     Dict.foldl
         (\spId meta acc ->
-            case meta.origin of
-                Just o ->
-                    if List.member o.sessionId nodeSids then
-                        spId :: acc
+            if List.member meta.origin.sessionId nodeSids then
+                spId :: acc
 
-                    else
-                        acc
-
-                Nothing ->
-                    acc
+            else
+                acc
         )
         []
         model.planMetas
@@ -3208,13 +3183,14 @@ update msg model =
                         Ok plan ->
                             let
                                 -- R3: record the origin session + plan index
-                                -- so feedback can route results back and the
-                                -- status bar can bind to this message. The
-                                -- index is counted with the same predicate as
+                                -- so feedback can route results back, the
+                                -- status bar can bind to this message, and the
+                                -- plan's on-disk dir can be found. The index
+                                -- is counted with the same predicate as
                                 -- detection, so rendering can find it back
                                 -- without relying on message ids.
                                 origin =
-                                    Just (PM.Origin sid planIndex Nothing)
+                                    PM.Origin sid planIndex
                             in
                             ( model2
                             , Task.perform (PlanSaveReady plan origin) (Task.map Time.posixToMillis Time.now)
@@ -3228,7 +3204,7 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
-        PlanSaveReady plan maybeOrigin timestamp ->
+        PlanSaveReady plan origin0 timestamp ->
             let
                 planId =
                     PT.slugify plan.name ++ "-" ++ String.fromInt timestamp
@@ -3238,17 +3214,10 @@ update msg model =
                 -- hand out fresh live ids whose dirs don't exist — the
                 -- origin must be the original dir id).
                 originDiskId =
-                    maybeOrigin
-                        |> Maybe.map (.sessionId >> onDiskSessionId model)
-                        |> Maybe.withDefault ""
+                    onDiskSessionId model origin0.sessionId
 
                 origin =
-                    case maybeOrigin of
-                        Just o ->
-                            Just { o | sessionId = originDiskId }
-
-                        Nothing ->
-                            Nothing
+                    { origin0 | sessionId = originDiskId }
 
                 planDir =
                     planDirIn model.homeDir originDiskId planId
@@ -5099,16 +5068,14 @@ applyPendingEvent raw sessions =
 
 type alias SessionDir =
     { id : String
-    , hasSessionFile : Bool
     , createdAt : String
     }
 
 
 sessionDirDecoder : D.Decoder SessionDir
 sessionDirDecoder =
-    D.map3 SessionDir
+    D.map2 SessionDir
         (D.field "id" D.string)
-        (D.field "has_session_file" D.bool)
         (D.field "created_at" D.string)
 
 

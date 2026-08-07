@@ -369,16 +369,12 @@ func TestIntegrationForkSession(t *testing.T) {
 	if len(list) != 2 {
 		t.Fatalf("list_session_dirs len = %d, want 2: %s", len(list), dirsBody)
 	}
-	// Both sessions must be listed with their session files. Ordering
-	// is by dir mtime; same-second timestamps make it ambiguous, so
-	// assert set membership (matches Rust, which has the same
-	// granularity ambiguity).
+	// Both sessions must be listed. Ordering is by dir mtime;
+	// same-second timestamps make it ambiguous, so assert set membership
+	// (matches Rust, which has the same granularity ambiguity).
 	ids := map[string]bool{}
 	for _, item := range list {
 		ids[item["id"].(string)] = true
-		if item["has_session_file"] != true {
-			t.Errorf("session %v should have session.alaya", item["id"])
-		}
 	}
 	if !ids[src] || !ids[newID] {
 		t.Errorf("list_session_dirs missing src/new: %s", dirsBody)
@@ -665,7 +661,7 @@ func TestIntegrationSessionWorkDir(t *testing.T) {
 // — every plan lives inside the session that created it, and the
 // sessions/ top level only ever contains plain sessions. The session
 // manager (list_session_dirs) must not show plan dirs, resume must find
-// the nested dir (with legacy fallbacks), and delete must remove it.
+// the nested dir, and delete must remove it.
 func TestIntegrationNestedPlanSessionDir(t *testing.T) {
 	e := newTestEnv(t, "")
 	sessionsRoot := filepath.Join(dirs.AlayafaceDir(), "sessions")
@@ -759,36 +755,6 @@ func TestIntegrationNestedPlanSessionDir(t *testing.T) {
 	// Resume WITHOUT originSessionId/planId must NOT find it (the lookup
 	// is nested-aware, not a flat fallback).
 	e.rpcErr(t, "resume_session", map[string]any{"sessionId": sid, "binaryPath": ""})
-
-	// LEGACY fallback 1 (P27 layout): a plan-keyed top-level subtree
-	// sessions/<planId>/<nodeId>/<sid> — resumable with planId only.
-	legacyPlanDir := filepath.Join(sessionsRoot, "legacy_plan", "t1")
-	legacySid := "legacy-sess-1"
-	if _, err := dirs.CreateSessionDirFrom(legacyPlanDir, legacySid, ""); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(legacyPlanDir, legacySid, "session.alaya"), []byte(""), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	body = e.rpcOK(t, "resume_session", map[string]any{
-		"sessionId": legacySid, "binaryPath": "", "planId": "legacy_plan", "nodeId": "t1",
-	})
-	var legacyID string
-	if err := json.Unmarshal(body, &legacyID); err != nil {
-		t.Fatalf("legacy P27 resume: %s", body)
-	}
-	e.rpcOK(t, "close_session", map[string]any{"sessionId": legacyID})
-
-	// LEGACY fallback 2 (flat): a pre-hierarchy plan session lives at
-	// sessions/<uuid> — resumable WITH origin+plan args.
-	body = e.rpcOK(t, "resume_session", map[string]any{
-		"sessionId": plainSid, "binaryPath": "", "planId": "legacy-plan", "nodeId": "t1", "originSessionId": originSid,
-	})
-	var flatID string
-	if err := json.Unmarshal(body, &flatID); err != nil {
-		t.Fatalf("legacy flat resume: %s", body)
-	}
-	e.rpcOK(t, "close_session", map[string]any{"sessionId": flatID})
 
 	// Delete with originSessionId/planId/nodeId removes the nested dir.
 	e.rpcOK(t, "delete_session_dir", map[string]any{"sessionId": sid, "planId": "demo 1", "nodeId": "t1/x", "originSessionId": originSid})

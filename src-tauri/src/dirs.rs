@@ -23,67 +23,6 @@
 
 use std::path::PathBuf;
 
-// ─── Legacy config seeds (detection only) ───────────────────────────
-//
-// Fresh presets are seeded as EMPTY shells: alayacore creates
-// model.conf, runtime.conf and themes/ itself when they are missing
-// (verified against the real binary — an empty config dir starts with
-// zero error frames and alayacore writes a working local-Ollama default
-// model). "Empty" seeds are therefore noise — a literal "{}" in
-// runtime.conf even makes alayacore emit a parse error on every
-// startup. Copying an EXISTING preset (clone) is the only path that
-// should produce files, and that keeps whatever is in the source.
-//
-// These constants exist ONLY to detect and remove files that still hold
-// exactly a legacy seed (never anything alayacore or the user has
-// written since).
-
-/// runtime.conf seed written by early versions (JSON empty object).
-const LEGACY_RUNTIME_CONF_EMPTY: &str = "{}";
-
-/// runtime.conf seed written by the P20 fix (bare comment). Equivalent
-/// to empty; removing it lets alayacore write the real file.
-const LEGACY_RUNTIME_CONF_COMMENT: &str = "# auto-managed by alayacore: active_model / active_theme selections";
-
-/// model.conf seed with the fake "Placeholder" model (empty api_key).
-const LEGACY_MODEL_CONF_SEED: &str = r##"name: "Placeholder"
-protocol_type: "openai"
-base_url: "https://api.openai.com/v1"
-api_key: ""
-model_name: "gpt-4o"
-context_limit: 128000
-max_tokens: 4096
-"##;
-
-/// Remove config files that still hold exactly a legacy empty seed.
-/// alayacore recreates model.conf/runtime.conf on its next spawn, so
-/// deletion is lossless. Anything that differs from a seed (real models
-/// the user configured, alayacore's own active_model/theme selections)
-/// is kept untouched. Idempotent; missing files are fine.
-pub fn heal_legacy_config_seeds(path: &std::path::Path) -> Result<(), String> {
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return Ok(());
-    };
-    let trimmed = content.trim();
-    let is_legacy_seed =
-        if name == "runtime.conf" {
-            trimmed == LEGACY_RUNTIME_CONF_EMPTY || trimmed == LEGACY_RUNTIME_CONF_COMMENT
-        } else if name == "model.conf" {
-            trimmed == LEGACY_MODEL_CONF_SEED.trim()
-        } else {
-            false
-        };
-    if is_legacy_seed {
-        std::fs::remove_file(path)
-            .map_err(|e| format!("Cannot remove legacy config seed {:?}: {}", path, e))?;
-    }
-    Ok(())
-}
-
 /// Get alayaface's base directory (~/.alayaface).
 pub fn alayaface_dir() -> PathBuf {
     let home = std::env::var("HOME")
@@ -212,24 +151,6 @@ pub fn ensure() -> Result<(PathBuf, PathBuf), String> {
         let dir = presets.join(name);
         if !dir.exists() {
             create_preset_defaults(&dir, name)?;
-        }
-    }
-
-    // Heal installs seeded before the empty-shell change: presets AND
-    // existing session config copies may still hold legacy empty seeds
-    // (runtime.conf "{}" / comment, Placeholder model.conf). alayacore
-    // recreates them, so removal is lossless.
-    if let Ok(preset_entries) = std::fs::read_dir(&presets) {
-        for entry in preset_entries.flatten() {
-            heal_legacy_config_seeds(&entry.path().join("runtime.conf"))?;
-            heal_legacy_config_seeds(&entry.path().join("model.conf"))?;
-        }
-    }
-    if let Ok(session_entries) = std::fs::read_dir(&sessions) {
-        for entry in session_entries.flatten() {
-            let config = entry.path().join("config");
-            heal_legacy_config_seeds(&config.join("runtime.conf"))?;
-            heal_legacy_config_seeds(&config.join("model.conf"))?;
         }
     }
 
@@ -454,47 +375,6 @@ mod tests {
             assert!(!safe_settings.contains("execute_command"));
             // Non-Safe presets carry no settings.conf (defaults apply).
             assert!(!preset_dir("Default").join("settings.conf").exists());
-        });
-    }
-
-    #[test]
-    fn heals_legacy_config_seeds() {
-        isolated_home(|| {
-            // Simulate an install seeded before the empty-shell change:
-            // the active preset holds "{}" + comment runtime.conf seeds
-            // and a Placeholder model.conf; an existing session's config
-            // copy holds "{}" too. ensure() must REMOVE all of them
-            // (alayacore recreates), while a real runtime.conf (alayacore
-            // wrote active_model) is kept.
-            let (config, sessions) = ensure().unwrap();
-            std::fs::write(config.join("runtime.conf"), "{}").unwrap();
-            std::fs::write(
-                config.join("model.conf"),
-                "name: \"Placeholder\"\nprotocol_type: \"openai\"\nbase_url: \"https://api.openai.com/v1\"\napi_key: \"\"\nmodel_name: \"gpt-4o\"\ncontext_limit: 128000\nmax_tokens: 4096\n",
-            )
-            .unwrap();
-            let sconf = sessions.join("sess-1").join("config");
-            std::fs::create_dir_all(&sconf).unwrap();
-            std::fs::write(
-                sconf.join("runtime.conf"),
-                "# auto-managed by alayacore: active_model / active_theme selections\n",
-            )
-            .unwrap();
-            // A meaningful runtime.conf must survive the heal.
-            let other = sessions.join("sess-2").join("config");
-            std::fs::create_dir_all(&other).unwrap();
-            std::fs::write(other.join("runtime.conf"), "active_model: \"GPT-4o\"\n").unwrap();
-
-            ensure().unwrap();
-
-            assert!(!config.join("runtime.conf").exists(), "preset runtime.conf removed");
-            assert!(!config.join("model.conf").exists(), "preset Placeholder model.conf removed");
-            assert!(!sconf.join("runtime.conf").exists(), "session comment seed removed");
-            assert_eq!(
-                std::fs::read_to_string(other.join("runtime.conf")).unwrap(),
-                "active_model: \"GPT-4o\"\n",
-                "real runtime.conf kept"
-            );
         });
     }
 

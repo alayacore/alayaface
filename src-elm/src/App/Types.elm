@@ -316,7 +316,7 @@ type Msg
     -- Manual "Open plan" from a detected-but-not-auto-created plan
     -- message (a history replay suppressed the auto-create).
     | PlanOpenFromMessage String Int
-    | PlanSaveReady PT.Plan (Maybe PM.Origin) Int
+    | PlanSaveReady PT.Plan PM.Origin Int
     -- Status-bar "Open" click on a message-bound plan (R3).
     | PlanStatusOpen String
     | PlanActivate String

@@ -387,8 +387,8 @@ normalize plan =
         , concurrency = clamp minConcurrency maxConcurrency plan.concurrency
         , defaultMaxAttempts = max 1 plan.defaultMaxAttempts
         , tasks = List.map normalizeTask plan.tasks
-        -- every normalized plan carries the marker (legacy files without
-        -- it are upgraded on save/export)
+        -- every normalized plan carries the marker (encode always
+        -- writes it, so saved/exported plans are always recognized)
         , planType = Just planTypeMarker
     }
 

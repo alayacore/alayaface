@@ -32,69 +32,6 @@ import (
 	"time"
 )
 
-// ─── Legacy config seeds (detection only) ───────────────────────────
-//
-// Fresh presets are seeded as EMPTY shells: alayacore creates
-// model.conf, runtime.conf and themes/ itself when they are missing
-// (verified against the real binary — an empty config dir starts with
-// zero error frames and alayacore writes a working local-Ollama default
-// model). "Empty" seeds are therefore noise — a literal "{}" in
-// runtime.conf even makes alayacore emit a parse error on every
-// startup. Copying an EXISTING preset (clone) is the only path that
-// should produce files, and that keeps whatever is in the source.
-//
-// These constants exist ONLY to detect and remove files that still hold
-// exactly a legacy seed (never anything alayacore or the user has
-// written since).
-
-// LegacyRuntimeConfEmpty is the runtime.conf seed written by early
-// versions (JSON empty object — unparseable by alayacore).
-const LegacyRuntimeConfEmpty = "{}"
-
-// LegacyRuntimeConfComment is the runtime.conf seed written by the P20
-// fix (bare comment). Equivalent to empty; removing it lets alayacore
-// write the real file.
-const LegacyRuntimeConfComment = "# auto-managed by alayacore: active_model / active_theme selections"
-
-// LegacyModelConfSeed is the model.conf seed with the fake "Placeholder"
-// model (empty api_key → "API key is required" on every prompt).
-const LegacyModelConfSeed = `name: "Placeholder"
-protocol_type: "openai"
-base_url: "https://api.openai.com/v1"
-api_key: ""
-model_name: "gpt-4o"
-context_limit: 128000
-max_tokens: 4096
-`
-
-// HealLegacyConfigSeeds removes config files that still hold exactly a
-// legacy empty seed. alayacore recreates model.conf/runtime.conf on its
-// next spawn, so deletion is lossless. Anything that differs from a
-// seed (real models the user configured, alayacore's own
-// active_model/theme selections) is kept untouched. Idempotent; missing
-// files are fine.
-func HealLegacyConfigSeeds(path string) error {
-	name := filepath.Base(path)
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	trimmed := strings.TrimSpace(string(content))
-	var isLegacySeed bool
-	switch name {
-	case "runtime.conf":
-		isLegacySeed = trimmed == LegacyRuntimeConfEmpty || trimmed == LegacyRuntimeConfComment
-	case "model.conf":
-		isLegacySeed = trimmed == strings.TrimSpace(LegacyModelConfSeed)
-	}
-	if isLegacySeed {
-		if err := os.Remove(path); err != nil {
-			return fmt.Errorf("Cannot remove legacy config seed %s: %w", path, err)
-		}
-	}
-	return nil
-}
-
 // AlayafaceDir returns the base directory (~/.alayaface).
 func AlayafaceDir() string {
 	home := os.Getenv("HOME")
@@ -236,34 +173,6 @@ func Ensure() (string, string, error) {
 		dir := filepath.Join(presets, name)
 		if _, err := os.Stat(dir); err != nil {
 			if err := CreatePresetDefaults(dir, name); err != nil {
-				return "", "", err
-			}
-		}
-	}
-
-	// Heal installs seeded before the empty-shell change: presets AND
-	// existing session config copies may still hold legacy empty seeds
-	// (runtime.conf "{}" / comment, Placeholder model.conf). alayacore
-	// recreates them, so removal is lossless.
-	presetEntries, err := os.ReadDir(presets)
-	if err == nil {
-		for _, e := range presetEntries {
-			if err := HealLegacyConfigSeeds(filepath.Join(presets, e.Name(), "runtime.conf")); err != nil {
-				return "", "", err
-			}
-			if err := HealLegacyConfigSeeds(filepath.Join(presets, e.Name(), "model.conf")); err != nil {
-				return "", "", err
-			}
-		}
-	}
-	sessionEntries, err := os.ReadDir(sessions)
-	if err == nil {
-		for _, e := range sessionEntries {
-			config := filepath.Join(sessions, e.Name(), "config")
-			if err := HealLegacyConfigSeeds(filepath.Join(config, "runtime.conf")); err != nil {
-				return "", "", err
-			}
-			if err := HealLegacyConfigSeeds(filepath.Join(config, "model.conf")); err != nil {
 				return "", "", err
 			}
 		}

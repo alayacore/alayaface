@@ -18,9 +18,8 @@ import (
 
 // SessionDirInfo is the serialized session directory info.
 type SessionDirInfo struct {
-	ID             string `json:"id"`
-	HasSessionFile bool   `json:"has_session_file"`
-	CreatedAt      string `json:"created_at"`
+	ID        string `json:"id"`
+	CreatedAt string `json:"created_at"`
 }
 
 // CreateSession spawns a new alayacore session.
@@ -158,15 +157,13 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	return writeResult(w, s.ID)
 }
 
-// resolveSessionDir locates an on-disk session directory by trying the
-// current and legacy layouts in order:
-//  1. sessions/<originSessionId>/plans/<planId>/<nodeId>/<sessionId>  (P28: plan under its session)
-//  2. sessions/<planId>/<nodeId>/<sessionId>                          (P27: plan-keyed top-level subtrees)
-//  3. sessions/<sessionId>                                            (flat, pre-hierarchy)
-// The first path that exists wins; "" components are skipped.
-func resolveSessionDir(sessionsRoot, originSessionId, planId, nodeId, sessionId string) string {
-	if strings.TrimSpace(originSessionId) != "" && strings.TrimSpace(planId) != "" {
-		d := filepath.Join(
+// planSessionDirFor builds the on-disk path of a plan NODE session:
+// sessions/<originSessionId>/plans/<planId>/<nodeId>/<sessionId>.
+// Plain sessions (no planId) stay at sessions/<sessionId>. The P28
+// layout is the ONLY layout — no legacy fallbacks.
+func planSessionDirFor(sessionsRoot, originSessionId, planId, nodeId, sessionId string) string {
+	if strings.TrimSpace(planId) != "" {
+		return filepath.Join(
 			sessionsRoot,
 			dirs.SanitizeDirComponent(originSessionId),
 			"plans",
@@ -174,20 +171,6 @@ func resolveSessionDir(sessionsRoot, originSessionId, planId, nodeId, sessionId 
 			dirs.SanitizeDirComponent(nodeId),
 			sessionId,
 		)
-		if _, err := os.Stat(d); err == nil {
-			return d
-		}
-	}
-	if strings.TrimSpace(planId) != "" {
-		d := filepath.Join(
-			sessionsRoot,
-			dirs.SanitizeDirComponent(planId),
-			dirs.SanitizeDirComponent(nodeId),
-			sessionId,
-		)
-		if _, err := os.Stat(d); err == nil {
-			return d
-		}
 	}
 	return filepath.Join(sessionsRoot, sessionId)
 }
@@ -210,8 +193,7 @@ func ResumeSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	// Plan node sessions are nested under the plan's owning session; the
 	// frontend passes originSessionId/planId/nodeId so resume finds the
 	// on-disk dir even though the session id alone is only unique per
-	// plan. resolveSessionDir falls back to older layouts for sessions
-	// created before this change.
+	// plan. Plain sessions (no planId) resolve at the top level.
 	originID := ""
 	if args.OriginSessionID != nil {
 		originID = *args.OriginSessionID
@@ -224,7 +206,7 @@ func ResumeSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	if args.NodeID != nil {
 		nodeID = *args.NodeID
 	}
-	sessionsDir := resolveSessionDir(sessionsRoot, originID, planID, nodeID, args.SessionID)
+	sessionsDir := planSessionDirFor(sessionsRoot, originID, planID, nodeID, args.SessionID)
 	sessionFile := filepath.Join(sessionsDir, "session.alaya")
 	configDir := filepath.Join(sessionsDir, "config")
 
@@ -329,9 +311,8 @@ func ListSessionDirs(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		created := dirs.FileBirthTime(fi)
 		items = append(items, item{
 			info: SessionDirInfo{
-				ID:             e.Name(),
-				HasSessionFile: true,
-				CreatedAt:      fmt.Sprintf("%d", created.Unix()),
+				ID:        e.Name(),
+				CreatedAt: fmt.Sprintf("%d", created.Unix()),
 			},
 			mod: mod,
 		})
@@ -360,7 +341,7 @@ func DeleteSessionDir(h *Handler, w http.ResponseWriter, r *http.Request) error 
 	_ = h.Sessions.Close(args.SessionID)
 	sessionsRoot := filepath.Join(dirs.AlayafaceDir(), "sessions")
 	// Plan node sessions are nested; originSessionId/planId/nodeId locate
-	// them (resolveSessionDir also tries the older layouts).
+	// them (plain sessions resolve at the top level).
 	originID := ""
 	if args.OriginSessionID != nil {
 		originID = *args.OriginSessionID
@@ -373,7 +354,7 @@ func DeleteSessionDir(h *Handler, w http.ResponseWriter, r *http.Request) error 
 	if args.NodeID != nil {
 		nodeID = *args.NodeID
 	}
-	sessionDir := resolveSessionDir(sessionsRoot, originID, planID, nodeID, args.SessionID)
+	sessionDir := planSessionDirFor(sessionsRoot, originID, planID, nodeID, args.SessionID)
 	if _, err := os.Stat(sessionDir); err == nil {
 		if err := os.RemoveAll(sessionDir); err != nil {
 			return fmt.Errorf("Cannot delete %s: %w", sessionDir, err)

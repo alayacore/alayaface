@@ -66,6 +66,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P26 plan JSON 顶层 `"type": "alayaface-plan"` 标志（按钮只认显式标志，普通 ```json 不误触发；**必填无兼容**——缺失/错误值直接报错） | [x] |
 | P27 连线升级 + session 目录层级：plan↔所属 session 连线（锚到可见的 `[Plan: …]` 按钮）；两条连线实线加粗 + 双控制点贝塞尔；`sessions/<planId>/<nodeId>/<uuid>/` 嵌套（顶层=纯普通会话） | [x] |
 | P28 Plan 归属 Session（用户决策：导入是早期遗留物，整体移除）：plan 文档/meta/run/work/节点子会话全部收进 `sessions/<来源session>/plans/<planId>/`，删除顶层 `plans/` 根；Plans manager 单页（从 planMetas 索引列，无 Browse/导入）；meta origin 记 on-disk 会话 id，绑定按 live id 解析 | [x] |
+| P29 清理全部"向后兼容"代码（用户：都是没用的）：删 session 目录 legacy 回退链（只认 P28 路径）、Plan/Meta lenient 解码（origin/planIndex 必填、删 messageId、origin 收紧为非 Maybe）、Legacy config 种子修复（heal 整块移除）、恒真 `has_session_file` 字段 | [x] |
 | R 系列 | Plan 重构：模型自主子流程 + 递归（自动创建 / 回填自动继续 / 重跑级联 / 状态条 / 超时移除）——**详见 REFACTOR.md** | 进行中 |
 
 ## P24 — 输出注入（{{tX.output}}）
@@ -231,8 +232,7 @@ C1 安全：`cancelTask` → `activeTask.cancel()` → 任务经 `taskResultCh`
 - [x] 后端（Rust+Go 对称）：`create_session`/`resume_session`/`delete_session_dir`
       新增可选 `originSessionId`（+ 已有 planId/nodeId）→ 嵌套路径
       `sessions/<San(origin)>/plans/<San(planId)>/<San(nodeId)>/<uuid>`；
-      `resume`/`delete` 用 `resolveSessionDir` 回退链：P28 → P27
-      （`sessions/<planId>/<nodeId>/<sid>`）→ 扁平（旧数据可恢复）；
+      resume/delete 直接按 P28 路径解析（**无任何 legacy 回退**）；
 - [x] `dirs.CreatePlanSessionDirFrom`/`create_session_dir_nested` 新签名
       （originSessionId, planId, nodeId, uuid, preset）+ 顶层 doc 布局更新；
 - [x] 前端路径：`plansDir` → `sessionsDir` + `planDirIn`/`planDirOf`/
@@ -254,12 +254,45 @@ C1 安全：`cancelTask` → `activeTask.cancel()` → 任务经 `taskResultCh`
       originSessionId；
 - [x] 测试：Go `TestSanitizeDirComponent`/`TestCreatePlanSessionDirFromNests`
       （新签名）+ `TestIntegrationNestedPlanSessionDir`（origin 嵌套创建、
-      管理器只列普通会话、嵌套 resume、P27/扁平 legacy 回退、嵌套删除）；
-      Rust dirs.rs 两例更新；Elm 213 全绿；e2e 5d 断言
+      管理器只列普通会话、嵌套 resume、**无 origin/planId 解析失败**、
+      嵌套删除）；Rust dirs.rs 两例更新；Elm 213 全绿；e2e 5d 断言
       `sessions/<origin>/plans/<planId>/{t1,t2,t3}/<uuid>` + plan 文档/
       meta/run 都在会话目录内 + manager 无 Browse 页 + work dir 新路径；
 - [x] 文档：plan-mode.md §7.2（单页管理器）、§8.7（P28 重写）、§12；
       TODO 本表；go-backend.md 命令表 + 布局注记；manual-acceptance 5c。
+
+---
+
+## P29 — 清理全部"向后兼容"代码（用户：都是没用的）
+
+用户：**"不用迁移，另外检查下项目里的'向后兼容'代码，他们都是没用的"**。
+逐项审计并移除 4 类：
+
+- [x] **Session 目录 legacy 回退链**（Go `resolveSessionDir` / Rust
+      `resolve_session_dir` 的 P27/扁平路径）：改为 `planSessionDirFor` /
+      `plan_session_dir_for` 直接构造 P28 路径（plan 会话）或顶层（普通
+      会话），**无回退**；集成测试删除 LEGACY fallback 1/2 两段；
+- [x] **Plan/Meta.elm lenient 解码**：origin 必填（严格）、planIndex 必填
+      （删 `-1` 兜底）、`messageId` 死字段（encode 从不写）从 `Origin`
+      类型移除；`PlanMeta.origin` 由 `Maybe Origin` 收紧为 `Origin`（无导入
+      = 必有 origin），所有消费点（planDirOf/planOriginSessionId/
+      messageBoundToPlan/planConnectionFor/feedbackCompletedPlan/
+      找节点会话、View 两处）直接访问；`decodeMeta` 全字段严格；
+      PlanMetaTest 改为严格断言（缺 origin/planIndex/created_at 拒绝）；
+- [x] **Legacy config 种子修复**（Go `HealLegacyConfigSeeds` +
+      `LegacyRuntimeConfEmpty/Comment` + `LegacyModelConfSeed` / Rust
+      `heal_legacy_config_seeds` + `LEGACY_*`）：整块移除（ensure() 不再
+      扫描清除），对应测试（Go `TestHealsLegacyConfigSeeds` / Rust
+      `heals_legacy_config_seeds`）删除；
+- [x] **`has_session_file` 恒真字段**（P27 列表过滤后已无意义）：Go
+      `SessionDirInfo` / Rust `SessionDirInfo` / 前端 `SessionDir` 解码器
+      + View 三处（canResume、"· no history"、Resume 提示）全部移除；
+- [x] 保留（非向后兼容，属运行鲁棒性）：binary 解析回退、graceful-close
+      SIGKILL 兜底、probe fallback、NUL 前缀 raw 帧回退；plan schema 的
+      可选字段默认值（模型可能省略，属输入归一化，validate 兜底）；
+      P26 type 标志的"无兼容"本来就是收紧方向；
+- [x] 验证：Elm 213 / Rust 43（-1 heal 测试）/ Go -race 8 包 / e2e ALL
+      PASS；文档（plan-mode.md §8.7、go-backend.md 命令表/注记、TODO）同步。
 
 ---
 
@@ -927,6 +960,9 @@ session window edge to the node card.
 > Superseded in part by P21: instead of seeding a comment, presets are
 > now EMPTY shells (no runtime.conf at all) and the heal REMOVES legacy
 > seeds. P20's detection/verification work still applies.
+> **P29: the legacy-seed heal was removed entirely** (user: backward-compat
+> code is useless; no migration) — `HealLegacyConfigSeeds` /
+> `heal_legacy_config_seeds` and their constants/tests are gone.
 
 Bug report: EVERY session window shows
 `runtime.conf: key "{}": cannot parse value "": line without ':' separator (missing colon?)`
@@ -979,6 +1015,7 @@ required" noise) + runtime.conf (proper key:value, no "{}" parse error).
       runtime.conf "{}" / P20 comment seed, and an EXACT Placeholder
       model.conf (anything the user/alayacore wrote since is kept)
       — presets AND old session config copies
+      (**removed in P29**)
 - [x] Session config copies: copyDirExcluding of an existing preset is
       the file-producing path (tests updated to write a source file
       first, then assert the copy + settings.conf exclusion)

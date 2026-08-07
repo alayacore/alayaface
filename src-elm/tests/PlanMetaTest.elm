@@ -14,7 +14,7 @@ tests =
             \_ ->
                 let
                     meta =
-                        { origin = Just { sessionId = "s-1", planIndex = 2, messageId = Nothing }
+                        { origin = { sessionId = "s-1", planIndex = 2 }
                         , feedbacks = [ { at = 100, status = "completed", text = "done", planId = "p-1" } ]
                         , createdAt = 50
                         }
@@ -28,7 +28,7 @@ tests =
                 case decoded of
                     Ok m2 ->
                         Expect.all
-                            [ \m -> Expect.equal (Just { sessionId = "s-1", planIndex = 2, messageId = Nothing }) m.origin
+                            [ \m -> Expect.equal { sessionId = "s-1", planIndex = 2 } m.origin
                             , \m -> Expect.equal 1 (List.length m.feedbacks)
                             , \m -> Expect.equal 50 m.createdAt
                             ]
@@ -36,33 +36,28 @@ tests =
 
                     Err e ->
                         Expect.fail ("decode failed: " ++ D.errorToString e)
-        , test "legacy origin (messageId, no planIndex) decodes with planIndex -1" <|
-            \_ ->
-                case D.decodeString M.decodeMeta """{ "origin": { "sessionId": "s-1", "messageId": "hist-1" }, "created_at": 1 }""" of
-                    Ok m ->
-                        -- planIndex -1 never matches a real message, but
-                        -- sessionId survives so feedback routing still works.
-                        Expect.equal
-                            (Just { sessionId = "s-1", planIndex = -1, messageId = Just "hist-1" })
-                            m.origin
-
-                    Err e ->
-                        Expect.fail ("decode failed: " ++ D.errorToString e)
-        , test "lenient: missing origin and feedbacks decode to defaults" <|
+        , test "strict: missing origin is rejected (every plan has one)" <|
             \_ ->
                 case D.decodeString M.decodeMeta """{ "created_at": 7 }""" of
-                    Ok m ->
-                        Expect.all
-                            [ \mm -> Expect.equal Nothing mm.origin
-                            , \mm -> Expect.equal [] mm.feedbacks
-                            , \mm -> Expect.equal 7 mm.createdAt
-                            ]
-                            m
+                    Ok _ ->
+                        Expect.fail "meta without origin must be rejected"
 
-                    Err e ->
-                        Expect.fail ("decode failed: " ++ D.errorToString e)
-        , test "metaPathFor joins the plans dir" <|
+                    Err _ ->
+                        Expect.pass
+        , test "strict: missing planIndex is rejected" <|
             \_ ->
-                Expect.equal "/home/u/.alayaface/plans/demo-1.meta.json"
-                    (M.metaPathFor "/home/u/.alayaface/plans" "demo-1")
+                case D.decodeString M.decodeMeta """{ "origin": { "sessionId": "s-1" }, "created_at": 7 }""" of
+                    Ok _ ->
+                        Expect.fail "origin without planIndex must be rejected"
+
+                    Err _ ->
+                        Expect.pass
+        , test "strict: missing created_at is rejected" <|
+            \_ ->
+                case D.decodeString M.decodeMeta """{ "origin": { "sessionId": "s-1", "planIndex": 1 }, "feedbacks": [] }""" of
+                    Ok _ ->
+                        Expect.fail "meta without created_at must be rejected"
+
+                    Err _ ->
+                        Expect.pass
         ]

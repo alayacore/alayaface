@@ -85,8 +85,7 @@ var msgSeq int
 // replySeq numbers ASSISTANT content blocks (Ar/At/AT/AR echo ids).
 // Real alayacore gives every content block a unique history id; constant
 // ids (the historical "t1"/"p1"/"r1") made every reply share one id —
-// the plan-message binding (meta origin messageId) then matched multiple
-// messages in the same session.
+// echo dedup then dropped or misattributed messages in the same session.
 var replySeq int
 
 func nextReplyID() string {

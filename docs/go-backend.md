@@ -83,7 +83,7 @@ One-way push (server → client), message format:
 | `create_session` | `POST /rpc/create_session` | `binaryPath`, `configPath`, `toolConfirm`(nullable), `preset`(nullable), `builtinTools`(nullable), `systemPrompt`(nullable), `workDir`(nullable), `planId`(nullable), `nodeId`(nullable), `originSessionId`(nullable) | string sessionId |
 | `resume_session` | `POST /rpc/resume_session` | `sessionId`, `binaryPath`, `workDir`(nullable), `planId`(nullable), `nodeId`(nullable), `originSessionId`(nullable) | string sessionId |
 | `close_session` | `POST /rpc/close_session` | `sessionId` | — (graceful: CI `save` → stdin EOF → ≤5s natural exit → SIGKILL fallback) |
-| `list_session_dirs` | `POST /rpc/list_session_dirs` | — | `[{id, has_session_file, created_at}]` (top-level session dirs only; plan subtrees excluded) |
+| `list_session_dirs` | `POST /rpc/list_session_dirs` | — | `[{id, created_at}]` (top-level session dirs only; plan subtrees excluded) |
 | `delete_session_dir` | `POST /rpc/delete_session_dir` | `sessionId`, `planId`(nullable), `nodeId`(nullable), `originSessionId`(nullable) | — |
 | `fork_session` | `POST /rpc/fork_session` | `sourceSessionId`, `historyId`, `binaryPath` | string sessionId |
 | `alayacore_send_prompt` | `POST /rpc/alayacore_send_prompt` | `sessionId`, `text`, `media:[{media_type,uri}]` | — |
@@ -115,7 +115,7 @@ One-way push (server → client), message format:
 | `start_mcp_auth_flow` | `POST /rpc/start_mcp_auth_flow` | `sessionId`, `serverName`, `authUrl` | string filled URL |
 | `fill_mcp_auth_url` | `POST /rpc/fill_mcp_auth_url` | `sessionId`, `serverName`, `authUrl` | string filled URL |
 
-> Note: snake_case fields in Rust command returns (`has_session_file`, `is_active`,
+> Note: snake_case fields in Rust command returns (`is_active`,
 > `tool_confirm`, `media_type`, ...) are serde defaults (no rename). Go JSON tags must
 > match these exactly — do not "fix" them to camelCase — the Elm decoders read these keys.
 
@@ -376,8 +376,8 @@ runtimes auto-switch on the presence of `window.__TAURI__`, avoiding two bridge 
 6. **Dual-backend coexistence**: both backends share `~/.alayaface/sessions/`
    (plain sessions at the top level, plan node sessions nested under
    `sessions/<originSessionId>/plans/<planId>/<nodeId>/<uuid>/` — same
-   sanitizer on both sides; resume resolves the P28 → P27 → flat
-   fallback chain); resuming the same session dir from both sides at
+   sanitizer on both sides; P28 is the only layout, no legacy
+   fallbacks); resuming the same session dir from both sides at
    once conflicts (Rust already guards double-resume). Recommend using
    one backend at a time; document "do not operate the same session from
    both backends simultaneously".

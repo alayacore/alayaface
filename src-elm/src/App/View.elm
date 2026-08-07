@@ -348,7 +348,7 @@ viewSessionManagerOverlay model =
                                     isSessionDirActive model dir.id
 
                                 canResume =
-                                    not active && dir.hasSessionFile
+                                    not active
                             in
                             Html.div
                                 [ Attr.class "sel-page-item" ]
@@ -363,9 +363,6 @@ viewSessionManagerOverlay model =
                                     , if active then
                                         Html.span [ Attr.class "sel-page-item-sub sel-page-item-active" ] [ Html.text "· active" ]
 
-                                      else if not dir.hasSessionFile then
-                                        Html.span [ Attr.class "sel-page-item-sub" ] [ Html.text "· no history" ]
-
                                       else
                                         Html.text ""
                                     ]
@@ -376,9 +373,6 @@ viewSessionManagerOverlay model =
                                     , Attr.title
                                         (if active then
                                             "Session is already open"
-
-                                         else if not dir.hasSessionFile then
-                                            "No session history on disk"
 
                                          else
                                             "Re-open this session (replays its history)"
@@ -929,23 +923,18 @@ planFileListFromMetas : Model -> List PlanFileInfo
 planFileListFromMetas model =
     Dict.foldl
         (\planId meta acc ->
-            case meta.origin of
-                Just origin ->
-                    { name = planId
-                    , path =
-                        model.homeDir
-                            ++ "/.alayaface/sessions/"
-                            ++ origin.sessionId
-                            ++ "/plans/"
-                            ++ planId
-                            ++ "/"
-                            ++ planId
-                            ++ ".json"
-                    }
-                        :: acc
-
-                Nothing ->
-                    acc
+            { name = planId
+            , path =
+                model.homeDir
+                    ++ "/.alayaface/sessions/"
+                    ++ meta.origin.sessionId
+                    ++ "/plans/"
+                    ++ planId
+                    ++ "/"
+                    ++ planId
+                    ++ ".json"
+            }
+                :: acc
         )
         []
         model.planMetas
@@ -1211,10 +1200,10 @@ formatEpoch s =
 
 
 {-| R3: the plan status bar under the assistant message that auto-created
-a plan — bound via meta.json origin (messageId → planId). Shows the plan
-name + run status; [Open] focuses the window (or opens from disk after a
-restart). Failed/Stopped plans show the status too; the [Re-run] action
-arrives with the R4 re-run cascade.
+a plan — bound via meta.json origin (sessionId + planIndex → planId).
+Shows the plan name + run status; [Open] focuses the window (or opens
+from disk after a restart). Failed/Stopped plans show the status too;
+the [Re-run] action arrives with the R4 re-run cascade.
 -}
 viewPlanStatusBar : Model -> String -> Int -> Html Msg
 viewPlanStatusBar model sid planIndex =
@@ -1294,20 +1283,15 @@ planMetaForMessage model sid planIndex =
                     acc
 
                 Nothing ->
-                    case meta.origin of
-                        Just o ->
-                            -- Binding is session + plan index (the order of
-                            -- plan messages in a session is stable; message
-                            -- ids are per-session implementation details and
-                            -- deliberately not used for matching).
-                            if o.sessionId == onDiskId && o.planIndex == planIndex then
-                                Just ( planId, meta )
+                    -- Binding is session + plan index (the order of
+                    -- plan messages in a session is stable; message
+                    -- ids are per-session implementation details and
+                    -- deliberately not used for matching).
+                    if meta.origin.sessionId == onDiskId && meta.origin.planIndex == planIndex then
+                        Just ( planId, meta )
 
-                            else
-                                Nothing
-
-                        Nothing ->
-                            Nothing
+                    else
+                        Nothing
         )
         Nothing
         model.planMetas

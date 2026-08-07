@@ -54,11 +54,6 @@ Add **Plan Mode** to AlayaFace: let the model decompose a large task into a
     **Note: alayacore parses it as `key: value` lines, not JSON**;
   - `settings.conf` — **AlayaFace-owned, stored per preset**, `{"tool_confirm": "id1,id2"}`; not copied into session dirs; `get_global_settings(preset)` / `sync_global_settings(config, preset)` already support per-preset read/write; only the Safe seed carries it;
   - `themes/` — alayacore auto-creates default themes when missing.
-  - **Legacy seed self-heal**: `dirs::ensure` removes files that still hold old
-    empty seeds at startup (runtime.conf `{}` / comment, Placeholder model.conf)
-    — both presets and old session config copies are scanned; alayacore
-    recreates them, so removal is lossless; real files whose content differs
-    (user-configured models, alayacore-written active_model) are never touched;
 - **create_session command**: already supports `configPath` (non-empty = use the given dir directly as session config); `toolConfirm` defaults to the active preset's settings.conf tool_confirm; **creating a session dir copies the active preset into `session_dir/config`** (`dirs::create_session_dir`, excluding settings.conf).
 - **resume_session depends on `session_dir/config`** → passing a preset path directly as configPath would break resume; the "copy template by preset name" path must be used.
 - **The alayacore tool set cannot be extended on the UI side** → plan JSON can only be captured via a "fenced ```json output" or "write_file to a file".
@@ -549,13 +544,12 @@ There is **no top-level `plans/` root** anymore.
   frontend passes all three for node sessions, none for plain sessions):
   - `create_session` with planId → `sessions/<originSessionId>/plans/<planId>/<nodeId>/<uuid>/`;
     without → `sessions/<uuid>/` (unchanged);
-  - `resume_session` resolves via a fallback chain
-    (`resolveSessionDir` / `resolve_session_dir`):
-    1. `sessions/<originSessionId>/plans/<planId>/<nodeId>/<sessionId>` (P28);
-    2. `sessions/<planId>/<nodeId>/<sessionId>` (P27 legacy);
-    3. `sessions/<sessionId>` (flat, pre-hierarchy legacy);
-    the resumed session keeps its fresh-id semantics and the ORIGINAL
-    on-disk dir (P18);
+  - `resume_session` with planId resolves directly to
+    `sessions/<originSessionId>/plans/<planId>/<nodeId>/<sessionId>`
+    (the resumed session keeps its fresh-id semantics and the ORIGINAL
+    on-disk dir, P18); plain sessions (no planId) resolve at the top
+    level. **No legacy layouts are supported** (user: no migration —
+    old-layout sessions are simply not resumable);
   - `delete_session_dir` uses the same resolution;
 - **Plan file paths** (frontend): `planDirOf` / `planFilePathOf` derive
   them from `planMetas[planId].origin.sessionId` — the **on-disk** origin
@@ -584,11 +578,11 @@ There is **no top-level `plans/` root** anymore.
   `NC.liveSessionForOrigin`), so the binding survives resume/restart;
 - Dual-backend parity: Go (`internal/dirs`, `handlers/sessions.go`) and
   Rust (`src-tauri/src/dirs.rs`, `commands/sessions.rs`) implement the
-  same layout, sanitizer and fallback chain;
+  same layout and sanitizer;
 - Tests: Go `TestSanitizeDirComponent` / `TestCreatePlanSessionDirFromNests` /
   `TestIntegrationNestedPlanSessionDir` (create→nested under the origin,
-  manager hides plan dirs, nested resume works, P27 + flat legacy
-  fallbacks, nested delete) + Rust
+  manager hides plan dirs, nested resume works, resume without
+  origin/planId fails, nested delete) + Rust
   `sanitize_dir_component_maps_to_safe_names` /
   `create_session_dir_nested_keeps_plan_children_out_of_top_level` + E2E
   (asserts `sessions/<origin>/plans/<planId>/{t1,t2,t3}/<uuid>`, plan

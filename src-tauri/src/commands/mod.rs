@@ -30,7 +30,6 @@ use std::io::Write;
 #[derive(Serialize)]
 pub struct SessionDirInfo {
     pub id: String,
-    pub has_session_file: bool,
     pub created_at: String,
 }
 

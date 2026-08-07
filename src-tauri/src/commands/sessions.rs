@@ -120,37 +120,24 @@ pub async fn create_session(
     }).await
 }
 
-/// Locate an on-disk session directory by trying the current and legacy
-/// layouts in order (first existing path wins; "" components skipped):
-///  1. sessions/<originSessionId>/plans/<planId>/<nodeId>/<sessionId>  (P28)
-///  2. sessions/<planId>/<nodeId>/<sessionId>                          (P27)
-///  3. sessions/<sessionId>                                            (flat)
-fn resolve_session_dir(
+/// Build the on-disk path of a plan NODE session:
+/// sessions/<originSessionId>/plans/<planId>/<nodeId>/<sessionId>.
+/// Plain sessions (no planId) stay at sessions/<sessionId>. The P28
+/// layout is the ONLY layout — no legacy fallbacks.
+fn plan_session_dir_for(
     sessions_root: &std::path::Path,
     origin_session_id: &str,
     plan_id: &str,
     node_id: &str,
     session_id: &str,
 ) -> std::path::PathBuf {
-    if !origin_session_id.trim().is_empty() && !plan_id.trim().is_empty() {
-        let nested = sessions_root
+    if !plan_id.trim().is_empty() {
+        return sessions_root
             .join(dirs::sanitize_dir_component(origin_session_id))
             .join("plans")
             .join(dirs::sanitize_dir_component(plan_id))
             .join(dirs::sanitize_dir_component(node_id))
             .join(session_id);
-        if nested.exists() {
-            return nested;
-        }
-    }
-    if !plan_id.trim().is_empty() {
-        let p27 = sessions_root
-            .join(dirs::sanitize_dir_component(plan_id))
-            .join(dirs::sanitize_dir_component(node_id))
-            .join(session_id);
-        if p27.exists() {
-            return p27;
-        }
     }
     sessions_root.join(session_id)
 }
@@ -171,9 +158,8 @@ pub async fn resume_session(
     // Plan node sessions are nested under the plan's owning session; the
     // frontend passes originSessionId/planId/nodeId so resume finds the
     // on-disk dir even though the session id alone is only unique per
-    // plan. resolve_session_dir falls back to older layouts for sessions
-    // created before this change.
-    let sessions_dir = resolve_session_dir(
+    // plan. Plain sessions (no planId) resolve at the top level.
+    let sessions_dir = plan_session_dir_for(
         &sessions_root,
         origin_session_id.as_deref().unwrap_or(""),
         plan_id.as_deref().unwrap_or(""),
@@ -279,7 +265,6 @@ pub async fn list_session_dirs() -> Result<Vec<SessionDirInfo>, String> {
 
         result.push(SessionDirInfo {
             id,
-            has_session_file: true,
             created_at,
         });
     }
@@ -299,8 +284,8 @@ pub async fn delete_session_dir(
 
     let sessions_root = dirs::alayaface_dir().join("sessions");
     // Plan node sessions are nested; originSessionId/planId/nodeId locate
-    // them (resolve_session_dir also tries the older layouts).
-    let session_dir = resolve_session_dir(
+    // them (plain sessions resolve at the top level).
+    let session_dir = plan_session_dir_for(
         &sessions_root,
         origin_session_id.as_deref().unwrap_or(""),
         plan_id.as_deref().unwrap_or(""),
