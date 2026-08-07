@@ -97,7 +97,11 @@ func WriteFrame(w io.Writer, tag, value string) error {
 // MaxFrameSize caps a single TLV frame's value length. alayacore's
 // frames are small (deltas, JSON payloads); the 4-byte length field
 // would otherwise allow a corrupt stream to trigger a huge allocation.
-const MaxFrameSize = 256 << 20 // 256 MiB
+// 64 MiB still accommodates large tool results (e.g. base64 images)
+// while keeping a single frame far below OOM territory — and the raw
+// value is forwarded to every WebSocket client, so an oversized frame
+// would multiply through the hub's per-client send buffers.
+const MaxFrameSize = 64 << 20 // 64 MiB
 
 // ReadFrame reads a single TLV frame from r.
 // Returns (nil, nil) on clean EOF; (nil, err) on protocol/IO errors.

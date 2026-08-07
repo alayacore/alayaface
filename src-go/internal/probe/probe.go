@@ -87,6 +87,17 @@ func RunTempProbe(bin, configPath string, cmd *ProbeCmd, modelCache *session.Mod
 	timeout := 5 * time.Second
 	result := &ProbeResult{End: EndTimeout}
 
+	// The stdout pipe is an *os.File on Unix: arm a read deadline for
+	// the whole probe budget before every frame read. Without it, a
+	// hung alayacore that wrote a PARTIAL frame would block ReadFrame's
+	// ReadFull forever (the loop's timeout only runs BETWEEN frames),
+	// leaking the probe goroutine and the child process — the defer
+	// KillChild would never execute.
+	type readDeadliner interface{ SetReadDeadline(time.Time) error }
+	if ds, ok := stdout.(readDeadliner); ok {
+		_ = ds.SetReadDeadline(start.Add(timeout))
+	}
+
 	reader := bufio.NewReader(stdout)
 	for {
 		if time.Since(start) > timeout {

@@ -79,6 +79,11 @@ pub struct Frame {
     pub value: String,
 }
 
+/// Maximum accepted frame value length (mirrors Go's tlv.MaxFrameSize).
+/// alayacore's frames are small (deltas, JSON payloads); a corrupt 4-byte
+/// length field must not trigger a huge allocation.
+pub const MAX_FRAME_SIZE: usize = 64 << 20; // 64 MiB
+
 /// Read a single TLV frame from a reader.
 /// Returns None on EOF, Some(frame) on success, or an error.
 pub fn read_frame<R: Read>(reader: &mut R) -> io::Result<Option<Frame>> {
@@ -94,6 +99,12 @@ pub fn read_frame<R: Read>(reader: &mut R) -> io::Result<Option<Frame>> {
         .to_string();
 
     let len = u32::from_be_bytes([header[2], header[3], header[4], header[5]]) as usize;
+    if len > MAX_FRAME_SIZE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("frame too large: {} bytes", len),
+        ));
+    }
 
     let mut value = vec![0u8; len];
     if len > 0 {
@@ -305,6 +316,19 @@ mod tests {
         assert!(parts.has_delta);
         assert_eq!(parts.history_id, "h1");
         assert_eq!(parts.content, "payload");
+    }
+
+    #[test]
+    fn read_frame_rejects_oversized_length() {
+        // Header claims MAX_FRAME_SIZE+1 bytes; must be rejected without
+        // allocating the frame.
+        let too_big = (MAX_FRAME_SIZE as u32) + 1;
+        let mut header = Vec::new();
+        header.extend_from_slice(b"UT");
+        header.extend_from_slice(&too_big.to_be_bytes());
+        let mut reader: &[u8] = &header;
+        let err = read_frame(&mut reader).unwrap_err();
+        assert!(err.to_string().contains("frame too large"), "got: {err}");
     }
 
     #[test]
