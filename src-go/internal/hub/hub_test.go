@@ -67,18 +67,34 @@ func TestSlowClientDropped(t *testing.T) {
 	c := h.NewClient()
 	h.Register(c)
 
-	// Never drain the client; the hub must drop it once its buffer
-	// (64 messages) fills, without blocking Broadcast.
-	for i := 0; i < 200; i++ {
+	// A realistic burst (hundreds of frames — task completion output)
+	// must be absorbed by the buffer WITHOUT dropping the client; the
+	// old 64-message buffer dropped the client mid-task, the WebSocket
+	// closed, and the frontend reconnected with no replay (frames lost,
+	// session "cut off" while alayacore kept running).
+	for i := 0; i < 1000; i++ {
+		h.Broadcast(NewEvent("x", map[string]any{"i": i}))
+	}
+	if h.Len() != 1 {
+		t.Fatalf("burst of 1000 frames dropped the client: Len = %d", h.Len())
+	}
+	// Drain so the next phase starts clean.
+	for i := 0; i < 1000; i++ {
+		<-c.Chan()
+	}
+
+	// Only an extreme backlog (buffer + 10) drops the client, without
+	// blocking Broadcast.
+	for i := 0; i < sendBuffer+10; i++ {
 		h.Broadcast(NewEvent("x", map[string]any{"i": i}))
 	}
 	if h.Len() != 0 {
-		t.Errorf("slow client not dropped: Len = %d", h.Len())
+		t.Errorf("slow client not dropped on extreme backlog: Len = %d", h.Len())
 	}
 	// The dropped client's channel is closed; drain the buffered
 	// messages until the closed state is visible.
 	closed := false
-	for i := 0; i < 200; i++ {
+	for i := 0; i < sendBuffer+20; i++ {
 		if _, ok := <-c.Chan(); !ok {
 			closed = true
 			break

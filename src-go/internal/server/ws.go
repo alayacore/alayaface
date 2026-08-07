@@ -3,9 +3,20 @@ package server
 import (
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+// writeTimeout bounds a single WebSocket write. Without it a client
+// that stops reading (frozen tab) would block the write pump forever
+// (gorilla WriteMessage blocks on a full TCP buffer), which combined
+// with the hub's drop-on-full behavior is what "cut off" sessions: the
+// client is dropped, the socket closes, and the frontend reconnects
+// with no replay of the frames emitted while disconnected. With the
+// deadline the socket is closed deterministically and the frontend's
+// reconnect keeps the connection healthy.
+const writeTimeout = 60 * time.Second
 
 // handleWS upgrades GET /ws and pumps hub events to the client.
 //
@@ -30,11 +41,14 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	// Write pump: drain the client's send channel. When the channel is
 	// closed (Unregister, or the hub dropping a slow client), close the
-	// connection so the read pump unblocks and this handler exits.
+	// connection so the read pump unblocks and this handler exits. A
+	// per-write deadline prevents a frozen (non-reading) client from
+	// blocking the pump forever.
 	writeDone := make(chan struct{})
 	go func() {
 		defer close(writeDone)
 		for msg := range c.Chan() {
+			_ = conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 				break
 			}

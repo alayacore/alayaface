@@ -10,6 +10,16 @@ import (
 	"sync"
 )
 
+// sendBuffer is the per-client outbound queue size. It must absorb the
+// largest burst alayacore can flush at once (a task completing dumps
+// thousands of TLV frames — reasoning deltas, tool results, the final
+// answer — in a few hundred milliseconds). If it is too small the hub
+// drops the client, the WebSocket closes, and the frontend reconnects
+// WITHOUT a replay: the frames emitted while disconnected are lost and
+// the session looks "cut off" while the alayacore process keeps running
+// to completion. 16384 frames (a few MB) covers any realistic burst.
+const sendBuffer = 16384
+
 // Event is a server→client push message.
 type Event struct {
 	Type    string          `json:"type"`
@@ -35,7 +45,7 @@ type Client struct {
 
 // NewClient creates a client bound to the hub with a send buffer.
 func (h *Hub) NewClient() *Client {
-	return &Client{hub: h, send: make(chan []byte, 64)}
+	return &Client{hub: h, send: make(chan []byte, sendBuffer)}
 }
 
 // Chan returns the client's outbound message channel (drained by the
