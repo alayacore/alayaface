@@ -73,6 +73,57 @@ func TestCallbackHandledOnce(t *testing.T) {
 	}
 }
 
+// startAuthCapture starts a flow whose onResult sends the Result to a
+// channel (buffered so the flow's timeout path never blocks).
+func startAuthCapture(t *testing.T) (filledURL, callbackBase string, res chan Result) {
+	t.Helper()
+	res = make(chan Result, 1)
+	u, err := StartAuthFlow("test-server", "https://example.com/auth?redirect={{redirect_uri}}&state={{state}}", false, func(r Result) {
+		res <- r
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	redirect, err := url.QueryUnescape(parsed.Query().Get("redirect"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	callbackBase = strings.TrimSuffix(redirect, "/callback")
+	return u, callbackBase, res
+}
+
+// TestCallbackStrayBeforeCallbackDoesNotDecline: a stray request BEFORE
+// the real callback (browser /favicon.ico, a manual visit without
+// params, an unrelated path) must NOT consume the flow — otherwise the
+// real callback would arrive to a server that already "declined" the
+// authorization (first-request-wins bug). The genuine callback must
+// still CONFIRM with the authorization code.
+func TestCallbackStrayBeforeCallbackDoesNotDecline(t *testing.T) {
+	url, cb, res := startAuthCapture(t)
+
+	// Strays first (all accepted at the TCP level; none is a callback).
+	hit(t, cb+"/favicon.ico", true)
+	hit(t, cb+"/callback", true)          // manual visit: no code/error/state
+	hit(t, cb+"/other/path", true)        // unrelated path
+	hit(t, cb+"/callback?foo=bar", true)  // params but no code/error/state
+
+	// The real callback arrives and must CONFIRM (Code != nil).
+	hit(t, cb+"/callback?state="+stateOf(t, url)+"&code=real-code", true)
+
+	select {
+	case r := <-res:
+		if r.Code == nil || *r.Code != "real-code" {
+			t.Fatalf("expected confirm with code 'real-code', got %+v", r)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for the real callback result")
+	}
+}
+
 // TestCallbackStateMismatchDeclines: a tampered state must produce a
 // single decline callback.
 func TestCallbackStateMismatchDeclines(t *testing.T) {

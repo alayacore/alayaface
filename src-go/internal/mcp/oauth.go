@@ -60,15 +60,33 @@ func StartAuthFlow(serverName, authURL string, openBrowser bool, onResult func(R
 
 	var srv *http.Server
 	srv = &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		// The http.Server can receive multiple requests (favicon,
-		// browser retries, keep-alive reuse). Only the first callback
+		q := req.URL.Query()
+
+		// Only a GENUINE callback request claims the handling slot: the
+		// OAuth provider redirects to /callback with code/error/state.
+		// Anything else — a browser's automatic /favicon.ico request, a
+		// manual visit without params, a port probe — must NOT consume
+		// the flow, or the real callback would arrive to a server that
+		// already "declined" the authorization (first-request-wins bug).
+		isCallback := req.URL.Path == "/callback" &&
+			(q.Get("code") != "" || q.Get("error") != "" || q.Get("state") != "")
+		if !isCallback {
+			if req.URL.Path == "/favicon.ico" {
+				w.WriteHeader(http.StatusNoContent)
+			} else {
+				http.NotFound(w, req)
+			}
+			return
+		}
+
+		// The http.Server can receive multiple callback-shaped requests
+		// (browser retries, keep-alive reuse). Only the first callback
 		// is processed — otherwise onResult would fire repeatedly and
 		// send duplicate mcp_confirm/mcp_decline commands.
 		if !handled.CompareAndSwap(false, true) {
 			writeCallbackPage(w, serverName, false)
 			return
 		}
-		q := req.URL.Query()
 
 		if errDesc := q.Get("error"); errDesc != "" {
 			log.Printf("[mcp_auth] Auth error: %s", errDesc)
