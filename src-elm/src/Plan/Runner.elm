@@ -3,6 +3,7 @@ module Plan.Runner exposing
     , step
     , nodeBySessionId
     , resumeState
+    , eventSessionId
     )
 
 {-| Pure DAG runner state machine for Plan Mode.
@@ -752,6 +753,34 @@ nodeBySessionId sid run =
         )
         Nothing
         run.nodes
+
+
+{-| The session id carried by an event, if any. The Update layer routes
+events to the owning plan window through this id (PlanRunFrame →
+findPlanIdBySession → runStepIn), so EVERY session-bearing event must
+be covered here — a missing case silently drops the event before it
+reaches the state machine.
+-}
+eventSessionId : Event -> Maybe String
+eventSessionId ev =
+    case ev of
+        TaskDone sid _ _ _ ->
+            Just sid
+
+        SessionError sid _ ->
+            Just sid
+
+        SessionDisconnected sid _ ->
+            Just sid
+
+        -- The sub-plan delegated by this node completed and its result
+        -- was fed back into the node's session: the event must reach the
+        -- run that binds that session so the node leaves WaitingForPlan.
+        ResumeDelegatedNode sid ->
+            Just sid
+
+        _ ->
+            Nothing
 
 
 {-| Prepare a restored RunState (from run.json) for continuation: nodes

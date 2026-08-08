@@ -789,22 +789,13 @@ findPlanIdBySession model sid =
         model.planWindows
 
 
-{-| The session id carried by a runner event, if any.
+{-| The session id carried by a runner event, if any. Delegated to
+Plan.Runner (pure + unit-tested) so a dropped-event regression like
+ResumeDelegatedNode is caught by the test suite.
 -}
 eventSessionId : R.Event -> Maybe String
-eventSessionId ev =
-    case ev of
-        R.TaskDone sid _ _ _ ->
-            Just sid
-
-        R.SessionError sid _ ->
-            Just sid
-
-        R.SessionDisconnected sid _ ->
-            Just sid
-
-        _ ->
-            Nothing
+eventSessionId =
+    R.eventSessionId
 
 
 -- ─── Cascade close (P34) ──────────────────────────────────────────
@@ -1094,13 +1085,26 @@ feedbackCompletedPlan planId now model =
                             Cmd.none
 
                 -- If the origin is a plan node session, resume the
-                -- waiting node so it answers based on the results.
+                -- waiting node so it answers based on the results. Only
+                -- when the feedback prompt was ACTUALLY delivered (the
+                -- origin session is open): with a closed origin no
+                -- continuation prompt can arrive, so marking the node
+                -- Running would leave it stuck in Running forever (no
+                -- live session, no answer). A closed origin keeps the
+                -- node WaitingForPlan — the run stays InProgress and the
+                -- user can reopen the node session / re-run the sub-plan
+                -- to recover.
                 resumeCmd =
-                    case findPlanIdBySession model origin.sessionId of
+                    case liveOrigin of
                         Just _ ->
-                            Task.perform
-                                (\t -> PlanRunFrame (Time.posixToMillis t) (R.ResumeDelegatedNode origin.sessionId))
-                                Time.now
+                            case findPlanIdBySession model origin.sessionId of
+                                Just _ ->
+                                    Task.perform
+                                        (\t -> PlanRunFrame (Time.posixToMillis t) (R.ResumeDelegatedNode origin.sessionId))
+                                        Time.now
+
+                                Nothing ->
+                                    Cmd.none
 
                         Nothing ->
                             Cmd.none

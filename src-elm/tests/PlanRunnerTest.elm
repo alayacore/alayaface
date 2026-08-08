@@ -1051,6 +1051,26 @@ tests =
                     in
                     Expect.equal P.WaitingForPlan (nodeState "a" run4).status
             ]
+        , describe "eventSessionId (Update routing — a missing case drops the event)"
+            [ test "every session-bearing event resolves to its session" <|
+                \_ ->
+                    Expect.all
+                        [ \_ -> Expect.equal (Just "s1") (R.eventSessionId (R.TaskDone "s1" False Nothing False))
+                        , \_ -> Expect.equal (Just "s1") (R.eventSessionId (R.SessionError "s1" "boom"))
+                        , \_ -> Expect.equal (Just "s1") (R.eventSessionId (R.SessionDisconnected "s1" "closed"))
+                        , \_ -> Expect.equal (Just "s1") (R.eventSessionId (R.ResumeDelegatedNode "s1"))
+                        ]
+                        ()
+            , test "non-session events resolve to Nothing" <|
+                \_ ->
+                    Expect.all
+                        [ \_ -> Expect.equal Nothing (R.eventSessionId R.StartRun)
+                        , \_ -> Expect.equal Nothing (R.eventSessionId R.StopRun)
+                        , \_ -> Expect.equal Nothing (R.eventSessionId (R.SessionCreatedFor "a" "s1"))
+                        , \_ -> Expect.equal Nothing (R.eventSessionId (R.RetryNode "a"))
+                        ]
+                        ()
+            ]
         , describe "restart (R4: skip succeeded, reset the rest)"
             [ test "RestartRun keeps Succeeded nodes (binding + output) and resets the rest" <|
                 \_ ->
