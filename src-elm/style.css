@@ -2584,6 +2584,44 @@ body {
   cursor: grabbing;
 }
 
+/* Bottom-left zoom badge (fixed: lives outside the panning canvas layer).
+   Click resets the canvas to 100%. Mirrors the global menu button on the
+   bottom-right. */
+.canvas-zoom-indicator {
+  position: fixed;
+  left: 16px;
+  bottom: 20px;
+  /* Above the canvas (0) but below modal overlays (200) and the
+     context menu (99998+): the badge must never float over a dialog. */
+  z-index: 150;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(20, 20, 35, 0.75);
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  color: #a5b4fc;
+  font-size: 0.72rem;
+  font-family: monospace;
+  cursor: pointer;
+  user-select: none;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+  transition: background 0.15s ease;
+}
+.canvas-zoom-indicator:hover {
+  background: rgba(99, 102, 241, 0.3);
+}
+@media (prefers-color-scheme: light) {
+  .canvas-zoom-indicator {
+    background: rgba(255, 255, 255, 0.88);
+    border-color: rgba(0, 0, 0, 0.15);
+    color: #4f46e5;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
+  }
+  .canvas-zoom-indicator:hover {
+    background: #eef0ff;
+  }
+}
+
 /* The canvas layer: zero-size origin that windows anchor to; the whole
    layer is translated via transform (GPU-composited, no layout). */
 .canvas {

@@ -77,6 +77,9 @@ port module Ports exposing
     , onScroll
       -- Window state
     , onWindowMaximized
+      -- Canvas zoom (wheel from bridge.js, non-passive so the browser
+      -- page zoom / scroll can be prevented)
+    , onCanvasWheel
     )
 
 import Json.Encode as E
@@ -187,3 +190,8 @@ port onScroll : ({ sessionId : String, scrollTop : Float, scrollHeight : Float, 
 -- Window state
 
 port onWindowMaximized : (Bool -> msg) -> Sub msg
+
+
+-- Canvas zoom: bridge.js forwards wheel events (with native scroll /
+-- browser zoom prevented) as { deltaY, clientX, clientY }.
+port onCanvasWheel : (E.Value -> msg) -> Sub msg

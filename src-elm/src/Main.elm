@@ -49,6 +49,7 @@ init _ =
       , windowPositions = Dict.empty
       , nextZIndex = 1
       , canvasOffset = { x = 0, y = 0 }
+      , canvasScale = 1.0
       , canvasDrag = Nothing
       , dragInfo = Nothing
       , resizeInfo = Nothing
@@ -156,4 +157,12 @@ subscriptions model =
                 (D.field "defaultPrevented" D.bool)
         , Evts.onMouseMove (D.map2 WindowDragMove (D.field "clientX" D.float) (D.field "clientY" D.float))
         , Evts.onMouseUp (D.succeed WindowDragEnd)
+        , Ports.onCanvasWheel (\raw ->
+            case D.decodeValue (D.map3 CanvasZoom (D.field "deltaY" D.float) (D.field "clientX" D.float) (D.field "clientY" D.float)) raw of
+                Ok m ->
+                    m
+
+                Err _ ->
+                    NoOp
+          )
         ]

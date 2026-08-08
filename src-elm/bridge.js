@@ -968,6 +968,26 @@
     });
     scrollObserver.observe(root, { childList: true, subtree: true });
 
+    // 4b. Canvas zoom: wheel anywhere inside main-content EXCEPT the
+    //     native-scrolling .messages list zooms the infinite canvas
+    //     centered on the cursor. Non-passive listener so we can
+    //     preventDefault() — without it, Ctrl+wheel (pinch) would trigger
+    //     the webview's page zoom and plain wheel over the background
+    //     could scroll the page. .messages keeps native wheel scrolling.
+    document.addEventListener("wheel", function (e) {
+      var t = e.target;
+      if (!t || typeof t.closest !== "function") return;
+      if (!t.closest(".main-content")) return; // overlays don't zoom
+      if (t.closest(".messages")) return;      // let messages scroll natively
+      if (e.defaultPrevented) return;
+      e.preventDefault();
+      app.ports.onCanvasWheel.send({
+        deltaY: e.deltaY * (e.deltaMode === 1 ? 16 : 1), // normalize line-mode
+        clientX: e.clientX,
+        clientY: e.clientY,
+      });
+    }, { passive: false });
+
     // 5. Window maximize state
     transport.isMaximized().then(function (v) {
       app.ports.onWindowMaximized.send(v);

@@ -83,6 +83,7 @@ view model =
             )
         , viewGlobalMenu model
         , viewContextMenu model
+        , viewZoomIndicator model
         , viewSessionManagerOverlay model
         , viewPresetManagerOverlay model
         , viewDefaultModelsEditorOverlay model
@@ -109,7 +110,23 @@ canvasTransform model =
         ++ String.fromInt model.canvasOffset.x
         ++ "px,"
         ++ String.fromInt model.canvasOffset.y
-        ++ "px,0)"
+        ++ "px,0) scale("
+        ++ String.fromFloat model.canvasScale
+        ++ ")"
+
+
+{-| Bottom-left zoom badge: shows the current scale as a percentage;
+clicking it resets the canvas to 100% (viewport center stays fixed).
+Fixed positioning keeps it out of the panning canvas layer.
+-}
+viewZoomIndicator : Model -> Html Msg
+viewZoomIndicator model =
+    Html.div
+        [ Attr.class "canvas-zoom-indicator"
+        , Attr.title "Reset zoom to 100%"
+        , Ev.onClick CanvasZoomReset
+        ]
+        [ Html.text (String.fromInt (round (model.canvasScale * 100)) ++ "%") ]
 
 
 viewSessionPanel : Model -> String -> Html Msg

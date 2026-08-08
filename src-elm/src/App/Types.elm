@@ -75,6 +75,10 @@ type alias Model =
     -- (viewport = canvas + offset). Dragging the empty background pans
     -- the canvas instead of moving a window.
     , canvasOffset : { x : Int, y : Int }
+    -- Zoom factor applied to the canvas layer (screen = canvas * scale
+    -- + offset). Kept GPU-composited: transform becomes
+    -- translate3d(offset) scale(scale), origin stays 0 0.
+    , canvasScale : Float
     , canvasDrag : Maybe CanvasDragInfo
     , dragInfo : Maybe DragInfo
     , resizeInfo : Maybe ResizeInfo
@@ -372,6 +376,11 @@ type Msg
     | PlanWindowDragStart String Float Float
     -- Canvas pan (drag on the empty background)
     | CanvasDragStart Float Float
+    -- Canvas zoom centered on the mouse: wheel deltaY + pointer position
+    | CanvasZoom Float Float Float
+    -- Reset zoom to 100% (click on the zoom indicator), keeping the
+    -- viewport center fixed
+    | CanvasZoomReset
       -- Window resizing
     | ResizeStart String ResizeHandle Float Float
     | PlanResizeStart String ResizeHandle Float Float

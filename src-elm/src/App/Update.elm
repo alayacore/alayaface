@@ -86,9 +86,17 @@ canvasMargin : Int
 canvasMargin = 24
 
 -- Safety bound for canvas pan (infinite in principle; guards float
--- precision and runaway drags).
+-- precision and runaway drags). Scales with zoom: at high zoom the
+-- viewport covers a smaller canvas area, so more pan distance is legal.
 canvasMaxPan : Int
 canvasMaxPan = 100000
+
+-- Canvas zoom limits (scale factor, 1.0 = 100%).
+canvasMinScale : Float
+canvasMinScale = 0.2
+
+canvasMaxScale : Float
+canvasMaxScale = 4.0
 
 -- Helpers
 
@@ -575,8 +583,8 @@ current viewport, cascading with the same 6×4 stagger as before.
 -}
 centeredSessionPos : Model -> WindowPos
 centeredSessionPos model =
-    { x = model.appWidth // 2 - defaultWinW // 2 + remainderBy 6 model.nextSessionNum * 50
-    , y = model.appHeight // 2 - defaultWinH // 2 + remainderBy 4 model.nextSessionNum * 40
+    { x = round ((toFloat (model.appWidth // 2 - defaultWinW // 2 + remainderBy 6 model.nextSessionNum * 50) - toFloat model.canvasOffset.x) / model.canvasScale)
+    , y = round ((toFloat (model.appHeight // 2 - defaultWinH // 2 + remainderBy 4 model.nextSessionNum * 40) - toFloat model.canvasOffset.y) / model.canvasScale)
     , w = defaultWinW
     , h = defaultWinH
     , z = model.nextZIndex
@@ -592,8 +600,8 @@ centeredPlanPos model =
         n =
             Dict.size model.planWindows
     in
-    { x = model.appWidth // 2 - planDefaultWinW // 2 + remainderBy 6 n * 50
-    , y = model.appHeight // 2 - planDefaultWinH // 2 + remainderBy 4 n * 40
+    { x = round ((toFloat (model.appWidth // 2 - planDefaultWinW // 2 + remainderBy 6 n * 50) - toFloat model.canvasOffset.x) / model.canvasScale)
+    , y = round ((toFloat (model.appHeight // 2 - planDefaultWinH // 2 + remainderBy 4 n * 40) - toFloat model.canvasOffset.y) / model.canvasScale)
     , w = planDefaultWinW
     , h = planDefaultWinH
     , z = model.nextZIndex
@@ -642,6 +650,38 @@ nodeSessionPositionBesidePlan model planId =
             centeredSessionPos model
 
 
+{-| Apply a zoom factor centered on viewport point (mx, my): the canvas
+point under the cursor stays under the cursor. Derivation:
+canvas point c = (mx - ox) / s; after zoom mx = c * s' + ox' so
+ox' = mx - (mx - ox) * (s'/s). Screen = canvas * scale + offset.
+-}
+applyZoom : Float -> Float -> Float -> Model -> Model
+applyZoom factor mx my model =
+    let
+        oldScale =
+            model.canvasScale
+
+        newScale =
+            clamp canvasMinScale canvasMaxScale (oldScale * factor)
+
+        k =
+            newScale / oldScale
+
+        ox =
+            toFloat model.canvasOffset.x
+
+        oy =
+            toFloat model.canvasOffset.y
+    in
+    { model
+        | canvasScale = newScale
+        , canvasOffset =
+            { x = round (mx - (mx - ox) * k)
+            , y = round (my - (my - oy) * k)
+            }
+    }
+
+
 {-| Pan the canvas so a window (canvas coordinates) is visible in the
 viewport, keeping at least canvasMargin on each side. New windows are
 placed relative to their source — which may be far off-screen — so a
@@ -649,37 +689,51 @@ fresh window must bring itself into view or the user would see nothing.
 -}
 bringIntoView : Model -> WindowPos -> Model
 bringIntoView model pos =
+    -- Window rect converted to SCREEN coordinates (screen = canvas *
+    -- scale + offset) before comparing against the viewport.
     let
+        s =
+            model.canvasScale
+
         vx =
-            pos.x + model.canvasOffset.x
+            toFloat pos.x * s + toFloat model.canvasOffset.x
 
         vy =
-            pos.y + model.canvasOffset.y
+            toFloat pos.y * s + toFloat model.canvasOffset.y
+
+        w =
+            toFloat pos.w
+
+        h =
+            toFloat pos.h
+
+        margin =
+            toFloat canvasMargin
 
         dx =
-            if vx + pos.w < canvasMargin then
-                canvasMargin - (vx + pos.w)
+            if vx + w < margin then
+                margin - (vx + w)
 
-            else if vx > model.appWidth - canvasMargin then
-                model.appWidth - canvasMargin - vx
+            else if vx > toFloat model.appWidth - margin then
+                toFloat model.appWidth - margin - vx
 
             else
                 0
 
         dy =
-            if vy + pos.h < canvasMargin then
-                canvasMargin - (vy + pos.h)
+            if vy + h < margin then
+                margin - (vy + h)
 
-            else if vy > model.appHeight - canvasMargin then
-                model.appHeight - canvasMargin - vy
+            else if vy > toFloat model.appHeight - margin then
+                toFloat model.appHeight - margin - vy
 
             else
                 0
     in
     { model
         | canvasOffset =
-            { x = model.canvasOffset.x + dx
-            , y = model.canvasOffset.y + dy
+            { x = model.canvasOffset.x + round dx
+            , y = model.canvasOffset.y + round dy
             }
     }
 
@@ -5379,15 +5433,33 @@ update msg model =
             , Cmd.none
             )
 
+        CanvasZoom deltaY mouseX mouseY ->
+            -- Wheel over the canvas: zoom centered on the cursor.
+            -- Smooth exponential factor (deltaY in screen px; trackpads
+            -- emit many small deltas, wheels ~±100 per notch).
+            ( applyZoom (e ^ (-deltaY * 0.0015)) mouseX mouseY model
+            , Cmd.none
+            )
+
+        CanvasZoomReset ->
+            -- Reset to 100% keeping the viewport center fixed.
+            ( applyZoom (1 / model.canvasScale) (toFloat model.appWidth / 2) (toFloat model.appHeight / 2) model
+            , Cmd.none
+            )
+
         WindowDragMove mouseX mouseY ->
             case model.dragInfo of
                 Just info ->
                     let
+                        -- Mouse deltas are screen pixels; window coords
+                        -- are canvas pixels (canvas layer scaled by
+                        -- canvasScale), so divide to keep the window
+                        -- glued to the cursor at any zoom level.
                         dx =
-                            round mouseX - round info.startMouseX
+                            round ((mouseX - info.startMouseX) / model.canvasScale)
 
                         dy =
-                            round mouseY - round info.startMouseY
+                            round ((mouseY - info.startMouseY) / model.canvasScale)
 
                         -- No viewport clamp: the canvas is unbounded and
                         -- the user recovers off-screen windows by panning.
@@ -5416,11 +5488,19 @@ update msg model =
                                 dy =
                                     round mouseY - round cd.startMouseY
 
+                                -- Pan offset is in SCREEN pixels (the
+                                -- translate part of the transform), so
+                                -- deltas need no scale division. The
+                                -- safety bound grows with zoom (high zoom
+                                -- covers a smaller canvas area).
+                                maxPan =
+                                    round (toFloat canvasMaxPan * model.canvasScale)
+
                                 newX =
-                                    clamp -canvasMaxPan canvasMaxPan (cd.startOffsetX + dx)
+                                    clamp -maxPan maxPan (cd.startOffsetX + dx)
 
                                 newY =
-                                    clamp -canvasMaxPan canvasMaxPan (cd.startOffsetY + dy)
+                                    clamp -maxPan maxPan (cd.startOffsetY + dy)
                             in
                             ( { model | canvasOffset = { x = newX, y = newY } }
                             , Cmd.none
@@ -5478,11 +5558,15 @@ handleResizeMove model mouseX mouseY =
     case model.resizeInfo of
         Just info ->
             let
+                -- Mouse deltas are screen pixels; window coords are
+                -- canvas pixels (the canvas layer is scaled by
+                -- canvasScale), so divide to keep the resize edge under
+                -- the cursor at any zoom level.
                 dx =
-                    round mouseX - round info.startMouseX
+                    round ((mouseX - info.startMouseX) / model.canvasScale)
 
                 dy =
-                    round mouseY - round info.startMouseY
+                    round ((mouseY - info.startMouseY) / model.canvasScale)
             in
             let
                 config =
