@@ -591,49 +591,40 @@
       if (el) { el.scrollIntoView({ block: "nearest" }); }
     });
 
-    // ── Session ↔ node / plan ↔ session connection curves ──────────
-    // Two fixed SVG overlays on <body> (outside Elm's vdom):
-    //   .node-connection-overlay — focused node session → its node card
-    //   .plan-connection-overlay — active plan window → its owning
-    //                              session (anchored on the [Plan: …]
-    //                              button when visible, else the edge)
-    // The plan window is raised to the SECOND layer when one of its node
-    // sessions is focused (session z = plan z + 1); the plan overlay is
-    // drawn at the plan window's z (same value + later DOM position →
-    // above the plan, below the session). The plan↔session overlay is
-    // drawn at the session window's z (it runs between two windows).
-    var nodeConnection = null;
-    var planConnection = null;
-    var connSvg = null;
-    var connPath = null;
-    var planConnSvg = null;
-    var planConnPath = null;
+    // ── Connection CHAIN overlays (session ↔ node / plan ↔ session) ─
+    // P36: when a deep node session is focused (or a plan window is
+    // activated), Elm sends the FULL connection chain — every segment
+    // from that window up through each ancestor plan↔session pair to
+    // the TOP-LEVEL session. One fixed SVG overlay per segment on
+    // <body> (outside Elm's vdom):
+    //   kind "node" → .node-connection-overlay — node session → its
+    //                  node card (anchored on the session edge nearest
+    //                  the node, ends at the node card center)
+    //   kind "plan" → .plan-connection-overlay — plan window → its
+    //                  owning session (anchored on the [Plan: …] button
+    //                  when visible, else the session edge)
+    // Each overlay gets its OWN z-index: node curves at their plan
+    // window's z (above the plan, below the session — the session is
+    // raised to plan z + 1), plan curves at the top of their two
+    // participants. The chain windows are stacked top→bottom by Elm
+    // (focused window, its plan, that plan's owning session, …), so
+    // every curve on the path is visible.
+    var chainSegs = [];
+    var chainSvgs = [];
     var connRaf = 0;
 
-    function ensureConnSvg() {
-      if (connSvg) return connSvg;
-      var ns = "http://www.w3.org/2000/svg";
-      connSvg = document.createElementNS(ns, "svg");
-      connSvg.setAttribute("class", "node-connection-overlay");
-      connSvg.style.display = "none";
-      connPath = document.createElementNS(ns, "path");
-      connPath.setAttribute("class", "node-connection-curve");
-      connSvg.appendChild(connPath);
-      document.body.appendChild(connSvg);
-      return connSvg;
-    }
-
-    function ensurePlanConnSvg() {
-      if (planConnSvg) return planConnSvg;
-      var ns = "http://www.w3.org/2000/svg";
-      planConnSvg = document.createElementNS(ns, "svg");
-      planConnSvg.setAttribute("class", "plan-connection-overlay");
-      planConnSvg.style.display = "none";
-      planConnPath = document.createElementNS(ns, "path");
-      planConnPath.setAttribute("class", "plan-connection-curve");
-      planConnSvg.appendChild(planConnPath);
-      document.body.appendChild(planConnSvg);
-      return planConnSvg;
+    // Per-segment SVG (cached by index; recreated on demand).
+    function ensureChainSvg(i) {
+      while (chainSvgs.length <= i) {
+        var ns = "http://www.w3.org/2000/svg";
+        var svg = document.createElementNS(ns, "svg");
+        svg.style.display = "none";
+        var path = document.createElementNS(ns, "path");
+        svg.appendChild(path);
+        document.body.appendChild(svg);
+        chainSvgs.push({ svg: svg, path: path });
+      }
+      return chainSvgs[i];
     }
 
     function connSessionPanel(sid) {
@@ -742,106 +733,87 @@
       return c ? (parseInt(getComputedStyle(c).zIndex, 10) || 0) : 0;
     }
 
-    function drawNodeConnection() {
-      if (!nodeConnection) {
-        if (connSvg) connSvg.style.display = "none";
-        return;
-      }
-      var s = connSessionPanel(nodeConnection.sessionId);
-      var plan = connPlanPanel(nodeConnection.planId);
-      var n = connNodeEl(plan, nodeConnection.nodeId);
-      if (!s || !plan || !n) {
-        if (connSvg) connSvg.style.display = "none";
+    // Draw one chain segment; hide it when a participant is missing
+    // (closed window / plan) or the node card scrolled out of view.
+    function drawChainSeg(i, seg) {
+      var slot = ensureChainSvg(i);
+      var svg = slot.svg, path = slot.path;
+      var isNode = seg.kind === "node";
+      svg.setAttribute("class", isNode ? "node-connection-overlay" : "plan-connection-overlay");
+      path.setAttribute("class", isNode ? "node-connection-curve" : "plan-connection-curve");
+      var s = connSessionPanel(seg.sessionId);
+      var plan = connPlanPanel(seg.planId);
+      if (!s || !plan) {
+        svg.style.display = "none";
         return;
       }
       var sr = s.getBoundingClientRect();
-      var nr = n.getBoundingClientRect();
       var pr = plan.getBoundingClientRect();
-      // Node scrolled out of the plan window's visible area → hide.
-      if (!rectVisibleIn(nr, pr)) {
-        if (connSvg) connSvg.style.display = "none";
-        return;
+      if (isNode) {
+        var n = connNodeEl(plan, seg.nodeId);
+        if (!n || !rectVisibleIn(n.getBoundingClientRect(), pr)) {
+          svg.style.display = "none";
+          return;
+        }
+        var nr = n.getBoundingClientRect();
+        // Anchor on the session edge nearest the node center.
+        var nx = nr.left + nr.width / 2;
+        var ny = nr.top + nr.height / 2;
+        var from = edgeAnchor(sr, nx, ny);
+        path.setAttribute("d", curvePath(from, { x: nx, y: ny }));
+        // Match the plan window's z-index: above it (same z, later in
+        // <body>), below the session (session z = planZ + 1).
+        var planZ = parseInt(getComputedStyle(plan).zIndex, 10) || 0;
+        svg.style.zIndex = String(canvasZBase() + planZ);
+      } else {
+        // From the plan window edge nearest the session…
+        var scx = sr.left + sr.width / 2;
+        var scy = sr.top + sr.height / 2;
+        var from2 = edgeAnchor(pr, scx, scy);
+        // …to the session's [Plan: <planId>] button when visible, else
+        // the session edge nearest the plan window.
+        var pcx = pr.left + pr.width / 2;
+        var pcy = pr.top + pr.height / 2;
+        var btnRect = connPlanButtonRect(s, seg.planId);
+        var to = btnRect
+          ? { x: btnRect.left + btnRect.width / 2, y: btnRect.top + btnRect.height / 2 }
+          : edgeAnchor(sr, pcx, pcy);
+        path.setAttribute("d", curvePath(from2, to));
+        // Between two windows: draw at the TOP of the two participants
+        // (same z + later DOM position → above both, below anything
+        // focused above them). Offset by the canvas layer's z.
+        var planZ2 = parseInt(getComputedStyle(plan).zIndex, 10) || 0;
+        var sessionZ = parseInt(getComputedStyle(s).zIndex, 10) || 0;
+        svg.style.zIndex = String(canvasZBase() + Math.max(planZ2, sessionZ));
       }
-      var svg = ensureConnSvg();
-      // Anchor on the session edge nearest the node center.
-      var nx = nr.left + nr.width / 2;
-      var ny = nr.top + nr.height / 2;
-      var from = edgeAnchor(sr, nx, ny);
-      var to = { x: nx, y: ny };
-      connPath.setAttribute("d", curvePath(from, to));
       svg.setAttribute("width", String(window.innerWidth));
       svg.setAttribute("height", String(window.innerHeight));
-      // Match the plan window's z-index: above it (same z, later in
-      // <body>), below the session (session z = planZ + 1). Offset by
-      // the canvas layer's z (it creates a stacking context).
-      var planZ = parseInt(getComputedStyle(plan).zIndex, 10) || 0;
-      svg.style.zIndex = String(canvasZBase() + planZ);
-      svg.style.display = "block";
-    }
-
-    function drawPlanConnection() {
-      if (!planConnection) {
-        if (planConnSvg) planConnSvg.style.display = "none";
-        return;
-      }
-      var plan = connPlanPanel(planConnection.planId);
-      var s = connSessionPanel(planConnection.sessionId);
-      if (!plan || !s) {
-        if (planConnSvg) planConnSvg.style.display = "none";
-        return;
-      }
-      var pr = plan.getBoundingClientRect();
-      var sr = s.getBoundingClientRect();
-      var svg = ensurePlanConnSvg();
-      // From the plan window edge nearest the session…
-      var scx = sr.left + sr.width / 2;
-      var scy = sr.top + sr.height / 2;
-      var from = edgeAnchor(pr, scx, scy);
-      // …to the session's [Plan: <planId>] button when visible, else the
-      // session edge nearest the plan window.
-      var pcx = pr.left + pr.width / 2;
-      var pcy = pr.top + pr.height / 2;
-      var btnRect = connPlanButtonRect(s, planConnection.planId);
-      var to = btnRect
-        ? { x: btnRect.left + btnRect.width / 2, y: btnRect.top + btnRect.height / 2 }
-        : edgeAnchor(sr, pcx, pcy);
-      planConnPath.setAttribute("d", curvePath(from, to));
-      svg.setAttribute("width", String(window.innerWidth));
-      svg.setAttribute("height", String(window.innerHeight));
-      // Between two windows: draw at the TOP of the two participants
-      // (same z + later DOM position → above both, below anything
-      // focused above them). Offset by the canvas layer's z.
-      var planZ = parseInt(getComputedStyle(plan).zIndex, 10) || 0;
-      var sessionZ = parseInt(getComputedStyle(s).zIndex, 10) || 0;
-      svg.style.zIndex = String(canvasZBase() + Math.max(planZ, sessionZ));
       svg.style.display = "block";
     }
 
     function drawConnections() {
-      drawNodeConnection();
-      drawPlanConnection();
+      var i;
+      for (i = 0; i < chainSvgs.length; i++) {
+        if (i < chainSegs.length) {
+          drawChainSeg(i, chainSegs[i]);
+        } else {
+          chainSvgs[i].svg.style.display = "none";
+        }
+      }
+      // New chain may have more segments than cached overlays.
+      for (i = chainSvgs.length; i < chainSegs.length; i++) {
+        drawChainSeg(i, chainSegs[i]);
+      }
     }
 
-    on("setNodeConnection", function (data) {
-      nodeConnection = data || null;
-      if ((nodeConnection || planConnection) && !connRaf) {
+    on("setConnectionChain", function (data) {
+      chainSegs = data || [];
+      if (chainSegs.length && !connRaf) {
         connRaf = requestAnimationFrame(function tick() {
           drawConnections();
-          connRaf = (nodeConnection || planConnection) ? requestAnimationFrame(tick) : 0;
+          connRaf = chainSegs.length ? requestAnimationFrame(tick) : 0;
         });
-      } else if (!nodeConnection && !planConnection) {
-        drawConnections(); // hides
-      }
-    });
-
-    on("setPlanConnection", function (data) {
-      planConnection = data || null;
-      if ((nodeConnection || planConnection) && !connRaf) {
-        connRaf = requestAnimationFrame(function tick() {
-          drawConnections();
-          connRaf = (nodeConnection || planConnection) ? requestAnimationFrame(tick) : 0;
-        });
-      } else if (!nodeConnection && !planConnection) {
+      } else if (!chainSegs.length) {
         drawConnections(); // hides
       }
     });

@@ -423,85 +423,149 @@ findResumedLive origId model =
         model.planResumedFrom
 
 
-{-| Build the active node↔session connection for a session id. Nothing
-for sessions not bound to a plan node (plain chats, unattached runner
-sessions, …).
+{-| The pure inputs the chain builder needs, lifted from the model.
 -}
-connectionForSession : String -> Model -> Maybe NC.NodeConnection
-connectionForSession sid model =
-    NC.nodeConnectionFor model.planNodeSessions model.planResumedFrom sid
+chainCtx : Model -> NC.ChainCtx
+chainCtx model =
+    { nodeSessions = model.planNodeSessions
+    , resumedFrom = model.planResumedFrom
+    , liveSessions = Dict.map (\_ _ -> ()) model.sessions
+    , planOrigins = Dict.map (\_ meta -> meta.origin.sessionId) model.planMetas
+    }
 
 
-{-| Build the active plan window ↔ owning session connection: the plan
-whose meta.json origin session is currently open (live or resumed). This
-is what makes the plan window "belong to" a session — the curve draws to
-the [Plan: <planId>] button in that session when visible.
+{-| Build the FULL connection chain for a focused session: the session's
+own node↔session segment plus every ancestor segment up to the
+top-level session — focusing a deep node session shows the whole path.
+[] for plain sessions (not bound to a plan node).
 -}
-planConnectionFor : String -> Model -> Maybe NC.PlanConnection
-planConnectionFor planId model =
-    case Dict.get planId model.planMetas of
-        Just meta ->
-            case NC.liveSessionForOrigin model.sessions model.planResumedFrom meta.origin.sessionId of
-                Just liveId ->
-                    Just { planId = planId, sessionId = liveId }
+connectionChainForSession : Model -> String -> List NC.ChainSegment
+connectionChainForSession model sid =
+    NC.chainForSession (chainCtx model) sid
 
-                Nothing ->
-                    Nothing
 
-        Nothing ->
-            Nothing
+{-| Build the FULL connection chain for an active plan window: the
+plan's own segment to its owning session, plus (for a sub-plan) the
+owning session's whole ancestor chain up to the top-level session.
+[] when the owning session is closed.
+-}
+connectionChainForPlan : Model -> String -> List NC.ChainSegment
+connectionChainForPlan model planId =
+    NC.chainForPlan (chainCtx model) planId
+
+
+{-| Raise every window on the connection chain so the whole path is
+visible, ordered top→bottom: the focused window first, then its plan,
+then the plan's owning session, then that session's plan, … up to the
+top-level session. Every node curve is drawn at its plan's z (below the
+session, above the plan) and every plan curve at its plan's z (above
+both participants, since the plan sits directly above its owning
+session) — so no curve is buried. Returns the updated positions and the
+next free z index. Windows without a recorded position (e.g. a closed
+plan) are skipped; bridge.js hides their segments anyway.
+-}
+raiseChainWindows : Model -> List NC.ChainSegment -> ( Dict String WindowPos, Int )
+raiseChainWindows model chain =
+    let
+        addWin k ws =
+            if List.member k ws then
+                ws
+
+            else
+                ws ++ [ k ]
+
+        -- Top→bottom order of every window on the path (deduped).
+        windows =
+            List.foldl
+                (\seg acc ->
+                    case seg.kind of
+                        "node" ->
+                            addWin seg.planId (addWin seg.sessionId acc)
+
+                        _ ->
+                            addWin seg.sessionId (addWin seg.planId acc)
+                )
+                []
+                chain
+
+        count =
+            List.length windows
+
+        ( positions, _ ) =
+            List.foldl
+                (\k ( pos, z ) ->
+                    ( Dict.update k
+                        (Maybe.map (\p -> { p | z = z }))
+                        pos
+                    , z - 1
+                    )
+                )
+                ( model.windowPositions, model.nextZIndex + count - 1 )
+                windows
+    in
+    ( positions, model.nextZIndex + count )
+
+
+{-| Drop every chain segment that references a closed session. If the
+ANCHOR (the first segment — the focused session, or a plan segment's
+owning session) is the one that closed, the whole chain goes: the focus
+is gone and the next focus rebuilds it.
+-}
+dropChainSession : List NC.ChainSegment -> String -> List NC.ChainSegment
+dropChainSession chain sid =
+    case chain of
+        first :: _ ->
+            if first.sessionId == sid then
+                []
+
+            else
+                List.filter (\seg -> seg.sessionId /= sid) chain
+
+        [] ->
+            []
 
 
 {-| Focus a session: raise it above everything else. If it belongs to a
-plan node, also raise that plan window to the SECOND layer (directly
-below the session) and tell bridge.js to draw the connection curve;
-otherwise hide any curve. The plan↔session curve hides too (the session
-focus is now the active connection).
+plan node, raise the whole connection chain (its plan window to the
+second layer, that plan's owning session below it, and so on up to the
+top-level session) and tell bridge.js to draw every segment — a deep
+node session's full path is visible. Otherwise hide any curves.
 -}
 activateSessionModel : Model -> String -> ( Model, Cmd Msg )
 activateSessionModel model id =
-    case connectionForSession id model of
-        Just conn ->
-            let
-                newPositions =
+    let
+        chain =
+            connectionChainForSession model id
+    in
+    if List.isEmpty chain then
+        let
+            newPositions =
+                Dict.update id
+                    (Maybe.map (\pos -> { pos | z = model.nextZIndex }))
                     model.windowPositions
-                        |> Dict.update id
-                            (Maybe.map (\pos -> { pos | z = model.nextZIndex + 1 }))
-                        |> Dict.update conn.planId
-                            (Maybe.map (\pos -> { pos | z = model.nextZIndex }))
-            in
-            ( { model
-                | activeId = Just id
-                , windowPositions = newPositions
-                , nextZIndex = model.nextZIndex + 2
-                , nodeConnection = Just conn
-                , planConnection = Nothing
-              }
-            , Cmd.batch
-                [ Ports.setNodeConnection (Just conn)
-                , Ports.setPlanConnection Nothing
-                ]
-            )
+        in
+        ( { model
+            | activeId = Just id
+            , windowPositions = newPositions
+            , nextZIndex = model.nextZIndex + 1
+            , connectionChain = []
+          }
+        , Ports.setConnectionChain []
+        )
 
-        Nothing ->
-            let
-                newPositions =
-                    Dict.update id
-                        (Maybe.map (\pos -> { pos | z = model.nextZIndex }))
-                        model.windowPositions
-            in
-            ( { model
-                | activeId = Just id
-                , windowPositions = newPositions
-                , nextZIndex = model.nextZIndex + 1
-                , nodeConnection = Nothing
-                , planConnection = Nothing
-              }
-            , Cmd.batch
-                [ Ports.setNodeConnection Nothing
-                , Ports.setPlanConnection Nothing
-                ]
-            )
+    else
+        let
+            ( raisedPositions, nextZ ) =
+                raiseChainWindows model chain
+        in
+        ( { model
+            | activeId = Just id
+            , windowPositions = raisedPositions
+            , nextZIndex = nextZ
+            , connectionChain = chain
+          }
+        , Ports.setConnectionChain chain
+        )
 
 
 {-| Live session window that owns a plan (planMetas origin — an ON-DISK
@@ -777,9 +841,11 @@ addPlanWindow key win model =
                 , windowPositions = positions2
                 , nextZIndex = model.nextZIndex + 1
                 -- The new plan window is active: connect it to its owning
-                -- session (drawn by bridge.js via the setPlanConnection port —
-                -- PlanSaveReady emits the matching Cmd).
-                , planConnection = planConnectionFor key model
+                -- session (drawn by bridge.js via the setConnectionChain
+                -- port — PlanSaveReady emits the matching Cmd). For a
+                -- sub-plan the chain continues up to the top-level
+                -- session, so the whole ancestor path is visible.
+                , connectionChain = connectionChainForPlan model key
             }
     in
     case Dict.get key positions2 of
@@ -1829,16 +1895,17 @@ update msg model =
 
                             else
                                 False
-                        -- A (user/resume) session taking focus yields the
-                        -- plan↔session curve (mirrors ActivateSession);
-                        -- runner sessions don't take focus, so the curve
+                        -- A (user/resume) session taking focus yields any
+                        -- previous curves (mirrors ActivateSession: a
+                        -- fresh session is not part of the old chain);
+                        -- runner sessions don't take focus, so the chain
                         -- stays while the plan runs.
-                        , planConnection =
+                        , connectionChain =
                             if isRunnerCreate then
-                                model.planConnection
+                                model.connectionChain
 
                             else
-                                Nothing
+                                []
                         , pendingEvents = Dict.remove id model.pendingEvents
                     }
 
@@ -1860,19 +1927,6 @@ update msg model =
                 -- this live window and CloseSession can attribute it back
                 -- to the plan node. Never consumed by a runner-created
                 -- session.
-                resumedConn =
-                    case ( model.planResumeFrom, isRunnerCreate ) of
-                        ( Just origId, False ) ->
-                            Dict.get origId baseModel.planNodeSessions
-                                |> Maybe.andThen NC.parseNodeConnection
-                                |> Maybe.map
-                                    (\( planId, nodeId ) ->
-                                        { sessionId = id, planId = planId, nodeId = nodeId }
-                                    )
-
-                        _ ->
-                            Nothing
-
                 resumedModel =
                     case ( model.planResumeFrom, isRunnerCreate ) of
                         ( Just origId, False ) ->
@@ -1880,30 +1934,51 @@ update msg model =
                                 label =
                                     Dict.get origId baseModel.planNodeSessions
 
-                                -- The new session is focused; pair the z
-                                -- order like activateSessionModel does
-                                -- (session top, plan window second layer).
-                                zRaised =
-                                    case resumedConn of
-                                        Just c ->
-                                            baseModel.windowPositions
-                                                |> Dict.update id
-                                                    (Maybe.map (\pos -> { pos | z = baseModel.nextZIndex + 1 }))
-                                                |> Dict.update c.planId
-                                                    (Maybe.map (\pos -> { pos | z = baseModel.nextZIndex }))
+                                -- The resumed session's FULL connection
+                                -- chain: its own node↔session segment plus
+                                -- every ancestor plan↔session segment up
+                                -- to the top-level session. Built with the
+                                -- fresh id already mapped back to the
+                                -- original dir id (and the binding label
+                                -- carried over), so the curve draws from
+                                -- the moment the window appears.
+                                chain =
+                                    connectionChainForSession
+                                        { baseModel
+                                            | planResumedFrom = Dict.insert id origId baseModel.planResumedFrom
+                                            , planNodeSessions =
+                                                case label of
+                                                    Just l ->
+                                                        Dict.insert id l baseModel.planNodeSessions
 
-                                        Nothing ->
-                                            Dict.update id
-                                                (Maybe.map (\pos -> { pos | z = baseModel.nextZIndex }))
-                                                baseModel.windowPositions
+                                                    Nothing ->
+                                                        baseModel.planNodeSessions
+                                        }
+                                        id
+
+                                -- The new session is focused; raise the
+                                -- whole chain like activateSessionModel
+                                -- does (session top, its plan second
+                                -- layer, the plan's owning session below,
+                                -- … up to the top-level session).
+                                ( raisedPositions, raisedNextZ ) =
+                                    raiseChainWindows baseModel chain
+
+                                positions =
+                                    if List.isEmpty chain then
+                                        Dict.update id
+                                            (Maybe.map (\pos -> { pos | z = baseModel.nextZIndex }))
+                                            baseModel.windowPositions
+
+                                    else
+                                        raisedPositions
 
                                 zBump =
-                                    case resumedConn of
-                                        Just _ ->
-                                            2
+                                    if List.isEmpty chain then
+                                        1
 
-                                        Nothing ->
-                                            1
+                                    else
+                                        raisedNextZ - baseModel.nextZIndex
                             in
                             { baseModel
                                 | planResumeFrom = Nothing
@@ -1918,9 +1993,8 @@ update msg model =
                                 -- plan window with all tasks Pending).
                                 , planReplaySessions =
                                     Set.insert id (Set.remove origId baseModel.planReplaySessions)
-                                , nodeConnection = resumedConn
-                                , planConnection = Nothing
-                                , windowPositions = zRaised
+                                , connectionChain = chain
+                                , windowPositions = positions
                                 , nextZIndex = baseModel.nextZIndex + zBump
                                 , planNodeSessions =
                                     case label of
@@ -1957,10 +2031,11 @@ update msg model =
             , Cmd.batch
                 [ cmds
                 , drainCmd
-                , Ports.setNodeConnection resumedConn
-                -- A (possibly resumed) session now owns the focus: the
-                -- plan↔session curve yields to the node↔session curve.
-                , Ports.setPlanConnection Nothing
+                -- Draw whatever chain the new session state implies: the
+                -- resumed session's full ancestor path, or [] for a
+                -- plain/runner-created session (runner keeps the
+                -- existing chain, which is already in the model).
+                , Ports.setConnectionChain drainedModel.connectionChain
                 , case model.planCreating of
                     -- A runner-created session: bind it to its node
                     -- (PlanBindSession also starts the next queued create).
@@ -2040,18 +2115,7 @@ update msg model =
                 , planNodeSessions = Dict.remove id m0.planNodeSessions
                 , planResumedFrom = Dict.remove id m0.planResumedFrom
                 , planTaskStarted = Set.remove id m0.planTaskStarted
-                , nodeConnection =
-                    if (m0.nodeConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
-                        Nothing
-
-                    else
-                        m0.nodeConnection
-                , planConnection =
-                    if (m0.planConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
-                        Nothing
-
-                    else
-                        m0.planConnection
+                , connectionChain = dropChainSession m0.connectionChain id
                 , activeId =
                     if m0.activeId == Just id then
                         List.head (List.reverse (List.filter (\k -> k /= id) m0.sessionOrder))
@@ -2063,16 +2127,7 @@ update msg model =
                 [ Ports.closeSession { sessionId = id }
                 , runnerFailCmd
                 , cascadeCmd
-                , if (m0.nodeConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
-                    Ports.setNodeConnection Nothing
-
-                  else
-                    Cmd.none
-                , if (m0.planConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
-                    Ports.setPlanConnection Nothing
-
-                  else
-                    Cmd.none
+                , Ports.setConnectionChain (dropChainSession m0.connectionChain id)
                 ]
             )
 
@@ -3473,12 +3528,12 @@ update msg model =
                                                           }
                                                         , Cmd.batch
                                                             [ Ports.fsReadFileText { path = runPath }
-                                                            , Ports.setPlanConnection m2.planConnection
+                                                            , Ports.setConnectionChain m2.connectionChain
                                                             ]
                                                         )
 
                                                     else
-                                                        ( m2, Ports.setPlanConnection m2.planConnection )
+                                                        ( m2, Ports.setConnectionChain m2.connectionChain )
 
                                                 Err errs ->
                                                     -- Invalid plan file: surface the
@@ -3697,7 +3752,7 @@ update msg model =
             , Cmd.batch
                 [ Ports.fsWriteFileText { path = path, content = content, createParents = True }
                 , Ports.fsWriteFileText { path = metaPath, content = E.encode 2 (PM.encodeMeta meta), createParents = True }
-                , Ports.setPlanConnection m2.planConnection
+                , Ports.setConnectionChain m2.connectionChain
                 , autoRunCmd
                 ]
             )
@@ -3707,11 +3762,29 @@ update msg model =
             -- otherwise (restart) open from disk like the manager does.
             if Dict.member planId model.planWindows then
                 let
-                    conn =
-                        planConnectionFor planId model
+                    chain =
+                        connectionChainForPlan model planId
+
+                    -- Raise the plan's ancestor path too, so the whole
+                    -- chain up to the top-level session is visible.
+                    ( raisedPositions, raisedNextZ ) =
+                        raiseChainWindows model chain
+
+                    ( positions, nextZ ) =
+                        if List.isEmpty chain then
+                            ( model.windowPositions, model.nextZIndex )
+
+                        else
+                            ( raisedPositions, raisedNextZ )
                 in
-                ( { model | planActiveId = Just planId, showGlobalMenu = False, planConnection = conn }
-                , Ports.setPlanConnection conn
+                ( { model
+                    | planActiveId = Just planId
+                    , showGlobalMenu = False
+                    , windowPositions = positions
+                    , nextZIndex = nextZ
+                    , connectionChain = chain
+                  }
+                , Ports.setConnectionChain chain
                 )
 
             else
@@ -3723,32 +3796,40 @@ update msg model =
                         ( model, Cmd.none )
 
         PlanActivate planId ->
-            if model.planActiveId == Just planId then
-                ( { model | showGlobalMenu = False }, Cmd.none )
+            -- Always rebuild + raise + emit, even when this plan is
+            -- already `planActiveId` (it stays set from auto-creation,
+            -- while focusing a session switches the chain away — so
+            -- clicking the (sub-)plan must switch the chain back to the
+            -- plan's own ancestor path).
+            let
+                chain =
+                    connectionChainForPlan model planId
 
-            else
-                let
-                    newPositions =
-                        Dict.update planId
+                ( raisedPositions, raisedNextZ ) =
+                    raiseChainWindows model chain
+
+                -- Empty chain (owning session closed / no meta):
+                -- still raise the plan window itself on top.
+                ( positions, nextZ ) =
+                    if List.isEmpty chain then
+                        ( Dict.update planId
                             (Maybe.map (\pos -> { pos | z = model.nextZIndex }))
                             model.windowPositions
+                        , model.nextZIndex + 1
+                        )
 
-                    conn =
-                        planConnectionFor planId model
-                in
-                ( { model
-                    | planActiveId = Just planId
-                    , windowPositions = newPositions
-                    , nextZIndex = model.nextZIndex + 1
-                    , showGlobalMenu = False
-                    , nodeConnection = Nothing
-                    , planConnection = conn
-                  }
-                , Cmd.batch
-                    [ Ports.setNodeConnection Nothing
-                    , Ports.setPlanConnection conn
-                    ]
-                )
+                    else
+                        ( raisedPositions, raisedNextZ )
+            in
+            ( { model
+                | planActiveId = Just planId
+                , windowPositions = positions
+                , nextZIndex = nextZ
+                , showGlobalMenu = False
+                , connectionChain = chain
+              }
+            , Ports.setConnectionChain chain
+            )
 
         PlanClose planId ->
             -- Cascade (P35): closing a plan window also closes the node
@@ -3823,32 +3904,13 @@ update msg model =
 
                     else
                         m2.planActiveId
-                , nodeConnection =
-                    if (m2.nodeConnection |> Maybe.map (\c -> c.planId)) == Just planId then
-                        Nothing
-
-                    else
-                        m2.nodeConnection
-                , planConnection =
-                    if (m2.planConnection |> Maybe.map (\c -> c.planId)) == Just planId then
-                        Nothing
-
-                    else
-                        m2.planConnection
+                , connectionChain =
+                    List.filter (\seg -> seg.planId /= planId) m2.connectionChain
               }
             , Cmd.batch
                 [ stopCmd
                 , closeNodeCmds
-                , if (m2.nodeConnection |> Maybe.map (\c -> c.planId)) == Just planId then
-                    Ports.setNodeConnection Nothing
-
-                  else
-                    Cmd.none
-                , if (m2.planConnection |> Maybe.map (\c -> c.planId)) == Just planId then
-                    Ports.setPlanConnection Nothing
-
-                  else
-                    Cmd.none
+                , Ports.setConnectionChain (List.filter (\seg -> seg.planId /= planId) m2.connectionChain)
                 ]
             )
 
@@ -4318,18 +4380,7 @@ update msg model =
                             , windowPositions = Dict.remove id mC.windowPositions
                             , planNodeSessions = Dict.remove id mC.planNodeSessions
                             , planResumedFrom = Dict.remove id mC.planResumedFrom
-                            , nodeConnection =
-                                if (mC.nodeConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
-                                    Nothing
-
-                                else
-                                    mC.nodeConnection
-                            , planConnection =
-                                if (mC.planConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
-                                    Nothing
-
-                                else
-                                    mC.planConnection
+                            , connectionChain = dropChainSession mC.connectionChain id
                             , activeId =
                                 if mC.activeId == Just id then
                                     List.head (List.reverse (List.filter (\k -> k /= id) mC.sessionOrder))
@@ -4344,16 +4395,7 @@ update msg model =
             , Cmd.batch
                 [ Ports.deleteSessionDir { sessionId = id, planId = Nothing, nodeId = Nothing, originSessionId = Nothing }
                 , cascadeCmd
-                , if (mC.nodeConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
-                    Ports.setNodeConnection Nothing
-
-                  else
-                    Cmd.none
-                , if (mC.planConnection |> Maybe.map (\c -> c.sessionId)) == Just id then
-                    Ports.setPlanConnection Nothing
-
-                  else
-                    Cmd.none
+                , Ports.setConnectionChain (dropChainSession mC.connectionChain id)
                 ]
             )
 
@@ -5556,23 +5598,12 @@ update msg model =
             ( { model | dragInfo = Nothing, resizeInfo = Nothing, canvasDrag = Nothing }, Cmd.none )
 
         ActivateSession id ->
-            if model.activeId == Just id then
-                -- Already focused: (re)assert the connection — it may have
-                -- been cleared by focusing the plan window in between.
-                -- The plan↔session curve yields to the session focus.
-                let
-                    conn =
-                        connectionForSession id model
-                in
-                ( { model | nodeConnection = conn, planConnection = Nothing }
-                , Cmd.batch
-                    [ Ports.setNodeConnection conn
-                    , Ports.setPlanConnection Nothing
-                    ]
-                )
-
-            else
-                activateSessionModel model id
+            -- Always re-raise + rebuild the chain, even when this
+            -- session is already `activeId`: focusing the plan window in
+            -- between switched the chain away (and raised the plan
+            -- chain), so clicking the session again must switch the
+            -- chain back AND bring its windows back on top.
+            activateSessionModel model id
 
         NoOp ->
             ( model, Cmd.none )

@@ -19,6 +19,48 @@ resumed =
     Dict.fromList [ ( "live-c", "sess-a" ) ]
 
 
+{-| P36 chain contexts. Naming: S = session, P = plan, T = top-level
+(plain) session. A three-level recursion looks like:
+
+    T (plain, open)
+     └─ plan-1 (origin T)   node sess-a bound to plan-1/t1
+         └─ plan-2 (origin sess-a)   node sess-b bound to plan-2/deep/node
+             └─ plan-3 (origin sess-b)   node sess-c bound to plan-3/t3
+-}
+singleCtx : NC.ChainCtx
+singleCtx =
+    { nodeSessions = Dict.fromList [ ( "sess-a", "plan-1/t1" ) ]
+    , resumedFrom = Dict.empty
+    , liveSessions = Dict.fromList [ ( "sess-top", () ), ( "sess-a", () ) ]
+    , planOrigins = Dict.fromList [ ( "plan-1", "sess-top" ) ]
+    }
+
+
+deepCtx : NC.ChainCtx
+deepCtx =
+    { nodeSessions =
+        Dict.fromList
+            [ ( "sess-a", "plan-1/t1" )
+            , ( "sess-b", "plan-2/deep/node" )
+            , ( "sess-c", "plan-3/t3" )
+            ]
+    , resumedFrom = Dict.empty
+    , liveSessions =
+        Dict.fromList
+            [ ( "sess-top", () )
+            , ( "sess-a", () )
+            , ( "sess-b", () )
+            , ( "sess-c", () )
+            ]
+    , planOrigins =
+        Dict.fromList
+            [ ( "plan-1", "sess-top" )
+            , ( "plan-2", "sess-a" )
+            , ( "plan-3", "sess-b" )
+            ]
+    }
+
+
 suite : Test
 suite =
     describe "App.NodeConnection"
@@ -122,5 +164,117 @@ suite =
                         resumed
                         "ghost"
                         |> Expect.equal Nothing
+            ]
+        , describe "chainForSession (P36: whole ancestor path to the top)"
+            [ test "plain session → no chain" <|
+                \_ ->
+                    NC.chainForSession singleCtx "sess-top"
+                        |> Expect.equal []
+
+            , test "unbound session → no chain" <|
+                \_ ->
+                    NC.chainForSession singleCtx "ghost"
+                        |> Expect.equal []
+
+            , test "single-level node session: its node segment + the plan's segment to the top session" <|
+                \_ ->
+                    NC.chainForSession singleCtx "sess-a"
+                        |> Expect.equal
+                            [ { kind = "node", sessionId = "sess-a", planId = "plan-1", nodeId = Just "t1" }
+                            , { kind = "plan", sessionId = "sess-top", planId = "plan-1", nodeId = Nothing }
+                            ]
+
+            , test "deep node session: every segment up to the top-level session" <|
+                \_ ->
+                    NC.chainForSession deepCtx "sess-c"
+                        |> Expect.equal
+                            [ { kind = "node", sessionId = "sess-c", planId = "plan-3", nodeId = Just "t3" }
+                            , { kind = "plan", sessionId = "sess-b", planId = "plan-3", nodeId = Nothing }
+                            , { kind = "node", sessionId = "sess-b", planId = "plan-2", nodeId = Just "deep/node" }
+                            , { kind = "plan", sessionId = "sess-a", planId = "plan-2", nodeId = Nothing }
+                            , { kind = "node", sessionId = "sess-a", planId = "plan-1", nodeId = Just "t1" }
+                            , { kind = "plan", sessionId = "sess-top", planId = "plan-1", nodeId = Nothing }
+                            ]
+
+            , test "resumed origin session resolves to its LIVE id" <|
+                \_ ->
+                    NC.chainForSession
+                        { nodeSessions = Dict.fromList [ ( "sess-a", "plan-1/t1" ) ]
+                        , resumedFrom = Dict.fromList [ ( "live-a", "sess-a" ) ]
+                        , liveSessions = Dict.fromList [ ( "sess-top", () ), ( "live-a", () ) ]
+                        , planOrigins = Dict.fromList [ ( "plan-1", "sess-top" ) ]
+                        }
+                        "live-a"
+                        |> Expect.equal
+                            [ { kind = "node", sessionId = "live-a", planId = "plan-1", nodeId = Just "t1" }
+                            , { kind = "plan", sessionId = "sess-top", planId = "plan-1", nodeId = Nothing }
+                            ]
+
+            , test "mid-chain owning session closed → chain stops at the deepest drawable segment" <|
+                \_ ->
+                    NC.chainForSession
+                        { deepCtx | liveSessions = Dict.fromList [ ( "sess-top", () ), ( "sess-c", () ), ( "sess-b", () ) ] }
+                        "sess-c"
+                        |> Expect.equal
+                            [ { kind = "node", sessionId = "sess-c", planId = "plan-3", nodeId = Just "t3" }
+                            , { kind = "plan", sessionId = "sess-b", planId = "plan-3", nodeId = Nothing }
+                            , { kind = "node", sessionId = "sess-b", planId = "plan-2", nodeId = Just "deep/node" }
+                            ]
+
+            , test "plan meta missing → chain stops at the deepest drawable segment" <|
+                \_ ->
+                    NC.chainForSession
+                        { deepCtx | planOrigins = Dict.fromList [ ( "plan-3", "sess-b" ) ] }
+                        "sess-c"
+                        |> Expect.equal
+                            [ { kind = "node", sessionId = "sess-c", planId = "plan-3", nodeId = Just "t3" }
+                            , { kind = "plan", sessionId = "sess-b", planId = "plan-3", nodeId = Nothing }
+                            , { kind = "node", sessionId = "sess-b", planId = "plan-2", nodeId = Just "deep/node" }
+                            ]
+
+            , test "origin cycle (plan meta → its own node session) terminates" <|
+                \_ ->
+                    NC.chainForSession
+                        { nodeSessions = Dict.fromList [ ( "sess-x", "plan-x/n1" ) ]
+                        , resumedFrom = Dict.empty
+                        , liveSessions = Dict.fromList [ ( "sess-x", () ) ]
+                        , planOrigins = Dict.fromList [ ( "plan-x", "sess-x" ) ]
+                        }
+                        "sess-x"
+                        |> Expect.equal
+                            [ { kind = "node", sessionId = "sess-x", planId = "plan-x", nodeId = Just "n1" }
+                            , { kind = "plan", sessionId = "sess-x", planId = "plan-x", nodeId = Nothing }
+                            ]
+            ]
+        , describe "chainForPlan (P36: active plan window → its whole ancestor path)"
+            [ test "top-level plan → just its segment to the owning session" <|
+                \_ ->
+                    NC.chainForPlan singleCtx "plan-1"
+                        |> Expect.equal
+                            [ { kind = "plan", sessionId = "sess-top", planId = "plan-1", nodeId = Nothing }
+                            ]
+
+            , test "sub-plan → its segment + the owning session's whole ancestor chain" <|
+                \_ ->
+                    NC.chainForPlan deepCtx "plan-3"
+                        |> Expect.equal
+                            [ { kind = "plan", sessionId = "sess-b", planId = "plan-3", nodeId = Nothing }
+                            , { kind = "node", sessionId = "sess-b", planId = "plan-2", nodeId = Just "deep/node" }
+                            , { kind = "plan", sessionId = "sess-a", planId = "plan-2", nodeId = Nothing }
+                            , { kind = "node", sessionId = "sess-a", planId = "plan-1", nodeId = Just "t1" }
+                            , { kind = "plan", sessionId = "sess-top", planId = "plan-1", nodeId = Nothing }
+                            ]
+
+            , test "owning session closed → no chain" <|
+                \_ ->
+                    NC.chainForPlan
+                        { singleCtx | liveSessions = Dict.fromList [ ( "sess-a", () ) ] }
+                        "plan-1"
+                        |> Expect.equal []
+
+            , test "unknown plan → no chain" <|
+                \_ ->
+                    NC.chainForPlan singleCtx "plan-ghost"
+                        |> Expect.equal []
             ]
         ]

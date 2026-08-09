@@ -48,8 +48,7 @@ port module Ports exposing
     , listSessionDirs
     , deleteSessionDir
     , closeAllSessions
-    , setNodeConnection
-    , setPlanConnection
+    , setConnectionChain
     , onSessionCreated
     , onSessionCreateError
     , onSessionDirs
@@ -83,7 +82,7 @@ port module Ports exposing
     )
 
 import Json.Encode as E
-import App.NodeConnection
+import App.NodeConnection as NC
 
 
 -- Inbound events (Tauri → Elm via JS bridge, use E.Value for custom decoding)
@@ -147,13 +146,13 @@ port deleteSessionDir : { sessionId : String, planId : Maybe String, nodeId : Ma
 -- The frontend fires this once on init (graceful close, history kept).
 port closeAllSessions : {} -> Cmd msg
 
--- Node↔session connection curve (P19): Elm tells bridge.js which pair to
--- connect (Nothing = hide). bridge.js measures the DOM and draws a bezier.
-port setNodeConnection : Maybe App.NodeConnection.NodeConnection -> Cmd msg
-
--- Plan window ↔ owning session curve: Elm tells bridge.js which plan
--- window to connect to which (live) session window (Nothing = hide).
-port setPlanConnection : Maybe App.NodeConnection.PlanConnection -> Cmd msg
+-- Connection chain (P36): Elm tells bridge.js EVERY segment of the
+-- active connection path — from the focused session (or active plan
+-- window) up through each ancestor plan↔session pair to the TOP-LEVEL
+-- session. A deep node session's whole path is drawn, so the user can
+-- trace the lines up to the topmost session window. [] = hide all.
+-- bridge.js measures the DOM and draws one bezier per segment.
+port setConnectionChain : List NC.ChainSegment -> Cmd msg
 
 port fsListDir : { path : String } -> Cmd msg
 port fsReadFileDataUri : { path : String } -> Cmd msg

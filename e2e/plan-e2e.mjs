@@ -429,9 +429,12 @@ try {
   await shot(page, '05-t1-session.png');
   console.log('PASS: t1 node opened its session (resumed, no error)');
 
-  // ── 7b. Node ↔ session connection curve ───────────────────────────
+  // ── 7b. Node ↔ session connection CHAIN ──────────────────────────
   // Focusing a plan-node session raises the plan window to the SECOND
-  // layer (session z = plan z + 1) and bridge.js draws a bezier overlay.
+  // layer (session z = plan z + 1) and bridge.js draws the FULL
+  // connection chain: the node↔session bezier PLUS the plan↔owning
+  // session bezier up to the top-level session (P36 — the whole path is
+  // visible, so the lines lead all the way up to the topmost window).
   const connState = async () => {
     const st = await page.evaluate(() => {
       const svg = document.querySelector('.node-connection-overlay');
@@ -440,12 +443,14 @@ try {
         .find(p => [...p.querySelectorAll('.plan-node-id')].some(e => e.textContent === 't1'));
       const pathEl = svg ? svg.querySelector('path') : null;
       const planSvg = document.querySelector('.plan-connection-overlay');
+      const planPath = planSvg ? planSvg.querySelector('path') : null;
       return {
         svgVisible: svg ? getComputedStyle(svg).display !== 'none' : false,
         pathD: svg ? (svg.querySelector('path')?.getAttribute('d') || '') : '',
         dash: pathEl ? getComputedStyle(pathEl).strokeDasharray : null,
         width: pathEl ? parseFloat(getComputedStyle(pathEl).strokeWidth) : null,
         planConnVisible: planSvg ? getComputedStyle(planSvg).display !== 'none' : false,
+        planConnPathD: planSvg ? (planPath?.getAttribute('d') || '') : '',
         sessionZ: active ? parseInt(getComputedStyle(active).zIndex, 10) : -1,
         planZ: plan ? parseInt(getComputedStyle(plan).zIndex, 10) : -1,
       };
@@ -459,8 +464,11 @@ try {
     assert(st.sessionZ === st.planZ + 1, label + ': plan window is one layer below the session, got: ' + JSON.stringify(st));
     assert(st.dash === 'none' || st.dash === '', label + ': connection curve is SOLID, got: ' + JSON.stringify(st));
     assert(st.width >= 3, label + ': connection curve is thicker (stroke-width ≥ 3), got: ' + JSON.stringify(st));
-    assert(!st.planConnVisible, label + ': plan↔session overlay hidden while a node session is focused, got: ' + JSON.stringify(st));
-    console.log('PASS: ' + label + ' (session z=' + st.sessionZ + ', plan z=' + st.planZ + ', solid + width ' + st.width + ')');
+    // P36: the plan↔owning-session segment of the chain is drawn too —
+    // the whole path up to the top-level session is visible.
+    assert(st.planConnVisible, label + ': plan↔session chain segment visible (path to the top), got: ' + JSON.stringify(st));
+    assert(st.planConnPathD.length > 10, label + ': plan↔session chain segment has a path, got: ' + JSON.stringify(st));
+    console.log('PASS: ' + label + ' (session z=' + st.sessionZ + ', plan z=' + st.planZ + ', solid + width ' + st.width + ', chain to top visible)');
   };
   await assertConnection('node↔session connection (plan second layer + bezier)');
   await shot(page, '05a-node-connection.png');

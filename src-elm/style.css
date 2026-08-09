@@ -2206,9 +2206,10 @@ body {
 
 .plan-filter-row { margin-bottom: 10px; }
 
-/* Node ↔ session connection curve (P19) + plan ↔ session curve:
-   fixed SVG overlays on <body>, z-index matched by bridge.js (solid
-   lines, thicker than before; cubic bezier with 2 control points). */
+/* Connection CHAIN overlays (P19/P27/P36): one fixed SVG per segment on
+   <body> (node ↔ session curve + plan ↔ session curves along the whole
+   ancestor path to the top-level session); z-index matched by bridge.js
+   (solid lines, thicker than before; cubic bezier with 2 control points). */
 .node-connection-overlay,
 .plan-connection-overlay {
   position: fixed;

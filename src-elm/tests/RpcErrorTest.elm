@@ -119,7 +119,6 @@ initModelWithSession =
     , planResumeOwner = Nothing
     , planResumeFrom = Nothing
     , planResumedFrom = Dict.empty
-    , nodeConnection = Nothing
-    , planConnection = Nothing
+    , connectionChain = []
     , homeDir = ""
     }

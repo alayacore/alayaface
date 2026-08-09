@@ -166,15 +166,15 @@ type alias Model =
     -- this app run. Lets a node click find the live resumed session and
     -- lets CloseSession attribute the window back to its plan node.
     , planResumedFrom : Dict String String
-    -- Active node↔session connection: when the user focuses a session
-    -- that belongs to a plan node, the node's plan window is raised to
-    -- the second layer and a bezier curve connects the two windows
-    -- (drawn by bridge.js; Elm only tracks which pair is connected).
-    , nodeConnection : Maybe NC.NodeConnection
-    -- Active plan window ↔ owning session connection: when the plan
-    -- window is active, a curve connects it to the (live) session that
-    -- auto-created it (meta.json origin). Drawn by bridge.js.
-    , planConnection : Maybe NC.PlanConnection
+    -- Active connection CHAIN (P36): when the user focuses a session
+    -- bound to a plan node — or activates a plan window — this holds
+    -- EVERY segment of the path from that window up through each
+    -- ancestor plan↔session pair to the TOP-LEVEL session (deep node
+    -- sessions show their whole ancestor path, so the lines lead all
+    -- the way up to the topmost session window). [] = nothing
+    -- connected. bridge.js draws one bezier per segment; Elm only
+    -- tracks which segments are connected.
+    , connectionChain : List NC.ChainSegment
     , homeDir : String
     }
 

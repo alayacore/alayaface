@@ -79,6 +79,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P33 Fix "Session is already active" after page refresh (user report): refresh orphans the backend's session handles → resume keeps failing until the Go process restarts; new `close_all_sessions` RPC (Go+Rust, graceful cancel-first close, history preserved) fired once on page load; restart-e2e gained a page-refresh phase | [x] |
 | P34 Cascade close (user request): closing a session window also closes everything it owns, recursively — its plans (meta origin) are stopped (StopRun → no respawn), their node sessions closed, plan windows closed; sub-plans of node sessions cascade the same way; `DeleteSession` cascades too; pure lookup `Plan.Meta.plansOwnedBySession`; plan-e2e gained a cascade step | [x] |
 | P35 Plan-window close cascades down (user report, twice): closing a plan window (✕) closes **every live node session window bound to its nodes under ANY run status** — active runs (InProgress/Paused) are stopped first (no respawn); terminal runs are not re-stopped (status bar keeps Completed/FailedRun/Stopped) but their open node-session windows (e.g. resumed from disk under a Stopped plan) are closed directly via `nodeSessionIdsForPlan`; sub-plans cascade through CloseSession; plan-e2e gained 8e + 8d | [x] |
+| P36 Connection CHAIN (user request — supersedes P32's "no ancestor-chain curves"): focusing a deep node session (or activating a plan window) draws the **whole ancestor path** — the focused session's node↔session bezier PLUS every ancestor plan↔owning-session bezier up to the **top-level session window** ("through the lines you can directly find the topmost session"); `App/NodeConnection.elm` builds the chain purely (`chainForSession`/`chainForPlan`, cycle-safe); all chain windows raised top→bottom (`raiseChainWindows`); bridge.js draws one bezier per segment (per-segment SVG overlay, own z); the plan↔session segment now stays visible while a node session is focused (plan-e2e 7b updated) | [x] |
 | R series | Plan refactor: model-autonomous sub-flows + recursion (auto-create / feedback auto-continue / re-run cascade / status bar / timeout removal) — **see REFACTOR.md** (R1–R5 all complete, see checklist below) | [x] |
 
 ## P24 — Output injection ({{tX.output}})
@@ -617,6 +618,80 @@ completion still works).
   restart-e2e ALL PASS;
 - docs: plan-mode.md §7.1 (P35 paragraph), §12 P35 row, TODO this table,
   manual-acceptance cascade item.
+
+---
+
+## P36 — Connection chain: a deep node session shows its WHOLE ancestor path
+
+User: **"连接session窗口和plan窗口的贝塞尔曲线，显示规则需要改进。当一个很深的
+子节点被选中的时候，整条路径都需要显示出来。期待的行为是通过连线直接能找到最顶上
+的session窗口"** — the curves connecting session and plan windows need better
+display rules: when a deep child node is selected, the WHOLE path must be
+shown; through the lines you can directly find the topmost session window.
+
+This **supersedes P32's "no ancestor-chain curves"** rule (which removed the
+ancestor curves because the DAG already draws node↔node edges — the P32
+clarification was about extra LINES BETWEEN CARDS, not about the path up to
+the top session; the user now wants exactly that path when a deep node
+session is focused).
+
+**Design**:
+- **Chain shape** (pure, `App/NodeConnection.elm`): alternating segments —
+  `node` (session window → its node card in the plan) and `plan` (plan
+  window → its LIVE owning session, anchored on the `[Plan: …]` button when
+  visible). `chainForSession` starts at the focused session's own node
+  segment; `chainForPlan` starts at the active plan's own plan segment; both
+  then walk UP: plan segment → (origin is a node session?) its node segment
+  → parent plan segment → … until a plain session, a closed owning session,
+  or a missing meta; `visited` guard makes it cycle-safe. Resumed origins
+  resolve to their live windows via `planResumedFrom` / `liveSessionForOrigin`.
+- **Z-stacking** (`raiseChainWindows`, Update.elm): every window on the path
+  is raised, ordered top→bottom — focused session, its plan (session z =
+  plan z + 1), that plan's owning session, then ITS plan, … up to the
+  top-level session. With that order every node curve (drawn at its plan's z)
+  and every plan curve (drawn at max of its two participants' z) is visible.
+- **bridge.js**: one fixed SVG overlay per segment (`.node-connection-overlay`
+  / `.plan-connection-overlay` per segment, own z-index), rAF-measured every
+  frame; segments whose participants are missing are hidden.
+- **Model**: the two single connections (`nodeConnection`/`planConnection`)
+  became one `connectionChain : List NC.ChainSegment`; the two ports became
+  one `setConnectionChain : List NC.ChainSegment -> Cmd msg`.
+- **Behavior changes**: the plan↔owning-session segment is now ALSO visible
+  while a node session is focused (it is part of the chain); closing the
+  anchor session clears the whole chain; closing a mid-chain window drops
+  its segments; PlanActivate/PlanStatusOpen/plan auto-create all draw the
+  full chain for sub-plans (top-level plans keep drawing just their single
+  plan↔session curve).
+
+**Implementation**:
+- `App/NodeConnection.elm`: `ChainCtx`/`ChainSegment` + `chainForSession`,
+  `chainForPlan`, `ancestorChain` (cycle-safe);
+- `App/Update.elm`: `connectionChainForSession`/`connectionChainForPlan`,
+  `chainCtx`, `raiseChainWindows`, `dropChainSession`; all connection call
+  sites rewritten (activateSessionModel, ActivateSession, PlanActivate,
+  PlanStatusOpen, addPlanWindow/PlanSaveReady/openPlanFile, SessionCreated
+  (resumed sessions build the chain immediately), CloseSession, PlanClose,
+  DeleteSession);
+- `src/Ports.elm`: `setConnectionChain` (replaces setNodeConnection/
+  setPlanConnection); `App/Types.elm` + `Main.elm` + `RpcErrorTest.elm`
+  updated to the new field;
+- tests: NodeConnectionTest +15 (single-level chain, 3-level deep chain,
+  plain/unbound session → [], resumed origin, closed mid-chain origin stops,
+  missing meta stops, cycle terminates, chainForPlan top-level/sub-plan/
+  closed-origin/unknown); **Elm 249** green;
+- E2E: plan-e2e 7b updated — while the t1 node session is focused the
+  plan↔owning-session segment is now asserted VISIBLE (chain to the top);
+  bridge.js passes `node --check`;
+- **follow-up fix (user report)**: clicking a sub-PLAN did not switch the
+  display back to the plan's own chain — `PlanActivate` early-returned when
+  the plan was already `planActiveId` (it stays set from auto-creation
+  while focusing a session switches the chain away without clearing it).
+  `PlanActivate`, `ActivateSession` (already-focused) and `PlanStatusOpen`
+  (already-open) now ALWAYS rebuild + raise + emit the chain, so clicking
+  the sub-plan (or its `[Plan: …]` link, or the sub-session again) switches
+  the path and brings its windows back on top; Elm 249 + plan-e2e green;
+- docs: plan-mode.md §7.1 (P36 paragraph), §12 P36 row, TODO this table,
+  manual-acceptance connection item.
 
 ---
 
