@@ -1015,8 +1015,21 @@ runStepIn planId now ev model =
                                 , planRunStatuses = Dict.insert planId run2.status model.planRunStatuses
                             }
 
+                        -- Persist the run status into meta.json whenever it
+                        -- changes (NotStarted → Running → … → Completed /
+                        -- Failed / Stopped). Reopened sessions then show the
+                        -- last known status in the status bar instead of a
+                        -- placeholder. Run-level status changes are rare (a
+                        -- handful per run), so the write is cheap.
+                        ( model1b, metaCmd ) =
+                            if run2.status /= run.status then
+                                persistRunStatus planId run2.status model1
+
+                            else
+                                ( model1, Cmd.none )
+
                         ( model2, cmds ) =
-                            applyEffectsIn planId model1 effects
+                            applyEffectsIn planId model1b effects
 
                         -- R3: when a run transitions INTO Completed, feed
                         -- the results back to the origin session (auto-
@@ -1041,7 +1054,7 @@ runStepIn planId now ev model =
                             else
                                 ( model2, Cmd.none )
                     in
-                    ( model3, Cmd.batch [ cmds, feedbackCmds ] )
+                    ( model3, Cmd.batch [ cmds, feedbackCmds, metaCmd ] )
 
                 Nothing ->
                     ( model, Cmd.none )
@@ -1219,6 +1232,34 @@ appendMetaFeedback planId fb model =
                     let
                         newMeta =
                             { meta | feedbacks = meta.feedbacks ++ [ fb ] }
+
+                        metaPath =
+                            PM.metaPathFor planDir planId
+                    in
+                    ( { model | planMetas = Dict.insert planId newMeta model.planMetas }
+                    , Ports.fsWriteFileText { path = metaPath, content = E.encode 2 (PM.encodeMeta newMeta), createParents = True }
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        Nothing ->
+            ( model, Cmd.none )
+
+
+{-| Persist a plan's run status into its meta.json (in memory + disk).
+Called from runStepIn whenever the run status changes; the status bar
+reads `lastStatus` after a restart (planRunStatuses is in-memory only).
+-}
+persistRunStatus : String -> PT.RunStatus -> Model -> ( Model, Cmd Msg )
+persistRunStatus planId st model =
+    case Dict.get planId model.planMetas of
+        Just meta ->
+            case planDirOf model planId of
+                Just planDir ->
+                    let
+                        newMeta =
+                            { meta | lastStatus = PT.runStatusToString st }
 
                         metaPath =
                             PM.metaPathFor planDir planId
@@ -3625,6 +3666,8 @@ update msg model =
                     , feedbacks = []
                     , depth = depth
                     , createdAt = timestamp
+                    , name = plan.name
+                    , lastStatus = PT.runStatusToString PT.NotStarted
                     }
 
                 metaPath =

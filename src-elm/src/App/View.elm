@@ -1144,18 +1144,17 @@ the [Re-run] action arrives with the R4 re-run cascade.
 viewPlanStatusBar : Model -> String -> Int -> Html Msg
 viewPlanStatusBar model sid planIndex =
     case planMetaForMessage model sid planIndex of
-        Just ( planId, _ ) ->
+        Just ( planId, meta ) ->
             let
+                -- The real display name comes from the plan's meta
+                -- (snapshotted at creation) — not the planId, which is
+                -- slugified and timestamped and would duplicate itself
+                -- in the [Plan: …] prefix.
                 name =
-                    case Dict.get planId model.planWindows of
-                        Just win ->
-                            Maybe.withDefault planId (Maybe.map .name win.view.plan)
-
-                        Nothing ->
-                            planId
+                    meta.name
 
                 ( statusLabel, statusClass, canRestart ) =
-                    planStatusFor model planId
+                    planStatusFor model planId (Just meta)
             in
             Html.div [ Attr.class "plan-offer" ]
                 [ Html.button
@@ -1233,38 +1232,52 @@ planMetaForMessage model sid planIndex =
         model.planMetas
 
 
-planStatusFor : Model -> String -> ( String, String, Bool )
-planStatusFor model planId =
+planStatusFor : Model -> String -> Maybe PM.PlanMeta -> ( String, String, Bool )
+planStatusFor model planId meta =
     case Dict.get planId model.planWindows of
         Just win ->
             case win.run of
                 Just run ->
-                    case run.status of
-                        PT.NotStarted -> ( "Created", "created", False )
-                        PT.InProgress -> ( "Running…", "running", False )
-                        PT.Paused -> ( "Paused", "paused", True )
-                        PT.Completed -> ( "Completed", "completed", False )
-                        PT.FailedRun -> ( "Failed", "failed", True )
-                        PT.Stopped -> ( "Stopped", "stopped", True )
+                    runStatusView run.status
 
                 Nothing ->
-                    ( "Created", "created", False )
+                    runStatusView PT.NotStarted
 
         Nothing ->
             -- Window closed (auto-close on completion, or never opened):
-            -- fall back to the last known run status kept in memory.
+            -- fall back to the last known run status kept in memory, then
+            -- to the status persisted in meta.json (survives restarts).
             case Dict.get planId model.planRunStatuses of
                 Just st ->
-                    case st of
-                        PT.NotStarted -> ( "Created", "created", False )
-                        PT.InProgress -> ( "Running…", "running", False )
-                        PT.Paused -> ( "Paused", "paused", True )
-                        PT.Completed -> ( "Completed", "completed", False )
-                        PT.FailedRun -> ( "Failed", "failed", True )
-                        PT.Stopped -> ( "Stopped", "stopped", True )
+                    runStatusView st
 
                 Nothing ->
-                    ( "Open", "created", False )
+                    case meta of
+                        Just m ->
+                            case PT.runStatusFromString m.lastStatus of
+                                Just st ->
+                                    runStatusView st
+
+                                Nothing ->
+                                    ( "Open", "created", False )
+
+                        Nothing ->
+                            ( "Open", "created", False )
+
+
+{-| The (label, css-class, can-restart) triple for a run status — used by
+the status bar whether the status comes from a live window, the in-memory
+cache or the meta.json snapshot.
+-}
+runStatusView : PT.RunStatus -> ( String, String, Bool )
+runStatusView st =
+    case st of
+        PT.NotStarted -> ( "Created", "created", False )
+        PT.InProgress -> ( "Running…", "running", False )
+        PT.Paused -> ( "Paused", "paused", True )
+        PT.Completed -> ( "Completed", "completed", False )
+        PT.FailedRun -> ( "Failed", "failed", True )
+        PT.Stopped -> ( "Stopped", "stopped", True )
 
 
 -- Header row of a message window: role label, optional tool info, and a

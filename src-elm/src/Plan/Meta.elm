@@ -23,7 +23,9 @@ runtime linkage:
       "origin": { "sessionId": "...", "planIndex": 1 },
       "feedbacks": [ { "at": 172..., "status": "completed", "text": "...", "planId": "..." } ],
       "depth": 2,
-      "created_at": 172...
+      "created_at": 172...,
+      "name": "analyze machine parameters",
+      "last_status": "completed"
     }
 
 - `origin` — the session's ON-DISK id (resumes get fresh live ids whose
@@ -44,6 +46,11 @@ runtime linkage:
   and persisted; sessions under a plan check it against the global
   recursion limit (see `shouldInjectPlanPrompt` / `shouldAutoRun`).
 - `created_at` — creation timestamp.
+- `name` — the plan's display name, snapshotted at creation (see the
+  record comment; the status bar renders it without opening the plan).
+- `last_status` — last known run status string (PT.runStatusToString),
+  rewritten whenever the run status changes; reopened sessions render
+  it in the status bar instead of a placeholder.
 
 The decoder is STRICT: every plan is created by a session, so origin is
 required (a meta.json that fails to decode is skipped by the index
@@ -75,6 +82,15 @@ type alias PlanMeta =
     , feedbacks : List Feedback
     , depth : Int
     , createdAt : Int
+    -- The plan's display name, snapshotted at creation (slugified id
+    -- loses case/spacing, so the status bar can't recover it from the
+    -- planId alone). Persisted so the status bar shows the real name
+    -- without opening the plan window / reading plan.json.
+    , name : String
+    -- Last known run status (PT.runStatusToString). Persisted whenever
+    -- the run status changes (runStepIn), so a reopened session's
+    -- status bar shows e.g. Completed instead of a placeholder.
+    , lastStatus : String
     }
 
 
@@ -109,12 +125,14 @@ encodeMeta m =
           )
         , ( "depth", E.int m.depth )
         , ( "created_at", E.int m.createdAt )
+        , ( "name", E.string m.name )
+        , ( "last_status", E.string m.lastStatus )
         ]
 
 
 decodeMeta : D.Decoder PlanMeta
 decodeMeta =
-    D.map4 PlanMeta
+    D.map6 PlanMeta
         (D.field "origin"
             (D.map2 Origin
                 (D.field "sessionId" D.string)
@@ -133,6 +151,8 @@ decodeMeta =
         )
         (D.field "depth" D.int)
         (D.field "created_at" D.int)
+        (D.field "name" D.string)
+        (D.field "last_status" D.string)
 
 
 {-| Every plan id whose meta `origin` is the given ON-DISK session id.

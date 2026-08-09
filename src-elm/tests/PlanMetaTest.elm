@@ -20,6 +20,8 @@ tests =
                         , feedbacks = [ { at = 100, status = "completed", text = "done", planId = "p-1" } ]
                         , depth = 2
                         , createdAt = 50
+                        , name = "analyze machine parameters"
+                        , lastStatus = "completed"
                         }
 
                     encoded =
@@ -35,6 +37,8 @@ tests =
                             , \m -> Expect.equal 1 (List.length m.feedbacks)
                             , \m -> Expect.equal 2 m.depth
                             , \m -> Expect.equal 50 m.createdAt
+                            , \m -> Expect.equal "analyze machine parameters" m.name
+                            , \m -> Expect.equal "completed" m.lastStatus
                             ]
                             m2
 
@@ -69,6 +73,22 @@ tests =
                 case D.decodeString M.decodeMeta """{ "origin": { "sessionId": "s-1", "planIndex": 1 }, "feedbacks": [], "depth": 1 }""" of
                     Ok _ ->
                         Expect.fail "meta without created_at must be rejected"
+
+                    Err _ ->
+                        Expect.pass
+        , test "strict: missing name is rejected (status bar needs it)" <|
+            \_ ->
+                case D.decodeString M.decodeMeta """{ "origin": { "sessionId": "s-1", "planIndex": 1 }, "feedbacks": [], "depth": 1, "created_at": 7 }""" of
+                    Ok _ ->
+                        Expect.fail "meta without name must be rejected"
+
+                    Err _ ->
+                        Expect.pass
+        , test "strict: missing last_status is rejected" <|
+            \_ ->
+                case D.decodeString M.decodeMeta """{ "origin": { "sessionId": "s-1", "planIndex": 1 }, "feedbacks": [], "depth": 1, "created_at": 7, "name": "p" }""" of
+                    Ok _ ->
+                        Expect.fail "meta without last_status must be rejected"
 
                     Err _ ->
                         Expect.pass
@@ -180,6 +200,8 @@ metaOfDepth sessionId depth =
     , feedbacks = []
     , depth = depth
     , createdAt = 1
+    , name = "plan-" ++ sessionId
+    , lastStatus = "not_started"
     }
 
 
