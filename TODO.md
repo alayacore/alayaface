@@ -80,6 +80,7 @@ Integration tests use `src-go/internal/fakecore` (scriptable alayacore stand-in)
 | P34 Cascade close (user request): closing a session window also closes everything it owns, recursively — its plans (meta origin) are stopped (StopRun → no respawn), their node sessions closed, plan windows closed; sub-plans of node sessions cascade the same way; `DeleteSession` cascades too; pure lookup `Plan.Meta.plansOwnedBySession`; plan-e2e gained a cascade step | [x] |
 | P35 Plan-window close cascades down (user report, twice): closing a plan window (✕) closes **every live node session window bound to its nodes under ANY run status** — active runs (InProgress/Paused) are stopped first (no respawn); terminal runs are not re-stopped (status bar keeps Completed/FailedRun/Stopped) but their open node-session windows (e.g. resumed from disk under a Stopped plan) are closed directly via `nodeSessionIdsForPlan`; sub-plans cascade through CloseSession; plan-e2e gained 8e + 8d | [x] |
 | P36 Connection CHAIN (user request — supersedes P32's "no ancestor-chain curves"): focusing a deep node session (or activating a plan window) draws the **whole ancestor path** — the focused session's node↔session bezier PLUS every ancestor plan↔owning-session bezier up to the **top-level session window** ("through the lines you can directly find the topmost session"); `App/NodeConnection.elm` builds the chain purely (`chainForSession`/`chainForPlan`, cycle-safe); all chain windows raised top→bottom (`raiseChainWindows`); bridge.js draws one bezier per segment (per-segment SVG overlay, own z); the plan↔session segment now stays visible while a node session is focused (plan-e2e 7b updated) | [x] |
+| P37 Overlay scrollbar scrolls away (user report, latent since P32): the `.overlay-scrollbar` track was appended INSIDE the scrolling `.messages` — an absolute child of a scroll container scrolls with the content, so the thumb left the viewport the moment the user scrolled down (track at y≈−3600 while the panel was on screen). bridge.js now appends the track to the NON-scrolling `.chat-area` wrapper and pins it to the messages area with layout offsets (offsetTop/offsetLeft/client* — unscaled by the canvas transform), verified at every scroll position and zoom level | [x] |
 | R series | Plan refactor: model-autonomous sub-flows + recursion (auto-create / feedback auto-continue / re-run cascade / status bar / timeout removal) — **see REFACTOR.md** (R1–R5 all complete, see checklist below) | [x] |
 
 ## P24 — Output injection ({{tX.output}})
@@ -692,6 +693,31 @@ session is focused).
   the path and brings its windows back on top; Elm 249 + plan-e2e green;
 - docs: plan-mode.md §7.1 (P36 paragraph), §12 P36 row, TODO this table,
   manual-acceptance connection item.
+
+---
+
+## P37 — Session-window overlay scrollbar scrolls away with the content
+
+User: **"session 窗口的滚动条无法显示了"** — the session window's scrollbar
+can no longer be displayed. Reproduced headlessly (panel fully on screen,
+messages scrolled to bottom): the `.overlay-scrollbar` track was appended
+INSIDE the scrolling `.messages` element, and an absolute-positioned child
+of a scroll container scrolls WITH the content — so the moment the user
+scrolled down, the track left the viewport (measured track top ≈ −3600px
+while the messages area sat at y=219). This was latent since P32 (the
+overlay scrollbar's original design), not a P36 regression — verified
+against HEAD~1.
+
+**Fix (bridge.js)**:
+- `attachOverlayScrollbar` appends the track to the NON-scrolling
+  `.chat-area` wrapper (falls back to `.messages` when no chat-area);
+- `updateOverlayScrollbar` pins the track to the messages area with
+  LAYOUT offsets — `el.offsetTop/offsetLeft`, `host.clientWidth/Height`
+  (unlike getBoundingClientRect these are NOT scaled by the canvas
+  transform, so the pinning survives canvas zoom);
+- verified with headless probes at scrollTop 0 / middle / bottom and at
+  canvas scale 0.49 / 1.2 / 2.05: track + thumb stay inside the messages
+  viewport; plan-e2e + restart-e2e still ALL PASS.
 
 ---
 

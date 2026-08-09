@@ -856,6 +856,18 @@
       var scrollable = el.scrollHeight > el.clientHeight + 1;
       sb.style.display = scrollable ? "block" : "none";
       if (!scrollable) return;
+      // The track lives in the NON-scrolling .chat-area wrapper (an
+      // absolute child of the scrolling .messages itself would scroll
+      // away with the content — the thumb vanished the moment the user
+      // scrolled down). Pin it to the messages area every update using
+      // LAYOUT offsets (offsetTop/offsetLeft/client* are unscaled by the
+      // canvas transform, unlike getBoundingClientRect).
+      var host = sb.parentElement;
+      if (host && host !== el) {
+        sb.style.top = (el.offsetTop + 12) + "px";
+        sb.style.bottom = (host.clientHeight - el.offsetTop - el.offsetHeight + 12) + "px";
+        sb.style.right = (host.clientWidth - el.offsetLeft - el.offsetWidth + 4) + "px";
+      }
       var trackH = sb.clientHeight || Math.max(1, el.clientHeight - 24);
       var thumbH = Math.max(24, trackH * trackH / el.scrollHeight);
       var maxTop = Math.max(0, trackH - thumbH);
@@ -872,7 +884,15 @@
       var thumb = document.createElement("div");
       thumb.className = "overlay-scrollbar-thumb";
       sb.appendChild(thumb);
-      el.appendChild(sb);
+      // Append to the NON-scrolling .chat-area wrapper, not to the
+      // scrolling .messages: absolute children of a scroll container
+      // scroll away with the content, so the thumb would leave the
+      // viewport whenever the user scrolls down. updateOverlayScrollbar
+      // pins the track to the messages area (inline top/bottom/right).
+      var host = el.parentElement && el.parentElement.classList.contains("chat-area")
+        ? el.parentElement
+        : el;
+      host.appendChild(sb);
       el._overlaySb = sb;
       el._overlayThumb = thumb;
 
