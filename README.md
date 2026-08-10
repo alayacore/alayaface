@@ -36,7 +36,10 @@ src-elm/              ← Elm frontend (no npm, no bundler)
 │       ├── Protocol.elm — TLV tag constants, event decoders
 │       ├── Selector.elm — Shared list-selector state machine (pure)
 │       └── Handlers.elm — Pure event handlers (no side effects)
-├── bridge.js          — Plain JS bridge: Elm ports ↔ Tauri __TAURI__
+├── transport.js        — JS bridge: Elm ports ↔ Tauri/HTTP transports
+│                         (RPC wiring + backend event listeners)
+├── chain.js            — connection-chain SVG overlays (P36)
+├── overlay.js          — overlay scrollbar, canvas zoom, cursor/scroll ports
 ├── index.html         — Entry point (loaded by Tauri webview)
 ├── style.css          — Application styles
 ├── homescreen.css     — Home screen / welcome styles

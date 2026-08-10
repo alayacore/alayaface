@@ -7,7 +7,7 @@
 # (see the R-series: the Rust close path diverged from Go's lock/parallel
 # semantics). This script fails CI when the command sets diverge.
 #
-# Also checks the command names bridge.js actually invokes: every invoke
+# Also checks the command names transport.js actually invokes: every invoke
 # must exist on both backends (a bridge-only name is a dead end).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -21,8 +21,8 @@ rust_cmds=$(grep -oE 'commands::[a-z_]+' src-tauri/src/lib.rs \
 go_cmds=$(grep -oE '"[a-z_]+"[[:space:]]*:[[:space:]]*[A-Z][A-Za-z]+' src-go/internal/server/handlers/handlers.go \
   | sed -E 's/^"([a-z_]+)".*/\1/' | sort -u)
 
-# bridge.js: command names invoked via transport.invoke.
-bridge_cmds=$(grep -oE 'invoke\("[a-z_]+"' src-elm/bridge.js \
+# transport.js: command names invoked via transport.invoke.
+bridge_cmds=$(grep -oE 'invoke\("[a-z_]+"' src-elm/transport.js \
   | sed -E 's/invoke\("([a-z_]+)"/\1/' | sort -u)
 
 fail=0
@@ -40,7 +40,7 @@ fi
 # entry point), so only check one direction: bridge ⊆ backends.
 missing_in_backends=$(comm -23 <(echo "$bridge_cmds") <(cat <(echo "$rust_cmds") <(echo "$go_cmds") | sort -u))
 if [ -n "$missing_in_backends" ]; then
-  echo "✗ bridge.js invokes commands missing from BOTH backends: $missing_in_backends"
+  echo "✗ transport.js invokes commands missing from BOTH backends: $missing_in_backends"
   fail=1
 fi
 
