@@ -2,7 +2,8 @@
 //
 // DOM-side concerns of the former bridge.js (M4/D5): the custom overlay
 // scrollbar for .messages containers (native scrollbar hidden via CSS),
-// canvas zoom on wheel over main-content, and the cursor/scroll ports
+// canvas zoom on wheel over the empty background (windows scroll
+// natively), and the cursor/scroll ports
 // that need direct DOM access. Exposes window.AlayaOverlay.init(app,
 // root) — called by transport.js after the Elm app is created.
 
@@ -173,17 +174,21 @@
     });
     scrollObserver.observe(root, { childList: true, subtree: true });
 
-    // 4b. Canvas zoom: wheel anywhere inside main-content EXCEPT the
-    //     native-scrolling .messages list zooms the infinite canvas
-    //     centered on the cursor. Non-passive listener so we can
-    //     preventDefault() — without it, Ctrl+wheel (pinch) would trigger
-    //     the webview's page zoom and plain wheel over the background
-    //     could scroll the page. .messages keeps native wheel scrolling.
+    // 4b. Canvas zoom: wheel on the EMPTY canvas background zooms the
+    //     infinite canvas centered on the cursor; wheel inside a WINDOW
+    //     (session or plan panel) is left native — .messages, the plan
+    //     DAG canvas and the plan info window scroll normally instead
+    //     of zooming (P37: "only non-window parts zoom").
+    //     Non-passive listener so we can preventDefault() — without it,
+    //     Ctrl+wheel (pinch) would trigger the webview's page zoom and
+    //     plain wheel over the background could scroll the page.
     document.addEventListener("wheel", function (e) {
       var t = e.target;
       if (!t || typeof t.closest !== "function") return;
-      if (!t.closest(".main-content")) return; // overlays don't zoom
-      if (t.closest(".messages")) return;      // let messages scroll natively
+      if (!t.closest(".main-content")) return;  // overlays don't zoom
+      if (t.closest(".session-panel")) return;  // windows scroll natively
+      if (t.closest(".plan-panel")) return;     // plan DAG / info scroll natively
+      if (t.closest(".messages")) return;       // let messages scroll natively
       if (e.defaultPrevented) return;
       e.preventDefault();
       app.ports.onCanvasWheel.send({

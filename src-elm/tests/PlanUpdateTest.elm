@@ -79,6 +79,7 @@ planWindowWithPlan =
     , runLog = []
     , selectedNode = Nothing
     , resumePath = Nothing
+    , infoOpen = False
     }
 
 

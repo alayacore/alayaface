@@ -2576,7 +2576,8 @@ update msg model =
                     ( model, Cmd.none )
 
         PlanSelectNode nodeId ->
-            ( updateActivePlanWin model (\w -> { w | selectedNode = Just nodeId })
+            ( updateActivePlanWin model
+                (\w -> { w | selectedNode = Just nodeId, infoOpen = True })
             , Cmd.none
             )
 
@@ -2648,17 +2649,17 @@ update msg model =
                                                                 )
 
                                                 Nothing ->
-                                                    ( updateActivePlanWin model (\w -> { w | selectedNode = Just nodeId })
+                                                    ( updateActivePlanWin model (\w -> { w | selectedNode = Just nodeId, infoOpen = True })
                                                     , Cmd.none
                                                     )
 
                                 Nothing ->
-                                    ( updateActivePlanWin model (\w -> { w | selectedNode = Just nodeId })
+                                    ( updateActivePlanWin model (\w -> { w | selectedNode = Just nodeId, infoOpen = True })
                                     , Cmd.none
                                     )
 
                         Nothing ->
-                            ( updateActivePlanWin model (\w -> { w | selectedNode = Just nodeId })
+                            ( updateActivePlanWin model (\w -> { w | selectedNode = Just nodeId, infoOpen = True })
                             , Cmd.none
                             )
 
@@ -2690,65 +2691,30 @@ update msg model =
                         , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model, planId = Just planId, nodeId = Just nodeId, originSessionId = planOriginSessionId model planId }
                         )
 
-        PlanSetConcurrency text ->
+        PlanToggleInfo ->
+            -- "?" in the plan title bar: open the Plan tab; switch from a
+            -- node tab back to the Plan tab; close when already on it.
             ( updateActivePlanWin model
                 (\w ->
-                    let
-                        wv =
-                            w.view
-                    in
-                    { w | view = { wv | concurrencyInput = text } }
+                    if w.infoOpen then
+                        case w.selectedNode of
+                            Just _ ->
+                                { w | selectedNode = Nothing }
+
+                            Nothing ->
+                                { w | infoOpen = False }
+
+                    else
+                        { w | infoOpen = True, selectedNode = Nothing }
                 )
             , Cmd.none
             )
 
-        PlanSetExportPath text ->
+        PlanCloseInfo ->
             ( updateActivePlanWin model
-                (\w ->
-                    let
-                        wv =
-                            w.view
-                    in
-                    { w | view = { wv | exportPath = text } }
-                )
+                (\w -> { w | infoOpen = False, selectedNode = Nothing })
             , Cmd.none
             )
-
-        PlanExport ->
-            case getPlanWin model of
-                Just win ->
-                    case win.view.plan of
-                        Just plan ->
-                            let
-                                path =
-                                    String.trim win.view.exportPath
-                            in
-                            if path == "" then
-                                ( updateActivePlanWin model
-                                    (\w ->
-                                        let
-                                            wv =
-                                                w.view
-                                        in
-                                        { w | view = { wv | errors = [ "Enter an export path" ] } }
-                                    )
-                                , Cmd.none
-                                )
-
-                            else
-                                ( model
-                                , Ports.fsWriteFileText
-                                    { path = path
-                                    , content = E.encode 2 (PT.encodePlan plan)
-                                    , createParents = True
-                                    }
-                                )
-
-                        Nothing ->
-                            ( model, Cmd.none )
-
-                Nothing ->
-                    ( model, Cmd.none )
 
         ToggleGlobalMenu ->
             ( { model | showGlobalMenu = not model.showGlobalMenu }, Cmd.none )

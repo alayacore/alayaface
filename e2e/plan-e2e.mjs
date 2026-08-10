@@ -5,7 +5,7 @@
 //   1. build fakecore + Go server (fresh HOME), start both
 //   2. Chrome headless → ⚙ → New Session → send a prompt
 //   3. fakecore answers with a fenced plan JSON → plan auto-creates
-//   4. Plan window DAG → set concurrency → Run
+//   4. Plan window DAG → Run (concurrency fixed at 8, P37 — no header input)
 //   5. t1 ok → t2 fails once (marker) → auto-retry → ok → t3 ok → Completed
 //   6. Node detail: t2 shows failure history + ≥2 attempt sessions
 //   7. Click t1 node → its session window activates and shows the reply
@@ -284,9 +284,9 @@ try {
     'DAG nodes t1/t2/t3, got: ' + JSON.stringify(nodeIds));
   console.log('PASS: Plan window with DAG nodes', JSON.stringify(nodeIds));
 
-  // Concurrency override (exercises parseConcurrency path).
-  await page.type('.plan-header-concurrency', '1', { delay: 5 });
-  assert(await clickByText('button.plan-header-btn', 'Run'), 'Run button');
+  // P37: concurrency is fixed at 8 (no header input); Run lives in the
+  // overlay strip on the canvas.
+  assert(await clickByText('button.plan-strip-btn', 'Run'), 'Run button');
 
   // R4: the run completes → succeeded node windows close AND the plan
   // window auto-closes (D10/D11, feedback queued first). So wait for the
@@ -590,9 +590,9 @@ try {
   });
   await sleep(400);
   // DOM clicks (not coordinate): overlapping session windows would
-  // intercept the mouse at the plan header's button positions.
+  // intercept the mouse at the plan strip's button positions.
   const clickPlanHeaderBtn = (label) => page.evaluate((lbl) => {
-    const btns = [...document.querySelectorAll('button.plan-header-btn')];
+    const btns = [...document.querySelectorAll('button.plan-strip-btn')];
     const b = btns.find(x => (x.textContent || '').includes(lbl));
     if (b && !b.disabled) { b.click(); return true; }
     return false;
@@ -621,7 +621,7 @@ try {
   await sleep(400);
   await shot(page, '05d-stop-before.png');
   assert(await clickPlanHeaderBtn('Stop'), 'Stop button');
-  await page.waitForFunction(() => !!document.querySelector('.plan-run-badge-stopped'), { timeout: 10000 });
+  await page.waitForFunction(() => !!document.querySelector('.plan-run-dot-stopped'), { timeout: 10000 });
   await sleep(500);
   const t3Windows = await page.$$eval('.session-panel', panels =>
     panels.filter(p => (p.querySelector('.session-bar-title')?.textContent || '').includes('/t3]')).length);

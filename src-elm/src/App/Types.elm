@@ -371,9 +371,10 @@ type Msg
     | PlanSelectNode String
     | PlanOpenNodeSession String String
     | PlanOpenAttemptSession String String String
-    | PlanSetConcurrency String
-    | PlanSetExportPath String
-    | PlanExport
+    -- P37: the floating info window ("?" in the plan title bar). Toggle
+    -- switches Plan tab ↔ closed; a node click opens the Node tab.
+    | PlanToggleInfo
+    | PlanCloseInfo
       -- Plan runner
     | PlanRunStart
     | PlanRunStartAt Int
@@ -604,16 +605,12 @@ emptyPresetManager =
 
 -- PLAN MODE
 
--- The currently opened plan (P2: list view; P3+: SVG/HTML DAG).
+-- The currently opened plan (P2: list view; P3+: HTML/CSS DAG).
 type alias PlanViewState =
     { plan : Maybe PT.Plan
     , path : Maybe String
     , errors : List String
     , saving : Bool
-    , exportPath : String
-    -- Concurrency override from the plan header (empty = use the plan's
-    -- own concurrency). Applied when a run starts.
-    , concurrencyInput : String
     }
 
 
@@ -623,14 +620,14 @@ emptyPlanView =
     , path = Nothing
     , errors = []
     , saving = False
-    , exportPath = ""
-    , concurrencyInput = ""
     }
 
 
 {-| A plan opened in its own draggable window (like a session window).
 One window per plan file; the window owns its run state so multiple
-plans can run independently.
+plans can run independently. `infoOpen` (P37): the floating info window
+— all plan text (goal / task prompts / run log / saved path) is hidden
+by default and shown there; `selectedNode` selects its Node tab.
 -}
 type alias PlanWindow =
     { view : PlanViewState
@@ -639,6 +636,7 @@ type alias PlanWindow =
     , runLog : List String
     , selectedNode : Maybe String
     , resumePath : Maybe String
+    , infoOpen : Bool
     }
 
 
@@ -650,6 +648,7 @@ emptyPlanWindow =
     , runLog = []
     , selectedNode = Nothing
     , resumePath = Nothing
+    , infoOpen = False
     }
 
 

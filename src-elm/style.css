@@ -2118,42 +2118,193 @@ body {
 .plan-panel-body {
   flex: 1;
   min-height: 0;
-  overflow: auto;
-  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  overflow: hidden;
+  position: relative;
 }
 .plan-panel .plan-page {
   min-width: 0;
   max-width: none;
   max-height: none;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
 }
 
-.plan-page-body {
+/* Title-bar run dot (P37): run state at a glance, no badge row */
+.plan-run-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 7px;
+  vertical-align: middle;
+  background: #c7c7d1;
+}
+.plan-run-dot-idle { background: #c7c7d1; }
+.plan-run-dot-running { background: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.25); }
+.plan-run-dot-paused { background: #f59e0b; }
+.plan-run-dot-completed { background: #22c55e; }
+.plan-run-dot-failed { background: #ef4444; }
+.plan-run-dot-stopped { background: #9ca3af; }
+
+/* "?" info button in the plan title bar */
+.plan-bar-info-btn {
+  background: transparent;
+  border: 1px solid rgba(128,128,128,0.45);
+  color: inherit;
+  border-radius: 50%;
+  width: 22px;
+  height: 22px;
+  line-height: 1;
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 0;
+  margin-right: 4px;
+}
+.plan-bar-info-btn:hover { border-color: #6366f1; color: #6366f1; }
+
+/* Transient error/restore-failure banner over the canvas */
+.plan-error-banner {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #991b1b;
+  font-size: 0.75rem;
+  border-radius: 6px;
+  padding: 6px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  flex-shrink: 0;
+}
+
+/* Run controls: compact semi-transparent strip overlaid on the canvas
+   top-right (absolute inside .plan-page, so it never scrolls away) */
+.plan-run-strip {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 3;
+  display: flex;
+  gap: 4px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.92);
+  border: 1px solid rgba(0,0,0,0.1);
+  box-shadow: 0 1px 6px rgba(0,0,0,0.12);
+}
+.plan-strip-btn {
+  padding: 3px 10px;
+  font-size: 0.72rem;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #fff;
+  color: #333;
+  cursor: pointer;
+  min-width: auto;
+  line-height: 1.3;
+}
+.plan-strip-btn:hover { border-color: #6366f1; color: #6366f1; }
+
+/* Floating info window (P37): all plan text lives here */
+.plan-info {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 340px;
+  max-width: calc(100% - 16px);
+  max-height: calc(100% - 16px);
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid #d0d0d8;
+  border-radius: 10px;
+  box-shadow: 0 4px 18px rgba(0,0,0,0.18);
+  z-index: 4;
+  overflow: hidden;
+}
+.plan-info-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid #eee;
+  background: #fafafa;
+  flex-shrink: 0;
+}
+.plan-info-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plan-info-close {
+  background: transparent;
+  border: none;
+  color: #888;
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.plan-info-close:hover { color: #ef4444; }
+.plan-info-body {
+  overflow-y: auto;
+  padding: 10px 12px;
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+.plan-info-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.plan-info-goal {
+  font-size: 0.8rem;
+  color: #444;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #f8f8fa;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+.plan-info-tasks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.plan-info-task {
+  border: 1px solid #e6e6ee;
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: #fcfcfd;
+}
+.plan-info-task-prompt {
+  font-size: 0.75rem;
+  color: #555;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 120px;
   overflow-y: auto;
+  background: #fff;
+  border: 1px solid #eee;
+  border-radius: 6px;
+  padding: 6px 8px;
 }
-
-.plan-page-name {
-  font-size: 1.1rem;
-  font-weight: 700;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.plan-page-goal {
+.plan-info-path {
+  font-size: 0.7rem;
   color: #888;
-  font-size: 0.85rem;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  word-break: break-all;
 }
-.plan-page-meta { color: #666; font-size: 0.75rem; white-space: nowrap; }
-.plan-page-path { color: #888; font-size: 0.7rem; word-break: break-all; }
 
 .plan-task-id {
   font-family: monospace;
@@ -2165,24 +2316,6 @@ body {
 }
 
 .plan-task-title { font-size: 0.85rem; font-weight: 600; flex: 1; }
-
-.plan-import-row {
-  display: flex;
-  gap: 6px;
-  margin-top: 12px;
-  align-items: center;
-}
-
-.plan-import-input {
-  flex: 1;
-  padding: 5px 8px;
-  border: 1px solid #ccc;
-  border-radius: 6px;
-  font-size: 0.8rem;
-  background: transparent;
-  color: inherit;
-}
-.plan-import-input:focus { border-color: #6366f1; outline: none; }
 
 /* Plans manager tabs + saved-list filter (P17) */
 .plan-tabs {
@@ -2273,69 +2406,17 @@ body {
   }
 }
 
-/* ─── Plan DAG view (P3) ─────────────────────────────────────────── */
-
-.plan-header {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 5px;
-  padding: 2px 0 8px;
-  border-bottom: 1px solid rgba(0,0,0,0.08);
-}
-
-.plan-header-text {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.plan-header-meta-row {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  flex-wrap: wrap;
-  min-width: 0;
-}
-
-.plan-header-controls {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  align-items: center;
-}
-
-/* Compact buttons inside the plan header (don't affect other overlays) */
-.plan-header-btn {
-  padding: 4px 10px;
-  font-size: 0.72rem;
-  min-width: auto;
-  line-height: 1.3;
-}
-
-/* Concurrency override input in the plan header */
-.plan-header-concurrency {
-  width: 52px;
-  padding: 3px 6px;
-  font-size: 0.72rem;
-  border: 1px solid #ccc;
-  border-radius: 6px;
-  background: #fff;
-  color: #333;
-}
-.plan-header-concurrency:focus {
-  outline: none;
-  border-color: #1d4ed8;
-}
+/* ─── Plan DAG view (P3 / P37) ──────────────────────────────────── */
 
 .plan-page-canvas {
+  flex: 1;
+  min-height: 0;
+  position: relative;
   overflow: auto;
   border: 1px solid #ddd;
   border-radius: 8px;
   background: #fbfbfb;
   padding: 12px;
-  max-height: 46vh;
 }
 
 .plan-dag {
@@ -2474,21 +2555,6 @@ body {
 }
 
 /* ─── Plan runner (P4) ───────────────────────────────────────────── */
-
-.plan-run-badge {
-  font-size: 0.7rem;
-  border-radius: 10px;
-  padding: 1px 8px;
-  display: inline-block;
-  width: fit-content;
-  margin-top: 4px;
-}
-.plan-run-badge-idle { background: #e5e7eb; color: #374151; }
-.plan-run-badge-running { background: #dbeafe; color: #1d4ed8; }
-.plan-run-badge-paused { background: #fef3c7; color: #92400e; }
-.plan-run-badge-completed { background: #dcfce7; color: #166534; }
-.plan-run-badge-failed { background: #fee2e2; color: #991b1b; }
-.plan-run-badge-stopped { background: #f3f4f6; color: #4b5563; }
 
 .plan-node-detail-status {
   font-size: 0.7rem;

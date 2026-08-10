@@ -529,7 +529,20 @@ viewPlanPanel model planId =
                     , Attr.title "Drag to move"
                     ]
                     [ Html.span [ Attr.class "session-bar-title" ]
-                        [ Html.text ("Plan — " ++ planName) ]
+                        [ Html.span
+                            [ Attr.class ("plan-run-dot plan-run-dot-" ++ runStatusClassOf win)
+                            , Attr.title (runStatusLabelOf win)
+                            ]
+                            []
+                        , Html.text ("Plan — " ++ planName)
+                        ]
+                    , Html.button
+                        [ Attr.class "plan-bar-info-btn"
+                        , Ev.stopPropagationOn "mousedown" (D.succeed ( NoOp, True ))
+                        , Ev.stopPropagationOn "click" (D.succeed ( PlanToggleInfo, True ))
+                        , Attr.title "Plan description (goal, tasks, run log)"
+                        ]
+                        [ Html.text "?" ]
                     , Html.button
                         [ Attr.class "session-bar-close"
                         , Ev.stopPropagationOn "mousedown" (D.succeed ( NoOp, True ))
@@ -539,35 +552,28 @@ viewPlanPanel model planId =
                         [ Html.text "✕" ]
                     ]
                 , Html.div [ Attr.class "plan-panel-body" ]
-                    [ Html.div [ Attr.class "plan-page" ]
-                        [ case pv.errors of
-                            err :: _ ->
-                                Html.div [ Attr.class "sel-page-status sel-page-status-error" ]
-                                    [ Html.text (String.join "\n" pv.errors) ]
+                    [ case pv.errors of
+                        err :: _ ->
+                            Html.div [ Attr.class "plan-error-banner" ]
+                                [ Html.text (String.join "\n" pv.errors) ]
 
-                            [] ->
-                                Html.text ""
-                        , case pv.plan of
-                            Just plan ->
-                                Html.div [ Attr.class "plan-page-body" ]
-                                    [ viewPlanHeader win plan
-                                    , case pv.path of
-                                        Just p ->
-                                            Html.div [ Attr.class "plan-page-path" ]
-                                                [ Html.text ("Saved: " ++ p) ]
+                        [] ->
+                            Html.text ""
+                    , case pv.plan of
+                        Just plan ->
+                            Html.div [ Attr.class "plan-page" ]
+                                [ Html.div [ Attr.class "plan-page-canvas" ]
+                                    [ Plan.View.viewDag nodeClick runStates plan ]
+                                , viewPlanRunStrip win
+                                , if win.infoOpen then
+                                    viewPlanInfoWindow planId win plan
 
-                                        Nothing ->
-                                            Html.text ""
-                                    , Html.div [ Attr.class "plan-page-canvas" ]
-                                        [ Plan.View.viewDag nodeClick runStates plan ]
-                                    , viewPlanNodeDetail planId win plan
-                                    , viewPlanRunLog win
-                                    , viewPlanExport pv
-                                    ]
+                                  else
+                                    Html.text ""
+                                ]
 
-                            Nothing ->
-                                Html.text ""
-                        ]
+                        Nothing ->
+                            Html.text ""
                     ]
                 ]
 
@@ -595,28 +601,38 @@ viewPlanResizeHandle planId handle =
         []
 
 
-viewPlanHeader : PlanWindow -> PT.Plan -> Html Msg
-viewPlanHeader win plan =
+runStatusClassOf : PlanWindow -> String
+runStatusClassOf win =
+    case win.run |> Maybe.map .status of
+        Just st ->
+            runStatusClass st
+
+        Nothing ->
+            "idle"
+
+
+runStatusLabelOf : PlanWindow -> String
+runStatusLabelOf win =
+    case win.run |> Maybe.map .status of
+        Just st ->
+            runStatusLabel st
+
+        Nothing ->
+            "Not started"
+
+
+{-| P37: the run controls are a compact semi-transparent strip overlaid
+on the canvas top-right. Only the buttons valid for the current run
+state are rendered (no disabled buttons, consumes no layout height).
+-}
+viewPlanRunStrip : PlanWindow -> Html Msg
+viewPlanRunStrip win =
     let
         runStatus =
             win.run |> Maybe.map .status
 
-        runBadge =
-            case runStatus of
-                Just st ->
-                    Html.span [ Attr.class ("plan-run-badge plan-run-badge-" ++ runStatusClass st) ]
-                        [ Html.text (runStatusLabel st) ]
-
-                Nothing ->
-                    Html.text ""
-
         canRun =
-            case runStatus of
-                Nothing ->
-                    True
-
-                Just st ->
-                    List.member st [ PT.NotStarted, PT.Completed, PT.FailedRun, PT.Stopped ]
+            runStatus == Nothing || List.member runStatus [ Just PT.NotStarted, Just PT.Completed, Just PT.FailedRun, Just PT.Stopped ]
 
         canPause =
             runStatus == Just PT.InProgress
@@ -629,74 +645,52 @@ viewPlanHeader win plan =
 
         canLoadRun =
             win.view.path /= Nothing
-                && (runStatus == Nothing || runStatus == Just PT.Completed || runStatus == Just PT.FailedRun || runStatus == Just PT.Stopped || runStatus == Just PT.NotStarted)
+                && (runStatus == Nothing || List.member runStatus [ Just PT.Completed, Just PT.FailedRun, Just PT.Stopped, Just PT.NotStarted ])
+
+        buttons =
+            List.filterMap identity
+                [ if canRun then
+                    Just (stripBtn "Run" PlanRunStart "Run all tasks")
+
+                  else
+                    Nothing
+                , if canPause then
+                    Just (stripBtn "Pause" PlanRunPause "Pause launching new tasks")
+
+                  else
+                    Nothing
+                , if canResume then
+                    Just (stripBtn "Resume" PlanRunResume "Resume a paused run")
+
+                  else
+                    Nothing
+                , if canStop then
+                    Just (stripBtn "Stop" PlanRunStop "Stop all running tasks")
+
+                  else
+                    Nothing
+                , if canLoadRun then
+                    Just (stripBtn "Load run" PlanResume "Load the saved run state and continue unfinished tasks")
+
+                  else
+                    Nothing
+                ]
     in
-    Html.div [ Attr.class "plan-header" ]
-        [ Html.div [ Attr.class "plan-header-text" ]
-            [ Html.div [ Attr.class "plan-page-name" ] [ Html.text plan.name ]
-            , runBadge
-            ]
-        , Html.div [ Attr.class "plan-header-meta-row" ]
-            [ Html.div [ Attr.class "plan-page-goal" ]
-                [ Html.text (if plan.goal == "" then "" else plan.goal) ]
-            , Html.div [ Attr.class "plan-page-meta" ]
-                [ Html.text
-                    ("Concurrency: "
-                        ++ String.fromInt plan.concurrency
-                        ++ " · Max attempts: "
-                        ++ String.fromInt plan.defaultMaxAttempts
-                    )
-                ]
-            ]
-        , Html.div [ Attr.class "plan-header-controls" ]
-            [ Html.input
-                [ Attr.class "plan-header-concurrency"
-                , Attr.type_ "number"
-                , Attr.min "1"
-                , Attr.max "8"
-                , Attr.placeholder "Concurrency"
-                , Attr.title ("Concurrency 1-8 (empty = plan default " ++ String.fromInt plan.concurrency ++ ")")
-                , Attr.value win.view.concurrencyInput
-                , Ev.onInput PlanSetConcurrency
-                ]
-                []
-            , Html.button
-                [ Attr.class "confirm-page-btn confirm-page-btn-allow plan-header-btn"
-                , Attr.disabled (not canRun)
-                , Ev.onClick PlanRunStart
-                , Attr.title "Run all tasks"
-                ]
-                [ Html.text "Run" ]
-            , Html.button
-                [ Attr.class "confirm-page-btn plan-header-btn"
-                , Attr.disabled (not canPause)
-                , Ev.onClick PlanRunPause
-                , Attr.title "Pause launching new tasks"
-                ]
-                [ Html.text "Pause" ]
-            , Html.button
-                [ Attr.class "confirm-page-btn plan-header-btn"
-                , Attr.disabled (not canResume)
-                , Ev.onClick PlanRunResume
-                , Attr.title "Resume a paused run"
-                ]
-                [ Html.text "Resume" ]
-            , Html.button
-                [ Attr.class "confirm-page-btn confirm-page-btn-deny plan-header-btn"
-                , Attr.disabled (not canStop)
-                , Ev.onClick PlanRunStop
-                , Attr.title "Stop all running tasks"
-                ]
-                [ Html.text "Stop" ]
-            , Html.button
-                [ Attr.class "confirm-page-btn plan-header-btn"
-                , Attr.disabled (not canLoadRun)
-                , Ev.onClick PlanResume
-                , Attr.title "Load the saved run state and continue unfinished tasks"
-                ]
-                [ Html.text "Load run" ]
-            ]
+    if List.isEmpty buttons then
+        Html.text ""
+
+    else
+        Html.div [ Attr.class "plan-run-strip" ] buttons
+
+
+stripBtn : String -> Msg -> String -> Html Msg
+stripBtn label msg tip =
+    Html.button
+        [ Attr.class "plan-strip-btn"
+        , Ev.onClick msg
+        , Attr.title tip
         ]
+        [ Html.text label ]
 
 
 runStatusLabel : PT.RunStatus -> String
@@ -743,132 +737,222 @@ runStatusClass st =
             "stopped"
 
 
-viewPlanNodeDetail : String -> PlanWindow -> PT.Plan -> Html Msg
-viewPlanNodeDetail planId win plan =
-    case win.selectedNode of
-        Just nodeId ->
-            case List.filter (\t -> t.id == nodeId) plan.tasks |> List.head of
-                Just t ->
-                    let
-                        nodeStatus =
-                            win.run
-                                |> Maybe.andThen (\run -> Dict.get nodeId run.nodes)
-                                |> Maybe.map .status
+{-| P37: the floating info window — all plan text lives here. Plan tab
+(open with the "?" button) = goal + full task list + run log + saved
+path; Node tab (clicking a node without a session) = that node's
+prompt / dependencies / failures / output / attempt sessions / Retry.
+-}
+viewPlanInfoWindow : String -> PlanWindow -> PT.Plan -> Html Msg
+viewPlanInfoWindow planId win plan =
+    let
+        tabTitle =
+            case win.selectedNode of
+                Just nodeId ->
+                    "Node " ++ nodeId
 
-                        canRetry =
-                            case nodeStatus of
-                                Just st ->
-                                    List.member st [ PT.Failed, PT.Canceled, PT.Waiting ]
+                Nothing ->
+                    "Plan info"
+    in
+    Html.div [ Attr.class "plan-info" ]
+        [ Html.div [ Attr.class "plan-info-head" ]
+            [ Html.span [ Attr.class "plan-info-title" ] [ Html.text tabTitle ]
+            , Html.button
+                [ Attr.class "plan-info-close"
+                , Ev.onClick PlanCloseInfo
+                , Attr.title "Close"
+                ]
+                [ Html.text "✕" ]
+            ]
+        , Html.div [ Attr.class "plan-info-body" ]
+            [ case win.selectedNode of
+                Just nodeId ->
+                    case List.filter (\t -> t.id == nodeId) plan.tasks |> List.head of
+                        Just t ->
+                            viewPlanNodeInfo planId win t
 
-                                Nothing ->
-                                    False
+                        Nothing ->
+                            viewPlanOverview win plan
 
-                        retryLabel =
-                            case nodeStatus of
-                                Just PT.Waiting ->
-                                    "Retry now"
+                Nothing ->
+                    viewPlanOverview win plan
+            ]
+        ]
 
-                                _ ->
-                                    "Retry node"
 
-                        failures =
-                            win.run
-                                |> Maybe.andThen (\run -> Dict.get nodeId run.nodes)
-                                |> Maybe.map .failures
-                                |> Maybe.withDefault []
-                    in
-                    Html.div [ Attr.class "plan-node-detail" ]
-                        [ Html.div [ Attr.class "plan-node-detail-head" ]
-                            [ Html.span [ Attr.class "plan-task-id" ] [ Html.text t.id ]
-                            , Html.span [ Attr.class "plan-task-title" ] [ Html.text t.title ]
-                            , case nodeStatus of
-                                Just st ->
-                                    Html.span [ Attr.class ("plan-node-detail-status plan-node-detail-status-" ++ statusClassFor st) ]
-                                        [ Html.text (statusLabelFor st) ]
+{-| Plan tab: goal, the full task list, run log, saved path. -}
+viewPlanOverview : PlanWindow -> PT.Plan -> Html Msg
+viewPlanOverview win plan =
+    Html.div [ Attr.class "plan-info-overview" ]
+        [ Html.div [ Attr.class "plan-node-detail-label" ] [ Html.text "Goal" ]
+        , Html.div [ Attr.class "plan-info-goal" ]
+            [ Html.text (if plan.goal == "" then "(no goal)" else plan.goal) ]
+        , Html.div [ Attr.class "plan-node-detail-label" ]
+            [ Html.text ("Tasks (" ++ String.fromInt (List.length plan.tasks) ++ ")") ]
+        , Html.div [ Attr.class "plan-info-tasks" ]
+            (List.map (\t -> viewPlanTaskInfo win t) plan.tasks)
+        , viewPlanRunLog win
+        , case win.view.path of
+            Just p ->
+                Html.div [ Attr.class "plan-info-path" ]
+                    [ Html.text ("Saved: " ++ p) ]
 
-                                Nothing ->
-                                    Html.text ""
-                            ]
-                        , Html.div [ Attr.class "plan-node-detail-row" ]
-                            [ Html.text ("preset: " ++ Maybe.withDefault "default" t.preset) ]
-                        , Html.div [ Attr.class "plan-node-detail-row" ]
-                            [ Html.text ("max attempts: " ++ String.fromInt t.maxAttempts) ]
-                        , Html.div [ Attr.class "plan-node-detail-row" ]
-                            [ Html.text
-                                ("depends on: "
-                                    ++ (if List.isEmpty t.dependsOn then
-                                            "—"
+            Nothing ->
+                Html.text ""
+        ]
 
-                                        else
-                                            String.join ", " t.dependsOn
-                                       )
-                                )
-                            ]
-                        , if List.isEmpty failures then
-                            Html.text ""
 
-                          else
-                            Html.div [ Attr.class "plan-node-detail-failures" ]
-                                (List.map
-                                    (\f ->
-                                        Html.div [ Attr.class "plan-node-detail-failure" ]
-                                            [ Html.text ("Attempt " ++ String.fromInt f.attempt ++ " failed: " ++ f.reason) ]
-                                    )
-                                    (List.reverse failures)
-                                )
-                        , let
-                            attemptSessions =
-                                win.run
-                                    |> Maybe.andThen (\run -> Dict.get nodeId run.nodes)
-                                    |> Maybe.map .attemptSessions
-                                    |> Maybe.withDefault []
-                          in
-                          if List.isEmpty attemptSessions then
-                            Html.text ""
+viewPlanTaskInfo : PlanWindow -> PT.TaskNode -> Html Msg
+viewPlanTaskInfo win t =
+    let
+        nodeOutput =
+            win.run
+                |> Maybe.andThen (\run -> Dict.get t.id run.nodes)
+                |> Maybe.andThen .output
 
-                          else
-                            Html.div [ Attr.class "plan-node-detail-attempts" ]
-                                [ Html.div [ Attr.class "plan-node-detail-label" ]
-                                    [ Html.text ("History sessions (" ++ String.fromInt (List.length attemptSessions) ++ ")") ]
-                                , Html.div [ Attr.class "plan-node-detail-attempt-row" ]
-                                    (List.map
-                                        (\sid ->
-                                            Html.button
-                                                [ Attr.class "plan-node-detail-attempt"
-                                                , Attr.title ("Open session " ++ sid)
-                                                , Ev.onClick (PlanOpenAttemptSession planId nodeId sid)
-                                                ]
-                                                [ Html.text (shortSessionId sid) ]
-                                        )
-                                        attemptSessions
-                                    )
-                                ]
-                        , let
-                            nodeOutput =
-                                win.run
-                                    |> Maybe.andThen (\run -> Dict.get nodeId run.nodes)
-                                    |> Maybe.andThen .output
-                          in
-                          Html.div []
-                              [ Html.div [ Attr.class "plan-node-detail-label" ] [ Html.text "Output" ]
-                              , Html.div [ Attr.class "plan-node-detail-output" ]
-                                  [ Html.text (Maybe.withDefault "(no output recorded)" nodeOutput) ]
-                              ]
-                        , Html.div [ Attr.class "plan-node-detail-label" ] [ Html.text "Prompt" ]
-                        , Html.div [ Attr.class "plan-node-detail-prompt" ] [ Html.text t.prompt ]
-                        , Html.button
-                            [ Attr.class "confirm-page-btn"
-                            , Attr.disabled (not canRetry)
-                            , Ev.onClick (PlanRunRetryNode nodeId)
-                            ]
-                            [ Html.text retryLabel ]
-                        ]
+        deps =
+            if List.isEmpty t.dependsOn then
+                "—"
+
+            else
+                String.join ", " t.dependsOn
+    in
+    Html.div [ Attr.class "plan-info-task" ]
+        [ Html.div [ Attr.class "plan-node-detail-head" ]
+            [ Html.span [ Attr.class "plan-task-id" ] [ Html.text t.id ]
+            , Html.span [ Attr.class "plan-task-title" ] [ Html.text t.title ]
+            ]
+        , Html.div [ Attr.class "plan-node-detail-row" ]
+            [ Html.text ("depends on: " ++ deps ++ " · preset: " ++ Maybe.withDefault "default" t.preset ++ " · max attempts: " ++ String.fromInt t.maxAttempts) ]
+        , Html.div [ Attr.class "plan-info-task-prompt" ] [ Html.text t.prompt ]
+        , case nodeOutput of
+            Just out ->
+                Html.div []
+                    [ Html.div [ Attr.class "plan-node-detail-label" ] [ Html.text "Output" ]
+                    , Html.div [ Attr.class "plan-node-detail-output" ] [ Html.text out ]
+                    ]
+
+            Nothing ->
+                Html.text ""
+        ]
+
+
+viewPlanNodeInfo : String -> PlanWindow -> PT.TaskNode -> Html Msg
+viewPlanNodeInfo planId win t =
+    let
+        nodeId =
+            t.id
+
+        nodeStatus =
+            win.run
+                |> Maybe.andThen (\run -> Dict.get nodeId run.nodes)
+                |> Maybe.map .status
+
+        canRetry =
+            case nodeStatus of
+                Just st ->
+                    List.member st [ PT.Failed, PT.Canceled, PT.Waiting ]
+
+                Nothing ->
+                    False
+
+        retryLabel =
+            case nodeStatus of
+                Just PT.Waiting ->
+                    "Retry now"
+
+                _ ->
+                    "Retry node"
+
+        failures =
+            win.run
+                |> Maybe.andThen (\run -> Dict.get nodeId run.nodes)
+                |> Maybe.map .failures
+                |> Maybe.withDefault []
+
+        attemptSessions =
+            win.run
+                |> Maybe.andThen (\run -> Dict.get nodeId run.nodes)
+                |> Maybe.map .attemptSessions
+                |> Maybe.withDefault []
+
+        nodeOutput =
+            win.run
+                |> Maybe.andThen (\run -> Dict.get nodeId run.nodes)
+                |> Maybe.andThen .output
+    in
+    Html.div [ Attr.class "plan-node-detail" ]
+        [ Html.div [ Attr.class "plan-node-detail-head" ]
+            [ Html.span [ Attr.class "plan-task-id" ] [ Html.text t.id ]
+            , Html.span [ Attr.class "plan-task-title" ] [ Html.text t.title ]
+            , case nodeStatus of
+                Just st ->
+                    Html.span [ Attr.class ("plan-node-detail-status plan-node-detail-status-" ++ statusClassFor st) ]
+                        [ Html.text (statusLabelFor st) ]
 
                 Nothing ->
                     Html.text ""
+            ]
+        , Html.div [ Attr.class "plan-node-detail-row" ]
+            [ Html.text ("preset: " ++ Maybe.withDefault "default" t.preset) ]
+        , Html.div [ Attr.class "plan-node-detail-row" ]
+            [ Html.text ("max attempts: " ++ String.fromInt t.maxAttempts) ]
+        , Html.div [ Attr.class "plan-node-detail-row" ]
+            [ Html.text
+                ("depends on: "
+                    ++ (if List.isEmpty t.dependsOn then
+                            "—"
 
-        Nothing ->
+                        else
+                            String.join ", " t.dependsOn
+                       )
+                )
+            ]
+        , if List.isEmpty failures then
             Html.text ""
+
+          else
+            Html.div [ Attr.class "plan-node-detail-failures" ]
+                (List.map
+                    (\f ->
+                        Html.div [ Attr.class "plan-node-detail-failure" ]
+                            [ Html.text ("Attempt " ++ String.fromInt f.attempt ++ " failed: " ++ f.reason) ]
+                    )
+                    (List.reverse failures)
+                )
+        , if List.isEmpty attemptSessions then
+            Html.text ""
+
+          else
+            Html.div [ Attr.class "plan-node-detail-attempts" ]
+                [ Html.div [ Attr.class "plan-node-detail-label" ]
+                    [ Html.text ("History sessions (" ++ String.fromInt (List.length attemptSessions) ++ ")") ]
+                , Html.div [ Attr.class "plan-node-detail-attempt-row" ]
+                    (List.map
+                        (\sid ->
+                            Html.button
+                                [ Attr.class "plan-node-detail-attempt"
+                                , Attr.title ("Open session " ++ sid)
+                                , Ev.onClick (PlanOpenAttemptSession planId nodeId sid)
+                                ]
+                                [ Html.text (shortSessionId sid) ]
+                        )
+                        attemptSessions
+                    )
+                ]
+        , Html.div []
+            [ Html.div [ Attr.class "plan-node-detail-label" ] [ Html.text "Output" ]
+            , Html.div [ Attr.class "plan-node-detail-output" ]
+                [ Html.text (Maybe.withDefault "(no output recorded)" nodeOutput) ]
+            ]
+        , Html.div [ Attr.class "plan-node-detail-label" ] [ Html.text "Prompt" ]
+        , Html.div [ Attr.class "plan-node-detail-prompt" ] [ Html.text t.prompt ]
+        , Html.button
+            [ Attr.class "confirm-page-btn"
+            , Attr.disabled (not canRetry)
+            , Ev.onClick (PlanRunRetryNode nodeId)
+            ]
+            [ Html.text retryLabel ]
+        ]
 
 
 statusClassFor : PT.NodeStatus -> String
@@ -923,27 +1007,6 @@ viewPlanRunLog win =
                     (List.reverse (List.take 15 win.runLog))
                 )
             ]
-
-
-viewPlanExport : PlanViewState -> Html Msg
-viewPlanExport pv =
-    Html.div [ Attr.class "plan-import-row" ]
-        [ Html.input
-            [ Attr.class "plan-import-input"
-            , Attr.placeholder "Export to path (empty = saved copy in plans dir)…"
-            , Attr.value pv.exportPath
-            , Ev.onInput PlanSetExportPath
-            ]
-            []
-        , Html.button
-            [ Attr.class "confirm-page-btn confirm-page-btn-allow"
-            , Ev.onClick PlanExport
-            , Attr.style "padding" "4px 10px"
-            , Attr.style "font-size" "0.75rem"
-            , Attr.style "min-width" "auto"
-            ]
-            [ Html.text "Export" ]
-        ]
 
 
 viewChatArea : Model -> T.SessionState -> Html Msg

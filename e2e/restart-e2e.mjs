@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Restart-persistence E2E: create a plan, run it to completion, RESTART
 // the backend (same HOME), reload the UI, reopen the plan via the
-// session's [Plan: …] status-bar link and assert the run state (badge +
+// session's [Plan: …] status-bar link and assert the run state (dot +
 // node statuses) came back from run.json / meta.json.
 //
 // Screenshots land in the artifact dir; ALL PASS printed on success.
@@ -170,7 +170,7 @@ try {
   });
   await page.waitForSelector('.plan-page', { timeout: 30000 });
   await sleep(800);
-  assert(await clickByText('button.plan-header-btn', 'Run'), 'Run button');
+  assert(await clickByText('button.plan-strip-btn', 'Run'), 'Run button');
   await page.waitForFunction(() => {
     return [...document.querySelectorAll('.plan-offer-btn')].some(e => e.textContent.includes('Completed'));
   }, { timeout: 120000 });
@@ -287,7 +287,7 @@ try {
   await page.screenshot({ path: path.join(artifacts, 'r2-reopened.png') });
 
   const restored = await page.evaluate(() => {
-    const badge = document.querySelector('.plan-run-badge');
+    const dot = document.querySelector('.plan-run-dot');
     const nodeCounts = {};
     for (const el of document.querySelectorAll('.plan-node')) {
       const cls = el.className || '';
@@ -295,17 +295,17 @@ try {
       if (m) nodeCounts[m[1]] = (nodeCounts[m[1]] || 0) + 1;
     }
     return {
-      badge: badge ? badge.textContent : null,
+      dot: dot ? dot.className : null,
       nodeCounts,
       nodes: document.querySelectorAll('.plan-node').length,
     };
   });
-  assert(restored.badge && restored.badge.includes('Completed'),
-    'run badge restored after restart, got: ' + JSON.stringify(restored));
+  assert(restored.dot && restored.dot.includes('plan-run-dot-completed'),
+    'run state restored after restart, got: ' + JSON.stringify(restored));
   assert(restored.nodes === 3, 'DAG has 3 nodes after restart, got: ' + JSON.stringify(restored));
   assert(restored.nodeCounts.succeeded === 3,
     'all 3 nodes restored as succeeded, got: ' + JSON.stringify(restored));
-  console.log('PASS: run state restored after restart — badge ' + restored.badge + ', nodes ' + JSON.stringify(restored.nodeCounts));
+  console.log('PASS: run state restored after restart — dot ' + restored.dot + ', nodes ' + JSON.stringify(restored.nodeCounts));
 
   console.log('\nALL PASS ✅');
   console.log(KEEP_ARTIFACTS ? `artifacts: ${tmp}` : 'artifacts: <removed on exit — set ALAYAFACE_KEEP_ARTIFACTS=1 to keep screenshots>');

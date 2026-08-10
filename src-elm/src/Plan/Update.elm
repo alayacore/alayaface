@@ -763,8 +763,10 @@ runStepIn dispatch planId now ev model =
 
 {-| Initialize the run state for a fresh run of the given plan window
 (fresh RunState on first run; a re-run keeps the existing state — its
-node statuses are reset by StartRun) and apply the header concurrency
-override. Shared by the manual Run button and the sub-plan auto-run.
+node statuses are reset by StartRun). Shared by the manual Run button
+and the sub-plan auto-run. P37: concurrency is NOT user-configurable —
+every run uses `defaultConcurrency` (8); the future dynamic path will
+compute it from system load here.
 -}
 startRunIn : String -> Int -> Model -> Model
 startRunIn planId ts model =
@@ -779,12 +781,7 @@ startRunIn planId ts model =
                                 win.run
 
                         run =
-                            case PT.parseConcurrency win.view.concurrencyInput of
-                                Just c ->
-                                    { baseRun | concurrency = c }
-
-                                Nothing ->
-                                    baseRun
+                            { baseRun | concurrency = PT.defaultConcurrency }
 
                         win2 =
                             case win.run of

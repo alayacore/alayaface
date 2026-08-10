@@ -153,11 +153,11 @@ session, and plan-node sessions are unaffected (no planner hint).
 
 | Field | Required | Description |
 |------|------|------|
-| `type` | yes | Top-level marker `"alayaface-plan"` (P26, **required**, no backward compat): missing → validation error `Missing top-level "type": ...`; wrong value → `Not an AlayaFace plan: ...`; always written on save/export |
+| `type` | yes | Top-level marker `"alayaface-plan"` (P26, **required**, no backward compat): missing → validation error `Missing top-level "type": ...`; wrong value → `Not an AlayaFace plan: ...`; always written on save |
 | `schema_version` | yes | Fixed 1 |
 | `name` | yes | Plan name (used for the file-name slug) |
 | `goal` | no | Overall goal, shown in the DAG view header |
-| `concurrency` | no | Parallel cap, default 8 (range 1–8) |
+| `concurrency` | no | Parallel cap, default 8 (**v1: fixed 8 in the UI, no override** — §7.1; future: dynamic from system load) |
 | `default_max_attempts` | no | Node default retry cap, default 3 |
 | `tasks[].id` | yes | Globally unique, non-empty |
 | `tasks[].title` | yes | Node title |
@@ -183,7 +183,7 @@ src/Plan/
 ├── Types.elm    — Plan / TaskNode / NodeStatus / RunState / FailureRecord + JSON codec + validate/normalize
 ├── Layout.elm   — DAG → layering (Kahn longest path) → per-layer coordinates (x,y) for SVG rendering
 ├── Runner.elm   — execution state machine: step : Event -> RunState -> (RunState, List Effect)
-├── View.elm     — SVG DAG canvas + node detail panel + Plans manager overlay
+├── View.elm     — HTML/CSS DAG canvas + floating info window (Plan / Node tabs)
 └── Detect.elm   — extract ```json code blocks from assistant message text
 ```
 
@@ -265,8 +265,8 @@ E2E covers the gate.
 - failure → append `FailureRecord{attempt, reason, at}`, `attempts += 1`;
 - `attempts < maxAttempts` → `CloseSessionFor` closes the old session → back to `Pending` → `ScheduleRetry` (default backoff 2s) → create a new session (**new process, clean rerun**);
 - `attempts >= maxAttempts` → `Failed` terminal → direct/indirect downstream → `Blocked`;
-- running nodes can be manually Retried (node detail panel button);
-- node cards show a retry badge (e.g. `x2`); failure reason visible on hover; detail panel lists the full failure history (attempt/reason/time).
+- running nodes can be manually Retried (floating info window, Node tab);
+- node cards show a retry badge (e.g. `x2`); failure reason visible on hover; the floating info window's Node tab lists the full failure history (attempt/reason/time).
 
 ### 6.6 Layout (Plan/Layout.elm)
 
@@ -337,23 +337,42 @@ WaitingForPlan and the R-series design is model-autonomous recursion.
 ## 7. UI Design
 
 ### 7.1 Plan Window (independent window, like a session window)
+
+**P37 redesign principle: the DAG IS the window.** The plan window shows one
+thing — the dependency graph. Everything textual (goal, task prompts, run
+log, saved path) is hidden by default and lives in a floating info window
+opened by the title-bar "?" button. Nothing that belongs to another layer
+(concurrency override, export, editing) lives here.
+
+#### Window chrome (2 elements)
 - Each opened plan is an **independent draggable/resizable window** (reusing the session window panel/drag/resize/z-order machinery), not an overlay; multiple plans can be open at once;
-- Window title bar: `Plan — <name>` + close button; inside: plan name + goal + run status badge + **Run / Pause / Stop / Retry** + **Load run** + **Export JSON**;
+- Title bar (unchanged height, single line): `Plan — <name>` + run-status dot + close ✕ + **"?" info button** (opens the floating description window below). No goal/meta text, no badge row, no controls inside the bar;
 - **The system menu (⚙) lists all open plan windows** (name + run status); clicking raises/activates one. **No Plans manager entry (P30)** — a plan is reopened through its session's `[Plan: …]` status-bar link (PlanStatusOpen → openPlanFile from planMetas origin), which survives restarts;
-- Canvas: HTML/CSS DAG; rounded-rect node cards, colors by status (gray=ready, blue=running, green=succeeded, red=failed, orange=retrying, dashed=blocked/canceled);
-- Node cards: `title`, status icon, retry badge `xN`, preset badge, hover shows the latest failure reason;
+
+#### Body: DAG canvas only (the core)
+- The canvas **fills the whole window body** — no header block, no saved-path line, no run log, no export row, no detail panel. It pans/scrolls with the window, and the node colors ARE the run state (no separate status area);
+- HTML/CSS DAG; rounded-rect node cards, colors by status (gray=ready, blue=running, green=succeeded, red=failed, orange=retrying, dashed=blocked/canceled);
+- Node cards stay minimal: `title` + status icon by default; the retry badge `xN`, preset badge and tools line render **only when non-default** (attempts > 0 / preset ≠ default / tools present); hover shows the latest failure reason;
+- **Run controls** = one compact semi-transparent strip **overlaid on the canvas top-right** (absolute, consumes no layout height). It renders only the buttons valid for the current run state — **Run / Pause / Resume / Stop / Load run**. Retry lives on the node (info window, below), not in the strip;
+- **Wheel inside a window scrolls it natively** (DAG canvas / info window / messages); canvas zoom is wheel-only over the **empty background** — working inside a window never triggers an accidental zoom (P37);
+
+#### Floating info window ("?" button) — all text lives here
+- A small floating panel **anchored top-right inside the plan window** (v1: not draggable — it lives within the window and scrolls internally; drag deferred), **one per plan window**, opened by the title-bar "?" and by node clicks; its content follows the last action and it closes independently of the plan window:
+  - **Plan tab** (opened by "?"): plan name, goal, the full task list (id / title / prompt / depends_on / preset / max_attempts), the run-log stream (node start / success / failure / retry events), and the saved path;
+  - **Node tab** (opened by clicking a node that has NO session): that node's prompt, dependencies, failure history, output, attempt sessions, and the **Retry** button;
+- Clicking a node WITH a session keeps opening the session (binding below) — never a panel;
 - **Clicking a node (node ↔ session binding)**:
   - node has sessionId (succeeded nodes keep the binding; run.json persists `session_id`):
     - session window still alive → `ActivateSession` raises and focuses it;
-    - session closed / after restart → **automatically `resume_session` from disk** (full history restored, title shows the `[Plan · planId/nodeId]` binding marker); restore failure is reported at the top of the plan window;
+    - session closed / after restart → **automatically `resume_session` from disk** (full history restored, title shows the `[Plan · planId/nodeId]` binding marker); restore failure is reported as a transient banner over the canvas (and in the floating info window's Plan tab);
   - node has no sessionId but has `lastSessionId` (Failed/Blocked/Canceled: session was closed by the runner) → **likewise auto `resume_session`** — failed/stopped node sessions are no longer lost, history can be reviewed anytime;
-  - neither → right-side node detail panel (full prompt, dependencies, failure history, Retry);
+  - neither → the floating info window opens on the **Node tab** (full prompt, dependencies, failure history, output, attempt sessions, Retry);
   - **resume id semantics (P18 fix)**: `resume_session` issues a **new UUID** each time but **reuses the original on-disk dir**; the node **always stays bound to the original id (the dir name)**; `planResumedFrom` (live id → original id) records the mapping for the current session:
     - clicking the node while the session is alive → `findResumedLive` finds the live window and focuses it;
     - clicking again after closing → `resume_session` the original id again (the dir is still on disk), can open/close repeatedly with no "Session directory not found";
     - run.json always persists the original id → restorable after app restart;
     - `CloseSession` / `findPlanIdBySession` use `planResumedFrom` to attribute a closed live window back to its plan node (disconnect → node failure retry unchanged);
-- **Opening a plan window auto-restores bindings**: opening/importing a plan file silently reads `<plan>.run.json` (best-effort) and restores node states and sessionIds — afterwards clicking any already-run node reopens its session; **Load run** goes further and continues executing unfinished tasks;
+- **Opening a plan window auto-restores bindings**: opening a plan file silently reads `<plan>.run.json` (best-effort) and restores node states and sessionIds — afterwards clicking any already-run node reopens its session; **Load run** goes further and continues executing unfinished tasks;
 - **Connection chain (P36 — deep node sessions show their whole path)**: replacing the single P19 curve, focusing a session that belongs to a plan node (or activating a plan window) draws the **FULL ancestor chain** — every segment from that window up through each ancestor plan↔session pair to the **top-level session**, so the lines lead directly to the topmost session window:
   - **chain shape** (built in `App/NodeConnection.elm`, `chainForSession`/`chainForPlan`, pure + unit-tested): the focused session's own node segment, then for each ancestor plan its plan↔owning-session segment, then (if that owning session is itself a node session) its node segment, etc. — alternating node/plan segments until a plain session is reached;
   - **all windows on the path are raised** (`raiseChainWindows`), stacked top→bottom: focused session, its plan (second layer, session z = plan z + 1), that plan's owning session, then *its* plan, … up to the top-level session — every curve is visible, nothing buried;
@@ -363,7 +382,14 @@ WaitingForPlan and the R-series design is model-autonomous recursion.
   - **no extra node↔node curves (P32, user clarification)**: the DAG canvas already draws the dependency edges between node cards — the chain only adds session↔node and plan↔session curves;
   - disappearance: focusing a plain session / closing or deleting a session or plan window on the path (the anchor session closing clears the whole chain); JS hides a node segment automatically when the node scrolls out of the visible canvas;
   - both curve styles share the **solid, thicker style** (`stroke-width: 3`, no dasharray) and an **S-shaped cubic bezier** (`curvePath` in bridge.js — two independent control points offset on **opposite sides** of the travel line, so the curve arcs one way then back across the midpoint; `bow = clamp(20, 80, dist × 0.18)`);
-- Bottom: run log stream (node start/success/failure/retry events);
+#### Concurrency — fixed 8, not configured here (P37)
+- The header concurrency input is **removed** (`concurrencyInput` / `parseConcurrency` deleted). Effective concurrency is the constant `8` (`defaultConcurrency`) for every run;
+- **Future seam (v2, dynamic)**: `effectiveConcurrency` will be computed at run start from a system-load sample — the backend exposes loadavg via a lightweight RPC (next to `probe`), and a pure `Plan.Concurrency.choose : LoadSample -> Int` maps load → 1..8 (e.g. load < 0.5×cores → 8, load > 2×cores → 2, linear between), unit-tested. Mid-run adjustment is out of scope for v1 — the runner's scheduling invariants assume a fixed cap;
+
+#### Export — removed (P37)
+- The **Export JSON** row is gone (`PlanSetExportPath` / `PlanExport` / `exportPath` / `viewPlanExport` deleted). Plans are saved automatically at `sessions/<origin>/plans/<planId>/<planId>.json` on creation; the file on disk is the editable source of truth (the in-app view stays read-only);
+
+#### Run semantics (unchanged)
 - **Stop semantics (P23)**: clicking Stop = stop **all in-progress node sessions owned by this plan run** — the runner marks running/starting nodes Canceled, `closeAndClear` issues `CloseSessionFor` for every node with a bound session → **kills the alayacore process and closes the session window at once** (history stays on disk; clicking the node recovers it). **Not stopped**: succeeded nodes' sessions (kept viewable), other plans' sessions, normal sessions, planner sessions;
 - **Cascade close (P34)**: closing a session window (✕) also closes everything it owns, recursively — every plan whose meta origin is that session is **stopped first** (StopRun → nodes Canceled → their node sessions' windows + processes closed, no respawn) and its plan window is closed; a node session's own sub-plans cascade the same way (through the same CloseSession path). `DeleteSession` in the Session Manager cascades too (the on-disk dir contains the whole `plans/` subtree anyway). Closing a node session MANUALLY still fails its node → retry (unchanged);
 - **Plan window close cascades down too (P35)**: clicking ✕ on a plan window closes **every node session window bound to its nodes — under ANY run status**. If the run is still InProgress/Paused it is stopped first (StopRun → CloseSessionFor, so nothing respawns); terminal runs (Completed/FailedRun/Stopped) are NOT re-stopped (that would overwrite the status-bar status, e.g. Completed → Stopped), but any node session windows still open — e.g. sessions **resumed from disk under a Stopped/FailedRun plan for review** — are closed directly (`nodeSessionIdsForPlan` = live windows in `planNodeSessions`/`planResumedFrom`); their sub-plans cascade through CloseSession;
@@ -395,7 +421,7 @@ WaitingForPlan and the R-series design is model-autonomous recursion.
 
 - Error messages: `Cannot write file: ...` / `Cannot read file: ...` (aligned with existing style);
 - `createParents=true` auto-creates parent dirs (first save of the plans dir);
-- Path policy reuses existing fs commands (no absolute-path restrictions; export goes through the FilePicker);
+- Path policy reuses existing fs commands (no absolute-path restrictions; plan files are written under the session's plans dir);
 - Tauri capabilities unchanged (custom commands don't go through the permission system);
 - Registered in `generate_handler!` / the RPC dispatcher; `docs/go-backend.md` command map updated in sync.
 
@@ -655,7 +681,7 @@ There is **no top-level `plans/` root** anymore.
 
 ```
 ~/.alayaface/plans/
-├── <planId>.json        ← normalized plan (user-exportable/editable)
+├── <planId>.json        ← normalized plan (user-editable source of truth; UI is read-only)
 └── <planId>.run.json    ← run state (node states/attempts/failure records/sessionId map/timestamps)
 ```
 
@@ -703,6 +729,7 @@ There is **no top-level `plans/` root** anymore.
 | P34 | **cascade close** (user request): closing a session window also closes everything it owns, recursively — its plans (meta origin) are stopped (StopRun → no respawn), their node sessions closed, plan windows closed; sub-plans of node sessions cascade the same way; `DeleteSession` cascades too. Pure lookup `Plan.Meta.plansOwnedBySession`; plan-e2e gained a cascade step | ✅ done |
 | P35 | **plan-window close cascades down** (user request): closing a plan window (✕) closes **every node session window bound to its nodes under ANY run status** — active runs (InProgress/Paused) are stopped first (no respawn); terminal runs are not re-stopped (status bar keeps Completed/FailedRun/Stopped) but their open node-session windows (e.g. resumed from disk under a Stopped plan) are closed directly via `nodeSessionIdsForPlan` (live windows in `planNodeSessions`/`planResumedFrom`); sub-plans cascade through CloseSession. plan-e2e gained 8e (Stopped plan + resumed t1 window → plan ✕ → t1 closes) + 8d | ✅ done |
 | P36 | **connection chain** (user request — supersedes P32's "no ancestor-chain curves"): focusing a deep node session (or activating a plan window) draws the **whole ancestor path** — the session's node segment plus every ancestor plan↔owning-session segment up to the **top-level session** (§7.1). `App/NodeConnection.elm` builds the chain purely (`chainForSession`/`chainForPlan`, cycle-safe, unit-tested); all chain windows are raised top→bottom (`raiseChainWindows`); bridge.js draws one bezier per segment (`.node-connection-overlay` / `.plan-connection-overlay` per segment, own z per curve); the plan↔session segment is now visible while a node session is focused (plan-e2e 7b updated) | ✅ done |
+| P37 | **plan-window UI redesign** (user request — "DAG is the core"): the window body is the DAG canvas only; goal/meta/run log/saved path are hidden by default and opened via the title-bar "?" button as a floating info panel (Plan tab) — node clicks without a session open its Node tab (no right-side detail panel); run controls collapse to a compact overlay strip on the canvas top-right showing only state-valid buttons; **concurrency input removed** (effective = fixed 8, `defaultConcurrency`; future seam: dynamic from system load); **Export JSON removed** (`PlanSetExportPath`/`PlanExport`/`exportPath`/`viewPlanExport` deleted) | ✅ done |
 
 > Implementation deviations: the DAG renders in pure HTML/CSS (absolute-positioned
 > divs + orthogonal connectors) because elm/svg isn't in the offline package
@@ -735,7 +762,7 @@ There is **no top-level `plans/` root** anymore.
   auto-create on detection.
 - **plan JSON top-level `"type": "alayaface-plan"` marker (P26, user instruction)**:
   only ```json blocks carrying the explicit marker are treated as plans (plain
-  code examples don't false-trigger); always written on save/export;
+  code examples don't false-trigger); always written on save;
   **required, no backward compat** — missing or wrong value errors out directly
   (`Missing top-level "type": "alayaface-plan" marker` /
   `Not an AlayaFace plan: ...`).
@@ -753,7 +780,7 @@ There is **no top-level `plans/` root** anymore.
   `Not an AlayaFace plan: ...`).
 
 ### Defaults (not explicitly confirmed; implemented as follows, adjustable at review)
-- `concurrency` default 8 (1–8 adjustable);
+- `concurrency` default 8 (**fixed 8 in v1 — UI override removed, P37**; future: dynamic from system load);
 - `default_max_attempts` default 3, retry backoff 2s;
 - failure determination: SM task_error / SM error / session disconnect (**task timeouts were removed in R1** — a hung node stays Running until Stop / disconnect);
 - downstream context: prompts support upstream output injection via `{{<taskId>.output}}` (P24 implemented; §8.6); unreferenced downstream prompts stay self-contained;
@@ -762,7 +789,7 @@ There is **no top-level `plans/` root** anymore.
 - plans are read-only display (node editing v2);
 - seed presets: Default / Fast / Deep / Data / Safe;
 - graceful close (§8.3): close_session = **cancel → save → EOF → 5s grace → SIGKILL** (P25 cancel-first: cancel the task and save up to the cancel point, don't wait for completion); kill_child/KillChild = EOF → 3s grace → SIGKILL;
-- the plan header can override concurrency (1–8, empty = the plan JSON's concurrency; P14 implemented);
+- ~~the plan header can override concurrency (1–8, empty = the plan JSON's concurrency; P14 implemented)~~ — **removed (P37)**: the header input is gone, effective concurrency is fixed at 8 (`defaultConcurrency`); future: dynamic from system load (§7.1);
 - **per-plan working directory** (§8.4): node sessions' cwd = `plans/<planId>/work/`; normal sessions keep the backend cwd (P16 implemented).
 
 ### Pending (v2, non-blocking)

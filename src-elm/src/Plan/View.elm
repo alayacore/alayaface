@@ -106,7 +106,11 @@ viewNode onNodeClick runStates tasksById pos =
             ]
         , Html.div [ Attr.class "plan-node-title" ] [ Html.text title ]
         , Html.div [ Attr.class "plan-node-meta" ]
-            [ Html.span [ Attr.class "plan-node-preset" ] [ Html.text preset ]
+            [ if preset /= "default" then
+                Html.span [ Attr.class "plan-node-preset" ] [ Html.text preset ]
+
+              else
+                Html.text ""
             , if attempts > 0 then
                 Html.span [ Attr.class "plan-node-attempts" ]
                     [ Html.text ("x" ++ String.fromInt attempts) ]
