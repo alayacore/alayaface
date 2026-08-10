@@ -55,7 +55,7 @@ func (g *gatedPipe) Close() error {
 // while holding the lock; closeGracefully must wait for it.
 func TestCloseGracefullyClosesStdinAfterInFlightWrite(t *testing.T) {
 	pipe := newGatedPipe()
-	s := &Session{ID: "test", Stdin: pipe}
+	s := &Session{ID: "test", Stdin: pipe, PendingCmds: newPendingCmds()}
 	s.setConnected(true)
 
 	writeDone := make(chan struct{})

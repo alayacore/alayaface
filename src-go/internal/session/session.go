@@ -47,8 +47,9 @@ type Session struct {
 	killOnce sync.Once
 	// PendingCmds maps call ID → command name (CI sent, CO not yet
 	// received). The reader attaches the command name to CO frames,
-	// since CO carries only the call ID.
-	PendingCmds sync.Map
+	// since CO carries only the call ID. Bounded (FIFO eviction beyond
+	// maxPendingCmds) so an unanswered CO cannot leak forever.
+	PendingCmds *pendingCmds
 }
 
 // kill reaps the child process exactly once (idempotent).
@@ -226,12 +227,13 @@ func (m *Manager) Create(cfg CreateConfig, h *hub.Hub, cache *ModelCache) (*Sess
 	}
 
 	s := &Session{
-		ID:         cfg.ID,
-		Stdin:      proc.Stdin,
-		Stdout:     proc.Stdout,
-		Child:      proc.Cmd,
-		SessionDir: cfg.SessionDir,
-		Owner:      cfg.Owner,
+		ID:          cfg.ID,
+		Stdin:       proc.Stdin,
+		Stdout:      proc.Stdout,
+		Child:       proc.Cmd,
+		SessionDir:  cfg.SessionDir,
+		Owner:       cfg.Owner,
+		PendingCmds: newPendingCmds(),
 	}
 	s.setConnected(true)
 

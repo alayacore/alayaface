@@ -25,7 +25,7 @@ pub fn spawn_stdout_reader(
     connected: Arc<AtomicBool>,
     model_cache: Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
     child: Arc<std::sync::Mutex<Option<std::process::Child>>>,
-    pending_commands: Arc<tokio::sync::Mutex<std::collections::HashMap<String, String>>>,
+    pending_commands: Arc<crate::session::PendingCommands>,
 ) {
     std::thread::spawn(move || {
         let sid = session_id;
@@ -74,7 +74,7 @@ fn dispatch_frame(
     sid: &str,
     frame: &tlv::Frame,
     model_cache: &Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
-    pending_commands: &Arc<tokio::sync::Mutex<std::collections::HashMap<String, String>>>,
+    pending_commands: &Arc<crate::session::PendingCommands>,
 ) {
     let tag = &frame.tag;
     let raw_value = &frame.value;
@@ -166,13 +166,13 @@ fn handle_cmd_output_frame(
     app: &AppHandle,
     sid: &str,
     raw_value: &str,
-    pending_commands: &Arc<tokio::sync::Mutex<std::collections::HashMap<String, String>>>,
+    pending_commands: &Arc<crate::session::PendingCommands>,
 ) {
     let mut json_val = serde_json::from_str::<serde_json::Value>(raw_value)
         .unwrap_or(serde_json::Value::Null);
     if let Some(obj) = json_val.as_object_mut() {
         let call_id = obj.get("id").and_then(|v| v.as_str()).unwrap_or("");
-        if let Some(name) = pending_commands.blocking_lock().remove(call_id) {
+        if let Some(name) = pending_commands.blocking_remove(call_id) {
             obj.insert("name".to_string(), serde_json::Value::String(name));
         }
     }

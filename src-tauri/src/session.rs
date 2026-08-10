@@ -24,7 +24,8 @@ pub struct SessionHandle {
     /// Pending command call IDs → command names (CI sent, CO not yet received).
     /// Used by the stdout reader to attach the command name to CO frames
     /// (CO carries only the call ID; the name comes from the CI we sent).
-    pub pending_commands: Arc<Mutex<std::collections::HashMap<String, String>>>,
+    /// Bounded — see PendingCommands (M5/D6).
+    pub pending_commands: Arc<PendingCommands>,
     /// The child process — kept for explicit cleanup on close.
     /// Uses std::sync::Mutex so Drop can access it (sync context).
     pub child: Arc<std::sync::Mutex<Option<std::process::Child>>>,
@@ -35,6 +36,80 @@ pub struct SessionHandle {
     /// sessions, so one client's page load never kills another client's
     /// live sessions (the Go backend is reachable from several clients).
     pub owner: String,
+}
+
+/// Bounded pending-command registry: call ID → command name (CI sent,
+/// CO not yet received). If a CO reply never arrives (protocol anomaly
+/// / killed core), an entry must not grow the map forever — insert
+/// evicts the OLDEST entries beyond the cap (FIFO), so the newest
+/// calls — the ones most likely to still get a reply — survive.
+/// Mirrors the Go internal/session/pendingCmds guard (M5/D6).
+pub(crate) struct PendingCommands {
+    inner: tokio::sync::Mutex<PendingCommandsInner>,
+}
+
+struct PendingCommandsInner {
+    map: std::collections::HashMap<String, String>,
+    order: std::collections::VecDeque<String>,
+}
+
+/// Maximum pending CI→CO entries per session.
+pub(crate) const MAX_PENDING_COMMANDS: usize = 512;
+
+impl PendingCommands {
+    pub(crate) fn new() -> Arc<Self> {
+        Arc::new(Self {
+            inner: tokio::sync::Mutex::new(PendingCommandsInner {
+                map: std::collections::HashMap::new(),
+                order: std::collections::VecDeque::new(),
+            }),
+        })
+    }
+
+    /// Record id → name, evicting the oldest entries beyond the cap.
+    pub(crate) async fn insert(&self, id: String, name: String) {
+        let mut g = self.inner.lock().await;
+        let is_new = g.map.insert(id.clone(), name).is_none();
+        if is_new {
+            g.order.push_back(id);
+        }
+        while g.order.len() > MAX_PENDING_COMMANDS {
+            if let Some(old) = g.order.pop_front() {
+                g.map.remove(&old);
+            }
+        }
+    }
+
+    /// Remove and return the name for id.
+    pub(crate) async fn remove(&self, id: &str) -> Option<String> {
+        let mut g = self.inner.lock().await;
+        let v = g.map.remove(id);
+        if v.is_some() {
+            g.order.retain(|x| x != id);
+        }
+        v
+    }
+
+    /// Remove and return the name for id, from a non-async context
+    /// (the stdout reader thread).
+    pub(crate) fn blocking_remove(&self, id: &str) -> Option<String> {
+        let mut g = self.inner.blocking_lock();
+        let v = g.map.remove(id);
+        if v.is_some() {
+            g.order.retain(|x| x != id);
+        }
+        v
+    }
+
+    #[cfg(test)]
+    async fn len(&self) -> usize {
+        self.inner.lock().await.map.len()
+    }
+
+    #[cfg(test)]
+    async fn contains(&self, id: &str) -> bool {
+        self.inner.lock().await.map.contains_key(id)
+    }
 }
 
 impl Drop for SessionHandle {
@@ -106,7 +181,7 @@ pub async fn create(cfg: SessionConfig<'_>) -> Result<String, String> {
     let connected = Arc::new(AtomicBool::new(true));
     let stdin = Arc::new(Mutex::new(Some(proc.stdin)));
     let child = Arc::new(std::sync::Mutex::new(Some(proc.child)));
-    let pending_commands = Arc::new(Mutex::new(std::collections::HashMap::new()));
+    let pending_commands = PendingCommands::new();
 
     let handle = SessionHandle {
         stdin: stdin.clone(),
@@ -185,6 +260,63 @@ pub async fn close_with_timeout(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // M5 (D6): the pending-commands registry must stay BOUNDED — a CO
+    // reply that never arrives (protocol anomaly / killed core) must
+    // not grow the map forever. Insert evicts the OLDEST entries beyond
+    // the cap (FIFO), so the newest calls — the ones most likely to
+    // still get a reply — always survive. Mirrors the Go
+    // pending_cmds_test.go cases.
+
+    #[tokio::test]
+    async fn pending_commands_bounded_by_cap() {
+        let pc = PendingCommands::new();
+        for i in 1..=(MAX_PENDING_COMMANDS + 100) {
+            pc.insert(format!("call-{i}"), "cmd".to_string()).await;
+        }
+        assert_eq!(pc.len().await, MAX_PENDING_COMMANDS);
+        // The 100 OLDEST entries were evicted; the newest survive.
+        assert!(!pc.contains("call-1").await, "oldest entry survived the cap eviction");
+        assert!(!pc.contains("call-100").await, "entry at the eviction boundary survived");
+        assert!(pc.contains("call-101").await, "first surviving entry was evicted");
+        assert!(pc.contains(&format!("call-{}", MAX_PENDING_COMMANDS + 100)).await, "newest entry was evicted");
+    }
+
+    #[tokio::test]
+    async fn pending_commands_async_remove() {
+        let pc = PendingCommands::new();
+        pc.insert("call-1".to_string(), "model_set".to_string()).await;
+        assert_eq!(pc.remove("call-1").await.as_deref(), Some("model_set"));
+        assert!(pc.remove("call-1").await.is_none());
+        assert_eq!(pc.len().await, 0);
+    }
+
+    #[test]
+    fn pending_commands_blocking_remove_works_off_runtime() {
+        // blocking_remove is the stdout-reader path: the reader runs on
+        // a plain std thread with NO tokio runtime — blocking_lock must
+        // work there (it panics when called inside a runtime).
+        let pc = PendingCommands::new();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            pc.insert("call-2".to_string(), "read_file".to_string()).await;
+        });
+        drop(rt);
+        assert_eq!(pc.blocking_remove("call-2"), Some("read_file".to_string()));
+        assert!(pc.blocking_remove("call-2").is_none());
+    }
+
+    #[tokio::test]
+    async fn pending_commands_reinsert_does_not_duplicate_order() {
+        let pc = PendingCommands::new();
+        pc.insert("call-1".to_string(), "a".to_string()).await;
+        pc.insert("call-1".to_string(), "a2".to_string()).await; // same id, new name
+        for i in 1..=MAX_PENDING_COMMANDS {
+            pc.insert(format!("call-{i}"), "cmd".to_string()).await;
+        }
+        // A duplicated order queue would evict two entries instead of one.
+        assert_eq!(pc.len().await, MAX_PENDING_COMMANDS);
+    }
     use std::process::{Command, Stdio};
     use std::time::Duration;
 
@@ -202,7 +334,7 @@ mod tests {
                 SessionHandle {
                     stdin: stdin.clone(),
                     connected: Arc::new(AtomicBool::new(true)),
-                    pending_commands: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+                    pending_commands: PendingCommands::new(),
                     child: Arc::new(std::sync::Mutex::new(Some(child))),
                     session_dir: PathBuf::from("/tmp/alayaface-test-session"),
                     owner: String::new(),

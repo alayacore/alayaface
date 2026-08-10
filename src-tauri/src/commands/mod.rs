@@ -93,10 +93,10 @@ pub(crate) async fn send_cmd(
     // Register the mapping BEFORE writing the frame — the CO reply can
     // arrive as soon as the CI frame is flushed.
     let handle = crate::session::get(map, session_id)?;
-    handle.pending_commands.lock().await.insert(id.clone(), name.to_string());
+    handle.pending_commands.insert(id.clone(), name.to_string()).await;
     let payload = serde_json::json!({ "id": id, "name": name, "input": input });
     if let Err(e) = send_raw(map, session_id, tlv::TAG_CMD_INPUT, &payload.to_string()).await {
-        handle.pending_commands.lock().await.remove(&id);
+        handle.pending_commands.remove(&id).await;
         return Err(e);
     }
     Ok(id)

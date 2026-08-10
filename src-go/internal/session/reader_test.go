@@ -18,7 +18,7 @@ func newTestSession() (*Session, *hub.Hub, *hub.Client) {
 	h := hub.New()
 	c := h.NewClient()
 	h.Register(c)
-	return &Session{ID: "s1"}, h, c
+	return &Session{ID: "s1", PendingCmds: newPendingCmds()}, h, c
 }
 
 // nextEvent reads one event from the client channel, decoding it.
