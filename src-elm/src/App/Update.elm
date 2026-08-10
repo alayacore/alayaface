@@ -169,32 +169,31 @@ activateSessionModel model id =
     in
     if List.isEmpty chain then
         let
-            newPositions =
-                Dict.update id
-                    (Maybe.map (\pos -> { pos | z = model.nextZIndex }))
-                    model.windowPositions
+            -- Raise the session window (D6): end of sessionOrder + next
+            -- bounded z. A fresh plain session is not part of any chain.
+            m1 =
+                raiseWindow model id
+                    |> (\m -> { m | activeId = Just id, connectionChain = [] })
         in
-        ( { model
-            | activeId = Just id
-            , windowPositions = newPositions
-            , nextZIndex = model.nextZIndex + 1
-            , connectionChain = []
-          }
-        , Ports.setConnectionChain []
+        ( m1
+        , Ports.setConnectionChain (chainPayload m1 [])
         )
 
     else
         let
             ( raisedPositions, nextZ ) =
                 raiseChainWindows model chain
+
+            m1 =
+                { model
+                    | activeId = Just id
+                    , windowPositions = raisedPositions
+                    , nextZIndex = nextZ
+                    , connectionChain = chain
+                }
         in
-        ( { model
-            | activeId = Just id
-            , windowPositions = raisedPositions
-            , nextZIndex = nextZ
-            , connectionChain = chain
-          }
-        , Ports.setConnectionChain chain
+        ( m1
+        , Ports.setConnectionChain (chainPayload m1 chain)
         )
 
 
@@ -404,7 +403,8 @@ update msg model =
                                                 centeredSessionPos model
                                 in
                                 Dict.insert id pos model.windowPositions
-                        , nextZIndex = model.nextZIndex + 1
+                        -- The z bump is applied by raiseWindow below
+                        -- (D6: bounded nextZIndex + order-list focus).
                         -- Only consume pendingSwitchOnCreate when this
                         -- session actually consumed it (non-runner). A
                         -- runner session arriving in between must not
@@ -448,6 +448,14 @@ update msg model =
                         Nothing ->
                             baseModel0
 
+                -- Raise the fresh session window (D6): end of
+                -- sessionOrder + next bounded z (rebase when the z
+                -- counter crosses the threshold). The resume branch
+                -- below re-raises the whole chain when this session
+                -- belongs to a plan node.
+                raisedModel =
+                    raiseWindow baseModel id
+
                 -- A session resumed for a plan node gets a FRESH id from
                 -- resume_session while keeping the ORIGINAL on-disk dir.
                 -- The node stays bound to the original id (the dir name)
@@ -461,7 +469,7 @@ update msg model =
                         ( Just origId, False ) ->
                             let
                                 label =
-                                    Dict.get origId baseModel.planNodeSessions
+                                    Dict.get origId raisedModel.planNodeSessions
 
                                 -- The resumed session's FULL connection
                                 -- chain: its own node↔session segment plus
@@ -473,15 +481,15 @@ update msg model =
                                 -- the moment the window appears.
                                 chain =
                                     connectionChainForSession
-                                        { baseModel
-                                            | planResumedFrom = Dict.insert id origId baseModel.planResumedFrom
+                                        { raisedModel
+                                            | planResumedFrom = Dict.insert id origId raisedModel.planResumedFrom
                                             , planNodeSessions =
                                                 case label of
                                                     Just l ->
-                                                        Dict.insert id l baseModel.planNodeSessions
+                                                        Dict.insert id l raisedModel.planNodeSessions
 
                                                     Nothing ->
-                                                        baseModel.planNodeSessions
+                                                        raisedModel.planNodeSessions
                                         }
                                         id
 
@@ -491,28 +499,29 @@ update msg model =
                                 -- layer, the plan's owning session below,
                                 -- … up to the top-level session).
                                 ( raisedPositions, raisedNextZ ) =
-                                    raiseChainWindows baseModel chain
+                                    raiseChainWindows raisedModel chain
 
                                 positions =
                                     if List.isEmpty chain then
-                                        Dict.update id
-                                            (Maybe.map (\pos -> { pos | z = baseModel.nextZIndex }))
-                                            baseModel.windowPositions
+                                        -- raiseWindow already raised the
+                                        -- session (empty chain = no plan
+                                        -- binding to lift).
+                                        raisedModel.windowPositions
 
                                     else
                                         raisedPositions
 
                                 zBump =
                                     if List.isEmpty chain then
-                                        1
+                                        0
 
                                     else
-                                        raisedNextZ - baseModel.nextZIndex
+                                        raisedNextZ - raisedModel.nextZIndex
                             in
-                            { baseModel
+                            { raisedModel
                                 | planResumeFrom = Nothing
                                 , planResumeOwner = Nothing
-                                , planResumedFrom = Dict.insert id origId baseModel.planResumedFrom
+                                , planResumedFrom = Dict.insert id origId raisedModel.planResumedFrom
                                 -- The replay-suppression marker is keyed by
                                 -- the ORIGINAL id at resume-click time, but
                                 -- replayed history frames carry the FRESH
@@ -521,21 +530,21 @@ update msg model =
                                 -- (otherwise it auto-creates a duplicate
                                 -- plan window with all tasks Pending).
                                 , planReplaySessions =
-                                    Set.insert id (Set.remove origId baseModel.planReplaySessions)
+                                    Set.insert id (Set.remove origId raisedModel.planReplaySessions)
                                 , connectionChain = chain
                                 , windowPositions = positions
-                                , nextZIndex = baseModel.nextZIndex + zBump
+                                , nextZIndex = raisedModel.nextZIndex + zBump
                                 , planNodeSessions =
                                     case label of
                                         Just l ->
-                                            Dict.insert id l baseModel.planNodeSessions
+                                            Dict.insert id l raisedModel.planNodeSessions
 
                                         Nothing ->
-                                            baseModel.planNodeSessions
+                                            raisedModel.planNodeSessions
                             }
 
                         _ ->
-                            baseModel
+                            raisedModel
 
                 -- Consume the in-flight marker for user creates (runner
                 -- creates are consumed inside PlanBindSession).
@@ -564,7 +573,7 @@ update msg model =
                 -- resumed session's full ancestor path, or [] for a
                 -- plain/runner-created session (runner keeps the
                 -- existing chain, which is already in the model).
-                , Ports.setConnectionChain drainedModel.connectionChain
+                , Ports.setConnectionChain (chainPayload drainedModel drainedModel.connectionChain)
                 , case model.planCreating of
                     -- A runner-created session: bind it to its node
                     -- (PlanBindSession also starts the next queued create).
@@ -656,7 +665,7 @@ update msg model =
                 [ Ports.closeSession { sessionId = id }
                 , runnerFailCmd
                 , cascadeCmd
-                , Ports.setConnectionChain (dropChainSession m0.connectionChain id)
+                , Ports.setConnectionChain (chainPayload m0 m0.connectionChain)
                 ]
             )
 
@@ -2305,7 +2314,7 @@ update msg model =
             , Cmd.batch
                 [ Ports.fsWriteFileText { path = path, content = content, createParents = True }
                 , Ports.fsWriteFileText { path = metaPath, content = E.encode 2 (PM.encodeMeta meta), createParents = True }
-                , Ports.setConnectionChain m2.connectionChain
+                , Ports.setConnectionChain (chainPayload m2 m2.connectionChain)
                 , autoRunCmd
                 ]
             )
@@ -2329,15 +2338,18 @@ update msg model =
 
                         else
                             ( raisedPositions, raisedNextZ )
+
+                    m1 =
+                        { model
+                            | planActiveId = Just planId
+                            , showGlobalMenu = False
+                            , windowPositions = positions
+                            , nextZIndex = nextZ
+                            , connectionChain = chain
+                        }
                 in
-                ( { model
-                    | planActiveId = Just planId
-                    , showGlobalMenu = False
-                    , windowPositions = positions
-                    , nextZIndex = nextZ
-                    , connectionChain = chain
-                  }
-                , Ports.setConnectionChain chain
+                ( m1
+                , Ports.setConnectionChain (chainPayload m1 chain)
                 )
 
             else
@@ -2357,32 +2369,36 @@ update msg model =
             let
                 chain =
                     connectionChainForPlan model planId
-
-                ( raisedPositions, raisedNextZ ) =
-                    raiseChainWindows model chain
-
-                -- Empty chain (owning session closed / no meta):
-                -- still raise the plan window itself on top.
-                ( positions, nextZ ) =
-                    if List.isEmpty chain then
-                        ( Dict.update planId
-                            (Maybe.map (\pos -> { pos | z = model.nextZIndex }))
-                            model.windowPositions
-                        , model.nextZIndex + 1
-                        )
-
-                    else
-                        ( raisedPositions, raisedNextZ )
             in
-            ( { model
-                | planActiveId = Just planId
-                , windowPositions = positions
-                , nextZIndex = nextZ
-                , showGlobalMenu = False
-                , connectionChain = chain
-              }
-            , Ports.setConnectionChain chain
-            )
+            if List.isEmpty chain then
+                -- Empty chain (owning session closed / no meta): still
+                -- raise the plan window itself (D6: raiseWindow).
+                let
+                    m1 =
+                        raiseWindow model planId
+                            |> (\m -> { m | planActiveId = Just planId, showGlobalMenu = False, connectionChain = chain })
+                in
+                ( m1
+                , Ports.setConnectionChain (chainPayload m1 chain)
+                )
+
+            else
+                let
+                    ( raisedPositions, raisedNextZ ) =
+                        raiseChainWindows model chain
+
+                    m1 =
+                        { model
+                            | planActiveId = Just planId
+                            , windowPositions = raisedPositions
+                            , nextZIndex = raisedNextZ
+                            , showGlobalMenu = False
+                            , connectionChain = chain
+                        }
+                in
+                ( m1
+                , Ports.setConnectionChain (chainPayload m1 chain)
+                )
 
         PlanClose planId ->
             -- Cascade (P35): closing a plan window also closes the node
@@ -2463,7 +2479,7 @@ update msg model =
             , Cmd.batch
                 [ stopCmd
                 , closeNodeCmds
-                , Ports.setConnectionChain (List.filter (\seg -> seg.planId /= planId) m2.connectionChain)
+                , Ports.setConnectionChain (chainPayload m2 m2.connectionChain)
                 ]
             )
 
@@ -3009,7 +3025,7 @@ update msg model =
             , Cmd.batch
                 [ Ports.deleteSessionDir { sessionId = id, planId = Nothing, nodeId = Nothing, originSessionId = Nothing }
                 , cascadeCmd
-                , Ports.setConnectionChain (dropChainSession mC.connectionChain id)
+                , Ports.setConnectionChain (chainPayload cleaned cleaned.connectionChain)
                 ]
             )
 
@@ -3984,6 +4000,21 @@ update msg model =
             , Cmd.none
             )
 
+        PlanScroll planId scrollTop scrollLeft ->
+            -- Plan DAG canvas scrolled: store the scroll (chain.js
+            -- subtracts it from node-card coordinates) and redraw the
+            -- chain — the curves follow the nodes as the DAG scrolls.
+            let
+                m1 =
+                    { model
+                        | planScrolls =
+                            Dict.insert planId { top = scrollTop, left = scrollLeft } model.planScrolls
+                    }
+            in
+            ( m1
+            , Ports.setConnectionChain (chainPayload m1 m1.connectionChain)
+            )
+
         KeyDown key ctrl alt defaultPrevented ->
             -- If another handler already processed this key (e.g. textarea), skip
             if defaultPrevented then
@@ -4035,7 +4066,12 @@ update msg model =
         ResizeStart id handle mouseX mouseY ->
             case Dict.get id model.windowPositions of
                 Just pos ->
-                    ( { model
+                    let
+                        -- Raise the resized window (D6: bounded z).
+                        m1 =
+                            raiseWindow model id
+                    in
+                    ( { m1
                         | resizeInfo =
                             Just
                                 { sessionId = id
@@ -4047,8 +4083,6 @@ update msg model =
                                 , startWinW = pos.w
                                 , startWinH = pos.h
                                 }
-                        , windowPositions = Dict.insert id { pos | z = model.nextZIndex } model.windowPositions
-                        , nextZIndex = model.nextZIndex + 1
                         , activeId = Just id
                       }
                     , Cmd.none
@@ -4060,7 +4094,11 @@ update msg model =
         PlanResizeStart id handle mouseX mouseY ->
             case Dict.get id model.windowPositions of
                 Just pos ->
-                    ( { model
+                    let
+                        m1 =
+                            raiseWindow model id
+                    in
+                    ( { m1
                         | resizeInfo =
                             Just
                                 { sessionId = id
@@ -4072,8 +4110,6 @@ update msg model =
                                 , startWinW = pos.w
                                 , startWinH = pos.h
                                 }
-                        , windowPositions = Dict.insert id { pos | z = model.nextZIndex } model.windowPositions
-                        , nextZIndex = model.nextZIndex + 1
                         , planActiveId = Just id
                       }
                     , Cmd.none
@@ -4085,7 +4121,11 @@ update msg model =
         WindowDragStart id mouseX mouseY ->
             case Dict.get id model.windowPositions of
                 Just pos ->
-                    ( { model
+                    let
+                        m1 =
+                            raiseWindow model id
+                    in
+                    ( { m1
                         | dragInfo =
                             Just
                                 { sessionId = id
@@ -4094,8 +4134,6 @@ update msg model =
                                 , startWinX = pos.x
                                 , startWinY = pos.y
                                 }
-                        , windowPositions = Dict.insert id { pos | z = model.nextZIndex } model.windowPositions
-                        , nextZIndex = model.nextZIndex + 1
                         , activeId = Just id
                       }
                     , Cmd.none
@@ -4107,7 +4145,11 @@ update msg model =
         PlanWindowDragStart id mouseX mouseY ->
             case Dict.get id model.windowPositions of
                 Just pos ->
-                    ( { model
+                    let
+                        m1 =
+                            raiseWindow model id
+                    in
+                    ( { m1
                         | dragInfo =
                             Just
                                 { sessionId = id
@@ -4116,8 +4158,6 @@ update msg model =
                                 , startWinX = pos.x
                                 , startWinY = pos.y
                                 }
-                        , windowPositions = Dict.insert id { pos | z = model.nextZIndex } model.windowPositions
-                        , nextZIndex = model.nextZIndex + 1
                         , planActiveId = Just id
                       }
                     , Cmd.none
@@ -4146,14 +4186,24 @@ update msg model =
             -- Wheel over the canvas: zoom centered on the cursor.
             -- Smooth exponential factor (deltaY in screen px; trackpads
             -- emit many small deltas, wheels ~±100 per notch).
-            ( applyZoom (e ^ (-deltaY * 0.0015)) mouseX mouseY model
-            , Cmd.none
+            -- Re-emit the chain: curve stroke-width is compensated by
+            -- canvasScale (3 / scale), so a zoom changes the drawing.
+            let
+                m1 =
+                    applyZoom (e ^ (-deltaY * 0.0015)) mouseX mouseY model
+            in
+            ( m1
+            , Ports.setConnectionChain (chainPayload m1 m1.connectionChain)
             )
 
         CanvasZoomReset ->
             -- Reset to 100% keeping the viewport center fixed.
-            ( applyZoom (1 / model.canvasScale) (toFloat model.appWidth / 2) (toFloat model.appHeight / 2) model
-            , Cmd.none
+            let
+                m1 =
+                    applyZoom (1 / model.canvasScale) (toFloat model.appWidth / 2) (toFloat model.appHeight / 2) model
+            in
+            ( m1
+            , Ports.setConnectionChain (chainPayload m1 m1.connectionChain)
             )
 
         WindowDragMove mouseX mouseY ->
@@ -4184,7 +4234,18 @@ update msg model =
                                 (Maybe.map (\pos -> { pos | x = newX, y = newY }))
                                 model.windowPositions
                       }
-                    , Cmd.none
+                    -- Re-emit the chain (discrete redraw, Phase A): the
+                    -- dragged window moved — curves follow it live.
+                    , Ports.setConnectionChain
+                        (chainPayload
+                            { model
+                                | windowPositions =
+                                    Dict.update info.sessionId
+                                        (Maybe.map (\pos -> { pos | x = newX, y = newY }))
+                                        model.windowPositions
+                            }
+                            model.connectionChain
+                        )
                     )
 
                 Nothing ->
@@ -4211,12 +4272,23 @@ update msg model =
                                 newY =
                                     clamp -maxPan maxPan (cd.startOffsetY + dy)
                             in
+                            -- Canvas PAN needs no redraw: the connection
+                            -- layer lives INSIDE .canvas, so the
+                            -- transform carries the curves along.
                             ( { model | canvasOffset = { x = newX, y = newY } }
                             , Cmd.none
                             )
 
                         Nothing ->
-                            handleResizeMove model mouseX mouseY
+                            let
+                                ( m1, _ ) =
+                                    handleResizeMove model mouseX mouseY
+                            in
+                            -- Window RESIZE (drag handle): curves follow
+                            -- the resized edge live.
+                            ( m1
+                            , Ports.setConnectionChain (chainPayload m1 m1.connectionChain)
+                            )
 
         WindowDragEnd ->
             ( { model | dragInfo = Nothing, resizeInfo = Nothing, canvasDrag = Nothing }, Cmd.none )

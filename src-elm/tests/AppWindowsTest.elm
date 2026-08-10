@@ -234,6 +234,131 @@ suite =
                         ]
                         m1
             ]
+        , describe "raiseWindow (P39/D6 bounded z)"
+            [ test "moves a session to the end of sessionOrder and bumps z" <|
+                \_ ->
+                    let
+                        m0 =
+                            { initModelWithSession
+                                | sessionOrder = [ "s1", "s2" ]
+                                , windowPositions =
+                                    Dict.insert "s1" { x = 0, y = 0, w = 560, h = 640, z = 1 } Dict.empty
+                            }
+
+                        m1 =
+                            W.raiseWindow m0 "s1"
+                    in
+                    Expect.all
+                        [ \m -> Expect.equal m.sessionOrder [ "s2", "s1" ]
+                        , \m -> Expect.equal (Dict.get "s1" m.windowPositions |> Maybe.map .z) (Just 1)
+                        , \m -> Expect.equal m.nextZIndex 2
+                        ]
+                        m1
+            , test "moves a plan to the end of planOrder and bumps z" <|
+                \_ ->
+                    let
+                        m0 =
+                            { initModelWithSession
+                                | planWindows = Dict.insert "p1" AT.emptyPlanWindow Dict.empty
+                                , planOrder = [ "p1" ]
+                                , windowPositions =
+                                    Dict.insert "p1" { x = 0, y = 0, w = 680, h = 720, z = 1 } Dict.empty
+                            }
+
+                        m1 =
+                            W.raiseWindow m0 "p1"
+                    in
+                    Expect.all
+                        [ \m -> Expect.equal m.planOrder [ "p1" ]
+                        , \m -> Expect.equal (Dict.get "p1" m.windowPositions |> Maybe.map .z) (Just 1)
+                        , \m -> Expect.equal m.nextZIndex 2
+                        ]
+                        m1
+            , test "unknown window key is a no-op" <|
+                \_ ->
+                    let
+                        m0 =
+                            { initModelWithSession | nextZIndex = 7 }
+
+                        m1 =
+                            W.raiseWindow m0 "ghost"
+                    in
+                    Expect.equal ( m1.nextZIndex, m1.sessionOrder ) ( 7, [ "s1" ] )
+            , test "rebases z when nextZIndex crosses the threshold" <|
+                \_ ->
+                    let
+                        m0 =
+                            { initModelWithSession
+                                | nextZIndex = 500
+                                , windowPositions =
+                                    Dict.fromList
+                                        [ ( "s1", { x = 0, y = 0, w = 560, h = 640, z = 499 } )
+                                        , ( "s2", { x = 0, y = 0, w = 560, h = 640, z = 1 } )
+                                        ]
+                            }
+
+                        m1 =
+                            W.raiseWindow m0 "s1"
+                    in
+                    -- raise → s1 z=500, nextZ=501 > 500 → drop = 501-100-1 = 400
+                    -- s1 → 100 (floor), s2 → -399 (negative inside the canvas
+                    -- stacking context is harmless), nextZIndex → 101.
+                    Expect.all
+                        [ \m -> Expect.equal m.nextZIndex 101
+                        , \m -> Expect.equal (Dict.get "s1" m.windowPositions |> Maybe.map .z) (Just 100)
+                        , \m -> Expect.equal (Dict.get "s2" m.windowPositions |> Maybe.map .z) (Just -399)
+                        ]
+                        m1
+            , test "raiseChainWindows rebases when nextZIndex crosses the threshold" <|
+                \_ ->
+                    let
+                        m0 =
+                            { initModelWithSession
+                                | nextZIndex = 500
+                                , windowPositions =
+                                    Dict.fromList
+                                        [ ( "s1", { x = 0, y = 0, w = 560, h = 640, z = 1 } )
+                                        , ( "p1", { x = 0, y = 0, w = 680, h = 720, z = 1 } )
+                                        ]
+                            }
+
+                        segments =
+                            [ { kind = "node", sessionId = "s1", planId = "p1", nodeId = Just "t1" } ]
+
+                        ( positions, next ) =
+                            W.raiseChainWindows m0 segments
+                    in
+                    -- z starts at 500+2-1 = 501 → nextZ 502 > 500 → drop =
+                    -- 502-100-1 = 401: s1 → 100 (floor), p1 → 99, next → 101.
+                    Expect.all
+                        [ \_ -> Expect.equal (Dict.get "s1" positions |> Maybe.map .z) (Just 100)
+                        , \_ -> Expect.equal (Dict.get "p1" positions |> Maybe.map .z) (Just 99)
+                        , \_ -> Expect.equal next 101
+                        ]
+                        positions
+            ]
+        , describe "chainPayload (P39/Phase A)"
+            [ test "carries positions, plan scroll and canvas scale" <|
+                \_ ->
+                    let
+                        m0 =
+                            { initModelWithSession
+                                | windowPositions =
+                                    Dict.insert "s1" { x = 10, y = 20, w = 560, h = 640, z = 3 } Dict.empty
+                                , planScrolls = Dict.insert "p1" { top = 12, left = 4 } Dict.empty
+                                , canvasScale = 1.5
+                            }
+
+                        payload =
+                            W.chainPayload m0 []
+                    in
+                    Expect.all
+                        [ \p -> Expect.equal p.positions [ { id = "s1", x = 10, y = 20, w = 560, h = 640, z = 3 } ]
+                        , \p -> Expect.equal p.planScroll [ { planId = "p1", scrollTop = 12, scrollLeft = 4 } ]
+                        , \p -> Expect.within (Expect.Absolute 0.0001) p.canvasScale 1.5
+                        ]
+                        payload
+            ]
         , describe "chain z-ordering"
             [ test "raiseChainWindows assigns increasing z to chain windows" <|
                 \_ ->

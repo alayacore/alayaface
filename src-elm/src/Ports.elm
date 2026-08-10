@@ -50,6 +50,7 @@ port module Ports exposing
     , deleteSessionDir
     , closeAllSessions
     , setConnectionChain
+    , onPlanScroll
     , onSessionCreated
     , onSessionCreateError
     , onSessionDirs
@@ -166,13 +167,38 @@ port deleteSessionDir : { sessionId : String, planId : Maybe String, nodeId : Ma
 -- The frontend fires this once on init (graceful close, history kept).
 port closeAllSessions : {} -> Cmd msg
 
--- Connection chain (P36): Elm tells bridge.js EVERY segment of the
+-- Connection chain (P36/P39): Elm tells bridge.js EVERY segment of the
 -- active connection path — from the focused session (or active plan
 -- window) up through each ancestor plan↔session pair to the TOP-LEVEL
--- session. A deep node session's whole path is drawn, so the user can
--- trace the lines up to the topmost session window. [] = hide all.
--- bridge.js measures the DOM and draws one bezier per segment.
-port setConnectionChain : List NC.ChainSegment -> Cmd msg
+-- session — plus the CANVAS state needed to draw curves in CANVAS
+-- coordinates inside the canvas layer (Phase A: no body-level SVG, no
+-- per-frame rAF):
+--   segments   — the chain ([] = hide all);
+--   positions  — every open window's canvas rect + z (chain.js never
+--                measures window positions; Elm knows them);
+--   planScroll — .plan-page-canvas scrollTop per open plan (reported
+--                through onPlanScroll; node cards move inside the plan
+--                window as the DAG scrolls);
+--   canvasScale — stroke-width is compensated: 3 / canvasScale so a
+--                curve stays 3 screen px at any zoom.
+-- chain.js draws one bezier per segment as an absolutely-positioned
+-- <svg> INSIDE .canvas (canvas coordinates), z-ordered between the
+-- windows. [] = hide all.
+port setConnectionChain :
+    { segments : List NC.ChainSegment
+    , positions : List { id : String, x : Int, y : Int, w : Int, h : Int, z : Int }
+    , planScroll : List { planId : String, scrollTop : Float, scrollLeft : Float }
+    , canvasScale : Float
+    }
+    -> Cmd msg
+
+
+-- Plan DAG canvas scroll (Phase A): the plan's .plan-page-canvas
+-- scroller reports its scrollTop/scrollLeft (overlay.js listens; Elm
+-- stores them in model.planScrolls and re-emits setConnectionChain so
+-- curves follow the node cards while the DAG scrolls inside the plan
+-- window).
+port onPlanScroll : ({ planId : String, scrollTop : Float, scrollLeft : Float } -> msg) -> Sub msg
 
 port fsListDir : { reqId : String, path : String } -> Cmd msg
 port fsReadFileDataUri : { path : String } -> Cmd msg

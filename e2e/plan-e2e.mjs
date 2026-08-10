@@ -235,7 +235,8 @@ try {
   // SOLID, thicker line (both connection curves share that style).
   const planConnState = async () => {
     return page.evaluate(() => {
-      const svg = document.querySelector('.plan-connection-overlay');
+      const svg = [...document.querySelectorAll('.connection-seg')]
+        .find(s => s.querySelector('.plan-connection-curve')) || null;
       const path = svg ? svg.querySelector('path') : null;
       const d = path ? (path.getAttribute('d') || '') : '';
       const nums = d.split(/[ MC,]/).filter(Boolean).map(Number);
@@ -245,7 +246,8 @@ try {
       const btn = [...document.querySelectorAll('button')]
         .find(b => /^\[Plan: /.test((b.textContent || '').trim()));
       const br = btn ? btn.getBoundingClientRect() : null;
-      const nodeSvg = document.querySelector('.node-connection-overlay');
+      const nodeSvg = [...document.querySelectorAll('.connection-seg')]
+        .find(s => s.querySelector('.node-connection-curve')) || null;
       return {
         visible,
         hasPath: d.length > 10,
@@ -464,12 +466,14 @@ try {
   // visible, so the lines lead all the way up to the topmost window).
   const connState = async () => {
     const st = await page.evaluate(() => {
-      const svg = document.querySelector('.node-connection-overlay');
+      const svg = [...document.querySelectorAll('.connection-seg')]
+        .find(s => s.querySelector('.node-connection-curve')) || null;
       const active = document.querySelector('.session-panel.session-panel-active');
       const plan = [...document.querySelectorAll('.plan-panel')]
         .find(p => [...p.querySelectorAll('.plan-node-id')].some(e => e.textContent === 't1'));
       const pathEl = svg ? svg.querySelector('path') : null;
-      const planSvg = document.querySelector('.plan-connection-overlay');
+      const planSvg = [...document.querySelectorAll('.connection-seg')]
+        .find(s => s.querySelector('.plan-connection-curve')) || null;
       const planPath = planSvg ? planSvg.querySelector('path') : null;
       return {
         svgVisible: svg ? getComputedStyle(svg).display !== 'none' : false,
@@ -555,7 +559,8 @@ try {
   await closeT1Session();
   await sleep(500);
   const hiddenAfterClose = await page.evaluate(() => {
-    const svg = document.querySelector('.node-connection-overlay');
+    const svg = [...document.querySelectorAll('.connection-seg')]
+      .find(s => s.querySelector('.node-connection-curve')) || null;
     return svg ? getComputedStyle(svg).display === 'none' : true;
   });
   assert(hiddenAfterClose, 'connection curve hidden after the session window closes');

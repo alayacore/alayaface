@@ -166,10 +166,35 @@
       });
     }
     attachScroll();
+    // 4c. Plan DAG canvas scroll (P39/Phase A): the plan's
+    //     .plan-page-canvas scroller reports scrollTop/scrollLeft so
+    //     Elm can re-emit the connection chain — curves follow the node
+    //     cards as the DAG scrolls inside the plan window.
+    function sendPlanScroll(el) {
+      var panel = el.closest ? el.closest(".plan-panel") : null;
+      if (!panel || !panel.dataset.plan) return;
+      app.ports.onPlanScroll.send({
+        planId: panel.dataset.plan,
+        scrollTop: el.scrollTop,
+        scrollLeft: el.scrollLeft,
+      });
+    }
+    function attachPlanScroll() {
+      document.querySelectorAll(".plan-page-canvas").forEach(function(el) {
+        if (!el._planScrollAttached) {
+          el._planScrollAttached = true;
+          el.addEventListener("scroll", function() { sendPlanScroll(el); }, { passive: true });
+          // Report the initial position (the DAG may open scrolled).
+          sendPlanScroll(el);
+        }
+      });
+    }
+    attachPlanScroll();
     // Check for new messages containers (e.g. new sessions) and keep
     // the overlay thumbs in sync as content is added.
     var scrollObserver = new MutationObserver(function () {
       attachScroll();
+      attachPlanScroll();
       document.querySelectorAll(".messages").forEach(updateOverlayScrollbar);
     });
     scrollObserver.observe(root, { childList: true, subtree: true });

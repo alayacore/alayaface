@@ -2388,15 +2388,15 @@ body {
 
 .plan-filter-row { margin-bottom: 10px; }
 
-/* Connection CHAIN overlays (P19/P27/P36): one fixed SVG per segment on
-   <body> (node ↔ session curve + plan ↔ session curves along the whole
-   ancestor path to the top-level session); z-index matched by bridge.js
-   (solid lines, thicker than before; cubic bezier with 2 control points). */
-.node-connection-overlay,
-.plan-connection-overlay {
-  position: fixed;
-  top: 0;
+/* Connection CHAIN curves (P19/P27/P36/P39): since Phase A each segment
+   is an absolutely-positioned <svg class="connection-seg"> INSIDE
+   .canvas (canvas coordinates — the canvas transform carries them
+   through pan/zoom; z-index from Elm's bounded window z, so curves sit
+   between the windows and can never cover the modal overlays). */
+.connection-seg {
+  position: absolute;
   left: 0;
+  top: 0;
   pointer-events: none;
   overflow: visible;
 }

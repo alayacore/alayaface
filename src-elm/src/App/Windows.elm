@@ -29,8 +29,10 @@ module App.Windows exposing
     , bringIntoView
     , addPlanWindow
     , chainCtx
+    , chainPayload
     , connectionChainForSession
     , connectionChainForPlan
+    , raiseWindow
     , raiseChainWindows
     , dropChainSession
     , handleResizeMove
@@ -172,8 +174,9 @@ top-level session. Every node curve is drawn at its plan's z (below the
 session, above the plan) and every plan curve at its plan's z (above
 both participants, since the plan sits directly above its owning
 session) — so no curve is buried. Returns the updated positions and the
-next free z index. Windows without a recorded position (e.g. a closed
-plan) are skipped; bridge.js hides their segments anyway.
+next free z index (rebased — z stays bounded, see `rebasePositions`).
+Windows without a recorded position (e.g. a closed plan) are skipped;
+bridge.js hides their segments anyway.
 -}
 raiseChainWindows : Model -> List NC.ChainSegment -> ( Dict String WindowPos, Int )
 raiseChainWindows model chain =
@@ -214,7 +217,150 @@ raiseChainWindows model chain =
                 ( model.windowPositions, model.nextZIndex + count - 1 )
                 windows
     in
-    ( positions, model.nextZIndex + count )
+    rebasePositions positions (model.nextZIndex + count)
+
+
+-- ─── Z manager (P39/D6) ─────────────────────────────────────────────
+--
+-- Windows are FOCUSED by list order (raiseWindow moves a window to the
+-- end of its sessionOrder/planOrder list — DOM order, last = top).
+-- Numeric z survives only for two things: ordering windows ACROSS the
+-- session/plan lists (a focused session must sit above plans) and
+-- layering the connection curves between windows. To keep z bounded
+-- (no unbounded nextZIndex, no z-cap patches), every raise bumps
+-- nextZIndex by one and, once it crosses zRebaseThreshold, ALL z
+-- values are rebased down by a constant (relative order unchanged).
+
+zRebaseThreshold : Int
+zRebaseThreshold =
+    500
+
+
+-- After a rebase the highest window lands at this z (nextZIndex =
+-- zRebaseFloor + 1, always well below the modal overlays at 1000000).
+zRebaseFloor : Int
+zRebaseFloor =
+    100
+
+
+{-| Subtract a constant from every window z (and from nextZIndex) so the
+highest z lands at zRebaseFloor. Relative order is preserved exactly
+(subtracting the same constant from every value); values may go
+negative inside the canvas stacking context — harmless, the canvas
+layer is transparent and the curves are children of the same context.
+-}
+rebasePositions : Dict String WindowPos -> Int -> ( Dict String WindowPos, Int )
+rebasePositions positions nextZ =
+    if nextZ <= zRebaseThreshold then
+        ( positions, nextZ )
+
+    else
+        let
+            -- nextZ = max assigned z + 1, so dropping nextZ to
+            -- zRebaseFloor + 1 puts the top window at zRebaseFloor.
+            drop =
+                max 0 (nextZ - zRebaseFloor - 1)
+        in
+        ( Dict.map (\_ p -> { p | z = p.z - drop }) positions
+        , nextZ - drop
+        )
+
+
+{-| Bound the model's z state (positions + nextZIndex) the same way.
+-}
+rebaseZ : Model -> Model
+rebaseZ model =
+    let
+        ( positions, nextZ ) =
+            rebasePositions model.windowPositions model.nextZIndex
+    in
+    { model
+        | windowPositions = positions
+        , nextZIndex = nextZ
+    }
+
+
+moveToEnd : String -> List String -> List String
+moveToEnd key list =
+    List.filter ((/=) key) list ++ [ key ]
+
+
+{-| Focus a window (D6): move it to the end of its order list (DOM
+order = intra-list focus) and give it the next z (cross-list ordering),
+bumping the bounded nextZIndex. Works for session AND plan windows;
+unknown keys (no window) are a no-op.
+-}
+raiseWindow : Model -> String -> Model
+raiseWindow model key =
+    if Dict.member key model.windowPositions then
+        let
+            m1 =
+                if Dict.member key model.sessions then
+                    { model | sessionOrder = moveToEnd key model.sessionOrder }
+
+                else if Dict.member key model.planWindows then
+                    { model | planOrder = moveToEnd key model.planOrder }
+
+                else
+                    model
+
+            positions =
+                Dict.update key
+                    (Maybe.map (\p -> { p | z = m1.nextZIndex }))
+                    m1.windowPositions
+
+            m2 =
+                { m1
+                    | windowPositions = positions
+                    , nextZIndex = m1.nextZIndex + 1
+                }
+        in
+        if m2.nextZIndex > zRebaseThreshold then
+            rebaseZ m2
+
+        else
+            m2
+
+    else
+        model
+
+
+-- ─── Chain payload (P39/Phase A) ────────────────────────────────────
+--
+-- The setConnectionChain port payload: segments + every window's
+-- canvas rect/z + per-plan DAG scrollTop + the canvas scale (curve
+-- stroke width is compensated 3 / scale). Pure — chain.js only draws
+-- what Elm sends (no window measuring, no rAF loop).
+
+{-| Build the setConnectionChain payload from the model: the chain plus
+the canvas state chain.js needs to draw curves in canvas coordinates.
+-}
+chainPayload : Model -> List NC.ChainSegment -> { segments : List NC.ChainSegment, positions : List { id : String, x : Int, y : Int, w : Int, h : Int, z : Int }, planScroll : List { planId : String, scrollTop : Float, scrollLeft : Float }, canvasScale : Float }
+chainPayload model segments =
+    { segments = segments
+    , positions =
+        Dict.toList model.windowPositions
+            |> List.map
+                (\( id, p ) ->
+                    { id = id
+                    , x = p.x
+                    , y = p.y
+                    , w = p.w
+                    , h = p.h
+                    , z = p.z
+                    }
+                )
+    , planScroll =
+        Dict.toList model.planScrolls
+            |> List.map
+                (\( planId, st ) ->
+                    { planId = planId
+                    , scrollTop = st.top
+                    , scrollLeft = st.left
+                    }
+                )
+    , canvasScale = model.canvasScale
+    }
 
 
 {-| Drop every chain segment that references a closed session. If the
@@ -494,10 +640,7 @@ addPlanWindow key win model =
                     )
                     model.windowPositions
 
-        positions2 =
-            Dict.update key (Maybe.map (\p -> { p | z = model.nextZIndex })) positions1
-
-        m1 =
+        m0 =
             { model
                 | planWindows = Dict.insert key win model.planWindows
                 , planOrder =
@@ -507,8 +650,7 @@ addPlanWindow key win model =
                     else
                         model.planOrder ++ [ key ]
                 , planActiveId = Just key
-                , windowPositions = positions2
-                , nextZIndex = model.nextZIndex + 1
+                , windowPositions = positions1
                 -- The new plan window is active: connect it to its owning
                 -- session (drawn by bridge.js via the setConnectionChain
                 -- port — PlanSaveReady emits the matching Cmd). For a
@@ -516,8 +658,14 @@ addPlanWindow key win model =
                 -- session, so the whole ancestor path is visible.
                 , connectionChain = connectionChainForPlan model key
             }
+
+        -- Raise (D6): move the window to the end of planOrder and give
+        -- it the next bounded z (raiseWindow also rebases when the z
+        -- counter crosses the threshold).
+        m1 =
+            raiseWindow m0 key
     in
-    case Dict.get key positions2 of
+    case Dict.get key positions1 of
         Just p ->
             bringIntoView m1 p
 

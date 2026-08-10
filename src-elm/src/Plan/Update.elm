@@ -64,7 +64,7 @@ cycle-free and the functions pure: a test passes a stub dispatcher.
 -}
 
 import App.Types exposing (..)
-import App.Windows exposing (addPlanWindow, setPlanWin)
+import App.Windows exposing (addPlanWindow, chainPayload, setPlanWin)
 import App.NodeConnection as NC
 import Dict exposing (Dict)
 import Json.Decode as D
@@ -389,12 +389,12 @@ handlePlanReadTarget dispatch model target ok content error =
                           }
                         , Cmd.batch
                             [ Ports.fsReadFileText { reqId = reqId2, path = runPath }
-                            , Ports.setConnectionChain m3.connectionChain
+                            , Ports.setConnectionChain (chainPayload m3 m3.connectionChain)
                             ]
                         )
 
                     else
-                        ( m2, Ports.setConnectionChain m2.connectionChain )
+                        ( m2, Ports.setConnectionChain (chainPayload m2 m2.connectionChain) )
 
                 Err errs ->
                     -- Invalid plan file: surface the parse errors in the
