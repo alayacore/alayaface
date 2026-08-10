@@ -305,6 +305,17 @@ update msg model =
                         , sessionOrder = model.sessionOrder ++ [ id ]
                         , sessionNums = Dict.insert id model.nextSessionNum model.sessionNums
                         , nextSessionNum = model.nextSessionNum + 1
+                        -- M3/D4: seed the incremental plan counter from
+                        -- the session's final messages (buffered replay
+                        -- included). O(n) ONCE at creation; per-frame
+                        -- bumps after that are O(1).
+                        , planMessageCounts =
+                            case Dict.get id sessionsAfterBuffer of
+                                Just s ->
+                                    Dict.insert id (planIndexForMessage s.messages) model.planMessageCounts
+
+                                Nothing ->
+                                    model.planMessageCounts
                         , windowPositions =
                             if Dict.member id model.windowPositions then
                                 model.windowPositions
@@ -577,6 +588,19 @@ update msg model =
                     case Dict.get ev.sessionId model.sessions of
                         Just session ->
                             let
+                                -- M3/D4: incremental plan count — the delta
+                                -- accumulator for this tag:historyId before
+                                -- and after; crossing the ```json fence
+                                -- bumps the counter exactly once per plan
+                                -- message (replaces the per-frame O(n)
+                                -- planIndexForMessage scan).
+                                prevContent =
+                                    Dict.get (ev.tag ++ ":" ++ ev.historyId) session.historyContents
+                                        |> Maybe.withDefault ""
+
+                                becamePlan =
+                                    becamePlanMessage prevContent (prevContent ++ ev.content)
+
                                 newSession =
                                     H.handleDeltaEvent session ev
 
@@ -588,6 +612,7 @@ update msg model =
                             in
                             ( { model
                                 | sessions = Dict.insert ev.sessionId newSession model.sessions
+                                , planMessageCounts = bumpPlanCount model.planMessageCounts ev.sessionId becamePlan
                               }
                             , cmds
                             )
@@ -604,6 +629,26 @@ update msg model =
                     case Dict.get ev.sessionId model.sessions of
                         Just session ->
                             let
+                                -- M3/D4: incremental plan count — the
+                                -- accumulated content for this
+                                -- tag:historyId BEFORE the frame; if the
+                                -- frame's content crosses the fence for
+                                -- the first time, bump the counter.
+                                -- AT with empty content (delta-mode
+                                -- terminator) or already-plan accumulated
+                                -- content never double-counts.
+                                prevAccum =
+                                    case ev.historyId of
+                                        Just hid ->
+                                            Dict.get (ev.tag ++ ":" ++ hid) session.historyContents
+                                                |> Maybe.withDefault ""
+
+                                        Nothing ->
+                                            ""
+
+                                becamePlan =
+                                    becamePlanMessage prevAccum (Maybe.withDefault "" ev.content)
+
                                 newSession =
                                     H.handleFrameEvent session ev
 
@@ -628,6 +673,7 @@ update msg model =
                                 updatedModel =
                                     { model
                                         | sessions = Dict.insert ev.sessionId { newSession | prevMsgCount = List.length newSession.messages } model.sessions
+                                        , planMessageCounts = bumpPlanCount model.planMessageCounts ev.sessionId becamePlan
                                         -- Replay suppression: the marker is
                                         -- removed by the core's explicit
                                         -- readiness signal — SM
@@ -662,7 +708,7 @@ update msg model =
                                             Just m ->
                                                 let
                                                     planIdx =
-                                                        planIndexForMessage newSession.messages
+                                                        planCountOf updatedModel.planMessageCounts ev.sessionId
                                                 in
                                                 if m.role == T.Assistant
                                                     && not (Set.member ev.sessionId updatedModel.planReplaySessions)
@@ -698,7 +744,7 @@ update msg model =
                                             Just m ->
                                                 let
                                                     planIdx =
-                                                        planIndexForMessage newSession.messages
+                                                        planCountOf updatedModel.planMessageCounts ev.sessionId
                                                 in
                                                 if m.role == T.Assistant
                                                     && not (Set.member ev.sessionId updatedModel.planReplaySessions)

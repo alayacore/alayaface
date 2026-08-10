@@ -18,6 +18,9 @@ module Plan.Update exposing
     , setPlanErrors
     , messageBoundToPlan
     , planIndexForMessage
+    , becamePlanMessage
+    , planCountOf
+    , bumpPlanCount
     , findPlanMessageRaw
     , injectPlanErrorIntoSession
     , findResumedLive
@@ -491,6 +494,40 @@ planIndexForMessage msgs =
         )
         0
         msgs
+
+
+{-| True when the just-received content completes a plan message that
+was NOT a plan message before — i.e. the message's accumulated content
+(historyContents for its tag:historyId) just crossed the ```json fence
+for the first time. Used to bump the incremental per-session plan
+counter exactly once per plan message (M3/D4). `prevContent` is the
+accumulated content BEFORE this delta/frame; `newContent` after.
+-}
+becamePlanMessage : String -> String -> Bool
+becamePlanMessage prevContent newContent =
+    not (Plan.Detect.isPlanMessage prevContent) && Plan.Detect.isPlanMessage newContent
+
+
+{-| The incremental per-session plan-message count (M3/D4): O(1) read
+replacing the O(n) `planIndexForMessage` scan in the per-frame AT path.
+Semantics identical to planIndexForMessage — locked by tests
+(replay/append/restore).
+-}
+planCountOf : Dict String Int -> String -> Int
+planCountOf counts sid =
+    Dict.get sid counts |> Maybe.withDefault 0
+
+
+{-| Bump the per-session plan count when a message just became a plan
+message (`becamePlanMessage`). O(1).
+-}
+bumpPlanCount : Dict String Int -> String -> Bool -> Dict String Int
+bumpPlanCount counts sid becamePlan =
+    if becamePlan then
+        Dict.update sid (\c -> Just (Maybe.withDefault 0 c + 1)) counts
+
+    else
+        counts
 
 
 {-| The raw plan JSON of the session's planIndex-th plan message (used

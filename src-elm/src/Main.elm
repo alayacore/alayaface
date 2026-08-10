@@ -81,6 +81,7 @@ init _ =
       , planMetaReadReqId = Nothing
       , fsReqCounter = 0
       , planRunStatuses = Dict.empty
+      , planMessageCounts = Dict.empty
       , planTaskStarted = Set.empty
       , planOrder = []
       , planActiveId = Nothing

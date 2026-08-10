@@ -148,6 +148,14 @@ type alias Model =
     -- Completed plan window — the status bar needs it). Updated on every
     -- runStepIn; not persisted (rebuilt when the window reopens).
     , planRunStatuses : Dict String PT.RunStatus
+    -- Incremental per-session plan-message counts (M3/D4): how many
+    -- messages of each session are plan messages (same predicate as
+    -- Plan.Detect.isPlanMessage). Maintained O(1) per frame — a message
+    -- bumps the counter exactly when its accumulated content crosses
+    -- the ```json fence (becamePlanMessage) — replacing the O(n)
+    -- planIndexForMessage scan in the per-frame AT path. Seeded from
+    -- planIndexForMessage once at SessionCreated (buffered replay).
+    , planMessageCounts : Dict String Int
     -- Sessions that have seen an SM task in_progress:true frame — i.e. a
     -- REAL task started (the node prompt was sent). alayacore emits a
     -- boot task frame (in_progress:false) BEFORE any prompt; gating
