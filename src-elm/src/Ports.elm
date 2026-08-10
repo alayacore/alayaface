@@ -154,12 +154,12 @@ port closeAllSessions : {} -> Cmd msg
 -- bridge.js measures the DOM and draws one bezier per segment.
 port setConnectionChain : List NC.ChainSegment -> Cmd msg
 
-port fsListDir : { path : String } -> Cmd msg
+port fsListDir : { reqId : String, path : String } -> Cmd msg
 port fsReadFileDataUri : { path : String } -> Cmd msg
 port fsResolvePath : { path : String } -> Cmd msg
 port fsHomeDir : {} -> Cmd msg
 port fsWriteFileText : { path : String, content : String, createParents : Bool } -> Cmd msg
-port fsReadFileText : { path : String } -> Cmd msg
+port fsReadFileText : { reqId : String, path : String } -> Cmd msg
 port startMcpAuthFlow : { sessionId : String, serverName : String, authUrl : String } -> Cmd msg
 port fillMcpAuthUrl : { sessionId : String, serverName : String, authUrl : String } -> Cmd msg
 
@@ -168,13 +168,21 @@ port fillMcpAuthUrl : { sessionId : String, serverName : String, authUrl : Strin
 
 port onSessionCreated : (String -> msg) -> Sub msg
 port onSessionCreateError : (String -> msg) -> Sub msg
-port onSessionDirs : (List E.Value -> msg) -> Sub msg
+-- { ok, dirs, error }
+port onSessionDirs : (E.Value -> msg) -> Sub msg
 port onSessionActionResult : (E.Value -> msg) -> Sub msg
-port onFsListDir : (List E.Value -> msg) -> Sub msg
-port onFsHomeDir : (String -> msg) -> Sub msg
+-- { reqId, ok, entries, error } — reqId matches the fsListDir request so
+-- the plan-meta scan and the file picker can never steal each other's
+-- results (both share the same untagged port).
+port onFsListDir : (E.Value -> msg) -> Sub msg
+-- { ok, home, error }
+port onFsHomeDir : (E.Value -> msg) -> Sub msg
 port onFsResolvePath : (E.Value -> msg) -> Sub msg
-port onFsReadFileDataUri : (String -> msg) -> Sub msg
+-- { ok, uri, error }
+port onFsReadFileDataUri : (E.Value -> msg) -> Sub msg
 port onFsWriteResult : (E.Value -> msg) -> Sub msg
+-- { reqId, ok, content, error } — reqId matches the fsReadFileText
+-- request (meta scan / plan open / run load share the same port).
 port onFsReadResult : (E.Value -> msg) -> Sub msg
 
 

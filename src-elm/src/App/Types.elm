@@ -128,6 +128,22 @@ type alias Model =
     -- chain); planMetaReadQueue holds the remaining paths.
     , planMetaReading : Maybe String
     , planMetaReadQueue : List String
+    -- reqId of the scan's in-flight fs_list_dir (sessions/ listing or a
+    -- plans/ dir listing). fs_list_dir responses are routed by reqId:
+    -- a response whose reqId matches this is a scan listing; anything
+    -- else belongs to the file picker — so the scan can never swallow
+    -- (or be corrupted by) a user-initiated listing that races it.
+    , planMetaScanReqId : Maybe String
+    -- reqId of the scan's in-flight meta.json read. fs_read_file_text
+    -- responses are routed by reqId: matching here = the meta rebuild
+    -- chain; matching planReadTarget = an open/load read; neither = a
+    -- stale response (ignored).
+    , planMetaReadReqId : Maybe String
+    -- Monotonic counter for fs request ids (fsListDir/fsReadFileText
+    -- only — the two ports shared by the plan-meta scan and the normal
+    -- UI flows). Every request gets a unique id so responses can be
+    -- attributed to the flow that issued them.
+    , fsReqCounter : Int
     -- Last known run status per plan (survives the auto-close of a
     -- Completed plan window — the status bar needs it). Updated on every
     -- runStepIn; not persisted (rebuilt when the window reopens).
@@ -218,16 +234,16 @@ type Msg
     | FilePickerPickItem Int
     | FilePickerToggleMode
     | FilePickerNavigateUp
-    | FsListDirResult (List E.Value)
-    | FsHomeDirResult String
-    | FsReadFileResult String
+    | FsListDirResult E.Value
+    | FsHomeDirResult E.Value
+    | FsReadFileResult E.Value
     | FsResolvePathResult E.Value
     | FsWriteResult E.Value
     | FsReadResult E.Value
       -- Session manager
     | OpenSessionManager
     | CloseSessionManager
-    | SessionDirsResult (List E.Value)
+    | SessionDirsResult E.Value
     | SessionActionResult E.Value
     | ResumeSession String
     | DeleteSession String
@@ -638,7 +654,8 @@ which window it belongs to and what to do with the content.
     saved bindings when a plan window opens).
 -}
 type alias PlanReadTarget =
-    { planId : String
+    { reqId : String
+    , planId : String
     , path : String
     , isResume : Bool
     , continueRun : Bool

@@ -476,15 +476,25 @@
           ok: false, error: String((err && err.message) || err), kind: "resume",
         });
         transport.invoke("list_session_dirs").then(function (dirs) {
-          app.ports.onSessionDirs.send(dirs);
+          app.ports.onSessionDirs.send({ ok: true, dirs: dirs, error: "" });
+        }).catch(function (err) {
+          app.ports.onSessionDirs.send({
+            ok: false, dirs: [], error: String((err && err.message) || err),
+          });
         });
       });
     });
 
     on("listSessionDirs", function () {
-      transport.invoke("list_session_dirs").then(function (dirs) {
-        app.ports.onSessionDirs.send(dirs);
-      });
+      transport.invoke("list_session_dirs")
+        .then(function (dirs) {
+          app.ports.onSessionDirs.send({ ok: true, dirs: dirs, error: "" });
+        })
+        .catch(function (err) {
+          app.ports.onSessionDirs.send({
+            ok: false, dirs: [], error: String((err && err.message) || err),
+          });
+        });
     });
 
     // Page load: reclaim sessions orphaned by a previous page (refresh).
@@ -509,7 +519,11 @@
         .then(function () {
           // Reflect the deletion immediately
           transport.invoke("list_session_dirs").then(function (dirs) {
-            app.ports.onSessionDirs.send(dirs);
+            app.ports.onSessionDirs.send({ ok: true, dirs: dirs, error: "" });
+          }).catch(function (err) {
+            app.ports.onSessionDirs.send({
+              ok: false, dirs: [], error: String((err && err.message) || err),
+            });
           });
           app.ports.onSessionActionResult.send({ ok: true, error: "", kind: "delete" });
         })
@@ -522,27 +536,61 @@
     });
 
     on("fsListDir", function (data) {
-      transport.invoke("fs_list_dir", { path: data.path }).then(function (entries) {
-        app.ports.onFsListDir.send(entries);
-      });
+      transport.invoke("fs_list_dir", { path: data.path })
+        .then(function (entries) {
+          app.ports.onFsListDir.send({
+            reqId: data.reqId, ok: true, entries: entries, error: "",
+          });
+        })
+        .catch(function (err) {
+          // Surface the failure (with the reqId so Elm routes it to the
+          // right flow) instead of silently dropping it — a swallowed
+          // failure used to leave the file picker stuck in loading and
+          // the plan-meta scan spinning forever.
+          app.ports.onFsListDir.send({
+            reqId: data.reqId, ok: false, entries: [],
+            error: String((err && err.message) || err),
+          });
+        });
     });
 
     on("fsHomeDir", function () {
-      transport.invoke("fs_home_dir").then(function (home) {
-        app.ports.onFsHomeDir.send(home);
-      });
+      transport.invoke("fs_home_dir")
+        .then(function (home) {
+          app.ports.onFsHomeDir.send({ ok: true, home: home, error: "" });
+        })
+        .catch(function (err) {
+          app.ports.onFsHomeDir.send({
+            ok: false, home: "", error: String((err && err.message) || err),
+          });
+        });
     });
 
     on("fsResolvePath", function (data) {
-      transport.invoke("fs_resolve_path", { path: data.path }).then(function (res) {
-        app.ports.onFsResolvePath.send(res);
-      });
+      transport.invoke("fs_resolve_path", { path: data.path })
+        .then(function (res) {
+          app.ports.onFsResolvePath.send({
+            ok: true, resolved: res.resolved, exists: res.exists, isDir: res.isDir, error: "",
+          });
+        })
+        .catch(function (err) {
+          app.ports.onFsResolvePath.send({
+            ok: false, resolved: "", exists: false, isDir: false,
+            error: String((err && err.message) || err),
+          });
+        });
     });
 
     on("fsReadFileDataUri", function (data) {
-      transport.invoke("fs_read_file_data_uri", { path: data.path }).then(function (uri) {
-        app.ports.onFsReadFileDataUri.send(uri);
-      });
+      transport.invoke("fs_read_file_data_uri", { path: data.path })
+        .then(function (uri) {
+          app.ports.onFsReadFileDataUri.send({ ok: true, uri: uri, error: "" });
+        })
+        .catch(function (err) {
+          app.ports.onFsReadFileDataUri.send({
+            ok: false, uri: "", error: String((err && err.message) || err),
+          });
+        });
     });
 
     on("fsWriteFileText", function (data) {
@@ -562,11 +610,14 @@
     on("fsReadFileText", function (data) {
       transport.invoke("fs_read_file_text", { path: data.path })
         .then(function (content) {
-          app.ports.onFsReadResult.send({ ok: true, content: content, error: "" });
+          app.ports.onFsReadResult.send({
+            reqId: data.reqId, ok: true, content: content, error: "",
+          });
         })
         .catch(function (err) {
           app.ports.onFsReadResult.send({
-            ok: false, content: "", error: String((err && err.message) || err),
+            reqId: data.reqId, ok: false, content: "",
+            error: String((err && err.message) || err),
           });
         });
     });

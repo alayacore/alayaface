@@ -243,21 +243,260 @@ fsReadOkDecoder =
         (D.field "error" D.string)
 
 
+{-| Decoder for the tagged fs_list_dir response: { reqId, ok, entries, error }.
+-}
+fsListDirTaggedDecoder : D.Decoder { reqId : String, ok : Bool, entries : List D.Value, error : String }
+fsListDirTaggedDecoder =
+    D.map4 (\reqId ok entries err -> { reqId = reqId, ok = ok, entries = entries, error = err })
+        (D.field "reqId" D.string)
+        (D.field "ok" D.bool)
+        (D.field "entries" (D.list D.value))
+        (D.field "error" D.string)
+
+
+{-| Decoder for the tagged fs_read_file_text response: { reqId, ok, content, error }.
+-}
+fsReadTaggedDecoder : D.Decoder { reqId : String, ok : Bool, content : String, error : String }
+fsReadTaggedDecoder =
+    D.map4 (\reqId ok content err -> { reqId = reqId, ok = ok, content = content, error = err })
+        (D.field "reqId" D.string)
+        (D.field "ok" D.bool)
+        (D.field "content" D.string)
+        (D.field "error" D.string)
+
+
+{-| Allocate the next fs request id. Only fsListDir and fsReadFileText
+carry one — the two ports shared by the plan-meta scan and the normal
+UI flows. The id is echoed in the response so routing is decided by
+match, never by global state flags.
+-}
+nextFsReq : Model -> ( String, Model )
+nextFsReq model =
+    let
+        n =
+            model.fsReqCounter + 1
+    in
+    ( "fs-" ++ String.fromInt n, { model | fsReqCounter = n } )
+
+
+{-| Handle a fs_read_file_text result that matched the plan read target:
+open/import (isResume=False), Load run (isResume=True + continueRun=True)
+or a silent best-effort run-state restore when a plan window opens
+(isResume=True + continueRun=False). `ok/content/error` are the decoded
+fields of the tagged response.
+-}
+handlePlanReadTarget : Model -> PlanReadTarget -> Bool -> String -> String -> ( Model, Cmd Msg )
+handlePlanReadTarget model target ok content error =
+    if target.isResume then
+        -- Read <plan>.run.json → restore run state in the target plan
+        -- window (and optionally continue).
+        if ok then
+            let
+                win0 =
+                    Dict.get target.planId model.planWindows
+                        |> Maybe.withDefault emptyPlanWindow
+            in
+            case ( D.decodeString PT.decodeRunStateOverlay content, win0.view.plan ) of
+                ( Ok overlay, Just plan ) ->
+                    if target.continueRun then
+                        -- Load run: unfinished nodes re-run; restore then continue.
+                        let
+                            baseRun =
+                                PT.applyRunStateOverlay overlay (PT.emptyRunState "resume" plan)
+
+                            run =
+                                R.resumeState baseRun
+
+                            win1 =
+                                { win0
+                                    | run = Just run
+                                    , runPath = Just target.path
+                                    , resumePath = Nothing
+                                    , selectedNode = Nothing
+                                }
+
+                            m1 =
+                                { model
+                                    | planReadTarget = Nothing
+                                    , planWindows = Dict.insert target.planId win1 model.planWindows
+                                }
+                        in
+                        runStepIn target.planId 0 R.ContinueRun m1
+
+                    else
+                        -- Silent restore: only when the window has no run
+                        -- yet (a Run clicked in between must not be
+                        -- overwritten).
+                        if win0.run == Nothing then
+                            let
+                                run =
+                                    PT.applyRunStateOverlay overlay (PT.emptyRunState "resume" plan)
+
+                                win1 =
+                                    { win0
+                                        | run = Just run
+                                        , runPath = Just target.path
+                                        , resumePath = Nothing
+                                        , selectedNode = Nothing
+                                    }
+
+                                m1 =
+                                    { model
+                                        | planReadTarget = Nothing
+                                        , planWindows = Dict.insert target.planId win1 model.planWindows
+                                    }
+                            in
+                            ( m1, Cmd.none )
+
+                        else
+                            ( { model | planReadTarget = Nothing }, Cmd.none )
+
+                ( Ok _, Nothing ) ->
+                    ( { model | planReadTarget = Nothing }, Cmd.none )
+
+                ( Err err, _ ) ->
+                    if target.continueRun then
+                        ( { model
+                            | planReadTarget = Nothing
+                            , planWindows =
+                                Dict.update target.planId
+                                    (Maybe.map
+                                        (\w ->
+                                            let
+                                                wv =
+                                                    w.view
+                                            in
+                                            { w
+                                                | resumePath = Nothing
+                                                , view = { wv | errors = [ "Invalid run state: " ++ D.errorToString err ], saving = False }
+                                            }
+                                        )
+                                    )
+                                    model.planWindows
+                          }
+                        , Cmd.none
+                        )
+
+                    else
+                        -- silent restore: ignore a corrupt run file
+                        ( { model | planReadTarget = Nothing }, Cmd.none )
+
+        else if target.continueRun then
+            let
+                win0 =
+                    Dict.get target.planId model.planWindows
+                        |> Maybe.withDefault emptyPlanWindow
+            in
+            ( { model
+                | planReadTarget = Nothing
+                , planWindows =
+                    Dict.insert target.planId
+                        { win0 | resumePath = Nothing }
+                        model.planWindows
+              }
+            , Cmd.none
+            )
+
+        else
+            -- no run file yet: nothing to restore
+            ( { model | planReadTarget = Nothing }, Cmd.none )
+
+    else
+        -- Open/import: parse the plan file and open (or focus) its
+        -- window; then best-effort restore the saved run state so
+        -- node→session bindings come back.
+        if ok then
+            case PT.parsePlan content of
+                Ok plan ->
+                    let
+                        win0 =
+                            Dict.get target.planId model.planWindows
+                                |> Maybe.withDefault emptyPlanWindow
+
+                        wv =
+                            win0.view
+
+                        win1 =
+                            { win0
+                                | view =
+                                    { wv
+                                        | plan = Just plan
+                                        , path = Just target.path
+                                        , errors = []
+                                        , saving = False
+                                    }
+                            }
+
+                        m1 =
+                            { model
+                                | planReadTarget = Nothing
+                            }
+
+                        m2 =
+                            addPlanWindow target.planId win1 m1
+                    in
+                    if win0.run == Nothing then
+                        -- Fresh window: chain a silent read of
+                        -- <plan>.run.json to restore statuses/bindings.
+                        let
+                            runPath =
+                                runPathFor target.path
+
+                            ( reqId2, m3 ) =
+                                nextFsReq m2
+                        in
+                        ( { m3
+                            | planReadTarget =
+                                Just
+                                    { reqId = reqId2
+                                    , planId = target.planId
+                                    , path = runPath
+                                    , isResume = True
+                                    , continueRun = False
+                                    }
+                          }
+                        , Cmd.batch
+                            [ Ports.fsReadFileText { reqId = reqId2, path = runPath }
+                            , Ports.setConnectionChain m3.connectionChain
+                            ]
+                        )
+
+                    else
+                        ( m2, Ports.setConnectionChain m2.connectionChain )
+
+                Err errs ->
+                    -- Invalid plan file: surface the parse errors in the
+                    -- plan window.
+                    ( setPlanErrors errs { model | planReadTarget = Nothing }
+                    , Cmd.none
+                    )
+
+        else
+            ( setPlanErrors [ error ] { model | planReadTarget = Nothing }
+            , Cmd.none
+            )
+
+
 -- Shared open: set the read target and read the plan file. Used by the
 -- [Plan: …] status-bar link (path comes from planFilePathOf — plans
 -- always live under their owning session).
 openPlanFile : String -> Model -> ( Model, Cmd Msg )
 openPlanFile path model =
-    ( { model
+    let
+        ( reqId, m1 ) =
+            nextFsReq model
+    in
+    ( { m1
         | planReadTarget =
             Just
-                { planId = planWinKeyForPath path
+                { reqId = reqId
+                , planId = planWinKeyForPath path
                 , path = path
                 , isResume = False
                 , continueRun = False
                 }
       }
-    , Ports.fsReadFileText { path = path }
+    , Ports.fsReadFileText { reqId = reqId, path = path }
     )
 
 
@@ -3079,198 +3318,303 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
-        FsListDirResult entries ->
-            if model.planMetaLoading then
-                -- R3: dedicated listing for meta.json files (planMetas
-                -- index rebuild). Two-level scan:
-                --   1. sessions/ listing (planMetaDirListing == Nothing)
-                --      → queue each session's plans/ dir;
-                --   2. a sessions/<uuid>/plans listing (planMetaDirListing
-                --      == Just dir) → each SUBDIR is a plan (P28 nests
-                --      plan files in their own dir), so the meta path is
-                --      <plansDir>/<planId>/<planId>.meta.json — built
-                --      directly, no third listing level needed.
-                -- Every meta is then read one at a time.
-                let
-                    parsed =
-                        List.filterMap (\v -> D.decodeValue planDirEntryDecoder v |> Result.toMaybe) entries
-                in
-                case model.planMetaDirListing of
-                    Just dir ->
-                        let
-                            planDirsIn =
-                                parsed
-                                    |> List.filter (\e -> e.isDir && e.name /= ".." && e.name /= ".")
-                                    |> List.map .name
-
-                            newReadQueue =
-                                model.planMetaReadQueue
-                                    ++ List.map (\p -> dir ++ "/" ++ p ++ "/" ++ p ++ ".meta.json") planDirsIn
-                        in
-                        case model.planMetaDirQueue of
-                            next :: rest ->
-                                ( { model
-                                    | planMetaDirQueue = rest
-                                    , planMetaDirListing = Just next
-                                    , planMetaReadQueue = newReadQueue
-                                  }
-                                , Ports.fsListDir { path = next }
-                                )
-
-                            [] ->
-                                -- All plans dirs listed: start reading.
-                                case newReadQueue of
-                                    r :: rs ->
-                                        ( { model
-                                            | planMetaDirListing = Nothing
-                                            , planMetaReading = Just r
-                                            , planMetaReadQueue = rs
-                                            , planMetaLoading = False
-                                          }
-                                        , Ports.fsReadFileText { path = r }
-                                        )
-
-                                    [] ->
-                                        ( { model | planMetaDirListing = Nothing, planMetaLoading = False }
-                                        , Cmd.none
-                                        )
-
-                    Nothing ->
-                        -- The sessions/ listing: queue every session's
-                        -- plans/ subdir (missing plans dirs list empty;
-                        -- ".." from the listing is skipped).
-                        let
-                            planDirs =
-                                parsed
-                                    |> List.filter (\e -> e.isDir && e.name /= ".." && e.name /= ".")
-                                    |> List.map .name
-                                    |> List.map (\n -> sessionsDir model.homeDir ++ "/" ++ n ++ "/plans")
-                        in
-                        case planDirs of
-                            next :: rest ->
-                                ( { model
-                                    | planMetaDirQueue = rest
-                                    , planMetaDirListing = Just next
-                                  }
-                                , Ports.fsListDir { path = next }
-                                )
-
-                            [] ->
-                                ( { model | planMetaLoading = False }, Cmd.none )
-
-            else
-                let
-                    parsed =
-                        List.filterMap FP.decodeDirEntry entries
-
-                    -- Filter out ".." (parent directory entry) — not useful in UI
-                    noDotDot =
-                        List.filter (\e -> e.name /= "..") parsed
-
-                    -- The planMetas index rebuild starts HERE, after the
-                    -- session file-picker's home listing has been
-                    -- consumed — no other fs_list_dir is in flight, so
-                    -- the scan's listings cannot be misrouted.
-                    ( m0, scanCmd ) =
-                        if model.planMetaScanPending then
-                            ( { model | planMetaScanPending = False, planMetaLoading = True }
-                            , Ports.fsListDir { path = sessionsDir model.homeDir }
+        FsListDirResult raw ->
+            case D.decodeValue fsListDirTaggedDecoder raw of
+                Ok res ->
+                    -- Route by reqId, never by global state: a result
+                    -- whose id matches the scan's in-flight listing
+                    -- belongs to the planMetas rebuild; everything else
+                    -- (picker listings, failed scan listings) falls
+                    -- through to the file picker — so the scan can
+                    -- neither swallow a user listing that races it nor
+                    -- be corrupted by one.
+                    if model.planMetaScanReqId == Just res.reqId then
+                        if not res.ok then
+                            -- Scan listing failed (backend error): abandon
+                            -- the rebuild rather than stalling. planMetas
+                            -- stays empty this session; plan links still
+                            -- resolve from the on-disk files.
+                            ( { model
+                                | planMetaScanReqId = Nothing
+                                , planMetaDirListing = Nothing
+                                , planMetaLoading = False
+                              }
+                            , Cmd.none
                             )
 
                         else
-                            ( model, Cmd.none )
-                in
-                ( updateActiveSession m0 (\s ->
-                    let
-                        fp =
-                            s.filePicker
-                    in
-                    { s
-                        | filePicker = { fp | entries = noDotDot, loading = False, error = Nothing }
-                    }
-                  )
-                , scanCmd
-                )
+                            let
+                                parsed =
+                                    List.filterMap (\v -> D.decodeValue planDirEntryDecoder v |> Result.toMaybe) res.entries
+                            in
+                            case model.planMetaDirListing of
+                                Just dir ->
+                                    -- A sessions/<uuid>/plans listing:
+                                    -- each SUBDIR is a plan (P28 nests
+                                    -- plan files in their own dir), so the
+                                    -- meta path is
+                                    -- <plansDir>/<planId>/<planId>.meta.json
+                                    -- — built directly, no third listing
+                                    -- level needed.
+                                    let
+                                        planDirsIn =
+                                            parsed
+                                                |> List.filter (\e -> e.isDir && e.name /= ".." && e.name /= ".")
+                                                |> List.map .name
 
-        FsHomeDirResult home ->
-            let
-                model2 =
-                    { model | homeDir = home }
-            in
-            ( updateActiveSession model2 (\s ->
-                let
-                    fp =
-                        s.filePicker
-                in
-                { s
-                    | filePicker =
-                        { fp
-                            | baseDir = home
-                            , dir = home
-                            , input = home ++ "/"
-                            , filter = ""
-                            , loading = True
-                        }
-                }
-              )
-            , Cmd.batch
-                [ Ports.fsListDir { path = home }
-                , case model.activeId of
-                    Just sid ->
-                        Cmd.batch
-                            [ focusAfterDelay ("fp-page-input-" ++ sid)
-                            , Ports.setCursorPos ("fp-page-input-" ++ sid)
-                            ]
+                                        newReadQueue =
+                                            model.planMetaReadQueue
+                                                ++ List.map (\p -> dir ++ "/" ++ p ++ "/" ++ p ++ ".meta.json") planDirsIn
+                                    in
+                                    case model.planMetaDirQueue of
+                                        next :: rest ->
+                                            let
+                                                ( reqId, m1 ) =
+                                                    nextFsReq model
+                                            in
+                                            ( { m1
+                                                | planMetaDirQueue = rest
+                                                , planMetaDirListing = Just next
+                                                , planMetaReadQueue = newReadQueue
+                                                , planMetaScanReqId = Just reqId
+                                              }
+                                            , Ports.fsListDir { reqId = reqId, path = next }
+                                            )
 
-                    Nothing ->
-                        Cmd.none
-                ]
-            )
-            -- The planMetas index rebuild (fs_list_dir sessions/ → each
-            -- session's plans/ → read every *.meta.json) starts ONLY
-            -- after this home listing has been consumed (FsListDirResult's
-            -- picker branch): both are untagged fs_list_dir results, so
-            -- firing them in the same batch would let the home listing
-            -- be misrouted into the scan and desynchronize it — leaving
-            -- planMetas empty after a restart (plans unreachable via the
-            -- status-bar link).
-            |> (\( m, c ) -> ( { m | planMetaScanPending = True }, c ))
+                                        [] ->
+                                            -- All plans dirs listed: start reading.
+                                            case newReadQueue of
+                                                r :: rs ->
+                                                    let
+                                                        ( reqId, m1 ) =
+                                                            nextFsReq model
+                                                    in
+                                                    ( { m1
+                                                        | planMetaDirListing = Nothing
+                                                        , planMetaScanReqId = Nothing
+                                                        , planMetaReading = Just r
+                                                        , planMetaReadReqId = Just reqId
+                                                        , planMetaReadQueue = rs
+                                                        , planMetaLoading = False
+                                                      }
+                                                    , Ports.fsReadFileText { reqId = reqId, path = r }
+                                                    )
 
-        FsReadFileResult uri ->
-            case getActiveSession model of
-                Just s ->
-                    let
-                        fp =
-                            s.filePicker
+                                                [] ->
+                                                    ( { model | planMetaDirListing = Nothing, planMetaScanReqId = Nothing, planMetaLoading = False }
+                                                    , Cmd.none
+                                                    )
 
-                        name =
-                            if fp.pendingFileName /= "" then
-                                Just fp.pendingFileName
-                            else
-                                Nothing
+                                Nothing ->
+                                    -- The sessions/ listing: queue every
+                                    -- session's plans/ subdir (missing
+                                    -- plans dirs list empty; ".." from
+                                    -- the listing is skipped).
+                                    let
+                                        planDirs =
+                                            parsed
+                                                |> List.filter (\e -> e.isDir && e.name /= ".." && e.name /= ".")
+                                                |> List.map .name
+                                                |> List.map (\n -> sessionsDir model.homeDir ++ "/" ++ n ++ "/plans")
+                                    in
+                                    case planDirs of
+                                        next :: rest ->
+                                            let
+                                                ( reqId, m1 ) =
+                                                    nextFsReq model
+                                            in
+                                            ( { m1
+                                                | planMetaDirQueue = rest
+                                                , planMetaDirListing = Just next
+                                                , planMetaScanReqId = Just reqId
+                                              }
+                                            , Ports.fsListDir { reqId = reqId, path = next }
+                                            )
 
-                        detectedType =
-                            case name of
-                                Just n -> FP.detectMediaType n
-                                Nothing -> T.Document
+                                        [] ->
+                                            ( { model | planMetaScanReqId = Nothing, planMetaLoading = False }
+                                            , Cmd.none
+                                            )
 
-                        newItem =
-                            { id = "file-" ++ String.fromInt (List.length s.staged)
-                            , mediaType = detectedType
-                            , uri = uri
-                            , name = name
+                    else
+                        -- File picker listing (or any other non-scan
+                        -- listing). The planMetas index rebuild starts
+                        -- HERE, after the session file-picker's home
+                        -- listing has been consumed.
+                        let
+                            parsed =
+                                List.filterMap FP.decodeDirEntry res.entries
+
+                            noDotDot =
+                                List.filter (\e -> e.name /= "..") parsed
+
+                            ( m0, scanCmd ) =
+                                if model.planMetaScanPending then
+                                    let
+                                        ( reqId, m1 ) =
+                                            nextFsReq model
+                                    in
+                                    ( { m1
+                                        | planMetaScanPending = False
+                                        , planMetaLoading = True
+                                        , planMetaScanReqId = Just reqId
+                                      }
+                                    , Ports.fsListDir { reqId = reqId, path = sessionsDir m1.homeDir }
+                                    )
+
+                                else
+                                    ( model, Cmd.none )
+                        in
+                        ( updateActiveSession m0 (\s ->
+                            let
+                                fp =
+                                    s.filePicker
+                            in
+                            { s
+                                | filePicker =
+                                    if res.ok then
+                                        { fp | entries = noDotDot, loading = False, error = Nothing }
+
+                                    else
+                                        -- The listing failed (backend
+                                        -- error / dead session): surface
+                                        -- it in the picker instead of
+                                        -- leaving it stuck in loading.
+                                        { fp | entries = [], loading = False, error = Just res.error }
                             }
-                    in
-                    ( updateActiveSession model (\sess ->
-                        { sess
-                            | filePicker = { fp | show = False, input = "", pendingFileName = "" }
-                            , staged = sess.staged ++ [ newItem ]
-                        }
-                      )
-                    , focusInput model
-                    )
+                          )
+                        , scanCmd
+                        )
 
-                Nothing ->
+                Err _ ->
+                    ( model, Cmd.none )
+
+        FsHomeDirResult raw ->
+            case D.decodeValue fsHomeDirDecoder raw of
+                Ok { ok, home, error } ->
+                    if ok then
+                        let
+                            model2 =
+                                { model | homeDir = home }
+
+                            ( reqId, m1 ) =
+                                nextFsReq model2
+                        in
+                        ( updateActiveSession m1 (\s ->
+                            let
+                                fp =
+                                    s.filePicker
+                            in
+                            { s
+                                | filePicker =
+                                    { fp
+                                        | baseDir = home
+                                        , dir = home
+                                        , input = home ++ "/"
+                                        , filter = ""
+                                        , loading = True
+                                    }
+                            }
+                          )
+                        , Cmd.batch
+                            [ Ports.fsListDir { reqId = reqId, path = home }
+                            , case model.activeId of
+                                Just sid ->
+                                    Cmd.batch
+                                        [ focusAfterDelay ("fp-page-input-" ++ sid)
+                                        , Ports.setCursorPos ("fp-page-input-" ++ sid)
+                                        ]
+
+                                Nothing ->
+                                    Cmd.none
+                            ]
+                        )
+                        -- The planMetas index rebuild (fs_list_dir
+                        -- sessions/ → each session's plans/ → read every
+                        -- *.meta.json) starts ONLY after this home listing
+                        -- has been consumed (FsListDirResult's picker
+                        -- branch): firing them in the same batch would let
+                        -- the home listing be misrouted into the scan and
+                        -- desynchronize it — leaving planMetas empty after
+                        -- a restart (plans unreachable via the status-bar
+                        -- link). The reqId routing makes the two flows
+                        -- distinguishable even if they did overlap.
+                        |> (\( m, c ) -> ( { m | planMetaScanPending = True }, c ))
+
+                    else
+                        -- Home dir could not be resolved (no HOME env /
+                        -- backend error): surface it instead of leaving
+                        -- the picker stuck in loading with an empty base.
+                        let
+                            m1 =
+                                updateActiveSession model (\s ->
+                                    let
+                                        fp =
+                                            s.filePicker
+                                    in
+                                    { s | filePicker = { fp | loading = False, error = Just error } }
+                                )
+                        in
+                        ( { m1 | sessionManagerError = Just error }, Cmd.none )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        FsReadFileResult raw ->
+            case D.decodeValue fsReadFileUriDecoder raw of
+                Ok { ok, uri, error } ->
+                    case getActiveSession model of
+                        Just s ->
+                            if ok then
+                                let
+                                    fp =
+                                        s.filePicker
+
+                                    name =
+                                        if fp.pendingFileName /= "" then
+                                            Just fp.pendingFileName
+                                        else
+                                            Nothing
+
+                                    detectedType =
+                                        case name of
+                                            Just n -> FP.detectMediaType n
+                                            Nothing -> T.Document
+
+                                    newItem =
+                                        { id = "file-" ++ String.fromInt (List.length s.staged)
+                                        , mediaType = detectedType
+                                        , uri = uri
+                                        , name = name
+                                        }
+                                in
+                                ( updateActiveSession model (\sess ->
+                                    { sess
+                                        | filePicker = { fp | show = False, input = "", pendingFileName = "" }
+                                        , staged = sess.staged ++ [ newItem ]
+                                    }
+                                  )
+                                , focusInput model
+                                )
+
+                            else
+                                -- Read failed (oversized / missing file /
+                                -- backend error): surface it in the picker
+                                -- instead of silently dropping the click.
+                                ( updateActiveSession model (\sess ->
+                                    let
+                                        fp =
+                                            sess.filePicker
+                                    in
+                                    { sess | filePicker = { fp | loading = False, error = Just error } }
+                                  )
+                                , Cmd.none
+                                )
+
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                Err _ ->
                     ( model, Cmd.none )
 
         -- Text file write result: Plan Mode plan save (only writer so far).
@@ -3302,271 +3646,98 @@ update msg model =
         -- best-effort run-state restore when a plan window opens
         -- (isResume=True + continueRun=False).
         FsReadResult raw ->
-            case model.planMetaReading of
-                Just path ->
-                    -- R3: the read belongs to the meta.json rebuild chain.
-                    let
-                        decoded =
-                            D.decodeValue fsReadOkDecoder raw
+            case D.decodeValue fsReadTaggedDecoder raw of
+                Ok res ->
+                    -- Route by reqId, never by global state: a read whose
+                    -- id matches the scan's in-flight meta.json read
+                    -- belongs to the planMetas rebuild; a read matching
+                    -- the plan read target belongs to an open/load/
+                    -- restore flow; anything else is stale (raced a newer
+                    -- request) and is ignored.
+                    if model.planMetaReadReqId == Just res.reqId then
+                        let
+                            path =
+                                Maybe.withDefault "" model.planMetaReading
 
-                        m1 =
-                            case decoded of
-                                Ok { ok, content } ->
-                                    if ok then
-                                        case D.decodeString PM.decodeMeta content of
-                                            Ok meta ->
-                                                let
-                                                    -- planId = the meta
-                                                    -- file name minus
-                                                    -- ".meta.json" (paths
-                                                    -- are
-                                                    -- sessions/<origin>/plans/<planId>/<planId>.meta.json).
-                                                    planId =
-                                                        String.split "/" path
-                                                            |> List.reverse
-                                                            |> List.head
-                                                            |> Maybe.withDefault path
-                                                            |> String.dropRight (String.length ".meta.json")
-                                                in
-                                                { model | planMetas = Dict.insert planId meta model.planMetas }
+                            m1 =
+                                if res.ok then
+                                    case D.decodeString PM.decodeMeta res.content of
+                                        Ok meta ->
+                                            let
+                                                -- planId = the meta
+                                                -- file name minus
+                                                -- ".meta.json" (paths
+                                                -- are
+                                                -- sessions/<origin>/plans/<planId>/<planId>.meta.json).
+                                                planId =
+                                                    String.split "/" path
+                                                        |> List.reverse
+                                                        |> List.head
+                                                        |> Maybe.withDefault path
+                                                        |> String.dropRight (String.length ".meta.json")
+                                            in
+                                            { model | planMetas = Dict.insert planId meta model.planMetas }
 
-                                            Err _ ->
-                                                model
+                                        Err _ ->
+                                            model
 
-                                    else
-                                        model
-
-                                Err _ ->
+                                else
+                                    -- A failed meta read (missing/corrupt
+                                    -- file): skip it, keep the chain going.
                                     model
-                    in
-                    case m1.planMetaReadQueue of
-                        next :: rest ->
-                            ( { m1 | planMetaReading = Just next, planMetaReadQueue = rest }
-                            , Ports.fsReadFileText { path = next }
-                            )
+                        in
+                        case m1.planMetaReadQueue of
+                            next :: rest ->
+                                let
+                                    ( reqId2, m2 ) =
+                                        nextFsReq m1
+                                in
+                                ( { m2
+                                    | planMetaReading = Just next
+                                    , planMetaReadQueue = rest
+                                    , planMetaReadReqId = Just reqId2
+                                  }
+                                , Ports.fsReadFileText { reqId = reqId2, path = next }
+                                )
 
-                        [] ->
-                            ( { m1 | planMetaReading = Nothing }, Cmd.none )
+                            [] ->
+                                ( { m1 | planMetaReading = Nothing, planMetaReadReqId = Nothing }, Cmd.none )
 
-                Nothing ->
-                    case model.planReadTarget of
-                        Just target ->
-                            if target.isResume then
-                                -- Read <plan>.run.json → restore run state in the
-                                -- target plan window (and optionally continue).
-                                case D.decodeValue fsReadOkDecoder raw of
-                                    Ok { ok, content, error } ->
-                                        if ok then
-                                            let
-                                                win0 =
-                                                    Dict.get target.planId model.planWindows
-                                                        |> Maybe.withDefault emptyPlanWindow
-                                            in
-                                            case ( D.decodeString PT.decodeRunStateOverlay content, win0.view.plan ) of
-                                                ( Ok overlay, Just plan ) ->
-                                                    if target.continueRun then
-                                                        -- Load run: unfinished nodes
-                                                        -- re-run; restore then continue.
-                                                        let
-                                                            baseRun =
-                                                                PT.applyRunStateOverlay overlay (PT.emptyRunState "resume" plan)
+                    else
+                        case model.planReadTarget of
+                            Just target ->
+                                if target.reqId == res.reqId then
+                                    handlePlanReadTarget model target res.ok res.content res.error
 
-                                                            run =
-                                                                R.resumeState baseRun
+                                else
+                                    -- A newer read replaced this target
+                                    -- before the response arrived: ignore.
+                                    ( model, Cmd.none )
 
-                                                            win1 =
-                                                                { win0
-                                                                    | run = Just run
-                                                                    , runPath = Just target.path
-                                                                    , resumePath = Nothing
-                                                                    , selectedNode = Nothing
-                                                                }
+                            Nothing ->
+                                -- No read pending: stale/foreign response.
+                                ( model, Cmd.none )
 
-                                                            m1 =
-                                                                { model
-                                                                    | planReadTarget = Nothing
-                                                                    , planWindows = Dict.insert target.planId win1 model.planWindows
-                                                                }
-                                                        in
-                                                        runStepIn target.planId 0 R.ContinueRun m1
-
-                                                    else
-                                                        -- Silent restore: only when
-                                                        -- the window has no run yet
-                                                        -- (a Run clicked in between
-                                                        -- must not be overwritten).
-                                                        if win0.run == Nothing then
-                                                            let
-                                                                run =
-                                                                    PT.applyRunStateOverlay overlay (PT.emptyRunState "resume" plan)
-
-                                                                win1 =
-                                                                    { win0
-                                                                        | run = Just run
-                                                                        , runPath = Just target.path
-                                                                        , resumePath = Nothing
-                                                                        , selectedNode = Nothing
-                                                                    }
-
-                                                                m1 =
-                                                                    { model
-                                                                        | planReadTarget = Nothing
-                                                                        , planWindows = Dict.insert target.planId win1 model.planWindows
-                                                                    }
-                                                            in
-                                                            ( m1, Cmd.none )
-
-                                                        else
-                                                            ( { model | planReadTarget = Nothing }, Cmd.none )
-
-                                                ( Ok _, Nothing ) ->
-                                                    ( { model | planReadTarget = Nothing }, Cmd.none )
-
-                                                ( Err err, _ ) ->
-                                                    if target.continueRun then
-                                                        ( { model
-                                                            | planReadTarget = Nothing
-                                                            , planWindows =
-                                                                Dict.update target.planId
-                                                                    (Maybe.map
-                                                                        (\w ->
-                                                                            let
-                                                                                wv =
-                                                                                    w.view
-                                                                            in
-                                                                            { w
-                                                                                | resumePath = Nothing
-                                                                                , view = { wv | errors = [ "Invalid run state: " ++ D.errorToString err ], saving = False }
-                                                                            }
-                                                                        )
-                                                                    )
-                                                                    model.planWindows
-                                                          }
-                                                        , Cmd.none
-                                                        )
-
-                                                    else
-                                                        -- silent restore: ignore a
-                                                        -- corrupt run file
-                                                        ( { model | planReadTarget = Nothing }, Cmd.none )
-
-                                        else if target.continueRun then
-                                            let
-                                                win0 =
-                                                    Dict.get target.planId model.planWindows
-                                                        |> Maybe.withDefault emptyPlanWindow
-                                            in
-                                            ( { model
-                                                | planReadTarget = Nothing
-                                                , planWindows =
-                                                    Dict.insert target.planId
-                                                        { win0 | resumePath = Nothing }
-                                                        model.planWindows
-                                              }
-                                            , Cmd.none
-                                            )
-
-                                        else
-                                            -- no run file yet: nothing to restore
-                                            ( { model | planReadTarget = Nothing }, Cmd.none )
-
-                                    Err _ ->
-                                        ( { model | planReadTarget = Nothing }, Cmd.none )
-
-                            else
-                                -- Open/import: parse the plan file and open (or
-                                -- focus) its window; then best-effort restore the
-                                -- saved run state so node→session bindings come back.
-                                case D.decodeValue fsReadOkDecoder raw of
-                                    Ok { ok, content, error } ->
-                                        if ok then
-                                            case PT.parsePlan content of
-                                                Ok plan ->
-                                                    let
-                                                        win0 =
-                                                            Dict.get target.planId model.planWindows
-                                                                |> Maybe.withDefault emptyPlanWindow
-
-                                                        wv =
-                                                            win0.view
-
-                                                        win1 =
-                                                            { win0
-                                                                | view =
-                                                                    { wv
-                                                                        | plan = Just plan
-                                                                        , path = Just target.path
-                                                                        , errors = []
-                                                                        , saving = False
-                                                                    }
-                                                            }
-
-                                                        m1 =
-                                                            { model
-                                                                | planReadTarget = Nothing
-                                                            }
-
-                                                        m2 =
-                                                            addPlanWindow target.planId win1 m1
-                                                    in
-                                                    if win0.run == Nothing then
-                                                        -- Fresh window: chain a silent
-                                                        -- read of <plan>.run.json to
-                                                        -- restore statuses/bindings.
-                                                        let
-                                                            runPath =
-                                                                runPathFor target.path
-                                                        in
-                                                        ( { m2
-                                                            | planReadTarget =
-                                                                Just
-                                                                    { planId = target.planId
-                                                                    , path = runPath
-                                                                    , isResume = True
-                                                                    , continueRun = False
-                                                                    }
-                                                          }
-                                                        , Cmd.batch
-                                                            [ Ports.fsReadFileText { path = runPath }
-                                                            , Ports.setConnectionChain m2.connectionChain
-                                                            ]
-                                                        )
-
-                                                    else
-                                                        ( m2, Ports.setConnectionChain m2.connectionChain )
-
-                                                Err errs ->
-                                                    -- Invalid plan file: surface the
-                                                    -- parse errors in the plan window.
-                                                    ( setPlanErrors errs { model | planReadTarget = Nothing }
-                                                    , Cmd.none
-                                                    )
-
-                                        else
-                                            ( setPlanErrors [ error ] { model | planReadTarget = Nothing }
-                                            , Cmd.none
-                                            )
-
-                                    Err _ ->
-                                        ( { model | planReadTarget = Nothing }, Cmd.none )
-
-                        Nothing ->
-                            ( model, Cmd.none )
+                Err _ ->
+                    ( model, Cmd.none )
 
         FsResolvePathResult result ->
             case getActiveSession model of
                 Just s ->
                     case D.decodeValue resolvePathResultDecoder result of
                         Ok rp ->
-                            if rp.exists && rp.isDir then
+                            if rp.ok && rp.exists && rp.isDir then
                                 let
                                     fp =
                                         s.filePicker
 
                                     sameDir =
                                         rp.resolved == fp.dir
+
+                                    ( reqId, m1 ) =
+                                        nextFsReq model
                                 in
-                                ( updateActiveSession model (\sess ->
+                                ( updateActiveSession m1 (\sess ->
                                     { sess
                                         | filePicker = { fp | dir = rp.resolved, selected = 0 }
                                     }
@@ -3574,11 +3745,34 @@ update msg model =
                                 , if sameDir then
                                     Cmd.none
                                   else
-                                    Ports.fsListDir { path = rp.resolved }
+                                    Ports.fsListDir { reqId = reqId, path = rp.resolved }
                                 )
 
                             else
-                                ( model, Cmd.none )
+                                -- Resolve failed or the path is not a
+                                -- directory: release the picker's loading
+                                -- state so it never hangs waiting for a
+                                -- listing, and show why.
+                                let
+                                    errMsg =
+                                        if rp.ok then
+                                            "Not a directory: " ++ rp.resolved
+
+                                        else
+                                            rp.error
+                                in
+                                ( updateActiveSession model (\sess ->
+                                    let
+                                        fp =
+                                            sess.filePicker
+                                    in
+                                    { sess
+                                        | filePicker =
+                                            { fp | loading = False, error = Just errMsg }
+                                    }
+                                  )
+                                , Cmd.none
+                                )
 
                         Err _ ->
                             ( model, Cmd.none )
@@ -4098,18 +4292,22 @@ update msg model =
 
                                 win1 =
                                     { win | resumePath = Just runPath }
+
+                                ( reqId, m1 ) =
+                                    nextFsReq model
                             in
-                            ( { model
-                                | planWindows = Dict.insert pid win1 model.planWindows
+                            ( { m1
+                                | planWindows = Dict.insert pid win1 m1.planWindows
                                 , planReadTarget =
                                     Just
-                                        { planId = pid
+                                        { reqId = reqId
+                                        , planId = pid
                                         , path = runPath
                                         , isResume = True
                                         , continueRun = True
                                         }
                               }
-                            , Ports.fsReadFileText { path = runPath }
+                            , Ports.fsReadFileText { reqId = reqId, path = runPath }
                             )
 
                         Nothing ->
@@ -4299,8 +4497,19 @@ update msg model =
         CloseGlobalMenu ->
             ( { model | showGlobalMenu = False }, Cmd.none )
 
-        SessionDirsResult dirs ->
-            ( { model | sessionDirs = dirs }, Cmd.none )
+        SessionDirsResult raw ->
+            case D.decodeValue sessionDirsDecoder raw of
+                Ok { ok, dirs, error } ->
+                    if ok then
+                        ( { model | sessionDirs = dirs, sessionManagerError = Nothing }, Cmd.none )
+
+                    else
+                        -- list_session_dirs failed: surface the error
+                        -- instead of silently showing an empty manager.
+                        ( { model | sessionDirs = [], sessionManagerError = Just error }, Cmd.none )
+
+                Err _ ->
+                    ( model, Cmd.none )
 
         SessionActionResult raw ->
             case D.decodeValue sessionActionResultDecoder raw of
@@ -5743,18 +5952,49 @@ decodeSessionDir val =
 -- File Picker Helpers
 
 type alias ResolvedPathResult =
-    { resolved : String
+    { ok : Bool
+    , resolved : String
     , exists : Bool
     , isDir : Bool
+    , error : String
     }
 
 
 resolvePathResultDecoder : D.Decoder ResolvedPathResult
 resolvePathResultDecoder =
-    D.map3 ResolvedPathResult
+    D.map5 ResolvedPathResult
+        (D.field "ok" D.bool)
         (D.field "resolved" D.string)
         (D.field "exists" D.bool)
         (D.field "isDir" D.bool)
+        (D.field "error" D.string)
+
+
+-- { ok, home, error } — fs_home_dir response.
+fsHomeDirDecoder : D.Decoder { ok : Bool, home : String, error : String }
+fsHomeDirDecoder =
+    D.map3 (\ok home err -> { ok = ok, home = home, error = err })
+        (D.field "ok" D.bool)
+        (D.field "home" D.string)
+        (D.field "error" D.string)
+
+
+-- { ok, uri, error } — fs_read_file_data_uri response.
+fsReadFileUriDecoder : D.Decoder { ok : Bool, uri : String, error : String }
+fsReadFileUriDecoder =
+    D.map3 (\ok uri err -> { ok = ok, uri = uri, error = err })
+        (D.field "ok" D.bool)
+        (D.field "uri" D.string)
+        (D.field "error" D.string)
+
+
+-- { ok, dirs, error } — list_session_dirs response.
+sessionDirsDecoder : D.Decoder { ok : Bool, dirs : List D.Value, error : String }
+sessionDirsDecoder =
+    D.map3 (\ok dirs err -> { ok = ok, dirs = dirs, error = err })
+        (D.field "ok" D.bool)
+        (D.field "dirs" (D.list D.value))
+        (D.field "error" D.string)
 
 
 -- ─── Selector Search Keys ────────────────────────────────────────────

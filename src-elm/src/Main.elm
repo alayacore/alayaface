@@ -77,6 +77,9 @@ init _ =
       , planMetaDirListing = Nothing
       , planMetaReading = Nothing
       , planMetaReadQueue = []
+      , planMetaScanReqId = Nothing
+      , planMetaReadReqId = Nothing
+      , fsReqCounter = 0
       , planRunStatuses = Dict.empty
       , planTaskStarted = Set.empty
       , planOrder = []
@@ -138,11 +141,11 @@ subscriptions model =
         , Ports.onPresetActionResult (\raw -> PresetActionResult raw)
         , Ports.onSessionCreated (\id -> SessionCreated id)
         , Ports.onSessionCreateError (\err -> SessionCreateError err)
-        , Ports.onSessionDirs (\dirs -> SessionDirsResult dirs)
+        , Ports.onSessionDirs (\raw -> SessionDirsResult raw)
         , Ports.onSessionActionResult (\raw -> SessionActionResult raw)
-        , Ports.onFsListDir (\entries -> FsListDirResult entries)
-        , Ports.onFsHomeDir (\home -> FsHomeDirResult home)
-        , Ports.onFsReadFileDataUri (\uri -> FsReadFileResult uri)
+        , Ports.onFsListDir (\raw -> FsListDirResult raw)
+        , Ports.onFsHomeDir (\raw -> FsHomeDirResult raw)
+        , Ports.onFsReadFileDataUri (\raw -> FsReadFileResult raw)
         , Ports.onFsWriteResult (\raw -> FsWriteResult raw)
         , Ports.onFsReadResult (\raw -> FsReadResult raw)
         , Ports.onFsResolvePath (\result -> FsResolvePathResult result)
