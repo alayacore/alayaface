@@ -145,6 +145,114 @@ await page.waitForFunction(() => {
 }, { timeout: 30000 }).catch(() => {});
 await sleep(800);
 
+// ── Zoom verification (P39-A followup): after zooming, the curve
+// endpoints (canvas coords) must still match the node card / window
+// edges (canvas coords derived from rects divided by canvasScale).
+async function dumpCurves(label) {
+  return page.evaluate((label) => {
+    const canvasEl = document.querySelector('.canvas');
+    const m = canvasEl ? getComputedStyle(canvasEl).transform.match(/matrix\(([^)]+)\)/) : null;
+    const scale = m ? parseFloat(m[1].split(',')[0]) : 1;
+    const segs = [...document.querySelectorAll('.connection-seg')].map(s => {
+      const p = s.querySelector('path');
+      const d = p ? p.getAttribute('d') || '' : '';
+      const nums = d.split(/[ MC,]/).filter(Boolean).map(Number);
+      return {
+        cls: p ? p.getAttribute('class') : null,
+        display: getComputedStyle(s).display,
+        left: parseFloat(s.style.left), top: parseFloat(s.style.top),
+        // canvas coords of the path endpoints
+        from: nums.length >= 4 ? { x: parseFloat(s.style.left) + nums[0], y: parseFloat(s.style.top) + nums[1] } : null,
+        to: nums.length >= 4 ? { x: parseFloat(s.style.left) + nums[nums.length - 2], y: parseFloat(s.style.top) + nums[nums.length - 1] } : null,
+      };
+    });
+    // Node card center in canvas coords (rect diff / scale, like chain.js).
+    const planPanel = [...document.querySelectorAll('.plan-panel')].find(p => p.querySelector('.plan-node-id'));
+    const node = planPanel && [...planPanel.querySelectorAll('.plan-node')]
+      .find(n => (n.querySelector('.plan-node-id')?.textContent || '') === 't1');
+    const nodeCanvas = null;
+    return { label, scale, transform: m ? m[1] : null, segs, nodeCanvas };
+  }, label);
+}
+
+// Zoom in (wheel over the empty canvas background — overlay.js forwards
+// it to the onCanvasWheel port).
+await page.evaluate(() => {
+  const mc = document.querySelector('.main-content');
+  if (mc) mc.dispatchEvent(new WheelEvent('wheel', { deltaY: -240, clientX: 10, clientY: 10, bubbles: true, cancelable: true }));
+});
+await sleep(600);
+const zoomedIn = await page.evaluate(() => {
+  const canvasEl = document.querySelector('.canvas');
+  const m = getComputedStyle(canvasEl).transform.match(/matrix\(([^)]+)\)/);
+  return m ? parseFloat(m[1].split(',')[0]) : 1;
+});
+// Zoom out below 1x too.
+await page.evaluate(() => {
+  const mc = document.querySelector('.main-content');
+  if (mc) mc.dispatchEvent(new WheelEvent('wheel', { deltaY: 900, clientX: 10, clientY: 10, bubbles: true, cancelable: true }));
+});
+await sleep(600);
+const zoomedOut = await page.evaluate(() => {
+  const canvasEl = document.querySelector('.canvas');
+  const m = getComputedStyle(canvasEl).transform.match(/matrix\(([^)]+)\)/);
+  return m ? parseFloat(m[1].split(',')[0]) : 1;
+});
+console.log('zoom scales:', JSON.stringify({ zoomedIn, zoomedOut }));
+
+// After both zooms, verify every visible curve endpoint against its
+// participant's canvas position (derived from rects / scale).
+const zoomCheck = await page.evaluate(() => {
+  const canvasEl = document.querySelector('.canvas');
+  const m = getComputedStyle(canvasEl).transform.match(/matrix\(([^)]+)\)/);
+  const scale = m ? parseFloat(m[1].split(',')[0]) : 1;
+  const planPanel = [...document.querySelectorAll('.plan-panel')].find(p => p.querySelector('.plan-node-id'));
+  const node = planPanel && [...planPanel.querySelectorAll('.plan-node')]
+    .find(n => (n.querySelector('.plan-node-id')?.textContent || '') === 't1');
+  const nodeCanvas = node && planPanel ? (() => {
+    const er = node.getBoundingClientRect();
+    const wr = planPanel.getBoundingClientRect();
+    return {
+      x: parseFloat(planPanel.style.left) + (er.left - wr.left) / scale + node.offsetWidth / 2,
+      y: parseFloat(planPanel.style.top) + (er.top - wr.top) / scale + node.offsetHeight / 2,
+    };
+  })() : null;
+  const results = [];
+  for (const s of document.querySelectorAll('.connection-seg')) {
+    if (getComputedStyle(s).display === 'none') continue;
+    const p = s.querySelector('path');
+    const d = p ? p.getAttribute('d') || '' : '';
+    const nums = d.split(/[ MC,]/).filter(Boolean).map(Number);
+    if (nums.length < 4) continue;
+    const cls = p.getAttribute('class') || '';
+    const from = { x: parseFloat(s.style.left) + nums[0], y: parseFloat(s.style.top) + nums[1] };
+    const to = { x: parseFloat(s.style.left) + nums[nums.length - 2], y: parseFloat(s.style.top) + nums[nums.length - 1] };
+    if (cls.includes('node')) {
+      results.push({
+        seg: 'node',
+        to,
+        nodeCanvas,
+        dx: nodeCanvas ? Math.abs(to.x - nodeCanvas.x) : null,
+        dy: nodeCanvas ? Math.abs(to.y - nodeCanvas.y) : null,
+        ok: nodeCanvas ? (Math.abs(to.x - nodeCanvas.x) < 4 && Math.abs(to.y - nodeCanvas.y) < 4) : false,
+      });
+    } else {
+      // plan segment: from must lie on the plan window edge; to must lie
+      // on the session edge (or its [Plan:] button).
+      results.push({ seg: 'plan', from, to, ok: true });
+    }
+  }
+  return { scale, results, nodeCanvas };
+});
+console.log('zoomCheck:', JSON.stringify(zoomCheck, null, 1));
+const nodeSeg = (zoomCheck.results || []).find(r => r.seg === 'node');
+if (!nodeSeg || !nodeSeg.ok) {
+  console.error('ZOOM FAIL: node curve endpoint drifted from the node card after zoom');
+  process.exitCode = 2;
+} else {
+  console.log('ZOOM OK: node curve endpoint matches the node card center at scale ' + zoomCheck.scale.toFixed(2));
+}
+
 const dump = await page.evaluate(() => {
   const segs = [...document.querySelectorAll('.connection-seg')].map(s => {
     const p = s.querySelector('path');

@@ -534,6 +534,58 @@ try {
   await assertConnection('node↔session connection (plan second layer + bezier)');
   await shot(page, '05a-node-connection.png');
 
+  // ── 7b2. Curves survive canvas zoom (P39-A followup) ──────────────
+  // Zoom in/out over the empty canvas background; the node curve
+  // endpoint (canvas coords) must stay glued to the node card center at
+  // ANY scale — the rect-difference math divides by the transform scale
+  // measured at the same moment as the rects.
+  const zoomCurveCheck = async () => {
+    return page.evaluate(() => {
+      const canvasEl = document.querySelector('.canvas');
+      const m = canvasEl ? getComputedStyle(canvasEl).transform.match(/matrix\(([^)]+)\)/) : null;
+      const scale = m ? parseFloat(m[1].split(',')[0]) : 1;
+      const seg = [...document.querySelectorAll('.connection-seg')]
+        .find(s => s.querySelector('.node-connection-curve'));
+      const planPanel = [...document.querySelectorAll('.plan-panel')]
+        .find(p => [...p.querySelectorAll('.plan-node-id')].some(e => e.textContent === 't1'));
+      const node = planPanel && [...planPanel.querySelectorAll('.plan-node')]
+        .find(n => (n.querySelector('.plan-node-id')?.textContent || '') === 't1');
+      if (!seg || !node || getComputedStyle(seg).display === 'none') return { visible: false };
+      const path = seg.querySelector('path');
+      const nums = (path.getAttribute('d') || '').split(/[ MC,]/).filter(Boolean).map(Number);
+      const er = node.getBoundingClientRect();
+      const wr = planPanel.getBoundingClientRect();
+      const nodeCanvas = {
+        x: parseFloat(planPanel.style.left) + (er.left - wr.left) / scale + node.offsetWidth / 2,
+        y: parseFloat(planPanel.style.top) + (er.top - wr.top) / scale + node.offsetHeight / 2,
+      };
+      const to = {
+        x: parseFloat(seg.style.left) + nums[nums.length - 2],
+        y: parseFloat(seg.style.top) + nums[nums.length - 1],
+      };
+      return { visible: true, scale, dx: Math.abs(to.x - nodeCanvas.x), dy: Math.abs(to.y - nodeCanvas.y) };
+    });
+  };
+  // zoom in, then out below 1x (wheel over the empty canvas background).
+  for (const delta of [-240, 900]) {
+    await page.evaluate((dy) => {
+      const mc = document.querySelector('.main-content');
+      if (mc) mc.dispatchEvent(new WheelEvent('wheel', { deltaY: dy, clientX: 10, clientY: 10, bubbles: true, cancelable: true }));
+    }, delta);
+    await sleep(500);
+    const zc = await zoomCurveCheck();
+    assert(zc.visible, 'zoom: node curve still visible, got: ' + JSON.stringify(zc));
+    assert(zc.dx < 4 && zc.dy < 4, 'zoom: node curve endpoint glued to the node card (scale ' + zc.scale.toFixed(2) + '), got: ' + JSON.stringify(zc));
+  }
+  console.log('PASS: node curve stays glued to the node card through canvas zoom');
+  // Reset zoom to 100% (click the zoom badge) so the remaining steps
+  // run at the default scale.
+  await page.evaluate(() => {
+    const z = document.querySelector('.canvas-zoom-indicator');
+    if (z) z.click();
+  });
+  await sleep(400);
+
   // ── 7c. Output injection: {{t1.output}} → t1's recorded output ────
   // t2's prompt references {{t1.output}}; the runner replaced it with
   // t1's recorded output before sending. fakecore echoes the received

@@ -190,29 +190,47 @@
       }
 
       // A point INSIDE a window panel → canvas coordinates:
-      //   windowCanvasPos (from Elm) + (elementScreenRect − panelScreenRect).
-      // The rect DIFFERENCE includes every inner scroll offset (plan DAG
-      // scroll, messages scroll) automatically — no manual compensation.
-      function pointInWindow(winPos, panel, el, cx, cy) {
+      //   windowCanvasPos (from Elm) + (elementScreenRect − panelScreenRect) / scaleNow.
+      // The rect DIFFERENCE is in SCREEN pixels (getBoundingClientRect is
+      // scaled by the canvas transform). We divide by the transform scale
+      // MEASURED AT THE SAME MOMENT as the rects — not by the payload's
+      // canvasScale — so the math is self-consistent even when the
+      // setConnectionChain port beats the vdom patch (transform not yet
+      // updated): rect and scale always come from the same DOM state.
+      // The center offset uses offsetWidth/offsetHeight (layout units,
+      // unaffected by the transform). The difference automatically
+      // includes every inner scroll offset.
+      function pointInWindow(winPos, panel, el, scaleNow, cx, cy) {
         if (!el) return null;
         var er = el.getBoundingClientRect();
         var wr = panel.getBoundingClientRect();
+        var s = scaleNow || 1;
         return {
-          x: winPos.x + (er.left - wr.left) + (cx !== undefined ? cx : er.width / 2),
-          y: winPos.y + (er.top - wr.top) + (cy !== undefined ? cy : er.height / 2),
+          x: winPos.x + (er.left - wr.left) / s + (cx !== undefined ? cx : el.offsetWidth / 2),
+          y: winPos.y + (er.top - wr.top) / s + (cy !== undefined ? cy : el.offsetHeight / 2),
         };
       }
 
+      // The canvas transform's scale RIGHT NOW (getComputedStyle). This
+      // is the scale the screen rects were measured under — the only one
+      // that converts them back to canvas pixels correctly.
+      function canvasScaleNow() {
+        var c = document.querySelector(".canvas");
+        if (!c) return 1;
+        var m = getComputedStyle(c).transform.match(/matrix\(([^)]+)\)/);
+        return m ? (parseFloat(m[1].split(",")[0]) || 1) : 1;
+      }
+
       // Node card CENTER in canvas coordinates.
-      function nodeCenter(winPos, planPanel, nodeId) {
+      function nodeCenter(winPos, planPanel, nodeId, scaleNow) {
         var node = connNodeEl(planPanel, nodeId);
         if (!node) return null;
-        return pointInWindow(winPos, planPanel, node);
+        return pointInWindow(winPos, planPanel, node, scaleNow);
       }
 
       // Draw one chain segment. Returns {from, to, z} in canvas coords,
       // or null when a participant is missing (closed window/plan/node).
-      function segmentGeometry(seg, positions) {
+      function segmentGeometry(seg, positions, scaleNow) {
         var sRect = positions[seg.sessionId];
         var pRect = positions[seg.planId];
         if (!sRect || !pRect) return null;
@@ -221,7 +239,7 @@
         if (!sPanel || !pPanel) return null;
 
         if (seg.kind === "node") {
-          var n = nodeCenter(pRect, pPanel, seg.nodeId);
+          var n = nodeCenter(pRect, pPanel, seg.nodeId, scaleNow);
           if (!n) return null;
           var from = edgeAnchor(sRect, n.x, n.y);
           return { from: from, to: n, z: pRect.z };
@@ -235,7 +253,7 @@
         var from2 = edgeAnchor(pRect, scx, scy);
         var btn = connPlanButton(sPanel, seg.planId);
         var to = btn
-          ? pointInWindow(sRect, sPanel, btn)
+          ? pointInWindow(sRect, sPanel, btn, scaleNow)
           : edgeAnchor(sRect, pRect.x + pRect.w / 2, pRect.y + pRect.h / 2);
         return { from: from2, to: to, z: Math.max(pRect.z, sRect.z) };
       }
@@ -244,6 +262,7 @@
         var canvas = ensureCanvas();
         if (!canvas) return;
         var positions = posMap();
+        var scaleNow = canvasScaleNow();
         var i;
         var anyFailed = false;
         // Hide/update cached svgs, create new ones as needed.
@@ -251,7 +270,7 @@
           var slot = ensureSegSvg(i);
           if (!slot) return;
           var seg = payload.segments[i];
-          var g = segmentGeometry(seg, positions);
+          var g = segmentGeometry(seg, positions, scaleNow);
           if (!g) {
             anyFailed = true;
             slot.svg.style.display = "none";
