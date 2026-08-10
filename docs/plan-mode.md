@@ -97,7 +97,7 @@ Node succeeds → unlocks downstream → parallel scheduling (≤ concurrency ca
 "New Plan Session" entry, the `[Plan]` title prefix (`planSessionIds`),
 the `builtinTools=""` planner spawn, and the role-locked planner prompt.
 Every session is now plan-capable: the planner hint
-(`planSystemPrompt`, a constant in App/Update.elm) is injected via
+(`planSystemPrompt`, a constant in Plan/Update.elm) is injected via
 `--system` on ALL user-created sessions — it is advisory ("complex tasks
 → output a plan JSON first"), with no role lock; the model keeps its
 tools and may still execute directly. Plan detection (below) works in any
@@ -293,7 +293,7 @@ E2E covers the gate.
   boot SMs (version/task/model_list/model/reasoning/video_config) →
   replayed history content → **ready SM**. NO fallback: cores without the
   ready SM are unsupported (a resumed session's later LIVE plan messages
-  would never auto-create). `isSessionReady` in App/Update.elm.
+  would never auto-create). `isSessionReady` in Plan/Update.elm.
 - decode/validate (`type` **required**: missing or wrong value rejected, no backward compat) → normalize → generate planId → `fs_write_file_text` writes `sessions/<originSessionId>/plans/<planId>/<planId>.json` (the plan lives inside the session that created it) → opens the Plan window.
 
 ### 6.8 Recursion: depth, global limit, auto-run

@@ -13,8 +13,22 @@ src-elm/              ← Elm frontend (no npm, no bundler)
 │   ├── Main.elm       — Thin app shell: main/init/subscriptions
 │   ├── App/
 │   │   ├── Types.elm  — App-level Model, Msg, editor/window types
-│   │   ├── Update.elm — All update logic (transport, overlays, windows)
+│   │   ├── Update.elm — Message dispatch + session/overlay handling;
+│   │   │                delegates to Plan/Update and App/Windows
+│   │   ├── Windows.elm— Window/canvas placement, zoom/pan, resize,
+│   │   │                z-index & connection-chain helpers (pure)
 │   │   └── View.elm   — All view functions
+│   ├── Plan/
+│   │   ├── Update.elm — Plan Mode update logic (auto-create, feedback,
+│   │   │                restart cascade, meta scan, runner wiring) —
+│   │   │                pure, directly unit-tested
+│   │   ├── Runner.elm — Plan state machine (pure)
+│   │   ├── Types.elm  — Plan schema, run state, JSON codecs
+│   │   ├── Meta.elm   — Plan meta.json model
+│   │   ├── Detect.elm — Plan-message detection in session history
+│   │   ├── Layout.elm — DAG node layout (pure)
+│   │   ├── View.elm   — Plan window / DAG rendering
+│   │   └── Frames.elm — SM task-frame state machine (pure)
 │   ├── Ports.elm      — All Tauri IPC ports (inbound + outbound)
 │   ├── Fuzzy.elm      — Fuzzy string matching
 │   └── Session/
