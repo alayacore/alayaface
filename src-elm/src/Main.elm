@@ -81,6 +81,11 @@ init _ =
       , planMetaReadReqId = Nothing
       , fsReqCounter = 0
       , planRunStatuses = Dict.empty
+      , planCascadePreview = Nothing
+      , planCascade = Nothing
+      , planCascadeOpenQueue = []
+      , planSuppressFeedback = Set.empty
+      , planCascadeFork = Nothing
       , planMessageCounts = Dict.empty
       , planTaskStarted = Set.empty
       , planOrder = []
@@ -142,6 +147,7 @@ subscriptions model =
         , Ports.onPresetActionResult (\raw -> PresetActionResult raw)
         , Ports.onSessionCreated (\id -> SessionCreated id)
         , Ports.onSessionCreateError (\err -> SessionCreateError err)
+        , Ports.onCascadeForkResult (\raw -> PlanCascadeForkResult raw)
         , Ports.onSessionDirs (\raw -> SessionDirsResult raw)
         , Ports.onSessionActionResult (\raw -> SessionActionResult raw)
         , Ports.onFsListDir (\raw -> FsListDirResult raw)

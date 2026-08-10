@@ -8,6 +8,7 @@ module Plan.Meta exposing
     , plansOwnedBySession
     , depthOf
     , parentPlanIdOfSession
+    , parentSessionOf
     , depthForOrigin
     , shouldInjectPlanPrompt
     , shouldAutoRun
@@ -91,7 +92,31 @@ type alias PlanMeta =
     -- the run status changes (runStepIn), so a reopened session's
     -- status bar shows e.g. Completed instead of a placeholder.
     , lastStatus : String
+    -- The plan that owns this plan's origin session as a node (P38 re-run
+    -- cascade): computed once at creation from the parent plan's run
+    -- state, persisted so the ANCESTRY is queryable from the meta index
+    -- alone — closed ancestor windows (auto-closed on completion, D11)
+    -- still participate in the cascade's impact scope. Nothing = the
+    -- origin is a plain session (top-level plan).
+    , parentPlanId : Maybe String
+    -- P38 fork-based truncation: when a re-run cascade replaces the
+    -- parent conversation with a FORK (truncated history), the fork's
+    -- session id is recorded here. `origin` KEEPS the creation session
+    -- (it locates the plan's own dir: sessions/<origin>/plans/<planId>/);
+    -- `parentSessionId` is the session where the plan's result actually
+    -- lives (status-bar binding, feedback routing, cascade walk). The
+    -- original is the fallback when no fork happened. Persisted so the
+    -- binding survives restart.
+    , parentSessionId : Maybe String
     }
+
+
+{-| The session where the plan's result lives: the forked parent
+conversation (P38) if one replaced it, else the creation origin.
+-}
+parentSessionOf : PlanMeta -> String
+parentSessionOf meta =
+    Maybe.withDefault meta.origin.sessionId meta.parentSessionId
 
 
 {-| The meta file path for a plan id (same directory as the plan file —
@@ -105,34 +130,38 @@ metaPathFor planDir planId =
 encodeMeta : PlanMeta -> E.Value
 encodeMeta m =
     E.object
-        [ ( "origin"
-          , E.object
-                [ ( "sessionId", E.string m.origin.sessionId )
-                , ( "planIndex", E.int m.origin.planIndex )
-                ]
-          )
-        , ( "feedbacks"
-          , E.list
-                (\f ->
-                    E.object
-                        [ ( "at", E.int f.at )
-                        , ( "status", E.string f.status )
-                        , ( "text", E.string f.text )
-                        , ( "planId", E.string f.planId )
-                        ]
-                )
-                m.feedbacks
-          )
-        , ( "depth", E.int m.depth )
-        , ( "created_at", E.int m.createdAt )
-        , ( "name", E.string m.name )
-        , ( "last_status", E.string m.lastStatus )
-        ]
+        (List.filterMap identity
+            [ Just ( "origin"
+              , E.object
+                    [ ( "sessionId", E.string m.origin.sessionId )
+                    , ( "planIndex", E.int m.origin.planIndex )
+                    ]
+              )
+            , Just ( "feedbacks"
+              , E.list
+                    (\f ->
+                        E.object
+                            [ ( "at", E.int f.at )
+                            , ( "status", E.string f.status )
+                            , ( "text", E.string f.text )
+                            , ( "planId", E.string f.planId )
+                            ]
+                    )
+                    m.feedbacks
+              )
+            , Just ( "depth", E.int m.depth )
+            , Just ( "created_at", E.int m.createdAt )
+            , Just ( "name", E.string m.name )
+            , Just ( "last_status", E.string m.lastStatus )
+            , Maybe.map (\p -> ( "parent_plan_id", E.string p )) m.parentPlanId
+            , Maybe.map (\s -> ( "parent_session_id", E.string s )) m.parentSessionId
+            ]
+        )
 
 
 decodeMeta : D.Decoder PlanMeta
 decodeMeta =
-    D.map6 PlanMeta
+    D.map8 PlanMeta
         (D.field "origin"
             (D.map2 Origin
                 (D.field "sessionId" D.string)
@@ -153,6 +182,10 @@ decodeMeta =
         (D.field "created_at" D.int)
         (D.field "name" D.string)
         (D.field "last_status" D.string)
+        -- Lenient: old meta files (pre-P38) have no parent_plan_id.
+        (D.oneOf [ D.field "parent_plan_id" D.string |> D.map Just, D.succeed Nothing ])
+        -- Lenient: pre-fork meta has no parent_session_id.
+        (D.oneOf [ D.field "parent_session_id" D.string |> D.map Just, D.succeed Nothing ])
 
 
 {-| Every plan id whose meta `origin` is the given ON-DISK session id.

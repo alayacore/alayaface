@@ -32,6 +32,16 @@ nodeState id run =
             Debug.todo ("missing node " ++ id)
 
 
+runWithStatuses : P.Plan -> List ( String, P.NodeStatus ) -> P.RunState
+runWithStatuses plan pairs =
+    List.foldl
+        (\( id, st ) run ->
+            { run | nodes = Dict.update id (Maybe.map (\n -> { n | status = st })) run.nodes }
+        )
+        (runFromPlan plan)
+        pairs
+
+
 statuses : P.RunState -> Dict String P.NodeStatus
 statuses run =
     Dict.map (\_ n -> n.status) run.nodes
@@ -1236,5 +1246,65 @@ tests =
                     in
                     Expect.equal P.Completed restored.status
                         |> Expect.onFail "terminal run keeps its status"
+            ]
+        , describe "ResumeBranchFrom (P38: re-run the downstream branch after a resumed node succeeds)"
+            [ test "resets transitive downstream, keeps the node + parallel branches" <|
+                \_ ->
+                    let
+                        plan =
+                            planFromJson """{ "type": "alayaface-plan", "name": "x", "concurrency": 4, "tasks": [
+                                  { "id": "a", "title": "A", "prompt": "a" },
+                                  { "id": "b", "title": "B", "prompt": "b", "depends_on": ["a"] },
+                                  { "id": "c", "title": "C", "prompt": "c", "depends_on": ["b"] },
+                                  { "id": "d", "title": "D", "prompt": "d" }
+                                ] }"""
+
+                        run =
+                            runWithStatuses plan
+                                [ ( "a", P.Succeeded )
+                                , ( "b", P.Succeeded )
+                                , ( "c", P.Succeeded )
+                                , ( "d", P.Succeeded )
+                                ]
+
+                        ( run2, _ ) =
+                            R.step 1000 (R.ResumeBranchFrom "a") run
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal P.Succeeded (nodeState "a" run2).status |> Expect.onFail "node itself keeps Succeeded"
+                        , \_ -> Expect.equal P.Starting (nodeState "b" run2).status |> Expect.onFail "direct successor resets and relaunches (Starting)"
+                        , \_ -> Expect.equal P.Pending (nodeState "c" run2).status |> Expect.onFail "indirect successor resets to Pending"
+                        , \_ -> Expect.equal 0 (nodeState "b" run2).attempts |> Expect.onFail "attempts cleared"
+                        , \_ -> Expect.equal Nothing (nodeState "b" run2).sessionId |> Expect.onFail "live binding cleared"
+                        , \_ -> Expect.equal P.Succeeded (nodeState "d" run2).status |> Expect.onFail "parallel branch keeps its result"
+                        , \_ -> Expect.equal P.InProgress run2.status
+                        ]
+                        ()
+            , test "WaitingForPlan successors are left alone (their sub-plan resumes them)" <|
+                \_ ->
+                    let
+                        run =
+                            runWithStatuses chainPlan
+                                [ ( "a", P.Succeeded )
+                                , ( "b", P.WaitingForPlan )
+                                , ( "c", P.Pending )
+                                ]
+
+                        ( run2, _ ) =
+                            R.step 1000 (R.ResumeBranchFrom "a") run
+                    in
+                    Expect.equal P.WaitingForPlan (nodeState "b" run2).status
+                        |> Expect.onFail "delegated successor keeps WaitingForPlan"
+            , test "no successors → no-op (status untouched)" <|
+                \_ ->
+                    let
+                        ( run2, _ ) =
+                            R.step 1000 (R.ResumeBranchFrom "a") (runFromPlan singlePlan)
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal P.Pending (nodeState "a" run2).status
+                        , \_ -> Expect.equal P.NotStarted run2.status
+                        ]
+                        ()
             ]
         ]

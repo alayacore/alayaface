@@ -86,7 +86,7 @@ One-way push (server → client), message format:
 | `close_all_sessions` | `POST /rpc/close_all_sessions` | `clientId` | — (graceful close of the CALLING client's sessions only — empty `clientId` = all; the frontend fires it once on page load so sessions orphaned by a page refresh are reclaimed — otherwise `resume_session` fails with "Session is already active" until the backend restarts) |
 | `list_session_dirs` | `POST /rpc/list_session_dirs` | — | `[{id, created_at}]` (top-level session dirs only; plan subtrees excluded) |
 | `delete_session_dir` | `POST /rpc/delete_session_dir` | `sessionId`, `planId`(nullable), `nodeId`(nullable), `originSessionId`(nullable) | — |
-| `fork_session` | `POST /rpc/fork_session` | `sourceSessionId`, `historyId`, `binaryPath` | string sessionId |
+| `fork_session` | `POST /rpc/fork_session` | `sourceSessionId`, `historyId`, `binaryPath` + optional (P38): `toolConfirm`, `preset`, `builtinTools`, `systemPrompt`, `workDir`, `planId`, `nodeId`, `originSessionId`, `clientId` | string sessionId |
 | `alayacore_send_prompt` | `POST /rpc/alayacore_send_prompt` | `sessionId`, `text`, `media:[{media_type,uri}]` | — |
 | `alayacore_cancel` | `POST /rpc/alayacore_cancel` | `sessionId` | — |
 | `alayacore_model_set` | `POST /rpc/alayacore_model_set` | `sessionId`, `modelId`(int) | — |

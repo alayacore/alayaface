@@ -416,12 +416,24 @@ func DeleteSessionDir(h *Handler, w http.ResponseWriter, r *http.Request) error 
 }
 
 // ForkSession forks a running session up to a history point and starts
-// the new session.
+// the new session. Optional plan-node args (P38): a forked plan NODE
+// session lands in the SAME nested subtree as the original and keeps
+// the node's config/tools/system prompt — so a cascade fork can replace
+// the node session in place.
 func ForkSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	var args struct {
-		SourceSessionID string `json:"sourceSessionId"`
-		HistoryID       string `json:"historyId"`
-		BinaryPath      string `json:"binaryPath"`
+		SourceSessionID string  `json:"sourceSessionId"`
+		HistoryID       string  `json:"historyId"`
+		BinaryPath      string  `json:"binaryPath"`
+		ToolConfirm     *string `json:"toolConfirm"`
+		Preset          *string `json:"preset"`
+		BuiltinTools    *string `json:"builtinTools"`
+		SystemPrompt    *string `json:"systemPrompt"`
+		WorkDir         *string `json:"workDir"`
+		PlanID          *string `json:"planId"`
+		NodeID          *string `json:"nodeId"`
+		OriginSessionID *string `json:"originSessionId"`
+		ClientID        string  `json:"clientId"`
 	}
 	if err := decodeArgs(r, &args); err != nil {
 		return err
@@ -432,7 +444,24 @@ func ForkSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	newID := uuid.NewString()
-	newSessionDir, err := dirs.CreateSessionDir(sessionsDir, newID)
+	presetName := ""
+	if args.Preset != nil {
+		presetName = *args.Preset
+	}
+	var newSessionDir string
+	if args.PlanID != nil && strings.TrimSpace(*args.PlanID) != "" {
+		originID := ""
+		if args.OriginSessionID != nil {
+			originID = *args.OriginSessionID
+		}
+		nodeID := ""
+		if args.NodeID != nil {
+			nodeID = *args.NodeID
+		}
+		newSessionDir, err = dirs.CreatePlanSessionDirFrom(sessionsDir, originID, *args.PlanID, nodeID, newID, presetName)
+	} else {
+		newSessionDir, err = dirs.CreateSessionDirFrom(sessionsDir, newID, presetName)
+	}
 	if err != nil {
 		return err
 	}
@@ -455,14 +484,63 @@ func ForkSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 
+	// Mirror create_session's optional overrides so the fork keeps the
+	// node session's tool/preset/system-prompt behavior.
+	tc := ""
+	if args.ToolConfirm != nil && strings.TrimSpace(*args.ToolConfirm) != "" {
+		tc = *args.ToolConfirm
+	} else {
+		if eff, err := effectiveToolConfirm(); err != nil {
+			log.Printf("[settings] tool-confirm unavailable, spawning without it: %v", err)
+		} else {
+			tc = eff
+		}
+	}
+	var bt *string
+	if args.BuiltinTools != nil {
+		v := *args.BuiltinTools
+		bt = &v
+	} else {
+		if eff, err := effectiveBuiltinTools(); err != nil {
+			log.Printf("[settings] builtin-tools unavailable, spawning without it: %v", err)
+		} else if eff != "" {
+			bt = &eff
+		}
+	}
+	sp := ""
+	if args.SystemPrompt != nil {
+		sp = *args.SystemPrompt
+	}
+	wd := ""
+	if args.WorkDir != nil && strings.TrimSpace(*args.WorkDir) != "" {
+		wd = *args.WorkDir
+		if err := os.MkdirAll(wd, 0o755); err != nil {
+			return fmt.Errorf("Cannot create work dir %s: %w", wd, err)
+		}
+	}
+	// Persist the effective spawn args so resume_session re-applies them
+	// (same as create_session).
+	if err := dirs.WriteSpawnArgs(newSessionDir, dirs.SpawnArgs{
+		ToolConfirm:  tc,
+		BuiltinTools: bt,
+		SystemPrompt: sp,
+		WorkDir:      wd,
+	}); err != nil {
+		log.Printf("[session] warning: cannot persist spawn args for %s: %v", newSessionDir, err)
+	}
+
 	bin := ResolveBinary(args.BinaryPath)
 	s, err := h.Sessions.Create(session.CreateConfig{
-		ID:          newID,
-		Binary:      bin,
-		ConfigPath:  configPath,
-		SessionFile: targetFile,
-		SessionDir:  newSessionDir,
-		ToolConfirm: "",
+		ID:           newID,
+		Binary:       bin,
+		ConfigPath:   configPath,
+		SessionFile:  targetFile,
+		SessionDir:   newSessionDir,
+		ToolConfirm:  tc,
+		BuiltinTools: bt,
+		SystemPrompt: sp,
+		WorkDir:      wd,
+		Owner:        args.ClientID,
 	}, h.Hub, h.Cache)
 	if err != nil {
 		return err

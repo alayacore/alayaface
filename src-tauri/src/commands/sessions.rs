@@ -373,17 +373,42 @@ pub async fn delete_session_dir(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn fork_session(
     app: AppHandle,
     source_session_id: String,
     history_id: String,
     binary_path: String,
+    tool_confirm: Option<String>,
+    preset: Option<String>,
+    builtin_tools: Option<String>,
+    system_prompt: Option<String>,
+    work_dir: Option<String>,
+    plan_id: Option<String>,
+    node_id: Option<String>,
+    origin_session_id: Option<String>,
+    client_id: Option<String>,
     sessions: State<'_, SessionMap>,
     model_cache: State<'_, ModelCache>,
 ) -> Result<String, String> {
     let (_template_dir, sessions_dir) = dirs::ensure()?;
     let new_id = Uuid::new_v4().to_string();
-    let new_session_dir = dirs::create_session_dir(&sessions_dir, &new_id)?;
+    let preset_name = preset.unwrap_or_default();
+    // P38: a forked plan NODE session lands in the SAME nested subtree
+    // as the original (sessions/<origin>/plans/<planId>/<nodeId>/<uuid>/)
+    // and carries the node's config — so the fork replaces the node
+    // session in place. Plain forks stay at sessions/<uuid>/.
+    let new_session_dir = match &plan_id {
+        Some(pid) if !pid.trim().is_empty() => dirs::create_session_dir_nested(
+            &sessions_dir,
+            origin_session_id.as_deref().unwrap_or(""),
+            pid,
+            node_id.as_deref().unwrap_or(""),
+            &new_id,
+            &preset_name,
+        )?,
+        _ => dirs::create_session_dir_from(&sessions_dir, &new_id, &preset_name)?,
+    };
     let target_file = new_session_dir.join("session.alaya").to_string_lossy().to_string();
     let config_path = new_session_dir.join("config").to_string_lossy().to_string();
 
@@ -400,6 +425,28 @@ pub async fn fork_session(
     wait_for_file(&target_file).await?;
 
     let bin = resolve_binary(&binary_path);
+    // Mirror create_session's optional overrides so the fork keeps the
+    // node session's tool/preset/system-prompt behavior.
+    let tc = match tool_confirm {
+        Some(v) if !v.trim().is_empty() => v,
+        _ => crate::commands::effective_tool_confirm().unwrap_or_else(|e| {
+            log::warn!("[settings] tool-confirm unavailable, spawning without it: {e}");
+            String::new()
+        }),
+    };
+    let bt: Option<String> = match builtin_tools {
+        Some(v) => Some(v.to_string()),
+        None => crate::commands::effective_builtin_tools().ok().filter(|s| !s.is_empty()),
+    };
+    let sp = system_prompt.unwrap_or_default();
+    let wd = match &work_dir {
+        Some(d) if !d.trim().is_empty() => {
+            std::fs::create_dir_all(d)
+                .map_err(|e| format!("Cannot create work dir {}: {}", d, e))?;
+            Some(d.clone())
+        }
+        _ => None,
+    };
     session::create(session::SessionConfig {
         id: &new_id,
         app: &app,
@@ -409,10 +456,10 @@ pub async fn fork_session(
         session_dir: new_session_dir,
         sessions: &sessions,
         model_cache: &model_cache,
-        tool_confirm: "",
-        builtin_tools: None,
-        system_prompt: "",
-        work_dir: None,
-        owner: "",
+        tool_confirm: &tc,
+        builtin_tools: bt.as_deref(),
+        system_prompt: &sp,
+        work_dir: wd,
+        owner: &client_id.unwrap_or_default(),
     }).await
 }

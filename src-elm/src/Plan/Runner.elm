@@ -36,6 +36,7 @@ frame arriving while Starting (before the prompt is sent) is ignored.
 -}
 
 import Dict exposing (Dict)
+import Plan.Cascade as PC
 import Plan.Inject
 import Plan.Types as PT
 
@@ -52,6 +53,13 @@ type Event
     -- sub-plan is restarted instead (Update-level cascade) and the node
     -- waits for its feedback again.
     | RestartRun
+    -- P38 re-run cascade: after a resumed node succeeds, reset its
+    -- transitive DOWNSTREAM branch so the tasks that injected its (now
+    -- different) output re-run; the node itself and parallel independent
+    -- branches keep their results. WaitingForPlan successors are left
+    -- alone (their sub-plan feedback resumes them — v1 edge: their
+    -- answer may still reflect the pre-cascade context).
+    | ResumeBranchFrom String
     | SessionCreatedFor String String
     | SessionCreateFailed String String
     -- TaskDone sid isError output delegated: `delegated` is true when the
@@ -101,6 +109,9 @@ step now ev run =
 
                 RestartRun ->
                     ( restartRun run, [] )
+
+                ResumeBranchFrom nodeId ->
+                    ( resumeBranchFrom nodeId run, [] )
 
                 SessionCreatedFor nodeId sid ->
                     -- Sending the node prompt is the direct consequence of
@@ -232,6 +243,63 @@ restartRun run =
                 run.nodes
     in
     { run | status = PT.InProgress, nodes = nodes, finishedAt = Nothing }
+
+
+{-| P38 re-run cascade: after the resumed node succeeds, reset its
+transitive downstream branch (direct + indirect dependents) so tasks
+that injected its (now different) output re-run from scratch. The node
+itself and parallel independent branches keep their results.
+WaitingForPlan successors are left alone — their own sub-plan feedback
+resumes them (v1 edge: that answer may still reflect pre-cascade
+context; the branch re-run covers everything that actually depends on
+the changed output).
+-}
+resumeBranchFrom : String -> PT.RunState -> PT.RunState
+resumeBranchFrom nodeId run =
+    let
+        branch =
+            PC.transitiveSuccessors nodeId run.plan.tasks
+
+        resetNode n =
+            { n
+                | status = PT.Pending
+                , attempts = 0
+                , sessionId = Nothing
+                , lastSessionId = Nothing
+                , failures = []
+                , startedAt = Nothing
+                , finishedAt = Nothing
+                , output = Nothing
+            }
+
+        nodes =
+            Dict.map
+                (\id n ->
+                    if List.member id branch && n.status /= PT.WaitingForPlan then
+                        resetNode n
+
+                    else
+                        n
+                )
+                run.nodes
+
+        anyReset =
+            List.any
+                (\id ->
+                    case Dict.get id run.nodes of
+                        Just n ->
+                            List.member id branch && n.status /= PT.WaitingForPlan
+
+                        Nothing ->
+                            False
+                )
+                (Dict.keys run.nodes)
+    in
+    { run
+        | nodes = nodes
+        , status = if anyReset then PT.InProgress else run.status
+        , finishedAt = Nothing
+    }
 
 
 bindSession : String -> String -> PT.RunState -> ( PT.RunState, List PT.Effect )

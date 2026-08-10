@@ -24,6 +24,7 @@ import Fuzzy
 import Plan.Types as PT
 import Plan.Meta as PM
 import Plan.Detect
+import Plan.Cascade as PC
 import Plan.View
 import Overlay.ConfirmTool
 import Overlay.Settings
@@ -90,6 +91,7 @@ view model =
         , viewMcpEditorOverlay model
         , viewSettingsEditorOverlay model
         , viewGlobalConfigOverlay model
+        , viewPlanCascadeOverlay model
         ]
 
 
@@ -1007,6 +1009,87 @@ viewPlanRunLog win =
                     (List.reverse (List.take 15 win.runLog))
                 )
             ]
+
+
+{-| P38: re-run impact-scope confirmation (§7.4.2) — shown before a Run
+click that would truncate parent sessions and cascade upward. One
+authorization covers the whole chain (no per-level dialogs).
+-}
+viewPlanCascadeOverlay : Model -> Html Msg
+viewPlanCascadeOverlay model =
+    case model.planCascadePreview of
+        Nothing ->
+            Html.text ""
+
+        Just scope ->
+            let
+                totalUser =
+                    scope.rootUserMessages
+                        + List.sum (List.map .truncateUserMessages scope.levels)
+            in
+            viewOverlay PlanCascadeCancel
+                [ Html.div [ Attr.class "cascade-page" ]
+                    [ Html.div [ Attr.class "sel-page-title" ]
+                        [ Html.text ("Re-run affects " ++ String.fromInt (1 + List.length scope.levels) ++ " plan(s)") ]
+                    , Html.div [ Attr.class "cascade-scope" ]
+                        [ viewCascadeChain scope ]
+                    , Html.div [ Attr.class "cascade-warning" ]
+                        [ Html.text "The old result and everything after it is truncated in each affected session, then the new result is inserted and the chain continues upward." ]
+                    , if totalUser > 0 then
+                        Html.div [ Attr.class "cascade-user-warning" ]
+                            [ Html.text ("⚠ " ++ String.fromInt totalUser ++ " of your message(s) typed after the old results will be removed.") ]
+
+                      else
+                        Html.text ""
+                    , if List.isEmpty scope.closePlanIds then
+                        Html.text ""
+
+                      else
+                        Html.div [ Attr.class "cascade-close-plans" ]
+                            [ Html.text ("Child plans to close: " ++ String.join ", " scope.closePlanIds) ]
+                    , Html.div [ Attr.class "sel-page-input-row" ]
+                        [ Html.button
+                            [ Attr.class "confirm-page-btn confirm-page-btn-allow"
+                            , Ev.onClick PlanCascadeConfirm
+                            ]
+                            [ Html.text "Re-run" ]
+                        , Html.button
+                            [ Attr.class "confirm-page-btn"
+                            , Ev.onClick PlanCascadeCancel
+                            ]
+                            [ Html.text "Cancel" ]
+                        ]
+                    ]
+                ]
+
+
+viewCascadeChain : PC.ImpactScope -> Html Msg
+viewCascadeChain scope =
+    let
+        rootPart =
+            scope.rootPlanName ++ " (re-run)"
+
+        levelPart lvl =
+            lvl.planName
+                ++ " (partial: "
+                ++ (if List.isEmpty lvl.branchNodes then
+                        "affected branch"
+
+                    else
+                        String.join ", " lvl.branchNodes
+                   )
+                ++ ")"
+
+        topPart =
+            case scope.topSessionId of
+                Just _ ->
+                    "top session"
+
+                Nothing ->
+                    "…"
+    in
+    Html.div [ Attr.class "cascade-chain" ]
+        [ Html.text (String.join "  →  " (rootPart :: List.map levelPart scope.levels ++ [ topPart ])) ]
 
 
 viewChatArea : Model -> T.SessionState -> Html Msg

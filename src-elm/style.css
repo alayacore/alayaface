@@ -788,7 +788,10 @@ body {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  z-index: 200;
+  /* Windows grow z on every activation (unbounded) and the connection
+     curves sit between them — 200 was reachable, letting windows/curves
+     cover the dialog. Always on top. */
+  z-index: 1000000;
   padding: 0;
   overflow-y: auto;
 }
@@ -1979,7 +1982,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 210;
+  z-index: 1000001;
   cursor: pointer;
   animation: overlay-page-in 0.15s ease-out;
 }
@@ -2303,6 +2306,52 @@ body {
 .plan-info-path {
   font-size: 0.7rem;
   color: #888;
+  word-break: break-all;
+}
+
+/* ─── P38 re-run cascade confirmation (§7.4.2) ──────────────────── */
+
+/* Centered card inside the generic overlay (same recipe as .sel-page /
+   .confirm-page: align-self center + max-width). */
+.cascade-page {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  max-width: 520px;
+  width: 100%;
+  align-self: center;
+  gap: 8px;
+}
+
+.cascade-scope { margin-bottom: 4px; }
+.cascade-chain {
+  font-size: 0.78rem;
+  background: #f6f8ff;
+  border: 1px solid #e3e8f5;
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: #2b3a67;
+  word-break: break-all;
+}
+.cascade-warning { font-size: 0.75rem; color: #666; margin: 4px 0 8px; }
+.cascade-user-warning {
+  font-size: 0.75rem;
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+}
+.cascade-close-plans {
+  font-size: 0.72rem;
+  color: #991b1b;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-bottom: 8px;
   word-break: break-all;
 }
 

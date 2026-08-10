@@ -46,6 +46,7 @@ Extracted from App/Update.elm (D2). Types live in App.Types.
 import Dict exposing (Dict)
 import App.Types exposing (..)
 import App.NodeConnection as NC
+import Plan.Meta as PM
 
 
 defaultWinW : Int
@@ -140,7 +141,7 @@ chainCtx model =
     { nodeSessions = model.planNodeSessions
     , resumedFrom = model.planResumedFrom
     , liveSessions = Dict.map (\_ _ -> ()) model.sessions
-    , planOrigins = Dict.map (\_ meta -> meta.origin.sessionId) model.planMetas
+    , planOrigins = Dict.map (\_ meta -> PM.parentSessionOf meta) model.planMetas
     }
 
 

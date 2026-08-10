@@ -31,10 +31,11 @@ module Plan.Update exposing
     , runStepIn
     , startRunIn
     , feedbackCompletedPlan
-    , feedbackSummary
     , appendMetaFeedback
     , persistRunStatus
     , restartPlanCascade
+    , openNextOrStart
+    , adoptCascadeFork
     , subPlansOfPlan
     , runDiffLog
     , applyEffectsIn
@@ -69,6 +70,7 @@ import Dict exposing (Dict)
 import Json.Decode as D
 import Json.Encode as E
 import Process
+import Set exposing (Set)
 import Task
 import Time
 import Session.Types as T
@@ -76,6 +78,7 @@ import Session.Protocol as P
 import Plan.Types as PT
 import Plan.Runner as R
 import Plan.Meta as PM
+import Plan.Cascade as PC
 import Plan.Detect
 import Plan.Frames
 import Ports
@@ -472,6 +475,9 @@ messageBoundToPlan model sid planIndex =
         (\_ meta acc ->
             acc
                 || (meta.origin.sessionId == onDiskId && meta.origin.planIndex == planIndex)
+                -- P38: a fork may have replaced the creation session
+                -- (truncated history); the binding follows it.
+                || (PM.parentSessionOf meta == onDiskId && meta.origin.planIndex == planIndex)
         )
         False
         model.planMetas
@@ -743,16 +749,35 @@ runStepIn dispatch planId now ev model =
                                         feedbackCompletedPlan planId now model2
                                 in
                                 ( mF
-                                , Cmd.batch
-                                    [ cF
-                                    , Task.perform (\_ -> PlanClose planId) Time.now
-                                    ]
+                                , if mF.planCascadeFork == Nothing then
+                                    -- D11: no fork pending — close the
+                                    -- window right after the feedback is
+                                    -- queued (Failed/Stopped windows stay
+                                    -- for review/retry).
+                                    Cmd.batch
+                                        [ cF
+                                        , Task.perform (\_ -> PlanClose planId) Time.now
+                                        ]
+
+                                  else
+                                    -- P38: the fork adoption closes the
+                                    -- window once the fork took over —
+                                    -- keep the plan visible while the
+                                    -- fork is being created, so the
+                                    -- completion isn't followed by an
+                                    -- abrupt close + background streaming.
+                                    cF
                                 )
 
                             else
                                 ( model2, Cmd.none )
+
+                        -- P38: post-step cascade handling (branch re-run
+                        -- on resumed-node success, failure cleanup).
+                        ( model4, cascadeCmds ) =
+                            cascadeAfterStep dispatch planId ev run2 model3
                     in
-                    ( model3, Cmd.batch [ cmds, feedbackCmds, metaCmd ] )
+                    ( model4, Cmd.batch [ cmds, feedbackCmds, metaCmd, cascadeCmds ] )
 
                 Nothing ->
                     ( model, Cmd.none )
@@ -805,114 +830,710 @@ startRunIn planId ts model =
             model
 
 
-{-| R3: a plan just completed — send the results summary back to the
-session that auto-created it (auto-continue, D6) and record the
-feedback in meta.json. If the origin session is a plan NODE's session
-(recursion), also resume the node (WaitingForPlan → Running via
-ResumeDelegatedNode) so the model can answer based on the results.
+{-| P38: after the confirmation, ancestors whose windows auto-closed on
+completion (D11) are REOPENED from disk (their runs are needed to resume
+nodes and capture old summaries). Open the next queued ancestor, or —
+once the queue drains — build the cascade state and start the root run.
+Called right after a confirm and after every fs read that finished the
+open/restore flow (planReadTarget cleared).
 -}
-feedbackCompletedPlan : String -> Int -> Model -> ( Model, Cmd Msg )
-feedbackCompletedPlan planId now model =
-    case Dict.get planId model.planMetas of
-        Just meta ->
+openNextOrStart : Model -> ( Model, Cmd Msg )
+openNextOrStart model =
+    case model.planCascadeOpenQueue of
+        next :: rest ->
+            case planFilePathOf model next of
+                Just path ->
+                    let
+                        ( m1, c1 ) =
+                            openPlanFile path { model | planCascadeOpenQueue = rest }
+                    in
+                    ( m1, c1 )
+
+                Nothing ->
+                    -- no readable path: skip and keep draining
+                    openNextOrStart { model | planCascadeOpenQueue = rest }
+
+        [] ->
+            startCascadeNow model
+
+
+{-| All ancestors are open: build the execution state from the confirmed
+scope (old summaries captured BEFORE the root run resets outputs), arm
+the cascade and fire the root's Run. Failure to build (a level without a
+runnable node) aborts the cascade silently.
+-}
+startCascadeNow : Model -> ( Model, Cmd Msg )
+startCascadeNow model =
+    case model.planCascadePreview of
+        Just scope ->
             let
-                origin =
-                    meta.origin
-
-                summary =
-                    feedbackSummary planId model
-
-                prefix =
-                    "[Plan Result] The plan has completed. Results:\n\n"
-                        ++ summary
-                        ++ "\n\n[Plan: "
-                        ++ planId
-                        ++ "]"
-
-                -- Origin session (ON-DISK id) alive → send the
-                -- continuation prompt (auto-continue). Resolve to the
-                -- LIVE window id (the original if open, or the fresh id
-                -- of a resume of it). Closed → D7 (part): record the
-                -- feedback for later display; the auto-resume+continue
-                -- follow-up is pending.
-                liveOrigin =
-                    NC.liveSessionForOrigin model.sessions model.planResumedFrom origin.sessionId
-
-                feedbackCmd =
-                    case liveOrigin of
-                        Just liveSid ->
-                            Ports.sendPrompt { sessionId = liveSid, text = prefix, media = [] }
-
-                        Nothing ->
-                            Cmd.none
-
-                -- If the origin is a plan node session, resume the
-                -- waiting node so it answers based on the results. Only
-                -- when the feedback prompt was ACTUALLY delivered (the
-                -- origin session is open): with a closed origin no
-                -- continuation prompt can arrive, so marking the node
-                -- Running would leave it stuck in Running forever (no
-                -- live session, no answer). A closed origin keeps the
-                -- node WaitingForPlan — the run stays InProgress and the
-                -- user can reopen the node session / re-run the sub-plan
-                -- to recover.
-                resumeCmd =
-                    case liveOrigin of
-                        Just _ ->
-                            case findPlanIdBySession model origin.sessionId of
-                                Just _ ->
-                                    Task.perform
-                                        (\t -> PlanRunFrame (Time.posixToMillis t) (R.ResumeDelegatedNode origin.sessionId))
-                                        Time.now
-
-                                Nothing ->
-                                    Cmd.none
-
-                        Nothing ->
-                            Cmd.none
-
-                fb =
-                    PM.Feedback now "completed" prefix planId
-
-                ( m1, metaCmd ) =
-                    appendMetaFeedback planId fb model
+                runs =
+                    Dict.map (\_ w -> w.run) model.planWindows
             in
-            ( m1, Cmd.batch [ feedbackCmd, resumeCmd, metaCmd ] )
+            case PC.buildCascadeState scope runs of
+                Just cs ->
+                    ( { model | planCascadePreview = Nothing, planCascade = Just cs }
+                    , Task.perform (\t -> PlanRunStartAt (Time.posixToMillis t)) Time.now
+                    )
+
+                Nothing ->
+                    ( { model | planCascadePreview = Nothing }, Cmd.none )
 
         Nothing ->
             ( model, Cmd.none )
 
 
-{-| Concatenate every succeeded node's recorded output into a readable
-summary (P24 outputs are captured at TaskDone and persisted).
+{-| R3: a plan just completed — send the results summary back to the
+session that auto-created it (auto-continue, D6) and record the
+feedback in meta.json. If the origin session is a plan NODE's session
+(recursion), also resume the node (WaitingForPlan → Running via
+ResumeDelegatedNode) so the model can answer based on the results.
+
+P38 re-run cascade (§7.4): when the completing plan is part of an active
+cascade (root or head level):
+- if the plan's new summary equals its old summary (captured at confirm)
+  the cascade is a NO-OP: nothing is truncated, nothing is fed back, the
+  cascade ends (the ancestor windows were never touched — nodes are only
+  reset at feedback time);
+- otherwise the origin session is FIRST truncated at this plan's old
+  insertion point (the old `[Plan Result]` and everything after it),
+  the delegated ancestor node is reset Succeeded → WaitingForPlan so the
+  existing resume below can wake it, and the cascade level bookkeeping
+  advances (head level dropped / cleared when nothing remains).
+- plans inside a truncated region (planSuppressFeedback) never feed back.
 -}
-feedbackSummary : String -> Model -> String
-feedbackSummary planId model =
-    case Dict.get planId model.planWindows of
-        Just win ->
-            case win.run of
-                Just run ->
-                    run.plan.tasks
-                        |> List.filterMap
-                            (\t ->
-                                case Dict.get t.id run.nodes of
-                                    Just n ->
-                                        if n.status == PT.Succeeded then
-                                            Maybe.map (\out -> "## " ++ t.id ++ " · " ++ t.title ++ "\n" ++ out) n.output
+feedbackCompletedPlan : String -> Int -> Model -> ( Model, Cmd Msg )
+feedbackCompletedPlan planId now model =
+    if Set.member planId model.planSuppressFeedback then
+        -- P38: a plan living inside a truncated region: its completion
+        -- must not insert anything into the rewound conversation.
+        ( { model | planCascade = Nothing }, Cmd.none )
 
-                                        else
-                                            Nothing
+    else
+        case Dict.get planId model.planMetas of
+            Just meta ->
+                let
+                    origin =
+                        meta.origin
 
-                                    Nothing ->
-                                        Nothing
+                    -- P38: the session where the result lives may be a
+                    -- FORK of the creation origin (truncated history).
+                    parentSid =
+                        PM.parentSessionOf meta
+
+                    currentSummary =
+                        summaryOf planId model
+
+                    cascade =
+                        model.planCascade
+
+                    isCascadeRoot =
+                        Maybe.map (.rootPlanId >> (==) planId) cascade |> Maybe.withDefault False
+
+                    isCascadeHead =
+                        Maybe.map (.levels >> List.head >> Maybe.map .planId >> (==) (Just planId)) cascade
+                            |> Maybe.withDefault False
+
+                    -- P38 gate: the level's result did not change → no
+                    -- truncation, no feedback, cascade ends silently.
+                    unchanged =
+                        case cascade of
+                            Just cs ->
+                                if isCascadeRoot then
+                                    currentSummary == cs.rootOldSummary
+
+                                else if isCascadeHead then
+                                    (List.head cs.levels |> Maybe.map .oldSummary) == Just currentSummary
+
+                                else
+                                    False
+
+                            Nothing ->
+                                False
+                in
+                if unchanged then
+                    ( { model | planCascade = Nothing }, Cmd.none )
+
+                else
+                    let
+                        liveOrigin =
+                            NC.liveSessionForOrigin model.sessions model.planResumedFrom parentSid
+
+                        summary =
+                            currentSummary
+
+                        -- P38: truncate the parent session via a FORK —
+                        -- the fork's session.alaya really only contains
+                        -- the truncated history, so it survives restart.
+                        -- The fork takes the node's place; the original
+                        -- session is closed on adoption. Falls back to
+                        -- in-memory truncation when no fork point exists.
+                        forkReq =
+                            forkRequestFor planId liveOrigin summary model
+                    in
+                    case forkReq of
+                        Just ( target, args ) ->
+                            ( { model | planCascadeFork = Just target }
+                            , Ports.cascadeForkSession args
                             )
-                        |> String.join "\n\n"
+
+                        Nothing ->
+                            let
+                                -- Truncate the origin session at this
+                                -- plan's old insertion point (first run →
+                                -- no insertion → nothing to truncate).
+                                mTrunc =
+                                    truncateOrigin planId model
+
+                                -- Reset the delegated ancestor node
+                                -- Succeeded → WaitingForPlan (root → head
+                                -- level; head → next level) so the resume
+                                -- below can wake it.
+                                mReset =
+                                    resetDelegatedNode planId mTrunc
+
+                                prefix =
+                                    PC.insertPrefix planId summary
+
+                                feedbackCmd =
+                                    case liveOrigin of
+                                        Just liveSid ->
+                                            Ports.sendPrompt { sessionId = liveSid, text = prefix, media = [] }
+
+                                        Nothing ->
+                                            Cmd.none
+
+                                -- If the origin is a plan node session,
+                                -- resume the waiting node so it answers
+                                -- based on the results. Only when the
+                                -- feedback prompt was ACTUALLY delivered
+                                -- (the origin session is open): with a
+                                -- closed origin no continuation prompt can
+                                -- arrive, so marking the node Running
+                                -- would leave it stuck in Running forever.
+                                -- A closed origin keeps the node
+                                -- WaitingForPlan — the run stays
+                                -- InProgress and the user can reopen the
+                                -- node session / re-run the sub-plan to
+                                -- recover.
+                                resumeCmd =
+                                    case liveOrigin of
+                                        Just _ ->
+                                            case findPlanIdBySession mReset parentSid of
+                                                Just _ ->
+                                                    Task.perform
+                                                        (\t -> PlanRunFrame (Time.posixToMillis t) (R.ResumeDelegatedNode parentSid))
+                                                        Time.now
+
+                                                Nothing ->
+                                                    Cmd.none
+
+                                        Nothing ->
+                                            Cmd.none
+
+                                fb =
+                                    PM.Feedback now "completed" prefix planId
+
+                                ( m1, metaCmd ) =
+                                    appendMetaFeedback planId fb mReset
+
+                                -- P38 bookkeeping: head level dropped /
+                                -- cascade cleared when nothing remains.
+                                m2 =
+                                    advanceCascade planId m1
+                            in
+                            ( m2, Cmd.batch [ feedbackCmd, resumeCmd, metaCmd ] )
+
+            Nothing ->
+                ( model, Cmd.none )
+
+
+{-| Args for the cascade fork port (mirrors Ports.cascadeForkSession).
+-}
+type alias CascadeForkArgs =
+    { sourceSessionId : String
+    , historyId : String
+    , toolConfirm : String
+    , preset : String
+    , builtinTools : Maybe String
+    , systemPrompt : String
+    , workDir : String
+    , planId : String
+    , nodeId : String
+    , originSessionId : String
+    }
+
+
+{-| Whether to truncate the parent session via a FORK, and with which
+args. Only when the live origin session exists and has a fork point (the
+history id of the message before the plan's old insertion). The fork
+replaces the delegated ancestor node (root → head level, head → next
+level; none → plain origin), so it carries the node's preset / tools /
+plan system prompt and lands in the plan's nested node-session dir.
+-}
+forkRequestFor : String -> Maybe String -> String -> Model -> Maybe ( PC.CascadeForkTarget, CascadeForkArgs )
+forkRequestFor planId liveOrigin summary model =
+    case liveOrigin of
+        Nothing ->
+            Nothing
+
+        Just liveSid ->
+            case Dict.get liveSid model.sessions of
+                Just s ->
+                    case PC.forkHistoryId planId s.messages of
+                        Nothing ->
+                            Nothing
+
+                        Just historyId ->
+                            let
+                                ( levelPlanId, levelNodeId ) =
+                                    forkLevelFor planId model
+
+                                plainArgs =
+                                    { sourceSessionId = liveSid
+                                    , historyId = historyId
+                                    , toolConfirm = ""
+                                    , preset = ""
+                                    , builtinTools = Nothing
+                                    , systemPrompt = ""
+                                    , workDir = ""
+                                    , planId = ""
+                                    , nodeId = ""
+                                    , originSessionId = ""
+                                    }
+                            in
+                            if levelPlanId == "" then
+                                Just
+                                    ( { childPlanId = planId
+                                      , summary = summary
+                                      , planId = ""
+                                      , nodeId = ""
+                                      , forkSource = liveSid
+                                      }
+                                    , plainArgs
+                                    )
+
+                            else
+                                let
+                                    args =
+                                        nodeSessionArgsIn levelPlanId levelNodeId model
+                                in
+                                Just
+                                    ( { childPlanId = planId
+                                      , summary = summary
+                                      , planId = levelPlanId
+                                      , nodeId = levelNodeId
+                                      , forkSource = liveSid
+                                      }
+                                    , { sourceSessionId = liveSid
+                                      , historyId = historyId
+                                      , toolConfirm = Maybe.withDefault "" args.toolConfirm
+                                      , preset = Maybe.withDefault "" args.preset
+                                      , builtinTools = args.builtinTools
+                                      , systemPrompt = Maybe.withDefault "" args.systemPrompt
+                                      , workDir = Maybe.withDefault "" args.workDir
+                                      , planId = Maybe.withDefault "" args.planId
+                                      , nodeId = Maybe.withDefault "" args.nodeId
+                                      , originSessionId = Maybe.withDefault "" args.originSessionId
+                                      }
+                                    )
 
                 Nothing ->
-                    ""
+                    Nothing
+
+
+{-| The ancestor level whose node the fork replaces: root completion →
+head level; head completion → next level; none → the origin is a plain
+session (plain fork).
+-}
+forkLevelFor : String -> Model -> ( String, String )
+forkLevelFor planId model =
+    case model.planCascade of
+        Just cs ->
+            let
+                lvl =
+                    if cs.rootPlanId == planId then
+                        List.head cs.levels
+
+                    else
+                        List.head (List.drop 1 cs.levels)
+            in
+            case lvl of
+                Just level ->
+                    ( level.planId, level.nodeId )
+
+                Nothing ->
+                    ( "", "" )
 
         Nothing ->
-            ""
+            ( "", "" )
+
+
+{-| P38: adopt the fork that truncated a parent session. The fork (new
+session id) becomes the node's session: rebind the node, point the head
+level at the fork, rewrite the child plan's meta origin (persisted so
+the binding survives restart), drop the processed level, close the
+ORIGINAL session (safe after the rebind — its disconnect finds no node),
+then send the feedback prompt to the fork and resume the node.
+-}
+adoptCascadeFork : Dispatch -> String -> Model -> ( Model, Cmd Msg )
+adoptCascadeFork dispatch forkId model =
+    case model.planCascadeFork of
+        Nothing ->
+            ( model, Cmd.none )
+
+        Just target ->
+            let
+                m1 =
+                    rebindForkNode target forkId model
+
+                m2 =
+                    updateLevelSession target forkId m1
+
+                ( m3, metaCmd ) =
+                    rewriteParentSession target.childPlanId forkId m2
+
+                m4 =
+                    advanceCascade target.childPlanId m3
+
+                ( m5, closeCmd ) =
+                    if target.forkSource == "" then
+                        ( m4, Cmd.none )
+
+                    else
+                        dispatch (CloseSession target.forkSource) m4
+
+                feedbackCmd =
+                    Ports.sendPrompt
+                        { sessionId = forkId
+                        , text = PC.insertPrefix target.childPlanId target.summary
+                        , media = []
+                        }
+
+                resumeCmd =
+                    if target.nodeId == "" then
+                        Cmd.none
+
+                    else
+                        Task.perform
+                            (\t -> PlanRunFrame (Time.posixToMillis t) (R.ResumeDelegatedNode forkId))
+                            Time.now
+
+                -- The deferred D11 close: the plan window stays open
+                -- during the fork wait; close it now that the fork took
+                -- over (the feedback was sent, the node resumes).
+                closePlanCmd =
+                    Task.perform (\_ -> PlanClose target.childPlanId) Time.now
+
+                m6 =
+                    { m5
+                        | planCascadeFork = Nothing
+                        -- The fork replays its (truncated) history: mark
+                        -- it so plan messages inside are not auto-created
+                        -- (also covers the SessionCreated ordering race).
+                        , planReplaySessions = Set.insert forkId m5.planReplaySessions
+                    }
+            in
+            ( m6, Cmd.batch [ metaCmd, closeCmd, feedbackCmd, resumeCmd, closePlanCmd ] )
+
+
+{-| Rebind the ancestor node to the fork: Succeeded → WaitingForPlan
+with sessionId = forkId, run back to InProgress; the planNodeSessions
+label moves from the original session to the fork.
+-}
+rebindForkNode : PC.CascadeForkTarget -> String -> Model -> Model
+rebindForkNode target forkId model =
+    if target.planId == "" then
+        model
+
+    else
+        let
+            m1 =
+                case Dict.get target.planId model.planWindows of
+                    Just win ->
+                        case win.run of
+                            Just run ->
+                                let
+                                    nodes =
+                                        Dict.update target.nodeId
+                                            (Maybe.map
+                                                (\n ->
+                                                    if n.status == PT.Succeeded then
+                                                        { n | status = PT.WaitingForPlan, sessionId = Just forkId }
+
+                                                    else
+                                                        { n | sessionId = Just forkId }
+                                                )
+                                            )
+                                            run.nodes
+                                in
+                                setPlanWin target.planId
+                                    (\w -> { w | run = Just { run | nodes = nodes, status = PT.InProgress } })
+                                    model
+
+                            Nothing ->
+                                model
+
+                    Nothing ->
+                        model
+
+            label =
+                target.planId ++ "/" ++ target.nodeId
+
+            planNodeSessions =
+                Dict.insert forkId label (Dict.remove target.forkSource model.planNodeSessions)
+        in
+        { m1 | planNodeSessions = planNodeSessions }
+
+
+{-| Point the cascade head level at the fork: the level's nodeSessionId
+must match the fork id so the resumed node's TaskDone is recognized for
+the branch re-run.
+-}
+updateLevelSession : PC.CascadeForkTarget -> String -> Model -> Model
+updateLevelSession target forkId model =
+    case model.planCascade of
+        Just cs ->
+            let
+                levels =
+                    List.map
+                        (\l ->
+                            if l.nodeSessionId == target.forkSource then
+                                { l | nodeSessionId = forkId }
+
+                            else
+                                l
+                        )
+                        cs.levels
+            in
+            { model | planCascade = Just { cs | levels = levels } }
+
+        Nothing ->
+            model
+
+
+{-| Rewrite the child plan's parent-session binding so its parent
+conversation is the fork (persisted — survives restart). `origin` is
+KEPT (it locates the plan's own dir); only `parentSessionId` moves to
+the fork.
+-}
+rewriteParentSession : String -> String -> Model -> ( Model, Cmd Msg )
+rewriteParentSession planId forkId model =
+    case Dict.get planId model.planMetas of
+        Just meta ->
+            case planDirOf model planId of
+                Just planDir ->
+                    let
+                        newMeta =
+                            { meta | parentSessionId = Just forkId }
+                    in
+                    ( { model | planMetas = Dict.insert planId newMeta model.planMetas }
+                    , Ports.fsWriteFileText
+                        { path = PM.metaPathFor planDir planId
+                        , content = E.encode 2 (PM.encodeMeta newMeta)
+                        , createParents = True
+                        }
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        Nothing ->
+            ( model, Cmd.none )
+
+
+{-| The plan's current feedback summary (from its open run; "" when the
+window/run is gone).
+-}
+summaryOf : String -> Model -> String
+summaryOf planId model =
+    Dict.get planId model.planWindows
+        |> Maybe.andThen .run
+        |> Maybe.map PC.feedbackSummary
+        |> Maybe.withDefault ""
+
+
+{-| Truncate the plan's origin session at its LAST `[Plan Result]`
+insertion point (inclusive) — the old result and everything after it.
+Resolves the live session id (resumed sessions differ from the on-disk
+origin id). No-op when the origin is closed or has no insertion point.
+-}
+truncateOrigin : String -> Model -> Model
+truncateOrigin planId model =
+    case Dict.get planId model.planMetas of
+        Just meta ->
+            case NC.liveSessionForOrigin model.sessions model.planResumedFrom (PM.parentSessionOf meta) of
+                Just liveSid ->
+                    case Dict.get liveSid model.sessions of
+                        Just s ->
+                            case PC.findInsertionIndex planId s.messages of
+                                Just idx ->
+                                    { model
+                                        | sessions =
+                                            Dict.insert liveSid
+                                                { s | messages = PC.truncateMessagesAt idx s.messages }
+                                                model.sessions
+                                    }
+
+                                Nothing ->
+                                    model
+
+                        Nothing ->
+                            model
+
+                Nothing ->
+                    model
+
+        Nothing ->
+            model
+
+
+{-| P38: reset the delegated ancestor node Succeeded → WaitingForPlan so
+the existing resume (ResumeDelegatedNode) can wake it. Root completion →
+the head level's node (nearest ancestor); head completion → the NEXT
+level's node. The ancestor run goes back to InProgress. No-op when not
+part of a cascade.
+-}
+resetDelegatedNode : String -> Model -> Model
+resetDelegatedNode planId model =
+    case model.planCascade of
+        Just cs ->
+            let
+                lvl =
+                    if cs.rootPlanId == planId then
+                        List.head cs.levels
+
+                    else
+                        List.head (List.drop 1 cs.levels)
+            in
+            case lvl of
+                Just level ->
+                    case Dict.get level.planId model.planWindows of
+                        Just win ->
+                            case win.run of
+                                Just run ->
+                                    let
+                                        nodes =
+                                            Dict.update level.nodeId
+                                                (Maybe.map
+                                                    (\n ->
+                                                        if n.status == PT.Succeeded then
+                                                            -- Restore the session binding (closeAndClear dropped
+                                                            -- sessionId on completion; lastSessionId keeps the
+                                                            -- session reachable) so ResumeDelegatedNode / TaskDone
+                                                            -- routing still find this node via its session.
+                                                            { n
+                                                                | status = PT.WaitingForPlan
+                                                                , sessionId = n.lastSessionId
+                                                            }
+
+                                                        else
+                                                            n
+                                                    )
+                                                )
+                                                run.nodes
+                                    in
+                                    setPlanWin level.planId
+                                        (\w -> { w | run = Just { run | nodes = nodes, status = PT.InProgress } })
+                                        model
+
+                                Nothing ->
+                                    model
+
+                        Nothing ->
+                            model
+
+                Nothing ->
+                    model
+
+        Nothing ->
+            model
+
+
+{-| P38: cascade bookkeeping after a level completed and passed the gate.
+Root → levels stay (they are pending); when there are none the cascade
+ends. Head level → dropped; when nothing remains the cascade ends.
+-}
+advanceCascade : String -> Model -> Model
+advanceCascade planId model =
+    case model.planCascade of
+        Just cs ->
+            if cs.rootPlanId == planId then
+                if List.isEmpty cs.levels then
+                    { model | planCascade = Nothing }
+
+                else
+                    model
+
+            else
+                case cs.levels of
+                    _ :: rest ->
+                        { model
+                            | planCascade =
+                                if List.isEmpty rest then
+                                    Nothing
+
+                                else
+                                    Just { cs | levels = rest }
+                        }
+
+                    [] ->
+                        model
+
+        Nothing ->
+            model
+
+
+{-| P38: post-step cascade handling inside runStepIn:
+- a cascade participant (root or head) FAILED/STOPPED → the chain is
+  broken; ancestors were never touched (nodes reset only at feedback
+  time) so the cascade simply ends.
+- the HEAD level's node session just delivered TaskDone: if the node
+  SUCCEEDED, its output changed → re-run its transitive downstream
+  branch in that ancestor plan (ResumeBranchFrom); terminal failure →
+  cascade ends.
+-}
+cascadeAfterStep : Dispatch -> String -> R.Event -> PT.RunState -> Model -> ( Model, Cmd Msg )
+cascadeAfterStep dispatch planId ev run2 model =
+    case model.planCascade of
+        Nothing ->
+            ( model, Cmd.none )
+
+        Just cs ->
+            let
+                isRoot =
+                    cs.rootPlanId == planId
+
+                isHead =
+                    Maybe.map .planId (List.head cs.levels) == Just planId
+            in
+            if List.member run2.status [ PT.FailedRun, PT.Stopped ] && (isRoot || isHead) then
+                ( { model | planCascade = Nothing }, Cmd.none )
+
+            else
+                case ( ev, List.head cs.levels ) of
+                    ( R.TaskDone sid _ _ _, Just lvl ) ->
+                        if lvl.planId == planId && lvl.nodeSessionId == sid then
+                            case Dict.get lvl.nodeId run2.nodes of
+                                Just n ->
+                                    case n.status of
+                                        PT.Succeeded ->
+                                            runStepIn dispatch planId 0 (R.ResumeBranchFrom lvl.nodeId) model
+
+                                        PT.Failed ->
+                                            ( { model | planCascade = Nothing }, Cmd.none )
+
+                                        _ ->
+                                            ( model, Cmd.none )
+
+                                Nothing ->
+                                    ( model, Cmd.none )
+
+                        else
+                            ( model, Cmd.none )
+
+                    _ ->
+                        ( model, Cmd.none )
 
 
 {-| Append a feedback entry to the plan's meta (in memory + persisted to

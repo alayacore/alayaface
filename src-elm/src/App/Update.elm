@@ -4,6 +4,7 @@ module App.Update exposing
     , decodeSessionDir
     , helpItems
     , nextCopyName
+    , planFocusAboveSession
     )
 
 {-| Application update logic. Message dispatch plus session/overlay
@@ -33,6 +34,7 @@ import Session.FilePicker as FP
 import Plan.Types as PT
 import Plan.Runner as R
 import Plan.Meta as PM
+import Plan.Cascade as PC
 import Plan.Detect
 import Plan.Frames
 import Overlay.HelpWindow exposing (HelpItem, filterHelpItems)
@@ -62,6 +64,63 @@ updateActiveSession model fn =
 
         Nothing ->
             model
+
+
+{-| Inputs for the P38 impact-scope walk: metas (ancestry), runs (node
+bindings / branch / summaries), sessions (insertion points / user
+message counts). -}
+scopeCtx : Model -> { planMetas : Dict String PM.PlanMeta, runs : Dict String (Maybe PT.RunState), sessions : Dict String T.SessionState }
+scopeCtx model =
+    { planMetas = model.planMetas
+    , runs = Dict.map (\_ w -> w.run) model.planWindows
+    , sessions = model.sessions
+    }
+
+
+{-| P38 fork result: { ok, sessionId, error } — the new (truncated)
+session created by a cascade fork.
+-}
+cascadeForkResultDecoder : D.Decoder { ok : Bool, sessionId : String, error : String }
+cascadeForkResultDecoder =
+    D.map3
+        (\ok sessionId error -> { ok = ok, sessionId = sessionId, error = error })
+        (D.field "ok" D.bool)
+        (D.field "sessionId" D.string)
+        (D.field "error" D.string)
+
+
+{-| Which window the user is actually focused on (Ctrl+W close target):
+the active PLAN when its window is on top of the active session's
+window, or when no session is focused; Nothing when a session is focused
+(or neither — fall back to activeId/planActiveId in the caller).
+-}
+planFocusAboveSession : Model -> Maybe String
+planFocusAboveSession model =
+    case ( model.planActiveId, model.activeId ) of
+        ( Just pid, Just sid ) ->
+            let
+                pz =
+                    Dict.get pid model.windowPositions |> Maybe.map .z
+
+                sz =
+                    Dict.get sid model.windowPositions |> Maybe.map .z
+            in
+            case ( pz, sz ) of
+                ( Just p, Just s ) ->
+                    if p > s then
+                        Just pid
+
+                    else
+                        Nothing
+
+                _ ->
+                    Nothing
+
+        ( Just pid, Nothing ) ->
+            Just pid
+
+        ( Nothing, _ ) ->
+            Nothing
 
 
 focusInput : Model -> Cmd Msg
@@ -286,14 +345,25 @@ update msg model =
                         _ ->
                             False
 
+                -- P38: a cascade FORK replaces the parent conversation —
+                -- it must take focus so the user follows the continuation
+                -- (otherwise the fork streams deltas "behind" while the
+                -- closed plan's spot stays empty).
+                isCascadeFork =
+                    model.planCascadeFork /= Nothing
+
+                takeFocus =
+                    not isRunnerCreate
+                        && (isCascadeFork || model.pendingSwitchOnCreate || model.activeId == Nothing)
+
                 newActiveId =
-                    if not isRunnerCreate && (model.pendingSwitchOnCreate || model.activeId == Nothing) then
+                    if takeFocus then
                         Just id
                     else
                         model.activeId
 
                 cmds =
-                    if not isRunnerCreate && (model.pendingSwitchOnCreate || model.activeId == Nothing) then
+                    if takeFocus then
                         Cmd.batch [ Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ id)), Ports.scrollToBottom { sessionId = id } ]
                     else
                         Cmd.none
@@ -356,6 +426,15 @@ update msg model =
 
                             else
                                 []
+                        -- P38: a cascade FORK replays its (truncated)
+                        -- history — plan messages inside it must not
+                        -- auto-create duplicate windows.
+                        , planReplaySessions =
+                            if model.planCascadeFork /= Nothing then
+                                Set.insert id model.planReplaySessions
+
+                            else
+                                model.planReplaySessions
                         , pendingEvents = Dict.remove id model.pendingEvents
                     }
 
@@ -1966,7 +2045,23 @@ update msg model =
                         case model.planReadTarget of
                             Just target ->
                                 if target.reqId == res.reqId then
-                                    handlePlanReadTarget update model target res.ok res.content res.error
+                                    let
+                                        ( m1, c1 ) =
+                                            handlePlanReadTarget update model target res.ok res.content res.error
+                                    in
+                                    -- P38: the open/restore flow finished
+                                    -- (planReadTarget cleared) → reopen the
+                                    -- next queued ancestor or start the
+                                    -- confirmed cascade run.
+                                    if m1.planReadTarget == Nothing && m1.planCascadeOpenQueue /= [] then
+                                        let
+                                            ( m2, c2 ) =
+                                                openNextOrStart m1
+                                        in
+                                        ( m2, Cmd.batch [ c1, c2 ] )
+
+                                    else
+                                        ( m1, c1 )
 
                                 else
                                     -- A newer read replaced this target
@@ -2176,6 +2271,11 @@ update msg model =
                     , createdAt = timestamp
                     , name = plan.name
                     , lastStatus = PT.runStatusToString PT.NotStarted
+                    -- P38: persist the parent linkage so the re-run
+                    -- cascade can walk the ancestry from the meta index
+                    -- alone (ancestor windows may be closed).
+                    , parentPlanId = PM.parentPlanIdOfSession (runStatesOf model) originDiskId
+                    , parentSessionId = Nothing
                     }
 
                 metaPath =
@@ -2374,26 +2474,106 @@ update msg model =
                 Just win ->
                     case win.view.plan of
                         Just _ ->
-                            case win.run of
-                                Just run ->
-                                    -- re-run only from a finished/stopped state
-                                    if List.member run.status [ PT.Completed, PT.FailedRun, PT.Stopped, PT.NotStarted ] then
-                                        ( model
-                                        , Task.perform (\t -> PlanRunStartAt (Time.posixToMillis t)) Time.now
-                                        )
+                            let
+                                canStart =
+                                    case win.run of
+                                        Just run ->
+                                            List.member run.status [ PT.Completed, PT.FailedRun, PT.Stopped, PT.NotStarted ]
 
-                                    else
+                                        Nothing ->
+                                            True
+                            in
+                            if canStart then
+                                -- P38: a re-run that would truncate parent
+                                -- sessions / cascade upward needs the
+                                -- impact-scope confirmation first.
+                                case model.planActiveId of
+                                    Just pid ->
+                                        let
+                                            scope =
+                                                PC.impactScope (scopeCtx model) pid
+                                        in
+                                        if PC.needsConfirm scope then
+                                            ( { model | planCascadePreview = Just scope }, Cmd.none )
+
+                                        else
+                                            ( model
+                                            , Task.perform (\t -> PlanRunStartAt (Time.posixToMillis t)) Time.now
+                                            )
+
+                                    Nothing ->
                                         ( model, Cmd.none )
 
-                                Nothing ->
-                                    ( model
-                                    , Task.perform (\t -> PlanRunStartAt (Time.posixToMillis t)) Time.now
-                                    )
+                            else
+                                ( model, Cmd.none )
 
                         Nothing ->
                             ( model, Cmd.none )
 
                 Nothing ->
+                    ( model, Cmd.none )
+
+        PlanCascadeConfirm ->
+            -- P38: user authorized the re-run cascade. Close (and stop)
+            -- child plans living inside the truncated region (their
+            -- feedback is suppressed), then reopen any closed ancestors
+            -- (their runs are needed), then start the root run.
+            case model.planCascadePreview of
+                Just scope ->
+                    let
+                        m0 =
+                            { model
+                                | planSuppressFeedback =
+                                    Set.union model.planSuppressFeedback (Set.fromList scope.closePlanIds)
+                            }
+
+                        ( m1, closeCmd ) =
+                            List.foldl
+                                (\pid ( m, c ) ->
+                                    let
+                                        ( m2, c2 ) =
+                                            update (PlanClose pid) m
+                                    in
+                                    ( m2, Cmd.batch [ c, c2 ] )
+                                )
+                                ( m0, Cmd.none )
+                                scope.closePlanIds
+
+                        queue =
+                            List.filter (\lvl -> not (Dict.member lvl.planId m1.planWindows)) scope.levels
+                                |> List.map .planId
+
+                        ( m3, openCmd ) =
+                            openNextOrStart { m1 | planCascadeOpenQueue = queue }
+                    in
+                    ( m3, Cmd.batch [ closeCmd, openCmd ] )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        PlanCascadeCancel ->
+            ( { model
+                | planCascadePreview = Nothing
+                , planCascade = Nothing
+                , planCascadeOpenQueue = []
+                , planCascadeFork = Nothing
+              }
+            , Cmd.none
+            )
+
+        PlanCascadeForkResult raw ->
+            -- P38: the fork that truncated a parent session finished.
+            -- Adopt it as the node's session (rebind + meta origin
+            -- rewrite), close the original, continue the chain.
+            case D.decodeValue cascadeForkResultDecoder raw of
+                Ok r ->
+                    if r.ok then
+                        adoptCascadeFork update r.sessionId model
+
+                    else
+                        ( { model | planCascadeFork = Nothing }, Cmd.none )
+
+                Err _ ->
                     ( model, Cmd.none )
 
         PlanRunStartAt ts ->
@@ -3821,20 +4001,30 @@ update msg model =
                     , Cmd.none
                     )
 
-            -- Ctrl+W closes the active session window; with no active
-            -- session it closes the active plan window instead
+            -- Ctrl+W closes the FOCUSED window. Both a session
+            -- (activeId) and a plan (planActiveId) can be "active" at
+            -- once — clicking a plan raises it (top z) without clearing
+            -- the session focus, so closing must follow the TOPMOST
+            -- window. Otherwise "closing the plan" would close the
+            -- session still focused below it (its OWNING session —
+            -- the one above the plan — closing instead of the plan).
             else if key == "w" && ctrl then
-                case model.activeId of
-                    Just sid ->
-                        update (CloseSession sid) model
+                case planFocusAboveSession model of
+                    Just pid ->
+                        update (PlanClose pid) model
 
                     Nothing ->
-                        case model.planActiveId of
-                            Just pid ->
-                                update (PlanClose pid) model
+                        case model.activeId of
+                            Just sid ->
+                                update (CloseSession sid) model
 
                             Nothing ->
-                                ( model, Cmd.none )
+                                case model.planActiveId of
+                                    Just pid2 ->
+                                        update (PlanClose pid2) model
+
+                                    Nothing ->
+                                        ( model, Cmd.none )
 
             else
                 ( model, Cmd.none )

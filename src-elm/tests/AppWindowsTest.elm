@@ -11,7 +11,9 @@ import Test exposing (Test, describe, test)
 import Dict
 import App.Types as AT
 import App.Windows as W
+import App.Update as AU
 import App.NodeConnection as NC
+import Session.Types as T
 import TestHelpers exposing (initModelWithSession)
 
 
@@ -106,8 +108,8 @@ suite =
                                         ]
                                 , planMetas =
                                     Dict.fromList
-                                        [ ( "p1", { origin = { sessionId = "s1", planIndex = 0 }, feedbacks = [], depth = 1, createdAt = 0, name = "p1", lastStatus = "" } )
-                                        , ( "p2", { origin = { sessionId = "s1", planIndex = 1 }, feedbacks = [], depth = 1, createdAt = 0, name = "p2", lastStatus = "" } )
+                                        [ ( "p1", { origin = { sessionId = "s1", planIndex = 0 }, feedbacks = [], depth = 1, createdAt = 0, name = "p1", lastStatus = "", parentPlanId = Nothing, parentSessionId = Nothing } )
+                                        , ( "p2", { origin = { sessionId = "s1", planIndex = 1 }, feedbacks = [], depth = 1, createdAt = 0, name = "p2", lastStatus = "", parentPlanId = Nothing, parentSessionId = Nothing } )
                                         ]
                             }
 
@@ -268,7 +270,7 @@ suite =
                             { initModelWithSession
                                 | planMetas =
                                     Dict.fromList
-                                        [ ( "p1", { origin = { sessionId = "s1", planIndex = 0 }, feedbacks = [], depth = 1, createdAt = 0, name = "p1", lastStatus = "" } )
+                                        [ ( "p1", { origin = { sessionId = "s1", planIndex = 0 }, feedbacks = [], depth = 1, createdAt = 0, name = "p1", lastStatus = "", parentPlanId = Nothing, parentSessionId = Nothing } )
                                         ]
                             }
 
@@ -278,5 +280,78 @@ suite =
                     Expect.equal
                         ( List.map .kind chain, List.map .planId chain, List.map .sessionId chain )
                         ( [ "plan" ], [ "p1" ], [ "s1" ] )
+            , test "P38: a FORKED parent conversation resolves the plan segment to the fork" <|
+                \_ ->
+                    let
+                        forkSess =
+                            T.emptySession "fork-1"
+
+                        m0 =
+                            { initModelWithSession
+                                | sessions = Dict.insert "fork-1" forkSess initModelWithSession.sessions
+                                , planMetas =
+                                    Dict.fromList
+                                        [ ( "p1", { origin = { sessionId = "s1", planIndex = 0 }, feedbacks = [], depth = 1, createdAt = 0, name = "p1", lastStatus = "", parentPlanId = Nothing, parentSessionId = Just "fork-1" } )
+                                        ]
+                            }
+
+                        chain =
+                            W.connectionChainForPlan m0 "p1"
+                    in
+                    Expect.equal
+                        ( List.map .kind chain, List.map .planId chain, List.map .sessionId chain )
+                        ( [ "plan" ], [ "p1" ], [ "fork-1" ] )
+            ]
+        , describe "planFocusAboveSession (Ctrl+W close target)"
+            [ test "plan window on top → close the plan, not the session below" <|
+                \_ ->
+                    let
+                        m0 =
+                            { initModelWithSession
+                                | planActiveId = Just "p1"
+                                , activeId = Just "s1"
+                                , windowPositions =
+                                    Dict.fromList
+                                        [ ( "p1", { x = 0, y = 0, w = 100, h = 100, z = 10 } )
+                                        , ( "s1", { x = 0, y = 0, w = 100, h = 100, z = 9 } )
+                                        ]
+                            }
+                    in
+                    Expect.equal (AU.planFocusAboveSession m0) (Just "p1")
+            , test "session window on top → close the session" <|
+                \_ ->
+                    let
+                        m0 =
+                            { initModelWithSession
+                                | planActiveId = Just "p1"
+                                , activeId = Just "s1"
+                                , windowPositions =
+                                    Dict.fromList
+                                        [ ( "p1", { x = 0, y = 0, w = 100, h = 100, z = 9 } )
+                                        , ( "s1", { x = 0, y = 0, w = 100, h = 100, z = 10 } )
+                                        ]
+                            }
+                    in
+                    Expect.equal (AU.planFocusAboveSession m0) Nothing
+            , test "no active session → the plan is the close target" <|
+                \_ ->
+                    let
+                        m0 =
+                            { initModelWithSession
+                                | planActiveId = Just "p1"
+                                , activeId = Nothing
+                            }
+                    in
+                    Expect.equal (AU.planFocusAboveSession m0) (Just "p1")
+            , test "no active plan → nothing (session fallback in the caller)" <|
+                \_ ->
+                    let
+                        m0 =
+                            { initModelWithSession
+                                | planActiveId = Nothing
+                                , activeId = Just "s1"
+                            }
+                    in
+                    Expect.equal (AU.planFocusAboveSession m0) Nothing
             ]
         ]

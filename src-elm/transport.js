@@ -476,6 +476,40 @@
         .catch(function (err) { console.error("fork_session failed:", err); });
     });
 
+    // P38: cascade fork — like fork_session but for the re-run cascade's
+    // history truncation: the fork carries the node-session attributes so
+    // it replaces the parent session in place. The new id goes to a
+    // DEDICATED result port (not onSessionCreated) so the app can adopt
+    // it as the node's session instead of opening a plain new window.
+    on("cascadeForkSession", function (data) {
+      transport.invoke("fork_session", {
+        sourceSessionId: data.sourceSessionId,
+        historyId: data.historyId,
+        binaryPath: "",
+        toolConfirm: data.toolConfirm,
+        preset: data.preset,
+        builtinTools: data.builtinTools,
+        systemPrompt: data.systemPrompt,
+        workDir: data.workDir,
+        planId: data.planId,
+        nodeId: data.nodeId,
+        originSessionId: data.originSessionId,
+        clientId: clientId,
+      }).then(function (id) {
+        // Open the fork window FIRST (the original parent session is
+        // about to be closed by the adoption — without this the fork
+        // never gets a window and the conversation vanishes), then hand
+        // the id to the adoption.
+        app.ports.onSessionCreated.send(id);
+        app.ports.onCascadeForkResult.send({ ok: true, sessionId: id, error: "" });
+      }).catch(function (err) {
+        console.error("cascade fork_session failed:", err);
+        app.ports.onCascadeForkResult.send({
+          ok: false, sessionId: "", error: String((err && err.message) || err),
+        });
+      });
+    });
+
     on("resumeSession", function (data) {
       transport.invoke("resume_session", {
         sessionId: data.sessionId, binaryPath: "",

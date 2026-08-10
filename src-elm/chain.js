@@ -165,6 +165,14 @@
       return c ? (parseInt(getComputedStyle(c).zIndex, 10) || 0) : 0;
     }
 
+    // Windows grow z on every activation (unbounded); curves must NEVER
+    // climb above the modal overlays (z-index 1000000), or they would
+    // cover the dialog. Cap below the overlay.
+    var CHAIN_Z_CAP = 900000;
+    function chainZ(planZ) {
+      return String(Math.min(canvasZBase() + planZ, CHAIN_Z_CAP));
+    }
+
     // Draw one chain segment; hide it when a participant is missing
     // (closed window / plan) or the node card scrolled out of view.
     function drawChainSeg(i, seg) {
@@ -194,9 +202,10 @@
         var from = edgeAnchor(sr, nx, ny);
         path.setAttribute("d", curvePath(from, { x: nx, y: ny }));
         // Match the plan window's z-index: above it (same z, later in
-        // <body>), below the session (session z = planZ + 1).
+        // <body>), below the session (session z = planZ + 1). Capped so
+        // curves never cover the modal overlays.
         var planZ = parseInt(getComputedStyle(plan).zIndex, 10) || 0;
-        svg.style.zIndex = String(canvasZBase() + planZ);
+        svg.style.zIndex = chainZ(planZ);
       } else {
         // From the plan window edge nearest the session…
         var scx = sr.left + sr.width / 2;
@@ -213,10 +222,11 @@
         path.setAttribute("d", curvePath(from2, to));
         // Between two windows: draw at the TOP of the two participants
         // (same z + later DOM position → above both, below anything
-        // focused above them). Offset by the canvas layer's z.
+        // focused above them). Offset by the canvas layer's z; capped
+        // below the modal overlays.
         var planZ2 = parseInt(getComputedStyle(plan).zIndex, 10) || 0;
         var sessionZ = parseInt(getComputedStyle(s).zIndex, 10) || 0;
-        svg.style.zIndex = String(canvasZBase() + Math.max(planZ2, sessionZ));
+        svg.style.zIndex = chainZ(Math.max(planZ2, sessionZ));
       }
       svg.setAttribute("width", String(window.innerWidth));
       svg.setAttribute("height", String(window.innerHeight));
@@ -238,16 +248,42 @@
       }
     }
 
+    function chainTick() {
+      // Clear BEFORE drawing: if this callback is lost (rAF throttled in
+      // a background tab) or draw throws, connRaf is already 0 so the
+      // next setConnectionChain always restarts the loop — "clicking
+      // around" can never leave the curves permanently frozen.
+      connRaf = 0;
+      try {
+        drawConnections();
+      } catch (e) {
+        console.error("[chain] draw failed:", e);
+      }
+      if (chainSegs.length) {
+        connRaf = requestAnimationFrame(chainTick);
+      }
+    }
+
+    function ensureChainLoop() {
+      if (chainSegs.length && !connRaf) {
+        connRaf = requestAnimationFrame(chainTick);
+      }
+    }
+
     on("setConnectionChain", function (data) {
       chainSegs = data || [];
-      if (chainSegs.length && !connRaf) {
-        connRaf = requestAnimationFrame(function tick() {
-          drawConnections();
-          connRaf = chainSegs.length ? requestAnimationFrame(tick) : 0;
-        });
-      } else if (!chainSegs.length) {
+      if (chainSegs.length) {
+        ensureChainLoop();
+      } else {
+        if (connRaf) cancelAnimationFrame(connRaf);
+        connRaf = 0;
         drawConnections(); // hides
       }
+    });
+
+    // rAF stalls while the tab is hidden; resume drawing on return.
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden) ensureChainLoop();
     });
     }
   };

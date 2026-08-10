@@ -22,6 +22,8 @@ tests =
                         , createdAt = 50
                         , name = "analyze machine parameters"
                         , lastStatus = "completed"
+                        , parentPlanId = Just "p-0"
+                        , parentSessionId = Just "s-fork"
                         }
 
                     encoded =
@@ -39,6 +41,9 @@ tests =
                             , \m -> Expect.equal 50 m.createdAt
                             , \m -> Expect.equal "analyze machine parameters" m.name
                             , \m -> Expect.equal "completed" m.lastStatus
+                            , \m -> Expect.equal (Just "p-0") m.parentPlanId
+                            , \m -> Expect.equal (Just "s-fork") m.parentSessionId
+                            , \m -> Expect.equal "s-fork" (M.parentSessionOf m)
                             ]
                             m2
 
@@ -92,6 +97,15 @@ tests =
 
                     Err _ ->
                         Expect.pass
+        , test "lenient: old meta without parent_plan_id decodes to Nothing (P38)" <|
+            \_ ->
+                case D.decodeString M.decodeMeta """{ "origin": { "sessionId": "s-1", "planIndex": 1 }, "feedbacks": [], "depth": 1, "created_at": 7, "name": "p", "last_status": "completed" }""" of
+                    Ok m ->
+                        Expect.equal ( m.parentPlanId, m.parentSessionId, M.parentSessionOf m )
+                            ( Nothing, Nothing, "s-1" )
+
+                    Err e ->
+                        Expect.fail ("decode failed: " ++ D.errorToString e)
         , describe "plansOwnedBySession (P34 cascade close)"
             [ test "returns every plan whose origin is the session" <|
                 \_ ->
@@ -202,6 +216,8 @@ metaOfDepth sessionId depth =
     , createdAt = 1
     , name = "plan-" ++ sessionId
     , lastStatus = "not_started"
+    , parentPlanId = Nothing
+    , parentSessionId = Nothing
     }
 
 

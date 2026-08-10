@@ -408,6 +408,121 @@ opened by the title-bar "?" button. Nothing that belongs to another layer
 - Plain session windows (clickable/viewable) with a `[Plan]` prefix in the title;
 - Create args: `toolConfirm="allow"` (auto-approve tools, avoids confirmation-modal stalls), `preset`, `builtinTools` (node-level override).
 
+### 7.4 Re-run Cascade — truncate, propagate, confirm (P38)
+
+**Problem**: re-running a plan that already inserted its `[Plan Result]`
+(+ trailing `[Plan: <planId>]` link) into its parent session currently
+APPENDS the new result at the end of the parent's chat — breaking the
+causal chain (old result → parent's continuation → new result) and, for a
+sub-plan, the parent node is already `Succeeded` so the feedback never
+wakes it (`resumeDelegatedNode` only acts on `WaitingForPlan`).
+
+**Design: replace semantics, gated per level, confirmed up front.**
+
+#### 7.4.1 Trigger & scope computation (pure, unit-tested)
+
+- A "re-run" is a `Run` click on a plan that already has an insertion
+  point in its origin session — the **last** parent message starting with
+  `[Plan Result]` and containing `[Plan: <planId>]` (multiple past runs
+  exist → truncate from the latest; earlier runs stay as history).
+- First run (no insertion point) → current behavior, no confirmation.
+- `impactScope : Model -> String -> ImpactScope` walks the ancestry from
+  the re-run plan upward via `meta.origin` → `findPlanIdBySession`:
+  - every ancestor plan + the affected branch (the delegated node and its
+    **transitive downstream** — `{{tX.output}}` dependents);
+  - every session that will be truncated (each level's node session);
+  - sub-plans created inside the truncated region (their windows must be
+    closed, their feedback suppressed);
+  - per-session user-message count after the insertion point (shown in
+    the confirmation);
+  - terminates at the top-level plan (origin = plain session) or on a
+    **visited set** (cycle safety — NOT recursion_limit: upward walks an
+    existing fixed hierarchy, bounded by construction; the limit only
+    governs downward delegation).
+
+#### 7.4.2 Confirmation UI (before anything is truncated)
+
+- When `impactScope` is non-empty, `Run` opens a confirmation dialog
+  instead of starting: title "Re-run affects N plans", a chain readout
+  `A (re-run) → B (partial: t2,t3,t4) → C (partial: t4) → top session`,
+  per-level truncation warnings including **user messages that will be
+  removed** ("B's t2 session: 3 of your messages after the old result
+  will be truncated"), and the list of child plans to close.
+- **Confirm** = one-time authorization for the whole chain (no per-level
+  dialogs; a `cascadeConfirm` flag suppresses re-prompts while the chain
+  runs). **Cancel** = nothing happens.
+- Optional v2 affordance: "re-run only to direct parent" vs "all
+  ancestors" (default all).
+
+#### 7.4.3 Execution per level (sequential, asynchronous)
+
+1. Truncate the level's parent session at the insertion point (in memory
+   + persist to session.alaya immediately — a later resume must not
+   resurrect the old messages); close child plans spawned in the cut
+   region.
+2. Reset the delegated node `Succeeded → WaitingForPlan` (at re-run
+   start, not at feedback), parent run `Completed → InProgress`.
+3. On plan completion, truncate + re-insert the new `[Plan Result]` into
+   its parent, then `ResumeDelegatedNode` (node → Running) as today.
+4. Node answers → if its output changed → **partial re-run** of the
+   parent plan (`ResumeBranchFrom nodeId`: reset the node + transitive
+   downstream to Pending; parallel independent branches keep results)
+   → plan completes again.
+5. **Upward gate**: only if the plan's result summary changed does the
+   cascade continue to the next level. Terminators: top-level plain
+   session / output unchanged / user-input guard (already authorized by
+   the confirmation) / failure or Stop of a level (chain stops, state
+   recoverable: upper nodes stay WaitingForPlan) / visited set.
+
+#### 7.4.4 Implementation notes (P38, done)
+
+- **Ancestry is persisted**: `meta.json` gains `parent_plan_id`
+  (computed once at creation from the parent run's binding; old meta
+  files decode leniently to Nothing). `Plan/Cascade.elm` walks the
+  ancestry from the meta index alone — closed ancestor windows
+  (auto-closed on completion, D11) still participate.
+- **Closed ancestors are reopened on confirm**: their runs are needed to
+  capture old summaries and resume nodes. `planCascadeOpenQueue` opens
+  them one by one (openPlanFile → silent run.json restore); the root run
+  starts when the queue drains (`openNextOrStart`). The walk stops at the
+  first CLOSED session on the path (no feedback/truncation possible —
+  D7 record-only semantics preserved).
+- **Gate**: at confirm, each level's old summary is captured
+  (`buildCascadeState`); on completion, an unchanged summary makes the
+  cascade a silent no-op (nothing truncated, nothing fed back, ancestors
+  untouched — nodes are only reset at feedback time, gated).
+- **Reset restores the binding**: completion clears a node's `sessionId`
+  (closeAndClear keeps `lastSessionId`); the `Succeeded →
+  WaitingForPlan` reset re-attaches `sessionId = lastSessionId` so
+  `ResumeDelegatedNode` / `TaskDone` routing still finds the node.
+- **Child plans in truncated regions**: closed via the P35 cascade and
+  their feedback suppressed (`planSuppressFeedback`) — a completion
+  inside a rewound region never inserts anything.
+- **Truncation is fork-based (P38)**: when the gate passes and the live
+  origin session has a fork point (the message before the old `[Plan
+  Result]` carries a history id), the cascade FORKS the parent session
+  instead of truncating in memory. `fork_session` was extended (Rust +
+  Go, symmetric) to accept the node-session attributes — `preset`,
+  `builtinTools`, `toolConfirm`, `systemPrompt`, `workDir`, `planId`,
+  `nodeId`, `originSessionId` — so the fork lands in the plan's nested
+  node-session dir and keeps the node's config + plan system prompt. The
+  fork's `session.alaya` is written by alayacore and REALLY contains
+  only the truncated history → reopening the session after a restart
+  shows the correct state. Adoption (`adoptCascadeFork`): rebind the
+  node to the fork (`sessionId = forkId`, `Succeeded → WaitingForPlan`),
+  rewrite the child plan's **`parentSessionId`** to the fork (persisted —
+  `origin` is KEPT: it locates the plan's own dir, while the binding /
+  feedback / cascade walk resolve through `parentSessionOf`), close the
+  ORIGINAL session (safe after the rebind — its disconnect finds no
+  node), send the new `[Plan Result]` to the fork, resume the node. The
+  fork session is marked as a replay so its replayed plan messages do
+  not auto-create duplicate windows. Falls back to the in-memory
+  truncation only when no fork point exists (first message / no history
+  id).
+- **v1 edge**: `WaitingForPlan` successors inside a re-run branch are
+  left alone (their own sub-plan feedback resumes them; that answer may
+  still reflect pre-cascade context).
+
 ---
 
 ## 8. Backend & Port Changes (minimal, dual-backend parity)
@@ -730,6 +845,7 @@ There is **no top-level `plans/` root** anymore.
 | P35 | **plan-window close cascades down** (user request): closing a plan window (✕) closes **every node session window bound to its nodes under ANY run status** — active runs (InProgress/Paused) are stopped first (no respawn); terminal runs are not re-stopped (status bar keeps Completed/FailedRun/Stopped) but their open node-session windows (e.g. resumed from disk under a Stopped plan) are closed directly via `nodeSessionIdsForPlan` (live windows in `planNodeSessions`/`planResumedFrom`); sub-plans cascade through CloseSession. plan-e2e gained 8e (Stopped plan + resumed t1 window → plan ✕ → t1 closes) + 8d | ✅ done |
 | P36 | **connection chain** (user request — supersedes P32's "no ancestor-chain curves"): focusing a deep node session (or activating a plan window) draws the **whole ancestor path** — the session's node segment plus every ancestor plan↔owning-session segment up to the **top-level session** (§7.1). `App/NodeConnection.elm` builds the chain purely (`chainForSession`/`chainForPlan`, cycle-safe, unit-tested); all chain windows are raised top→bottom (`raiseChainWindows`); bridge.js draws one bezier per segment (`.node-connection-overlay` / `.plan-connection-overlay` per segment, own z per curve); the plan↔session segment is now visible while a node session is focused (plan-e2e 7b updated) | ✅ done |
 | P37 | **plan-window UI redesign** (user request — "DAG is the core"): the window body is the DAG canvas only; goal/meta/run log/saved path are hidden by default and opened via the title-bar "?" button as a floating info panel (Plan tab) — node clicks without a session open its Node tab (no right-side detail panel); run controls collapse to a compact overlay strip on the canvas top-right showing only state-valid buttons; **concurrency input removed** (effective = fixed 8, `defaultConcurrency`; future seam: dynamic from system load); **Export JSON removed** (`PlanSetExportPath`/`PlanExport`/`exportPath`/`viewPlanExport` deleted) | ✅ done |
+| P38 | **re-run cascade** (user request): re-running a plan that already has an insertion point in its parent truncates the parent at the last `[Plan Result]`/`[Plan: <planId>]` message and re-inserts the new result (replace semantics, §7.4); per-level gates (output changed? user-input guard? top-level reached? visited set — no recursion_limit upward), recursive upward partial re-runs (`ResumeBranchFrom nodeId` resets the node + transitive downstream), parent node `Succeeded → WaitingForPlan` at re-run start; **before anything runs, a confirmation dialog shows the full impact chain and requires one-time authorization** (§7.4.2). Ancestry persisted via `meta.parent_plan_id`; closed ancestors reopened on confirm; **truncation is fork-based** — `fork_session` extended (Rust+Go) to carry node-session attributes, the fork's session.alaya is truly truncated so reopen survives restart (`Plan/Cascade.elm` pure + unit-tested, `ResumeBranchFrom` runner-tested) | ✅ done |
 
 > Implementation deviations: the DAG renders in pure HTML/CSS (absolute-positioned
 > divs + orthogonal connectors) because elm/svg isn't in the offline package
@@ -778,6 +894,16 @@ There is **no top-level `plans/` root** anymore.
   **required, no backward compat** — missing or wrong value errors out directly
   (`Missing top-level "type": "alayaface-plan" marker` /
   `Not an AlayaFace plan: ...`).
+- **re-run cascade with up-front confirmation (user instruction, P38,
+  §7.4)**: re-running a plan uses replace semantics — the parent session is
+  truncated at the plan's last `[Plan Result]` insertion point and the new
+  result re-inserted, propagating upward level by level while the level's
+  result actually changed; **before anything is truncated, a confirmation
+  dialog shows the whole impact chain (ancestor plans + affected branches +
+  truncated sessions + user messages that will be removed + child plans to
+  close) and requires a single explicit authorization**; `recursion_limit`
+  does NOT bound the upward walk (existing fixed hierarchy, visited set for
+  cycle safety), only downward delegation.
 
 ### Defaults (not explicitly confirmed; implemented as follows, adjustable at review)
 - `concurrency` default 8 (**fixed 8 in v1 — UI override removed, P37**; future: dynamic from system load);

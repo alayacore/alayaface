@@ -42,6 +42,7 @@ import Set exposing (Set)
 import Plan.Types as PT
 import Plan.Runner as R
 import Plan.Meta as PM
+import Plan.Cascade as PC
 import Session.Selector as Sel
 import Session.Types as T
 import App.NodeConnection as NC
@@ -148,6 +149,22 @@ type alias Model =
     -- Completed plan window — the status bar needs it). Updated on every
     -- runStepIn; not persisted (rebuilt when the window reopens).
     , planRunStatuses : Dict String PT.RunStatus
+    -- P38 re-run cascade (§7.4): impact-scope confirmation shown before a
+    -- re-run that would truncate parent sessions / cascade upward.
+    , planCascadePreview : Maybe PC.ImpactScope
+    -- Active cascade execution state; Nothing = no cascade in flight.
+    , planCascade : Maybe PC.CascadeState
+    -- Ancestor plan windows being REOPENED (async) after the confirm —
+    -- their runs are needed to resume nodes and capture old summaries
+    -- (ancestors auto-close on completion, D11). The root run starts
+    -- once the queue drains.
+    , planCascadeOpenQueue : List String
+    -- Plans closed (and stopped) because they live inside a truncated
+    -- region: their completion must NOT insert feedback anywhere.
+    , planSuppressFeedback : Set String
+    -- P38: a fork issued to truncate a parent session (awaiting its
+    -- result); the adoption rewrites bindings/meta and continues.
+    , planCascadeFork : Maybe PC.CascadeForkTarget
     -- Incremental per-session plan-message counts (M3/D4): how many
     -- messages of each session are plan messages (same predicate as
     -- Plan.Detect.isPlanMessage). Maintained O(1) per frame — a message
@@ -375,6 +392,15 @@ type Msg
     -- switches Plan tab ↔ closed; a node click opens the Node tab.
     | PlanToggleInfo
     | PlanCloseInfo
+    -- P38 re-run cascade: Run click found an impact scope → confirm;
+    -- confirm starts the (possibly ancestor-reopening) cascade, cancel
+    -- does nothing.
+    | PlanCascadeConfirm
+    | PlanCascadeCancel
+    -- P38: the fork that truncated a parent session's history finished.
+    -- Adopts the fork as the node's session (rebind), rewrites the child
+    -- meta origin, closes the original session and continues the chain.
+    | PlanCascadeForkResult E.Value
       -- Plan runner
     | PlanRunStart
     | PlanRunStartAt Int

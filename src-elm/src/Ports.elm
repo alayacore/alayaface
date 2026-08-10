@@ -44,6 +44,7 @@ port module Ports exposing
     , sendMcpDecline
     , sendMcpCancel
     , forkSession
+    , cascadeForkSession
     , resumeSession
     , listSessionDirs
     , deleteSessionDir
@@ -53,6 +54,7 @@ port module Ports exposing
     , onSessionCreateError
     , onSessionDirs
     , onSessionActionResult
+    , onCascadeForkResult
       -- File system
     , fsListDir
     , fsReadFileDataUri
@@ -136,6 +138,24 @@ port confirmTool : { sessionId : String, id : String, allowed : Bool } -> Cmd ms
 port sendMcpDecline : { sessionId : String, server : String } -> Cmd msg
 port sendMcpCancel : { sessionId : String } -> Cmd msg
 port forkSession : { sourceSessionId : String, historyId : String } -> Cmd msg
+-- P38: fork used by the re-run cascade to TRUNCATE a parent session's
+-- history (the fork's session.alaya only contains messages up to the
+-- given history id). Carries the plan-node attributes so the fork can
+-- replace the node session in place (same nested dir, same config /
+-- tools / plan system prompt). Result arrives on onCascadeForkResult.
+port cascadeForkSession :
+    { sourceSessionId : String
+    , historyId : String
+    , toolConfirm : String
+    , preset : String
+    , builtinTools : Maybe String
+    , systemPrompt : String
+    , workDir : String
+    , planId : String
+    , nodeId : String
+    , originSessionId : String
+    }
+    -> Cmd msg
 port resumeSession : { sessionId : String, workDir : Maybe String, planId : Maybe String, nodeId : Maybe String, originSessionId : Maybe String } -> Cmd msg
 port listSessionDirs : {} -> Cmd msg
 port deleteSessionDir : { sessionId : String, planId : Maybe String, nodeId : Maybe String, originSessionId : Maybe String } -> Cmd msg
@@ -171,6 +191,9 @@ port onSessionCreateError : (String -> msg) -> Sub msg
 -- { ok, dirs, error }
 port onSessionDirs : (E.Value -> msg) -> Sub msg
 port onSessionActionResult : (E.Value -> msg) -> Sub msg
+-- P38: { ok, sessionId, error } — the new (truncated) session created
+-- by a cascade fork.
+port onCascadeForkResult : (E.Value -> msg) -> Sub msg
 -- { reqId, ok, entries, error } — reqId matches the fsListDir request so
 -- the plan-meta scan and the file picker can never steal each other's
 -- results (both share the same untagged port).

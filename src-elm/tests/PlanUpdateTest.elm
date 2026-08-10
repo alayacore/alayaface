@@ -146,6 +146,8 @@ suite =
                             , createdAt = 0
                             , name = "x"
                             , lastStatus = ""
+                            , parentPlanId = Nothing
+                            , parentSessionId = Nothing
                             }
 
                         m =
@@ -163,6 +165,8 @@ suite =
                             , createdAt = 0
                             , name = "x"
                             , lastStatus = ""
+                            , parentPlanId = Nothing
+                            , parentSessionId = Nothing
                             }
 
                         m =
