@@ -181,7 +181,9 @@ pub fn close_child_gracefully(
     close_child_gracefully_with_timeout(child, stdin, GRACEFUL_CLOSE_TIMEOUT);
 }
 
-fn close_child_gracefully_with_timeout(
+/// Shared graceful-close implementation with an explicit grace timeout
+/// (tests use a short one; `close_child_gracefully` uses the real 5s).
+pub(crate) fn close_child_gracefully_with_timeout(
     child: &mut Child,
     stdin: &tokio::sync::Mutex<Option<std::process::ChildStdin>>,
     timeout: std::time::Duration,

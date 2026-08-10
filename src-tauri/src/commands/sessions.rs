@@ -269,6 +269,10 @@ pub async fn close_session(
 /// reclaimed — otherwise resume_session keeps failing with "Session is
 /// already active" until the backend is restarted. History is saved up
 /// to each session's cancel point (same sequence as close_session).
+///
+/// Runs the per-session teardown IN PARALLEL (bounded by one grace
+/// period regardless of session count — a hung alayacore would
+/// otherwise cost its 5s timeout per session, serially).
 #[tauri::command]
 pub async fn close_all_sessions(
     client_id: Option<String>,
@@ -282,8 +286,18 @@ pub async fn close_all_sessions(
             .map(|(id, _)| id.clone())
             .collect()
     };
+    // Each close removes its own handle under the lock and releases it
+    // before the blocking teardown, so concurrent commands stay
+    // responsive while the closes drain.
+    let mut handles = Vec::new();
     for id in ids {
-        let _ = session::close(&id, &sessions).await;
+        let map = sessions.0.clone();
+        handles.push(tokio::spawn(async move {
+            let _ = session::close(&id, &SessionMap(map)).await;
+        }));
+    }
+    for h in handles {
+        let _ = h.await;
     }
     Ok(())
 }

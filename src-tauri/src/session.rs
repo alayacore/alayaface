@@ -143,19 +143,107 @@ pub async fn create(cfg: SessionConfig<'_>) -> Result<String, String> {
 /// drains the active task — auto-saving at task end — then exits), and
 /// only SIGKILL after a grace period. See `alayacore::close_child_gracefully`.
 pub async fn close(session_id: &str, sessions: &SessionMap) -> Result<(), String> {
-    let mut map = sessions.0.lock().await;
-    if let Some(handle) = map.remove(session_id) {
-        let child_opt = handle.child.lock().unwrap().take();
-        let stdin = handle.stdin.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            if let Some(mut child) = child_opt {
-                alayacore::close_child_gracefully(&mut child, &stdin);
-            }
-        })
-        .await;
-        Ok(())
-    } else {
-        Err("Session not found".to_string())
+    close_with_timeout(session_id, sessions, alayacore::GRACEFUL_CLOSE_TIMEOUT).await
+}
+
+/// Shared close implementation with an explicit grace timeout (tests
+/// use a short one; `close` uses the real 5s constant).
+///
+/// The map lock is taken ONLY to remove the handle, and released before
+/// the graceful close runs (the `spawn_blocking` await). Holding it
+/// across the close would block every other command (send_prompt,
+/// create_session, resume, ...) for up to the timeout on every session
+/// close — a hung alayacore would freeze the whole backend.
+pub async fn close_with_timeout(
+    session_id: &str,
+    sessions: &SessionMap,
+    timeout: std::time::Duration,
+) -> Result<(), String> {
+    let handle = {
+        let mut map = sessions.0.lock().await;
+        map.remove(session_id)
+    };
+    let Some(handle) = handle else {
+        return Err("Session not found".to_string());
+    };
+    let child_opt = handle.child.lock().unwrap().take();
+    let stdin = handle.stdin.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        if let Some(mut child) = child_opt {
+            alayacore::close_child_gracefully_with_timeout(&mut child, &stdin, timeout);
+        }
+    })
+    .await;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::{Command, Stdio};
+    use std::time::Duration;
+
+    /// Build a SessionMap with one handle backed by a real child process.
+    fn map_with_session(
+        mut child: std::process::Child,
+        sid: &str,
+    ) -> (SessionMap, Arc<tokio::sync::Mutex<Option<std::process::ChildStdin>>>) {
+        let stdin = Arc::new(tokio::sync::Mutex::new(Some(child.stdin.take().unwrap())));
+        let map = SessionMap(Arc::new(tokio::sync::Mutex::new(HashMap::new())));
+        {
+            let mut inner = map.0.try_lock().unwrap();
+            inner.insert(
+                sid.to_string(),
+                SessionHandle {
+                    stdin: stdin.clone(),
+                    connected: Arc::new(AtomicBool::new(true)),
+                    pending_commands: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+                    child: Arc::new(std::sync::Mutex::new(Some(child))),
+                    session_dir: PathBuf::from("/tmp/alayaface-test-session"),
+                    owner: String::new(),
+                },
+            );
+        }
+        (map, stdin)
+    }
+
+    #[tokio::test]
+    async fn close_releases_map_lock_while_graceful_close_runs() {
+        // A child that ignores EOF: the graceful close must wait out its
+        // timeout, which gives the test a deterministic window to observe
+        // whether the SessionMap lock is still held.
+        let child = Command::new("sleep")
+            .arg("60")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sleep");
+        let (map, _stdin) = map_with_session(child, "s1");
+
+        let map_arc = map.0.clone();
+        let closer = tokio::spawn(async move {
+            close_with_timeout("s1", &SessionMap(map_arc), Duration::from_millis(600)).await
+        });
+
+        // Give the closer time to remove the handle and enter the
+        // blocking graceful close.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(
+            map.0.try_lock().is_ok(),
+            "SessionMap lock must NOT be held while a session is closing \
+             (graceful close can take seconds; holding it would freeze \
+             every other command)"
+        );
+
+        closer.await.expect("close task panicked").expect("close should succeed");
+    }
+
+    #[tokio::test]
+    async fn close_unknown_session_returns_not_found() {
+        let map = SessionMap(Arc::new(tokio::sync::Mutex::new(HashMap::new())));
+        let err = close("nope", &map).await.unwrap_err();
+        assert_eq!(err, "Session not found");
     }
 }
 
