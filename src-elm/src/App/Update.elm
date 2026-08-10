@@ -27,6 +27,7 @@ import App.NodeConnection as NC
 import App.SelectorKit as Kit
 import Plan.Update as PU exposing (..)
 import Session.Types as T
+import Session.Meta as SM
 import Session.Protocol as P
 import Session.Handlers as H
 import Session.Selector as Sel exposing (Page(..))
@@ -435,6 +436,19 @@ update msg model =
 
                             else
                                 model.planReplaySessions
+                        -- P39/Phase B: a genuinely NEW top-level instance
+                        -- registers as the ROOT of its conversation
+                        -- (instance → conversation = itself). Resumed
+                        -- live handles (planResumeFrom) are ephemeral
+                        -- windows over an existing instance; runner-
+                        -- created node sessions and cascade forks get
+                        -- their lineage from the plan machinery instead.
+                        , sessionLineage =
+                            if model.planResumeFrom == Nothing && model.planCascadeFork == Nothing && not isRunnerCreate then
+                                Dict.insert id (SM.empty id) model.sessionLineage
+
+                            else
+                                model.sessionLineage
                         , pendingEvents = Dict.remove id model.pendingEvents
                     }
 
@@ -574,6 +588,19 @@ update msg model =
                 -- plain/runner-created session (runner keeps the
                 -- existing chain, which is already in the model).
                 , Ports.setConnectionChain (chainPayload drainedModel drainedModel.connectionChain)
+                -- P39/Phase B: persist the root lineage meta for a
+                -- genuinely NEW top-level instance (sessions/<id>/
+                -- session.meta.json). Resume / runner / fork instances
+                -- register through their own paths.
+                , if model.planResumeFrom == Nothing && model.planCascadeFork == Nothing && not isRunnerCreate then
+                    Ports.fsWriteFileText
+                        { path = sessionsDir model.homeDir ++ "/" ++ id ++ "/session.meta.json"
+                        , content = E.encode 2 (SM.encode (SM.empty id))
+                        , createParents = True
+                        }
+
+                  else
+                    Cmd.none
                 , case model.planCreating of
                     -- A runner-created session: bind it to its node
                     -- (PlanBindSession also starts the next queued create).
@@ -1729,8 +1756,15 @@ update msg model =
                                             )
 
                                         [] ->
-                                            -- All plans dirs listed: start reading.
-                                            case newReadQueue of
+                                            -- All plans dirs listed: start
+                                            -- reading — session lineage
+                                            -- metas first (P39/Phase B),
+                                            -- then every plan meta.
+                                            let
+                                                readQueue =
+                                                    model.planMetaSessionQueue ++ newReadQueue
+                                            in
+                                            case readQueue of
                                                 r :: rs ->
                                                     let
                                                         ( reqId, m1 ) =
@@ -1741,6 +1775,7 @@ update msg model =
                                                         , planMetaScanReqId = Nothing
                                                         , planMetaReading = Just r
                                                         , planMetaReadReqId = Just reqId
+                                                        , planMetaSessionQueue = []
                                                         , planMetaReadQueue = rs
                                                         , planMetaLoading = False
                                                       }
@@ -1756,13 +1791,23 @@ update msg model =
                                     -- The sessions/ listing: queue every
                                     -- session's plans/ subdir (missing
                                     -- plans dirs list empty; ".." from
-                                    -- the listing is skipped).
+                                    -- the listing is skipped) AND every
+                                    -- session's lineage meta
+                                    -- (sessions/<uuid>/session.meta.json,
+                                    -- P39/Phase B — read BEFORE the plan
+                                    -- metas so plan origins can resolve
+                                    -- against the registry).
                                     let
-                                        planDirs =
+                                        sessionDirs =
                                             parsed
                                                 |> List.filter (\e -> e.isDir && e.name /= ".." && e.name /= ".")
                                                 |> List.map .name
-                                                |> List.map (\n -> sessionsDir model.homeDir ++ "/" ++ n ++ "/plans")
+
+                                        planDirs =
+                                            List.map (\n -> sessionsDir model.homeDir ++ "/" ++ n ++ "/plans") sessionDirs
+
+                                        sessionMetaQueue =
+                                            List.map (\n -> sessionsDir model.homeDir ++ "/" ++ n ++ "/session.meta.json") sessionDirs
                                     in
                                     case planDirs of
                                         next :: rest ->
@@ -1773,15 +1818,37 @@ update msg model =
                                             ( { m1
                                                 | planMetaDirQueue = rest
                                                 , planMetaDirListing = Just next
+                                                , planMetaSessionQueue = sessionMetaQueue
                                                 , planMetaScanReqId = Just reqId
                                               }
                                             , Ports.fsListDir { reqId = reqId, path = next }
                                             )
 
                                         [] ->
-                                            ( { model | planMetaScanReqId = Nothing, planMetaLoading = False }
-                                            , Cmd.none
-                                            )
+                                            -- No plans dirs anywhere: go
+                                            -- straight to reading the
+                                            -- session lineage metas.
+                                            case sessionMetaQueue of
+                                                r :: rs ->
+                                                    let
+                                                        ( reqId2, m2 ) =
+                                                            nextFsReq model
+                                                    in
+                                                    ( { m2
+                                                        | planMetaScanReqId = Nothing
+                                                        , planMetaReading = Just r
+                                                        , planMetaReadReqId = Just reqId2
+                                                        , planMetaSessionQueue = rs
+                                                        , planMetaReadQueue = []
+                                                        , planMetaLoading = False
+                                                      }
+                                                    , Ports.fsReadFileText { reqId = reqId2, path = r }
+                                                    )
+
+                                                [] ->
+                                                    ( { model | planMetaScanReqId = Nothing, planMetaLoading = False }
+                                                    , Cmd.none
+                                                    )
 
                     else
                         -- File picker listing (or any other non-scan
@@ -2008,25 +2075,46 @@ update msg model =
 
                             m1 =
                                 if res.ok then
-                                    case D.decodeString PM.decodeMeta res.content of
-                                        Ok meta ->
-                                            let
-                                                -- planId = the meta
-                                                -- file name minus
-                                                -- ".meta.json" (paths
-                                                -- are
-                                                -- sessions/<origin>/plans/<planId>/<planId>.meta.json).
-                                                planId =
-                                                    String.split "/" path
-                                                        |> List.reverse
-                                                        |> List.head
-                                                        |> Maybe.withDefault path
-                                                        |> String.dropRight (String.length ".meta.json")
-                                            in
-                                            { model | planMetas = Dict.insert planId meta model.planMetas }
+                                    if String.endsWith "/session.meta.json" path then
+                                        -- P39/Phase B: a session lineage
+                                        -- meta (sessions/<uuid>/session.meta.json)
+                                        -- registers instanceId → SessionMeta.
+                                        case D.decodeString SM.decode res.content of
+                                            Ok sm ->
+                                                let
+                                                    instanceId =
+                                                        case List.reverse (String.split "/" path) of
+                                                            _ :: i :: _ ->
+                                                                i
 
-                                        Err _ ->
-                                            model
+                                                            _ ->
+                                                                path
+                                                in
+                                                { model | sessionLineage = Dict.insert instanceId sm model.sessionLineage }
+
+                                            Err _ ->
+                                                model
+
+                                    else
+                                        case D.decodeString PM.decodeMeta res.content of
+                                            Ok meta ->
+                                                let
+                                                    -- planId = the meta
+                                                    -- file name minus
+                                                    -- ".meta.json" (paths
+                                                    -- are
+                                                    -- sessions/<origin>/plans/<planId>/<planId>.meta.json).
+                                                    planId =
+                                                        String.split "/" path
+                                                            |> List.reverse
+                                                            |> List.head
+                                                            |> Maybe.withDefault path
+                                                            |> String.dropRight (String.length ".meta.json")
+                                                in
+                                                { model | planMetas = Dict.insert planId meta model.planMetas }
+
+                                            Err _ ->
+                                                model
 
                                 else
                                     -- A failed meta read (missing/corrupt

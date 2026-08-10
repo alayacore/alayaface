@@ -45,6 +45,7 @@ import Plan.Meta as PM
 import Plan.Cascade as PC
 import Session.Selector as Sel
 import Session.Types as T
+import Session.Meta as SM
 import App.NodeConnection as NC
 
 
@@ -140,6 +141,17 @@ type alias Model =
     -- chain; matching planReadTarget = an open/load read; neither = a
     -- stale response (ignored).
     , planMetaReadReqId : Maybe String
+    -- P39/Phase B: session.meta.json paths (sessions/<uuid>/session.meta.json)
+    -- collected from the sessions/ listing, read BEFORE the plan metas
+    -- (lineage first — plan origins resolve against it). Each successful
+    -- read registers instanceId → SessionMeta in `sessionLineage`.
+    , planMetaSessionQueue : List String
+    -- P39/Phase B: session lineage registry — physical session instance
+    -- id → its stable conversation id (+ parent instance pointer). Built
+    -- from the session.meta.json scan and on session creation; used to
+    -- resolve frame events / bindings to the CONVERSATION id (stable
+    -- across forks). See Session.Meta.
+    , sessionLineage : Dict String SM.SessionMeta
     -- Monotonic counter for fs request ids (fsListDir/fsReadFileText
     -- only — the two ports shared by the plan-meta scan and the normal
     -- UI flows). Every request gets a unique id so responses can be
