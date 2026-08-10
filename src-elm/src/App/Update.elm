@@ -2638,10 +2638,23 @@ update msg model =
                 Ok err ->
                     case Dict.get err.sessionId model.sessions of
                         Just s ->
+                            -- An MCP auth failure (start/fill rejected, e.g.
+                            -- the session died) must release the running-auth
+                            -- marker — otherwise mcpAuthRunning stays set
+                            -- forever (only an SM status clears it, and a
+                            -- dead session never sends one).
+                            let
+                                s1 =
+                                    if err.kind == "mcp_auth" then
+                                        { s | mcpAuthRunning = Nothing }
+
+                                    else
+                                        s
+                            in
                             ( { model
                                 | sessions =
                                     Dict.insert err.sessionId
-                                        { s
+                                        { s1
                                             | sendPending = False
                                             , statusMsg = err.kind ++ " failed: " ++ err.message
                                         }

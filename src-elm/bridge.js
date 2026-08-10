@@ -650,6 +650,10 @@
         navigator.clipboard.writeText(url).catch(function (e) {
           console.error("copyToClipboard failed:", e);
         });
+      }).catch(function (err) {
+        // Surface the failure (dead session / backend error) so Elm can
+        // release the running-auth marker instead of sticking forever.
+        rpcError("mcp_auth", data.sessionId, err);
       });
     });
 
