@@ -1,0 +1,114 @@
+{
+  "frame": [
+    {
+      "name": "plain_no_prefix",
+      "input": {
+        "session_id": "s1",
+        "tag": "XX",
+        "raw_value": "odd",
+        "history_id": null,
+        "content": "odd",
+        "json": null,
+        "user_content_type": null
+      },
+      "expected": "{\"session_id\":\"s1\",\"tag\":\"XX\",\"raw_value\":\"odd\",\"history_id\":null,\"content\":\"odd\",\"json\":null,\"user_content_type\":null}"
+    },
+    {
+      "name": "user_echo_with_history",
+      "input": {
+        "session_id": "s1",
+        "tag": "UT",
+        "raw_value": "\u0000h1\u0000hi",
+        "history_id": "h1",
+        "content": "hi",
+        "json": null,
+        "user_content_type": "UT"
+      },
+      "expected": "{\"session_id\":\"s1\",\"tag\":\"UT\",\"raw_value\":\"\\u0000h1\\u0000hi\",\"history_id\":\"h1\",\"content\":\"hi\",\"json\":null,\"user_content_type\":\"UT\"}"
+    },
+    {
+      "name": "at_terminator_empty_content",
+      "input": {
+        "session_id": "s1",
+        "tag": "AT",
+        "raw_value": "\u0000h1\u0000",
+        "history_id": "h1",
+        "content": null,
+        "json": null,
+        "user_content_type": null
+      },
+      "expected": "{\"session_id\":\"s1\",\"tag\":\"AT\",\"raw_value\":\"\\u0000h1\\u0000\",\"history_id\":\"h1\",\"content\":null,\"json\":null,\"user_content_type\":null}"
+    },
+    {
+      "name": "json_frame",
+      "input": {
+        "session_id": "s1",
+        "tag": "AF",
+        "raw_value": "\u0000h1\u0000{\"id\":\"t1\",\"name\":\"read\"}",
+        "history_id": "h1",
+        "content": "{\"id\":\"t1\",\"name\":\"read\"}",
+        "json": "{\"id\":\"t1\",\"name\":\"read\"}",
+        "user_content_type": null
+      },
+      "expected": "{\"session_id\":\"s1\",\"tag\":\"AF\",\"raw_value\":\"\\u0000h1\\u0000{\\\"id\\\":\\\"t1\\\",\\\"name\\\":\\\"read\\\"}\",\"history_id\":\"h1\",\"content\":\"{\\\"id\\\":\\\"t1\\\",\\\"name\\\":\\\"read\\\"}\",\"json\":{\"id\":\"t1\",\"name\":\"read\"},\"user_content_type\":null}"
+    },
+    {
+      "name": "co_with_injected_name",
+      "input": {
+        "session_id": "s1",
+        "tag": "CO",
+        "raw_value": "{\"id\":\"call-1\",\"output\":{\"ok\":true},\"is_error\":false}",
+        "history_id": null,
+        "content": "{\"id\":\"call-1\",\"output\":{\"ok\":true},\"is_error\":false}",
+        "json": "{\"id\":\"call-1\",\"is_error\":false,\"name\":\"model_set\",\"output\":{\"ok\":true}}",
+        "user_content_type": null
+      },
+      "expected": "{\"session_id\":\"s1\",\"tag\":\"CO\",\"raw_value\":\"{\\\"id\\\":\\\"call-1\\\",\\\"output\\\":{\\\"ok\\\":true},\\\"is_error\\\":false}\",\"history_id\":null,\"content\":\"{\\\"id\\\":\\\"call-1\\\",\\\"output\\\":{\\\"ok\\\":true},\\\"is_error\\\":false}\",\"json\":{\"id\":\"call-1\",\"is_error\":false,\"name\":\"model_set\",\"output\":{\"ok\":true}},\"user_content_type\":null}"
+    },
+    {
+      "name": "sm_envelope",
+      "input": {
+        "session_id": "s1",
+        "tag": "SM",
+        "raw_value": "{\"type\":\"task\",\"data\":{\"id\":\"boot\"}}",
+        "history_id": null,
+        "content": "{\"type\":\"task\",\"data\":{\"id\":\"boot\"}}",
+        "json": "{\"data\":{\"id\":\"boot\"},\"type\":\"task\"}",
+        "user_content_type": null
+      },
+      "expected": "{\"session_id\":\"s1\",\"tag\":\"SM\",\"raw_value\":\"{\\\"type\\\":\\\"task\\\",\\\"data\\\":{\\\"id\\\":\\\"boot\\\"}}\",\"history_id\":null,\"content\":\"{\\\"type\\\":\\\"task\\\",\\\"data\\\":{\\\"id\\\":\\\"boot\\\"}}\",\"json\":{\"data\":{\"id\":\"boot\"},\"type\":\"task\"},\"user_content_type\":null}"
+    }
+  ],
+  "delta": [
+    {
+      "name": "normal",
+      "input": {
+        "session_id": "s1",
+        "history_id": "h1",
+        "content": "hello",
+        "tag": "At"
+      },
+      "expected": "{\"session_id\":\"s1\",\"history_id\":\"h1\",\"content\":\"hello\",\"tag\":\"At\"}"
+    }
+  ],
+  "status": [
+    {
+      "name": "connected",
+      "input": {
+        "session_id": "s1",
+        "connected": true,
+        "message": "ready"
+      },
+      "expected": "{\"session_id\":\"s1\",\"connected\":true,\"message\":\"ready\"}"
+    },
+    {
+      "name": "disconnected",
+      "input": {
+        "session_id": "s1",
+        "connected": false,
+        "message": "Connection closed"
+      },
+      "expected": "{\"session_id\":\"s1\",\"connected\":false,\"message\":\"Connection closed\"}"
+    }
+  ]
+}

@@ -143,6 +143,25 @@ func (e *testEnv) createSession(t *testing.T) string {
 	return id
 }
 
+// waitSessionFile blocks until fakecore has written <sid>/session.alaya
+// on disk. resume_session checks the file BEFORE the in-memory
+// "Session is already active" guard, and fakecore writes the file
+// asynchronously during boot — so any test asserting the double-resume
+// guard must wait for the file first or it races (flaky "Session file
+// not found" instead of "Session is already active").
+func waitSessionFile(t *testing.T, sid string) {
+	t.Helper()
+	path := filepath.Join(dirs.AlayafaceDir(), "sessions", sid, "session.alaya")
+	deadline := time.Now().Add(6 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("session.alaya not written for %s", sid)
+}
+
 // waitEvent reads WS events until one of type typ matches pred (or a
 // 6s deadline). Non-matching events are drained. Single read deadline:
 // gorilla connections cannot be re-read after a read error, so a
@@ -607,6 +626,11 @@ func TestIntegrationCloseAllSessionsReclaimsOnPageLoad(t *testing.T) {
 	e := newTestEnv(t, "")
 	sid1 := e.createSession(t)
 	sid2 := e.createSession(t)
+	// resume_session's "already active" guard only fires after the
+	// on-disk session.alaya check passes; fakecore writes it during
+	// boot, so wait for both files before the assertion.
+	waitSessionFile(t, sid1)
+	waitSessionFile(t, sid2)
 
 	// Both are active: a direct resume must be rejected.
 	if msg := e.rpcErr(t, "resume_session", map[string]any{"sessionId": sid1, "binaryPath": ""}); msg != "Session is already active" {
@@ -656,6 +680,9 @@ func TestIntegrationCloseAllSessionsScopedByClient(t *testing.T) {
 	}
 	sidA := createFor("client-a")
 	sidB := createFor("client-b")
+	// B's session.alaya is written asynchronously by fakecore; the
+	// double-resume guard below only fires once the file exists.
+	waitSessionFile(t, sidB)
 
 	// A page load for client A reclaims only A's session.
 	e.rpcOK(t, "close_all_sessions", map[string]any{"clientId": "client-a"})

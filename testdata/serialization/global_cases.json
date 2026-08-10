@@ -1,0 +1,24 @@
+{
+  "cases": [
+    {
+      "name": "default",
+      "input": {
+        "recursion_limit": 0
+      },
+      "normalized": {
+        "recursion_limit": 8
+      },
+      "expected_file": "{\n  \"recursion_limit\": 8\n}"
+    },
+    {
+      "name": "custom",
+      "input": {
+        "recursion_limit": 12
+      },
+      "normalized": {
+        "recursion_limit": 12
+      },
+      "expected_file": "{\n  \"recursion_limit\": 12\n}"
+    }
+  ]
+}

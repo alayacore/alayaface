@@ -1,0 +1,16 @@
+{
+  "parse_cases": [
+    {
+      "name": "http_and_stdio",
+      "input_text": "server: exaWebSearch\nurl: https://mcp.exa.ai/mcp\nproto-version: 2025-11-25\n---\nserver: embedded\ncommand: \"embedded-debugger-mcp\"\nargs: [\"--allow-flash-erase\", \"serve\"]\nenv: {\"RUST_LOG\": \"info\"}\n",
+      "expected_parsed": "[{\"proto_version\":\"2025-11-25\",\"server\":\"exaWebSearch\",\"type\":\"http\",\"url\":\"https://mcp.exa.ai/mcp\"},{\"args\":\"[\\\"--allow-flash-erase\\\",\\\"serve\\\"]\",\"command\":\"embedded-debugger-mcp\",\"env\":\"{\\\"RUST_LOG\\\":\\\"info\\\"}\",\"server\":\"embedded\",\"type\":\"stdio\"}]"
+    }
+  ],
+  "write_cases": [
+    {
+      "name": "ordered_fields",
+      "input_servers": "[{\"server\":\"exaWebSearch\",\"url\":\"https://mcp.exa.ai/mcp\",\"proto_version\":\"2025-11-25\"},{\"server\":\"embedded\",\"command\":\"embedded-debugger-mcp\",\"args\":\"[\\\"--allow-flash-erase\\\",\\\"serve\\\"]\",\"env\":\"{\\\"RUST_LOG\\\":\\\"info\\\"}\"}]",
+      "expected_text": "server: \"exaWebSearch\"\nurl: \"https://mcp.exa.ai/mcp\"\nproto-version: \"2025-11-25\"\n---\nserver: \"embedded\"\ncommand: \"embedded-debugger-mcp\"\nargs: [\"--allow-flash-erase\",\"serve\"]\nenv: {\"RUST_LOG\":\"info\"}\n"
+    }
+  ]
+}

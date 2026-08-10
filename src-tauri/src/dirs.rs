@@ -562,4 +562,46 @@ mod tests {
         assert_eq!(empty.tool_confirm, "");
         assert_eq!(empty.builtin_tools, None);
     }
+
+    #[test]
+    fn spawn_args_serialization_matches_shared_fixture() {
+        // M1 truth table (D3): session.spawn.json must serialize to the
+        // exact bytes in testdata/serialization/spawn_cases.json — the
+        // same fixture the Go side (dirs/spawn_serialization_test.go)
+        // is tested against. Locks the builtin_tools null semantics
+        // (None -> null, Some("") -> "", Some("a,b") -> "a,b").
+        #[derive(serde::Deserialize)]
+        struct Fixture {
+            cases: Vec<Case>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Case {
+            name: String,
+            input: Input,
+            expected: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct Input {
+            tool_confirm: String,
+            builtin_tools: Option<String>,
+            system_prompt: String,
+            work_dir: String,
+        }
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../testdata/serialization/spawn_cases.json");
+        let text = std::fs::read_to_string(&path).expect("read spawn_cases.json fixture");
+        let fx: Fixture = serde_json::from_str(&text).expect("parse spawn_cases.json fixture");
+
+        for c in fx.cases {
+            let args = SpawnArgs {
+                tool_confirm: c.input.tool_confirm,
+                builtin_tools: c.input.builtin_tools,
+                system_prompt: c.input.system_prompt,
+                work_dir: c.input.work_dir,
+            };
+            let got = serde_json::to_string_pretty(&args).unwrap();
+            assert_eq!(got, c.expected, "SpawnArgs case {}", c.name);
+        }
+    }
 }

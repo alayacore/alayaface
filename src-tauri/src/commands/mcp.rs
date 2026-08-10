@@ -587,4 +587,48 @@ env: {"RUST_LOG": "info"}
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(sync_default_mcp(config.to_string(), "".to_string()))
     }
+
+    #[test]
+    fn mcp_parse_matches_shared_fixture() {
+        // M1 truth table (D3): parse_mcp_conf must produce the exact
+        // JSON in testdata/serialization/mcp_cases.json — the same
+        // fixture the Go side (handlers/serialization_test.go) is
+        // tested against. Locks key mapping, args/env normalization,
+        // type inference and comment/block skipping.
+        #[derive(serde::Deserialize)]
+        struct Fixture {
+            parse_cases: Vec<ParseCase>,
+            write_cases: Vec<WriteCase>,
+        }
+        #[derive(serde::Deserialize)]
+        struct ParseCase {
+            name: String,
+            input_text: String,
+            expected_parsed: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct WriteCase {
+            name: String,
+            input_servers: String,
+            expected_text: String,
+        }
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../testdata/serialization/mcp_cases.json");
+        let text = std::fs::read_to_string(&path).expect("read mcp_cases.json fixture");
+        let fx: Fixture = serde_json::from_str(&text).expect("parse mcp_cases.json fixture");
+
+        for c in fx.parse_cases {
+            let servers = parse_mcp_conf(&c.input_text);
+            let got = serde_json::to_string(&servers).unwrap();
+            assert_eq!(got, c.expected_parsed, "parse case {}", c.name);
+        }
+
+        for c in fx.write_cases {
+            let servers: Vec<serde_json::Value> =
+                serde_json::from_str(&c.input_servers).expect("fixture input_servers");
+            let got = write_mcp_conf(&servers);
+            assert_eq!(got, c.expected_text, "write case {}", c.name);
+        }
+    }
 }

@@ -1,0 +1,34 @@
+{
+  "cases": [
+    {
+      "name": "no_tools",
+      "input": {
+        "tool_confirm": "allow",
+        "builtin_tools": "",
+        "system_prompt": "planner-hint",
+        "work_dir": "/tmp/plan-work"
+      },
+      "expected": "{\n  \"tool_confirm\": \"allow\",\n  \"builtin_tools\": \"\",\n  \"system_prompt\": \"planner-hint\",\n  \"work_dir\": \"/tmp/plan-work\"\n}"
+    },
+    {
+      "name": "selected_tools",
+      "input": {
+        "tool_confirm": "",
+        "builtin_tools": "a,b",
+        "system_prompt": "",
+        "work_dir": ""
+      },
+      "expected": "{\n  \"tool_confirm\": \"\",\n  \"builtin_tools\": \"a,b\",\n  \"system_prompt\": \"\",\n  \"work_dir\": \"\"\n}"
+    },
+    {
+      "name": "unset_tools",
+      "input": {
+        "tool_confirm": "",
+        "builtin_tools": null,
+        "system_prompt": "",
+        "work_dir": ""
+      },
+      "expected": "{\n  \"tool_confirm\": \"\",\n  \"builtin_tools\": null,\n  \"system_prompt\": \"\",\n  \"work_dir\": \"\"\n}"
+    }
+  ]
+}

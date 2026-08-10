@@ -192,4 +192,51 @@ mod tests {
             assert_eq!(effective_builtin_tools().unwrap(), "");
         });
     }
+
+    #[test]
+    fn settings_serialization_matches_shared_fixture() {
+        // M1 truth table (D3): settings.conf must normalize + serialize
+        // to the exact bytes in testdata/serialization/settings_cases.json
+        // — the same fixture the Go side (handlers/serialization_test.go)
+        // is tested against.
+        #[derive(serde::Deserialize)]
+        struct Fixture {
+            cases: Vec<Case>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Case {
+            name: String,
+            input: Input,
+            normalized: Normalized,
+            expected_file: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct Input {
+            tool_confirm: String,
+            builtin_tools: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct Normalized {
+            tool_confirm: String,
+            builtin_tools: String,
+        }
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../testdata/serialization/settings_cases.json");
+        let text = std::fs::read_to_string(&path).expect("read settings_cases.json fixture");
+        let fx: Fixture = serde_json::from_str(&text).expect("parse settings_cases.json fixture");
+
+        for c in fx.cases {
+            let tc = normalize_tool_confirm(&c.input.tool_confirm).unwrap();
+            let bt = normalize_tool_confirm(&c.input.builtin_tools).unwrap();
+            assert_eq!(tc, c.normalized.tool_confirm, "case {}: tool_confirm", c.name);
+            assert_eq!(bt, c.normalized.builtin_tools, "case {}: builtin_tools", c.name);
+            let settings = GlobalSettings {
+                tool_confirm: tc,
+                builtin_tools: bt,
+            };
+            let got = serde_json::to_string_pretty(&settings).unwrap();
+            assert_eq!(got, c.expected_file, "case {}: file text", c.name);
+        }
+    }
 }

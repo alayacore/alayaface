@@ -1,0 +1,28 @@
+{
+  "cases": [
+    {
+      "name": "normalized",
+      "input": {
+        "tool_confirm": " execute_command , search_files ,",
+        "builtin_tools": "read_file,write_file"
+      },
+      "normalized": {
+        "tool_confirm": "execute_command,search_files",
+        "builtin_tools": "read_file,write_file"
+      },
+      "expected_file": "{\n  \"tool_confirm\": \"execute_command,search_files\",\n  \"builtin_tools\": \"read_file,write_file\"\n}"
+    },
+    {
+      "name": "empty",
+      "input": {
+        "tool_confirm": "",
+        "builtin_tools": ""
+      },
+      "normalized": {
+        "tool_confirm": "",
+        "builtin_tools": ""
+      },
+      "expected_file": "{\n  \"tool_confirm\": \"\",\n  \"builtin_tools\": \"\"\n}"
+    }
+  ]
+}
