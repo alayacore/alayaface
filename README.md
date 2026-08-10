@@ -237,8 +237,10 @@ SIGKILL only after a 5s grace period. (AlayaCore itself is untouched;
   bar shows Completed → clicking a node activates its session with the
   assistant reply; Stop / resume / Browse-import / marker-rejection paths
   are covered too
-- asserts via DOM selectors, saves screenshots to a temp artifact dir,
-  and cleans up the server/Chrome
+- asserts via DOM selectors, saves screenshots to a temp artifact dir
+  (removed on exit; `ALAYAFACE_KEEP_ARTIFACTS=1` keeps them for debugging),
+  and cleans up the server/Chrome/tmp dir — Ctrl-C also kills the backend
+  child so no orphan server is left behind
 
 This already caught real bugs that unit tests missed (see TODO.md P15).
 It does **not** cover real-model behavior — that still needs an OpenAI

@@ -5,10 +5,13 @@
 // node statuses) came back from run.json / meta.json.
 //
 // Screenshots land in the artifact dir; ALL PASS printed on success.
+// The tmp dir is removed on exit — set ALAYAFACE_KEEP_ARTIFACTS=1 to keep
+// the screenshots for debugging. Signal handlers (Ctrl-C / SIGTERM) kill
+// the backend child too, so no orphan server is left behind.
 
 import puppeteer from 'puppeteer-core';
 import { execSync, spawn } from 'node:child_process';
-import { mkdtempSync, existsSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
@@ -99,6 +102,30 @@ async function launchChrome() {
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// ── cleanup ─────────────────────────────────────────────────────────
+// Remove the tmp dir on exit (unless ALAYAFACE_KEEP_ARTIFACTS=1 — useful
+// to inspect screenshots after a failed run). Signal handlers also kill
+// the backend child, so Ctrl-C / SIGTERM cannot orphan a server process.
+const KEEP_ARTIFACTS = process.env.ALAYAFACE_KEEP_ARTIFACTS === '1';
+function removeTmp() {
+  if (KEEP_ARTIFACTS) return;
+  try { rmSync(tmp, { recursive: true, force: true }); } catch {}
+}
+function killServer() {
+  try { if (server) server.kill('SIGTERM'); } catch {}
+}
+let exiting = false;
+function onSignal(sig) {
+  if (exiting) return;
+  exiting = true;
+  killServer();
+  removeTmp();
+  process.exit(sig === 'SIGINT' ? 130 : 143);
+}
+process.on('SIGINT', () => onSignal('SIGINT'));
+process.on('SIGTERM', () => onSignal('SIGTERM'));
+process.on('SIGHUP', () => onSignal('SIGHUP'));
 
 try {
   // ── Phase 1: create + run a plan ──────────────────────────────────
@@ -281,8 +308,9 @@ try {
   console.log('PASS: run state restored after restart — badge ' + restored.badge + ', nodes ' + JSON.stringify(restored.nodeCounts));
 
   console.log('\nALL PASS ✅');
-  console.log('artifacts:', tmp);
+  console.log(KEEP_ARTIFACTS ? `artifacts: ${tmp}` : 'artifacts: <removed on exit — set ALAYAFACE_KEEP_ARTIFACTS=1 to keep screenshots>');
 } finally {
   if (browser) await browser.close().catch(() => {});
-  if (server) server.kill('SIGTERM');
+  killServer();
+  removeTmp();
 }
