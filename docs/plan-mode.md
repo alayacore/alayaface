@@ -1,9 +1,9 @@
 # Plan Mode Design Document (AlayaFace)
 
 > Status: **Implemented (P0–P11 done; includes several review-round fixes)**.
-> Development progress lives in the root `TODO.md` (read it first).
+> Development history (all phases done) lives in `docs/archive/TODO.md`.
 > This document is the single authoritative design source for Plan Mode;
-> after an interruption, read this + `TODO.md` before continuing.
+> This document is the reference; the phase-by-phase task records were archived to `docs/archive/` after completion.
 > Deviations from the design are annotated (e.g. NodeStatus gained `Waiting`,
 > session creation is serialized).
 
@@ -57,7 +57,7 @@ Add **Plan Mode** to AlayaFace: let the model decompose a large task into a
 - **create_session command**: already supports `configPath` (non-empty = use the given dir directly as session config); `toolConfirm` defaults to the active preset's settings.conf tool_confirm; **creating a session dir copies the active preset into `session_dir/config`** (`dirs::create_session_dir`, excluding settings.conf).
 - **resume_session depends on `session_dir/config`** → passing a preset path directly as configPath would break resume; the "copy template by preset name" path must be used.
 - **The alayacore tool set cannot be extended on the UI side** → plan JSON can only be captured via a "fenced ```json output" or "write_file to a file".
-- `TODO.md` / `REFACTOR.md` were originally gitignored → the `TODO.md` ignore was removed and it is now version-controlled (interruption recovery depends on it).
+- `TODO.md` / `REFACTOR.md` were originally gitignored → the `TODO.md` ignore was removed and it became version-controlled; both were archived to `docs/archive/` once the R series completed.
 
 ---
 
@@ -505,7 +505,7 @@ entirely: the `default_timeout_seconds` / `timeout_seconds` schema fields,
 the `Time.every` tick subscription, and the `Tick` event are gone. Nodes
 have no timeout — a hung task stays Running until the user Stops it
 (cancel-first close, §8.3) or the session disconnects. Hung nodes are an
-accepted experience-period limitation (see REFACTOR.md §8).
+accepted experience-period limitation (see docs/archive/REFACTOR.md §8).
 
 Historical design (for reference, no longer implemented): `Time.every
 1000ms` → `PlanTick` → `Tick now` → `failNode "Timeout after Ns"` for
@@ -678,7 +678,7 @@ There is **no top-level `plans/` root** anymore.
 
 ---
 
-## 12. Phased Implementation Plan (progress in TODO.md)
+## 12. Phased Implementation Plan (historical records in docs/archive/TODO.md)
 
 | Phase | Content | Status |
 |---|---|---|
@@ -690,7 +690,7 @@ There is **no top-level `plans/` root** anymore.
 | P4.5 | `create_session` gains `preset`/`builtinTools` arguments + settings.conf `builtin_tools` + seed preset seeding | ✅ done |
 | P5 | polish (run log/docs/README etc.) | ✅ done |
 | P6 | Plan Session (menu entry + `--system` planner instructions + `[Plan]` title) | ✅ done |
-| P17–P23 | Plans manager Browse import / node-session resume dir id / node↔session connection curve / config empty shells / Plan Session role lock + no tools / Stop closes node windows (see TODO.md) | ✅ done |
+| P17–P23 | Plans manager Browse import / node-session resume dir id / node↔session connection curve / config empty shells / Plan Session role lock + no tools / Stop closes node windows (see docs/archive/TODO.md) | ✅ done |
 | P24 | output injection `{{tX.output}}` (§8.6: TaskDone records output → run.json persistence → downstream SendPrompt replacement → detail panel display) | ✅ done |
 | P25 | close_session cancel-first (§8.3: Stop/close window immediately cancels the task, history saved up to the cancel point) | ✅ done |
 | P26 | plan JSON top-level `"type": "alayaface-plan"` marker (§5/§6.7: the button only recognizes the explicit marker; **required, no compat** — missing/wrong value errors out) | ✅ done |
@@ -727,7 +727,7 @@ There is **no top-level `plans/` root** anymore.
 ### Confirmed (explicit user instructions)
 - **Don't modify AlayaCore** (constraint C1);
 - built-in tool set is specified **via spawn arguments** like tool confirmation (`--builtin-tools`), config lives in settings.conf (per-preset, symmetric with tool_confirm);
-- design is written into this document + TODO.md manages subsequent development (read this + TODO.md first after an interruption);
+- design is written into this document (phase records archived in docs/archive/TODO.md);
 - **Plan Session entry (superseded by R2 — fixed plan mode)**: originally the
   user only describes the need, a dedicated menu entry created a role-locked,
   tool-less planner session with a `[Plan]` prefix. R2 removed the entry: every
@@ -780,4 +780,4 @@ There is **no top-level `plans/` root** anymore.
 - `src-elm/src/Session/Handlers.elm` — existing task status / tool call handling
 - `src-tauri/src/dirs.rs` / `src-go/internal/dirs/dirs.go` — preset/session directory structure
 - `src-tauri/src/commands/settings.rs` — existing settings.conf implementation (builtin_tools symmetric reference)
-- archived old Go backend working notes: `docs/go-backend-todo.md`
+- old Go backend working notes archived to `docs/archive/go-backend-todo.md`

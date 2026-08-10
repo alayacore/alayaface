@@ -2,13 +2,13 @@
 
 > **Core flow is automated**: `make e2e` (headless Chrome + fakecore fake model)
 > already covers the whole chain of Plan Session → Create Plan → Run → node
-> success/failure retry → opening a node's session (see TODO.md P15). The items
+> success/failure retry → opening a node's session (see docs/archive/TODO.md P15). The items
 > left in this checklist are those **not covered by automation**: conversation
 > quality with real alayacore + a real model, Tauri native windows, and MCP.
 >
 > Usage: when a desktop environment + a model API key (or a local .gguf) is
 > available, smoke-test each item below and tick it off; write the results back
-> to TODO.md.
+> to docs/archive/TODO.md.
 >
 > Prerequisites: `alayacore` executable (`which alayacore` or `ALAYACORE_BIN`),
 > model API key configured (Default preset's model.conf), MCP currently

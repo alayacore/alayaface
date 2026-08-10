@@ -146,8 +146,8 @@ alayaface-server --addr 0.0.0.0:8765 --static ../src-elm [--token <token>]
 - Commands: `POST /rpc/{command}` with JSON args (mirrors Tauri `invoke`).
 - Events: WebSocket `GET /ws` pushes `{type, payload}` messages
   (`tlv-delta`, `tlv-frame`, `core-status`).
-- See `docs/go-backend.md` for the full API mapping and design; `TODO.md`
-  tracks implementation status.
+- See `docs/go-backend.md` for the full API mapping and design
+  (historical phase records: `docs/archive/TODO.md`).
 
 ## Plan Mode (DAG task planning & execution)
 
@@ -246,7 +246,8 @@ SIGKILL only after a 5s grace period. (AlayaCore itself is untouched;
   and cleans up the server/Chrome/tmp dir — Ctrl-C also kills the backend
   child so no orphan server is left behind
 
-This already caught real bugs that unit tests missed (see TODO.md P15).
+This already caught real bugs that unit tests missed (see
+`docs/archive/TODO.md` P15).
 It does **not** cover real-model behavior — that still needs an OpenAI
 compatible API key (or a local `.gguf`) for `manual-acceptance.md`.
 
