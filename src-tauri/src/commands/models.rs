@@ -20,11 +20,8 @@ pub async fn list_models(
     sessions: State<'_, SessionMap>,
 ) -> Result<Vec<serde_json::Value>, String> {
     // Try cache first
-    {
-        let cache = model_cache.0.lock().unwrap();
-        if !cache.is_empty() {
-            return Ok(cache.clone());
-        }
+    if !model_cache.is_empty() {
+        return Ok(model_cache.get());
     }
 
     // Ask any connected session
@@ -44,19 +41,17 @@ pub async fn list_models(
             // the cache immediately after send_cmd would always miss it
             // and silently fall through to the probe (while spamming
             // the live session with a pointless model_load on every
-            // call). 2s bound; on timeout fall back to the probe.
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-            loop {
-                {
-                    let cache = model_cache.0.lock().unwrap();
-                    if !cache.is_empty() {
-                        return Ok(cache.clone());
-                    }
-                }
-                if std::time::Instant::now() > deadline {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            // call). Sleep on the cache's notification instead of
+            // polling (M6/D6); 2s bound, on timeout fall back to the
+            // probe.
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                model_cache.wait_non_empty(),
+            )
+            .await
+            {
+                Ok(()) => return Ok(model_cache.get()),
+                Err(_) => {}
             }
             break;
         }
@@ -194,8 +189,7 @@ fn run_temp_probe(
                             if let Some(arr) = env.data.get("models").and_then(|v| v.as_array()) {
                                 result.models = Some(arr.clone());
                                 if let Some(cache) = &model_cache {
-                                    let mut cache = cache.0.lock().unwrap();
-                                    *cache = arr.clone();
+                                    cache.set(arr.clone());
                                 }
                             }
                         }

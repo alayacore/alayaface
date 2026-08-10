@@ -46,14 +46,17 @@ func ListModels(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		return true // only ask the first connected session
 	})
 	if asked {
-		// Wait up to 2s for the model_list SM (alayacore answers fast);
-		// on timeout fall back to the probe rather than hanging the RPC.
-		deadline := time.Now().Add(2 * time.Second)
-		for h.Cache.IsEmpty() && time.Now().Before(deadline) {
-			time.Sleep(20 * time.Millisecond)
-		}
-		if !h.Cache.IsEmpty() {
-			return writeJSON(w, h.Cache.Get())
+		// Wait for the model_list SM (alayacore answers fast): sleep on
+		// the cache's notification instead of polling — a Set that
+		// happened before this call is still observed (WaitCh re-checks
+		// under the cache lock). 2s bound; on timeout fall back to the
+		// probe rather than hanging the RPC.
+		select {
+		case <-h.Cache.WaitCh():
+			if !h.Cache.IsEmpty() {
+				return writeJSON(w, h.Cache.Get())
+			}
+		case <-time.After(2 * time.Second):
 		}
 	}
 

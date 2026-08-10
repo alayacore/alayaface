@@ -23,7 +23,7 @@ pub fn spawn_stdout_reader(
     session_id: String,
     mut stdout: std::process::ChildStdout,
     connected: Arc<AtomicBool>,
-    model_cache: Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    model_cache: Arc<crate::ModelCacheInner>,
     child: Arc<std::sync::Mutex<Option<std::process::Child>>>,
     pending_commands: Arc<crate::session::PendingCommands>,
 ) {
@@ -73,7 +73,7 @@ fn dispatch_frame(
     app: &AppHandle,
     sid: &str,
     frame: &tlv::Frame,
-    model_cache: &Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    model_cache: &Arc<crate::ModelCacheInner>,
     pending_commands: &Arc<crate::session::PendingCommands>,
 ) {
     let tag = &frame.tag;
@@ -88,8 +88,7 @@ fn dispatch_frame(
         if let Ok(env) = serde_json::from_str::<tlv::SystemMsgEnvelope>(raw_value) {
             if env.msg_type == "model_list" {
                 if let Some(arr) = env.data.get("models").and_then(|v| v.as_array()) {
-                    let mut cache = model_cache.lock().unwrap();
-                    *cache = arr.clone();
+                    model_cache.set(arr.clone());
                 }
             }
         }
