@@ -238,7 +238,7 @@ parentPlanIdOfSession runStates sid =
                     acc
 
                 Nothing ->
-                    if Dict.toList nodes |> List.any (\( _, n ) -> n.sessionId == Just sid || n.lastSessionId == Just sid) then
+                    if Dict.toList nodes |> List.any (\( _, n ) -> n.conversationId == Just sid || n.lastSessionId == Just sid) then
                         Just pid
 
                     else

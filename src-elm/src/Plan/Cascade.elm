@@ -248,7 +248,7 @@ bindingInRun sid maybeRun =
                             acc
 
                         Nothing ->
-                            if n.sessionId == Just sid || n.lastSessionId == Just sid then
+                            if n.conversationId == Just sid || n.lastSessionId == Just sid then
                                 Just ( nodeId, nodeId :: transitiveSuccessors nodeId run.plan.tasks )
 
                             else

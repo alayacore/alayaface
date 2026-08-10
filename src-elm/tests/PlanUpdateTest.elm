@@ -14,6 +14,7 @@ import Dict
 import App.Types as AT
 import Plan.Update as PU
 import Plan.Types as PT
+import Session.Meta as SM
 import Session.Types as T
 import TestHelpers exposing (initModelWithSession)
 
@@ -245,6 +246,94 @@ suite =
                     in
                     Expect.equal ( String.contains "alayaface-plan" p, String.contains "type" p )
                         ( True, True )
+            ]
+        , describe "findPlanIdBySession (P39/Phase B lineage routing)"
+            [ test "routes a fork instance to the node's conversation" <|
+                \_ ->
+                    let
+                        runBound =
+                            let
+                                base =
+                                    PT.emptyRunState "r-1" plan
+
+                                n1 =
+                                    { nodeId = "t1"
+                                    , status = PT.Running
+                                    , attempts = 1
+                                    , maxAttempts = 3
+                                    , conversationId = Just "conv-1"
+                                    , lastSessionId = Just "conv-1"
+                                    , attemptSessions = [ "conv-1" ]
+                                    , failures = []
+                                    , startedAt = Just 1
+                                    , finishedAt = Nothing
+                                    , output = Nothing
+                                    }
+                            in
+                            { base | nodes = Dict.insert "t1" n1 base.nodes }
+
+                        win =
+                            { planWindowWithPlan | run = Just runBound }
+
+                        m0 =
+                            { initModelWithSession
+                                | planWindows = Dict.insert "p1" win Dict.empty
+                                , sessionLineage =
+                                    Dict.fromList
+                                        [ ( "conv-1", SM.empty "conv-1" )
+                                        , ( "fork-2", { conversationId = "conv-1", parentInstanceId = Just "conv-1" } )
+                                        ]
+                            }
+                    in
+                    -- The node is bound to conversation conv-1; the FORK
+                    -- physical instance resolves through the registry to
+                    -- conv-1 and finds the plan.
+                    Expect.equal (PU.findPlanIdBySession m0 "fork-2") (Just "p1")
+            , test "a root instance matches directly (identity)" <|
+                \_ ->
+                    let
+                        runBound =
+                            let
+                                base =
+                                    PT.emptyRunState "r-2" plan
+
+                                n1 =
+                                    { nodeId = "t1"
+                                    , status = PT.Running
+                                    , attempts = 1
+                                    , maxAttempts = 3
+                                    , conversationId = Just "s1"
+                                    , lastSessionId = Just "s1"
+                                    , attemptSessions = [ "s1" ]
+                                    , failures = []
+                                    , startedAt = Just 1
+                                    , finishedAt = Nothing
+                                    , output = Nothing
+                                    }
+                            in
+                            { base | nodes = Dict.insert "t1" n1 base.nodes }
+
+                        win =
+                            { planWindowWithPlan | run = Just runBound }
+
+                        m0 =
+                            { initModelWithSession
+                                | planWindows = Dict.insert "p1" win Dict.empty
+                            }
+                    in
+                    Expect.equal (PU.findPlanIdBySession m0 "s1") (Just "p1")
+            , test "sessions not bound to any node do not match" <|
+                \_ ->
+                    let
+                        win =
+                            { planWindowWithPlan | run = Just (PT.emptyRunState "r-3" plan) }
+
+                        m0 =
+                            { initModelWithSession
+                                | planWindows = Dict.insert "p1" win Dict.empty
+                            }
+                    in
+                    Expect.equal (PU.findPlanIdBySession m0 "stranger") Nothing
             ]
         , describe "handlePlanReadTarget"
             [ test "open/import parses the plan and chains a run restore" <|

@@ -164,7 +164,7 @@ tests =
                     in
                     Expect.all
                         [ \_ -> Expect.equal (Just P.Running) (Dict.get "a" (statuses run2))
-                        , \_ -> Expect.equal (Just "s1") (nodeState "a" run2).sessionId
+                        , \_ -> Expect.equal (Just "s1") (nodeState "a" run2).conversationId
                         , \_ -> Expect.equal True (List.member "prompt:s1:a" (effects es))
                         , \_ -> Expect.equal 1 (List.length (List.filter (\e -> String.startsWith "prompt:" e) (effects es)))
                         ]
@@ -184,7 +184,7 @@ tests =
                             R.step 3000 (R.SessionCreatedFor "a" "s1") run2
                     in
                     Expect.equal 0 (List.length (List.filter (\e -> String.startsWith "prompt:" e) (effects es)))
-                        |> always (Expect.equal (Just "s1") (nodeState "a" run3).sessionId)
+                        |> always (Expect.equal (Just "s1") (nodeState "a" run3).conversationId)
             , test "SendPrompt carries the exact plan prompt (parallel plan)" <|
                 \_ ->
                     let
@@ -252,7 +252,7 @@ tests =
                     in
                     Expect.all
                         [ \r -> Expect.equal [ "s1", "s2" ] (nodeState "a" r).attemptSessions
-                        , \r -> Expect.equal (Just "s2") (nodeState "a" r).sessionId
+                        , \r -> Expect.equal (Just "s2") (nodeState "a" r).conversationId
                         , \r -> Expect.equal (Just "s2") (nodeState "a" r).lastSessionId
                         , \r -> Expect.equal P.Running (nodeState "a" r).status
                         ]
@@ -277,7 +277,7 @@ tests =
                     Expect.all
                         [ \r -> Expect.equal P.Starting (nodeState "a" r).status
                         , \r -> Expect.equal [ "s1" ] (nodeState "a" r).attemptSessions
-                        , \r -> Expect.equal Nothing (nodeState "a" r).sessionId
+                        , \r -> Expect.equal Nothing (nodeState "a" r).conversationId
                         ]
                         run4
             ]
@@ -300,7 +300,7 @@ tests =
                         -- runner closes it), so the live binding is cleared
                         -- and the on-disk session stays reachable via
                         -- lastSessionId (clicking the node resumes it).
-                        , \r -> Expect.equal Nothing (nodeState "a" r).sessionId
+                        , \r -> Expect.equal Nothing (nodeState "a" r).conversationId
                         , \r -> Expect.equal (Just "s1") (nodeState "a" r).lastSessionId
                         ]
                         run3
@@ -324,7 +324,7 @@ tests =
                         , \_ -> Expect.equal 1 a.attempts
                         , \_ -> Expect.equal 1 (List.length a.failures)
                         , \_ -> Expect.equal 1 (Maybe.withDefault 0 (List.head a.failures |> Maybe.map .attempt))
-                        , \_ -> Expect.equal Nothing a.sessionId
+                        , \_ -> Expect.equal Nothing a.conversationId
                         -- the closed session stays reopenable via lastSessionId
                         , \_ -> Expect.equal (Just "s1") a.lastSessionId
                         , \_ -> Expect.equal True (List.member "close:s1" (effects es))
@@ -441,7 +441,7 @@ tests =
                     in
                     Expect.all
                         [ \_ -> Expect.equal P.Canceled (nodeState "a" run3).status
-                        , \_ -> Expect.equal Nothing (nodeState "a" run3).sessionId
+                        , \_ -> Expect.equal Nothing (nodeState "a" run3).conversationId
                         , \_ -> Expect.equal 0 (List.length (List.filter (\e -> String.startsWith "prompt:" e) (effects es)))
                         ]
                         ()
@@ -462,7 +462,7 @@ tests =
                         , \_ -> Expect.equal 1 a.attempts
                         , \_ -> Expect.equal "Session create failed: preset not found" (Maybe.withDefault "" (List.head a.failures |> Maybe.map .reason))
                         , \_ -> Expect.equal True (List.any (\e -> String.startsWith "retry:a" e) (effects es))
-                        , \_ -> Expect.equal Nothing a.sessionId
+                        , \_ -> Expect.equal Nothing a.conversationId
                         ]
                         ()
             , test "SessionCreateFailed on a non-Starting node is ignored" <|
@@ -567,7 +567,7 @@ tests =
                     in
                     Expect.all
                         [ \_ -> Expect.equal P.Failed a.status
-                        , \_ -> Expect.equal Nothing a.sessionId
+                        , \_ -> Expect.equal Nothing a.conversationId
                         -- binding survives closeAndClear for reopening
                         , \_ -> Expect.equal (Just "s1") a.lastSessionId
                         ]
@@ -597,7 +597,7 @@ tests =
                     in
                     Expect.all
                         [ \_ -> Expect.equal P.Starting a.status
-                        , \_ -> Expect.equal Nothing a.sessionId
+                        , \_ -> Expect.equal Nothing a.conversationId
                         , \_ -> Expect.equal Nothing a.lastSessionId
                         ]
                         ()
@@ -942,7 +942,7 @@ tests =
                     Expect.all
                         [ \r -> Expect.equal P.WaitingForPlan (nodeState "a" r).status
                         , \r -> Expect.equal P.InProgress r.status
-                        , \r -> Expect.equal (Just "s1") (nodeState "a" r).sessionId
+                        , \r -> Expect.equal (Just "s1") (nodeState "a" r).conversationId
                         , \r -> Expect.equal Nothing (nodeState "a" r).output
                         ]
                         run3
@@ -1102,7 +1102,7 @@ tests =
                         -- R4 close-and-clear: a finished node's live binding
                         -- is dropped (window closed); lastSessionId keeps the
                         -- session reachable, and output survives the restart.
-                        , \_ -> Expect.equal Nothing (nodeState "a" run4).sessionId |> Expect.onFail "succeeded live binding closed"
+                        , \_ -> Expect.equal Nothing (nodeState "a" run4).conversationId |> Expect.onFail "succeeded live binding closed"
                         , \_ -> Expect.equal (Just "s1") (nodeState "a" run4).lastSessionId |> Expect.onFail "lastSessionId kept"
                         , \_ -> Expect.equal (Just "a-output") (nodeState "a" run4).output |> Expect.onFail "succeeded output survives"
                         ]
@@ -1135,7 +1135,7 @@ tests =
                     Expect.all
                         [ \_ -> Expect.equal P.Starting (nodeState "b" run6).status |> Expect.onFail "failed node resets and relaunches (Starting)"
                         , \_ -> Expect.equal 0 (nodeState "b" run6).attempts
-                        , \_ -> Expect.equal Nothing (nodeState "b" run6).sessionId
+                        , \_ -> Expect.equal Nothing (nodeState "b" run6).conversationId
                         , \_ -> Expect.equal [] (nodeState "b" run6).failures
                         , \_ -> Expect.equal P.Pending (nodeState "c" run6).status
                         , \_ -> Expect.equal P.InProgress run6.status
@@ -1198,7 +1198,7 @@ tests =
                     in
                     Expect.all
                         [ \_ -> Expect.equal P.Pending (nodeState "a" restored).status |> Expect.onFail "Running node → Pending"
-                        , \_ -> Expect.equal Nothing (nodeState "a" restored).sessionId |> Expect.onFail "stale session binding dropped"
+                        , \_ -> Expect.equal Nothing (nodeState "a" restored).conversationId |> Expect.onFail "stale session binding dropped"
                         , \_ -> Expect.equal P.InProgress restored.status |> Expect.onFail "run with pending work is InProgress"
                         ]
                         ()
@@ -1275,7 +1275,7 @@ tests =
                         , \_ -> Expect.equal P.Starting (nodeState "b" run2).status |> Expect.onFail "direct successor resets and relaunches (Starting)"
                         , \_ -> Expect.equal P.Pending (nodeState "c" run2).status |> Expect.onFail "indirect successor resets to Pending"
                         , \_ -> Expect.equal 0 (nodeState "b" run2).attempts |> Expect.onFail "attempts cleared"
-                        , \_ -> Expect.equal Nothing (nodeState "b" run2).sessionId |> Expect.onFail "live binding cleared"
+                        , \_ -> Expect.equal Nothing (nodeState "b" run2).conversationId |> Expect.onFail "live binding cleared"
                         , \_ -> Expect.equal P.Succeeded (nodeState "d" run2).status |> Expect.onFail "parallel branch keeps its result"
                         , \_ -> Expect.equal P.InProgress run2.status
                         ]

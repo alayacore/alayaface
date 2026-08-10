@@ -171,7 +171,14 @@ type alias NodeRunState =
     , status : NodeStatus
     , attempts : Int
     , maxAttempts : Int
-    , sessionId : Maybe String
+    -- P39/Phase B: the node session's CONVERSATION id (stable across
+    -- forks — never rewritten when a fork replaces the physical
+    -- instance). For a root conversation it equals the instance id, so
+    -- pre-fork data is unchanged. Persisted in run.json as
+    -- "conversation_id" (legacy "session_id" still decodes). The LIVE
+    -- binding aspect is tracked separately (cleared on close); the
+    -- conversation binding itself is what node matching uses.
+    , conversationId : Maybe String
     -- The session that last ran this node. Kept even after the session
     -- was closed (failure/stop), so the DAG can reopen it (resume_session)
     -- from disk. sessionId is the LIVE binding (cleared on close).
@@ -223,7 +230,7 @@ emptyNodeRunState node =
     , status = Pending
     , attempts = 0
     , maxAttempts = node.maxAttempts
-    , sessionId = Nothing
+    , conversationId = Nothing
     , lastSessionId = Nothing
     , attemptSessions = []
     , failures = []
@@ -799,7 +806,10 @@ encodeNodeRunState n =
         [ ( "status", E.string (nodeStatusToString n.status) )
         , ( "attempts", E.int n.attempts )
         , ( "max_attempts", E.int n.maxAttempts )
-        , ( "session_id", maybeString n.sessionId )
+        -- P39/Phase B: the node binding is a CONVERSATION id (stable
+        -- across forks). Written as conversation_id; legacy session_id
+        -- still decodes (see nodeRunStateDecoder).
+        , ( "conversation_id", maybeString n.conversationId )
         , ( "last_session_id", maybeString n.lastSessionId )
         , ( "attempt_session_ids", E.list E.string n.attemptSessions )
         , ( "failures", E.list encodeFailure n.failures )
@@ -897,12 +907,12 @@ nodeRunStateDecoder =
                 (\lastSid n -> { n | lastSessionId = lastSid })
                 (D.oneOf [ D.field "last_session_id" (D.nullable D.string), D.succeed Nothing ])
                 (D.map8
-                    (\nodeId status attempts maxAttempts sessionId failures startedAt finishedAt ->
+                    (\nodeId status attempts maxAttempts conversationId failures startedAt finishedAt ->
                         { nodeId = nodeId
                         , status = status
                         , attempts = attempts
                         , maxAttempts = maxAttempts
-                        , sessionId = sessionId
+                        , conversationId = conversationId
                         , lastSessionId = Nothing
                         , attemptSessions = []
                         , failures = failures
@@ -922,7 +932,14 @@ nodeRunStateDecoder =
                     )
                     (D.oneOf [ D.field "attempts" D.int, D.succeed 0 ])
                     (D.oneOf [ D.field "max_attempts" D.int, D.succeed defaultMaxAttempts ])
-                    (D.field "session_id" (D.nullable D.string))
+                    -- P39/Phase B: the binding is a CONVERSATION id —
+                    -- accept the new field name AND the legacy
+                    -- "session_id" (pre-lineage run.json files).
+                    (D.oneOf
+                        [ D.field "conversation_id" (D.nullable D.string)
+                        , D.field "session_id" (D.nullable D.string)
+                        ]
+                    )
                     (D.field "failures" (D.list failureDecoder))
                     (D.field "started_at" (D.nullable D.int))
                     (D.field "finished_at" (D.nullable D.int))

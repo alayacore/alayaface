@@ -166,7 +166,7 @@ startRun now run =
                         { n
                             | status = PT.Pending
                             , attempts = 0
-                            , sessionId = Nothing
+                            , conversationId = Nothing
                             , lastSessionId = Nothing
                             , failures = []
                             , startedAt = Nothing
@@ -232,7 +232,7 @@ restartRun run =
                             { n
                                 | status = PT.Pending
                                 , attempts = 0
-                                , sessionId = Nothing
+                                , conversationId = Nothing
                                 , lastSessionId = Nothing
                                 , failures = []
                                 , startedAt = Nothing
@@ -264,7 +264,7 @@ resumeBranchFrom nodeId run =
             { n
                 | status = PT.Pending
                 , attempts = 0
-                , sessionId = Nothing
+                , conversationId = Nothing
                 , lastSessionId = Nothing
                 , failures = []
                 , startedAt = Nothing
@@ -303,7 +303,7 @@ resumeBranchFrom nodeId run =
 
 
 bindSession : String -> String -> PT.RunState -> ( PT.RunState, List PT.Effect )
-bindSession nodeId sid run =
+bindSession nodeId conversationId run =
     case Dict.get nodeId run.nodes of
         Just n ->
             if n.status == PT.Starting then
@@ -321,15 +321,21 @@ bindSession nodeId sid run =
                             |> Maybe.map (.prompt >> Plan.Inject.injectOutputs (outputsOf run))
                             |> Maybe.withDefault ""
 
+                    -- P39/Phase B: the binding is the node session's
+                    -- CONVERSATION id (stable across forks; the Update
+                    -- layer resolves the physical instance → conversation
+                    -- before stepping). attemptSessions keeps the
+                    -- conversation ids (for a root conversation that is
+                    -- the instance id — each still maps to a session dir).
                     attemptSessions =
-                        if List.member sid n.attemptSessions then
+                        if List.member conversationId n.attemptSessions then
                             n.attemptSessions
 
                         else
-                            n.attemptSessions ++ [ sid ]
+                            n.attemptSessions ++ [ conversationId ]
                 in
-                ( { run | nodes = Dict.insert nodeId { n | status = PT.Running, sessionId = Just sid, lastSessionId = Just sid, attemptSessions = attemptSessions } run.nodes }
-                , [ PT.SendPrompt sid promptText ]
+                ( { run | nodes = Dict.insert nodeId { n | status = PT.Running, conversationId = Just conversationId, lastSessionId = Just conversationId, attemptSessions = attemptSessions } run.nodes }
+                , [ PT.SendPrompt conversationId promptText ]
                 )
 
             else
@@ -608,16 +614,16 @@ closeAndClear : PT.RunState -> ( PT.RunState, List PT.Effect )
 closeAndClear run =
     Dict.foldl
         (\_ n ( r, acc ) ->
-            case n.sessionId of
-                Just sid ->
+            case n.conversationId of
+                Just convId ->
                     -- R4 (D10): SUCCEEDED node windows close too — a
                     -- finished node's session window is gone (history
                     -- stays on disk; clicking the node resumes it).
                     -- WaitingForPlan nodes keep their window (they are
                     -- waiting for a sub-plan, not done).
                     if n.status == PT.Waiting || n.status == PT.Failed || n.status == PT.Canceled || n.status == PT.Succeeded then
-                        ( { r | nodes = Dict.insert n.nodeId { n | sessionId = Nothing, lastSessionId = Just sid } r.nodes }
-                        , PT.CloseSessionFor sid n.nodeId :: acc
+                        ( { r | nodes = Dict.insert n.nodeId { n | conversationId = Nothing, lastSessionId = Just convId } r.nodes }
+                        , PT.CloseSessionFor convId n.nodeId :: acc
                         )
 
                     else
@@ -805,7 +811,10 @@ updateNode nodeId fn run =
 
 
 nodeBySessionId : String -> PT.RunState -> Maybe String
-nodeBySessionId sid run =
+nodeBySessionId convId run =
+    -- P39/Phase B: nodes are bound by CONVERSATION id (stable across
+    -- forks); callers resolve the physical instance → conversation
+    -- before matching.
     Dict.foldl
         (\nodeId n acc ->
             case acc of
@@ -813,7 +822,7 @@ nodeBySessionId sid run =
                     acc
 
                 Nothing ->
-                    if n.sessionId == Just sid then
+                    if n.conversationId == Just convId then
                         Just nodeId
 
                     else
@@ -865,10 +874,10 @@ resumeState run =
                 (\_ n ->
                     case n.status of
                         PT.Starting ->
-                            { n | status = PT.Pending, sessionId = Nothing }
+                            { n | status = PT.Pending, conversationId = Nothing }
 
                         PT.Running ->
-                            { n | status = PT.Pending, sessionId = Nothing }
+                            { n | status = PT.Pending, conversationId = Nothing }
 
                         PT.Waiting ->
                             { n | status = PT.Pending }

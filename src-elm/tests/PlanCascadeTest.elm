@@ -100,7 +100,7 @@ runB =
     { base
         | nodes =
             Dict.update "t2"
-                (Maybe.map (\n -> { n | sessionId = Just "s1", status = PT.Succeeded, output = Just "old" }))
+                (Maybe.map (\n -> { n | conversationId = Just "s1", status = PT.Succeeded, output = Just "old" }))
                 base.nodes
     }
 
@@ -115,7 +115,7 @@ runC =
     { base
         | nodes =
             Dict.update "p2"
-                (Maybe.map (\n -> { n | sessionId = Just "s2", status = PT.Succeeded, output = Just "old-c" }))
+                (Maybe.map (\n -> { n | conversationId = Just "s2", status = PT.Succeeded, output = Just "old-c" }))
                 base.nodes
     }
 

@@ -74,6 +74,7 @@ import Set exposing (Set)
 import Task
 import Time
 import Session.Types as T
+import Session.Meta as SM
 import Session.Protocol as P
 import Plan.Types as PT
 import Plan.Runner as R
@@ -620,14 +621,19 @@ planWinKeyForPath path =
 
 {-| Find the plan window whose run owns the given session id. A resumed
 session id (fresh UUID) is resolved back to its original on-disk dir id
-via planResumedFrom, so closing a resumed node session still attributes
-the window to its plan node (runner disconnect handling).
+via planResumedFrom; the id is then resolved through the session
+lineage registry to its CONVERSATION id (P39/Phase B — a fork instance
+routes to the conversation its node is bound to; for root sessions the
+conversation id IS the instance id, so pre-fork behavior is unchanged).
 -}
 findPlanIdBySession : Model -> String -> Maybe String
 findPlanIdBySession model sid =
     let
         origId =
             Dict.get sid model.planResumedFrom |> Maybe.withDefault sid
+
+        convId =
+            SM.resolveConversation model.sessionLineage origId
     in
     Dict.foldl
         (\pid win acc ->
@@ -638,7 +644,7 @@ findPlanIdBySession model sid =
                 Nothing ->
                     case win.run of
                         Just run ->
-                            if R.nodeBySessionId origId run == Nothing then
+                            if R.nodeBySessionId convId run == Nothing then
                                 Nothing
 
                             else
@@ -1259,10 +1265,10 @@ rebindForkNode target forkId model =
                                             (Maybe.map
                                                 (\n ->
                                                     if n.status == PT.Succeeded then
-                                                        { n | status = PT.WaitingForPlan, sessionId = Just forkId }
+                                                        { n | status = PT.WaitingForPlan, conversationId = Just forkId }
 
                                                     else
-                                                        { n | sessionId = Just forkId }
+                                                        { n | conversationId = Just forkId }
                                                 )
                                             )
                                             run.nodes
@@ -1419,12 +1425,12 @@ resetDelegatedNode planId model =
                                                     (\n ->
                                                         if n.status == PT.Succeeded then
                                                             -- Restore the session binding (closeAndClear dropped
-                                                            -- sessionId on completion; lastSessionId keeps the
+                                                            -- conversationId on completion; lastSessionId keeps the
                                                             -- session reachable) so ResumeDelegatedNode / TaskDone
                                                             -- routing still find this node via its session.
                                                             { n
                                                                 | status = PT.WaitingForPlan
-                                                                , sessionId = n.lastSessionId
+                                                                , conversationId = n.lastSessionId
                                                             }
 
                                                         else
@@ -1634,7 +1640,7 @@ subPlansOfPlan planId model =
                             Dict.foldl
                                 (\_ n acc ->
                                     if n.status == PT.WaitingForPlan then
-                                        Maybe.withDefault "" n.sessionId :: acc
+                                        Maybe.withDefault "" n.conversationId :: acc
 
                                     else
                                         acc
@@ -1946,6 +1952,14 @@ planEventFromFrame model ev =
                 ( model, Nothing )
 
             Just _ ->
+                -- P39/Phase B: frames carry the PHYSICAL instance id;
+                -- the runner matches nodes by CONVERSATION id, so
+                -- resolve through the lineage registry first (root
+                -- sessions: identity).
+                let
+                    convId =
+                        SM.resolveConversation model.sessionLineage ev.sessionId
+                in
                 case ev.json of
                     Just json ->
                         case D.decodeValue P.systemMsgDecoder json of
@@ -1969,7 +1983,7 @@ planEventFromFrame model ev =
                                         case maybeDone of
                                             Just ( sid, err ) ->
                                                 ( { model | planTaskStarted = started }
-                                                , Just (R.TaskDone sid err (lastAssistantOutput model ev.sessionId) (lastAssistantIsPlan model ev.sessionId))
+                                                , Just (R.TaskDone convId err (lastAssistantOutput model ev.sessionId) (lastAssistantIsPlan model ev.sessionId))
                                                 )
 
                                             Nothing ->
@@ -1982,7 +1996,7 @@ planEventFromFrame model ev =
                                                     |> Result.toMaybe
                                                     |> Maybe.withDefault "Error"
                                         in
-                                        ( model, Just (R.SessionError ev.sessionId text) )
+                                        ( model, Just (R.SessionError convId text) )
 
                                     _ ->
                                         ( model, Nothing )

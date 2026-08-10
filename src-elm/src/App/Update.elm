@@ -931,10 +931,12 @@ update msg model =
                             if not ev.connected then
                                 case findPlanIdBySession model ev.sessionId of
                                     Just _ ->
+                                        -- P39/Phase B: route by CONVERSATION
+                                        -- id (root sessions: identity).
                                         Task.perform
                                             (\t ->
                                                 PlanRunFrame (Time.posixToMillis t)
-                                                    (R.SessionDisconnected ev.sessionId ev.message)
+                                                    (R.SessionDisconnected (SM.resolveConversation model.sessionLineage ev.sessionId) ev.message)
                                             )
                                             Time.now
 
@@ -2779,21 +2781,28 @@ update msg model =
 
         PlanBindSession ts planId nodeId sid ->
             let
+                -- P39/Phase B: the node is bound by its session's
+                -- CONVERSATION id (stable across forks; a root session
+                -- resolves to itself).
+                convId =
+                    SM.resolveConversation model.sessionLineage sid
+
                 m0 =
                     { model | planCreating = Nothing }
 
                 ( m1, c1 ) =
-                    runStepIn update planId ts (R.SessionCreatedFor nodeId sid) m0
+                    runStepIn update planId ts (R.SessionCreatedFor nodeId convId) m0
 
                 ( m2, c2 ) =
                     startNextCreateIn m1
 
                 -- Keep the node→session binding visible: the session bar
-                -- shows "[Plan · planId/nodeId]".
+                -- shows "[Plan · planId/nodeId]" (keyed by the
+                -- conversation id so fork instances resolve to it).
                 m3 =
                     { m2
                         | planNodeSessions =
-                            Dict.insert sid (planId ++ "/" ++ nodeId) m2.planNodeSessions
+                            Dict.insert convId (planId ++ "/" ++ nodeId) m2.planNodeSessions
                     }
 
                 -- Orphan cleanup: if the bind did NOT take (node no longer
@@ -2807,7 +2816,7 @@ update msg model =
                                 Just run ->
                                     case Dict.get nodeId run.nodes of
                                         Just n ->
-                                            if n.status == PT.Running && n.sessionId == Just sid then
+                                            if n.status == PT.Running && n.conversationId == Just convId then
                                                 ( m3, Cmd.none )
 
                                             else
@@ -2867,21 +2876,26 @@ update msg model =
 
         PlanOpenNodeSession planId nodeId ->
             -- Node → session binding: click a node to open its session.
-            -- Priority: live sessionId (focus it) → live session resumed
-            -- from the same dir (focus it) → resume from disk → detail.
+            -- Priority: live conversation session (focus it) → live
+            -- session resumed from the same instance (focus it) →
+            -- resume from disk → detail.
             case Dict.get planId model.planWindows of
                 Just win ->
                     case win.run of
                         Just run ->
                             case Dict.get nodeId run.nodes of
                                 Just n ->
-                                    case n.sessionId of
-                                        Just sid ->
-                                            if Dict.member sid model.sessions then
-                                                update (ActivateSession sid) model
+                                    -- P39/Phase B: the node is bound by
+                                    -- CONVERSATION id; for a root session
+                                    -- that IS the instance/dir id, so
+                                    -- resume_session works unchanged.
+                                    case n.conversationId of
+                                        Just convId ->
+                                            if Dict.member convId model.sessions then
+                                                update (ActivateSession convId) model
 
                                             else
-                                                case findResumedLive sid model of
+                                                case findResumedLive convId model of
                                                     Just liveId ->
                                                         update (ActivateSession liveId) model
 
@@ -2890,20 +2904,21 @@ update msg model =
                                                         -- (e.g. restart):
                                                         -- resume from disk.
                                                         -- The node STAYS
-                                                        -- bound to sid (the
-                                                        -- dir name); the
-                                                        -- resumed window gets
-                                                        -- a fresh id tracked
-                                                        -- via planResumedFrom.
+                                                        -- bound to convId
+                                                        -- (the dir name);
+                                                        -- the resumed window
+                                                        -- gets a fresh id
+                                                        -- tracked via
+                                                        -- planResumedFrom.
                                                         ( { model
                                                             | pendingSwitchOnCreate = True
                                                             , planResumeOwner = Just planId
-                                                            , planResumeFrom = Just sid
-                                                            , planReplaySessions = Set.insert sid model.planReplaySessions
+                                                            , planResumeFrom = Just convId
+                                                            , planReplaySessions = Set.insert convId model.planReplaySessions
                                                             , planNodeSessions =
-                                                                Dict.insert sid (planId ++ "/" ++ nodeId) model.planNodeSessions
+                                                                Dict.insert convId (planId ++ "/" ++ nodeId) model.planNodeSessions
                                                           }
-                                                        , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model, planId = Just planId, nodeId = Just nodeId, originSessionId = planOriginSessionId model planId }
+                                                        , Ports.resumeSession { sessionId = convId, workDir = planWorkDir planId model, planId = Just planId, nodeId = Just nodeId, originSessionId = planOriginSessionId model planId }
                                                         )
 
                                         Nothing ->

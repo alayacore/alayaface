@@ -434,7 +434,7 @@ line3", "max_attempts": 3 } ] }"""
                                                 , status = P.Succeeded
                                                 , attempts = 1
                                                 , maxAttempts = 3
-                                                , sessionId = Just "s1"
+                                                , conversationId = Just "s1"
                                                 , lastSessionId = Just "s1"
                                                 , attemptSessions = [ "s1" ]
                                                 , failures = []
@@ -450,7 +450,7 @@ line3", "max_attempts": 3 } ] }"""
                                                     , status = P.Waiting
                                                     , attempts = 1
                                                     , maxAttempts = 3
-                                                    , sessionId = Nothing
+                                                    , conversationId = Nothing
                                                     , lastSessionId = Just "s-old"
                                                     , attemptSessions = [ "s-old", "s-old2" ]
                                                     , failures = [ { attempt = 1, reason = "boom", at = 300 } ]
@@ -478,7 +478,7 @@ line3", "max_attempts": 3 } ] }"""
                             Expect.all
                                 [ \r -> Expect.equal P.InProgress r.status
                                 , \r -> Expect.equal P.Succeeded (nodeState "t1" r).status
-                                , \r -> Expect.equal (Just "s1") (nodeState "t1" r).sessionId
+                                , \r -> Expect.equal (Just "s1") (nodeState "t1" r).conversationId
                                 , \r -> Expect.equal (Just "s1") (nodeState "t1" r).lastSessionId
                                 , \r -> Expect.equal [ "s1" ] (nodeState "t1" r).attemptSessions
                                 , \r -> Expect.equal (Just "the answer") (nodeState "t1" r).output
@@ -519,6 +519,47 @@ line3", "max_attempts": 3 } ] }"""
 
                         Err e ->
                             Expect.fail ("lenient decode failed: " ++ D.errorToString e)
+            , test "P39: legacy session_id decodes into conversationId" <|
+                \_ ->
+                    -- Pre-lineage run.json files write the binding as
+                    -- "session_id"; the node decoder maps it to the new
+                    -- conversationId field.
+                    let
+                        nodeJson =
+                            """{"node_id":"t1","status":"running","attempts":1,"max_attempts":3,
+                                "session_id":"s1","last_session_id":"s1",
+                                "failures":[],"started_at":1,"finished_at":null}"""
+
+                        decoded =
+                            D.decodeString P.nodeRunStateDecoderPublic nodeJson
+                    in
+                    case decoded of
+                        Ok n ->
+                            Expect.equal (Just "s1") n.conversationId
+
+                        Err e ->
+                            Expect.fail ("legacy decode failed: " ++ D.errorToString e)
+            , test "P39: conversation_id round-trips (new field name)" <|
+                \_ ->
+                    let
+                        nodeJson =
+                            """{"node_id":"t1","status":"running","attempts":1,"max_attempts":3,
+                                "conversation_id":"conv-1","last_session_id":"conv-1",
+                                "failures":[],"started_at":1,"finished_at":null}"""
+
+                        decoded =
+                            D.decodeString P.nodeRunStateDecoderPublic nodeJson
+                    in
+                    case decoded of
+                        Ok n ->
+                            Expect.all
+                                [ \ns -> Expect.equal (Just "conv-1") ns.conversationId
+                                , \ns -> Expect.equal (Just "conv-1") ns.lastSessionId
+                                ]
+                                n
+
+                        Err e ->
+                            Expect.fail ("conversation_id decode failed: " ++ D.errorToString e)
             , test "unknown status strings are rejected" <|
                 \_ ->
                     let

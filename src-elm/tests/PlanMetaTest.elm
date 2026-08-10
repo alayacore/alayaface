@@ -163,7 +163,7 @@ tests =
                             nodeBoundTo "sess-a"
 
                         closed =
-                            { closedNode | sessionId = Nothing, lastSessionId = Just "sess-a" }
+                            { closedNode | conversationId = Nothing, lastSessionId = Just "sess-a" }
 
                         runStates =
                             Dict.fromList
@@ -227,7 +227,7 @@ nodeBoundTo sid =
     , status = PT.WaitingForPlan
     , attempts = 1
     , maxAttempts = 3
-    , sessionId = Just sid
+    , conversationId = Just sid
     , lastSessionId = Just sid
     , attemptSessions = [ sid ]
     , failures = []
