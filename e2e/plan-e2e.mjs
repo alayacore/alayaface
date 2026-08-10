@@ -242,10 +242,22 @@ try {
       const nums = d.split(/[ MC,]/).filter(Boolean).map(Number);
       const visible = svg ? getComputedStyle(svg).display !== 'none' : false;
       const style = path ? getComputedStyle(path) : null;
+      // Phase A: curves are CANVAS coordinates inside .canvas (svg
+      // left/top + path points). Convert the [Plan: …] button's screen
+      // rect to canvas coordinates for comparison.
+      const canvasEl = document.querySelector('.canvas');
+      const cr = canvasEl ? canvasEl.getBoundingClientRect() : null;
+      const m = canvasEl ? getComputedStyle(canvasEl).transform.match(/matrix\(([^)]+)\)/) : null;
+      const scale = m ? (parseFloat(m[1].split(',')[0]) || 1) : 1;
+      const toCanvas = (x, y) => ({
+        x: cr ? (x - cr.left) / scale : x,
+        y: cr ? (y - cr.top) / scale : y,
+      });
       // The [Plan: …] button inside the origin session (status bar).
       const btn = [...document.querySelectorAll('button')]
         .find(b => /^\[Plan: /.test((b.textContent || '').trim()));
       const br = btn ? btn.getBoundingClientRect() : null;
+      const btnC = br ? toCanvas(br.left + br.width / 2, br.top + br.height / 2) : null;
       const nodeSvg = [...document.querySelectorAll('.connection-seg')]
         .find(s => s.querySelector('.node-connection-curve')) || null;
       return {
@@ -253,7 +265,13 @@ try {
         hasPath: d.length > 10,
         endX: nums.length >= 2 ? nums[nums.length - 2] : null,
         endY: nums.length >= 2 ? nums[nums.length - 1] : null,
-        btn: br ? { x: br.left + br.width / 2, y: br.top + br.height / 2, text: (btn.textContent || '').slice(0, 40) } : null,
+        // Path points are RELATIVE to the svg; canvas coords =
+        // svg left/top + point.
+        svgLeft: svg ? parseFloat(svg.style.left) : null,
+        svgTop: svg ? parseFloat(svg.style.top) : null,
+        endCanvasX: svg && nums.length >= 2 ? parseFloat(svg.style.left) + nums[nums.length - 2] : null,
+        endCanvasY: svg && nums.length >= 2 ? parseFloat(svg.style.top) + nums[nums.length - 1] : null,
+        btn: btnC ? { x: btnC.x, y: btnC.y, text: (btn.textContent || '').slice(0, 40) } : null,
         dash: style ? getComputedStyle(path).strokeDasharray : null,
         width: style ? parseFloat(getComputedStyle(path).strokeWidth) : null,
         nodeVisible: nodeSvg ? getComputedStyle(nodeSvg).display !== 'none' : false,
@@ -261,7 +279,7 @@ try {
     });
   };
   // Scroll the [Plan: …] status-bar button into view so the curve
-  // anchors to it (bridge.js falls back to the window edge otherwise).
+  // anchors to it (chain.js falls back to the window edge otherwise).
   await page.evaluate(() => {
     const btn = [...document.querySelectorAll('button')]
       .find(b => /^\[Plan: /.test((b.textContent || '').trim()));
@@ -272,7 +290,7 @@ try {
   assert(pcs.visible, 'plan↔session overlay visible, got: ' + JSON.stringify(pcs));
   assert(pcs.hasPath, 'plan↔session curve has a path, got: ' + JSON.stringify(pcs));
   assert(pcs.btn, 'origin session has a [Plan: …] button, got: ' + JSON.stringify(pcs));
-  assert(pcs.endX !== null && Math.abs(pcs.endX - pcs.btn.x) < 8 && Math.abs(pcs.endY - pcs.btn.y) < 8,
+  assert(pcs.endCanvasX !== null && Math.abs(pcs.endCanvasX - pcs.btn.x) < 8 && Math.abs(pcs.endCanvasY - pcs.btn.y) < 8,
     'plan↔session curve anchored to the [Plan: …] button, got: ' + JSON.stringify(pcs));
   assert(pcs.dash === 'none' || pcs.dash === '', 'connection curve is SOLID (no dash), got: ' + JSON.stringify(pcs));
   assert(pcs.width >= 3, 'connection curve is thicker (stroke-width ≥ 3), got: ' + JSON.stringify(pcs));
@@ -475,6 +493,10 @@ try {
       const planSvg = [...document.querySelectorAll('.connection-seg')]
         .find(s => s.querySelector('.plan-connection-curve')) || null;
       const planPath = planSvg ? planSvg.querySelector('path') : null;
+      const allSegs = [...document.querySelectorAll('.connection-seg')].map(s => ({
+        cls: s.querySelector('path')?.getAttribute('class') || null,
+        display: getComputedStyle(s).display,
+      }));
       return {
         svgVisible: svg ? getComputedStyle(svg).display !== 'none' : false,
         pathD: svg ? (svg.querySelector('path')?.getAttribute('d') || '') : '',
@@ -484,6 +506,14 @@ try {
         planConnPathD: planSvg ? (planPath?.getAttribute('d') || '') : '',
         sessionZ: active ? parseInt(getComputedStyle(active).zIndex, 10) : -1,
         planZ: plan ? parseInt(getComputedStyle(plan).zIndex, 10) : -1,
+        allSegs,
+        lastChain: window.__lastChainPayload ? window.__lastChainPayload.segments : null,
+        drawLog: window.__chainDrawLog || null,
+        geomFail: window.__chainGeomFail || null,
+        canvasChildren: [...document.querySelectorAll('.canvas > *')].map(c => ({
+          cls: c.className || '',
+          ds: c.dataset.session || c.dataset.plan || '',
+        })),
       };
     });
     return st;
@@ -619,10 +649,31 @@ try {
     await sleep(400);
   };
   assert(await clickPlanHeaderBtn('Run'), 're-Run button');
-  await page.waitForFunction(() => {
-    return [...document.querySelectorAll('.session-panel')].some(p =>
-      (p.querySelector('.session-bar-title')?.textContent || '').includes('/t3]'));
-  }, { timeout: 30000 });
+  // P38: a re-run whose old result already sits in the origin session
+  // needs the impact-scope confirmation → confirm it (Phase C/D will
+  // replace this dialog with the cascade state machine).
+  await page.waitForSelector('.cascade-page .confirm-page-btn-allow', { timeout: 10000 }).catch(() => {});
+  await page.evaluate(() => {
+    const b = document.querySelector('.cascade-page .confirm-page-btn-allow');
+    if (b) b.click();
+  });
+  try {
+    await page.waitForFunction(() => {
+      return [...document.querySelectorAll('.session-panel')].some(p =>
+        (p.querySelector('.session-bar-title')?.textContent || '').includes('/t3]'));
+    }, { timeout: 30000 });
+  } catch (e) {
+    const st = await page.evaluate(() => ({
+      planPanels: [...document.querySelectorAll('.plan-panel')].map(p => ({
+        runDot: p.querySelector('.plan-run-dot')?.className || '',
+        planTitle: p.querySelector('.plan-bar-title, .session-bar-title')?.textContent || '',
+      })),
+      sessionTitles: [...document.querySelectorAll('.session-panel')].map(p =>
+        p.querySelector('.session-bar-title')?.textContent || ''),
+      runStrip: [...document.querySelectorAll('.plan-strip-btn')].map(b => ({ t: b.textContent || '', dis: b.disabled })),
+    }));
+    throw new Error('8b: t3 session never appeared after re-Run. state=' + JSON.stringify(st));
+  }
   await sleep(400);
   await shot(page, '05d-stop-before.png');
   assert(await clickPlanHeaderBtn('Stop'), 'Stop button');
@@ -671,6 +722,12 @@ try {
   // run and close the t3 session window too — no respawn afterwards.
   execSync('rm -f /tmp/alayaface-fakecore-hang-once-*.marker');
   assert(await clickPlanHeaderBtn('Run'), 'plan-close re-Run button');
+  // P38 impact-scope confirmation (same as 8b).
+  await page.waitForSelector('.cascade-page .confirm-page-btn-allow', { timeout: 10000 }).catch(() => {});
+  await page.evaluate(() => {
+    const b = document.querySelector('.cascade-page .confirm-page-btn-allow');
+    if (b) b.click();
+  });
   await page.waitForFunction(() => {
     return [...document.querySelectorAll('.session-panel')].some(p =>
       (p.querySelector('.session-bar-title')?.textContent || '').includes('/t3]'));
@@ -705,6 +762,12 @@ try {
   // hung t3 re-wrote it, which would make t3 succeed instantly here.)
   execSync('rm -f /tmp/alayaface-fakecore-hang-once-*.marker');
   assert(await clickPlanHeaderBtn('Run'), 'cascade re-Run button');
+  // P38 impact-scope confirmation (same as 8b/8d).
+  await page.waitForSelector('.cascade-page .confirm-page-btn-allow', { timeout: 10000 }).catch(() => {});
+  await page.evaluate(() => {
+    const b = document.querySelector('.cascade-page .confirm-page-btn-allow');
+    if (b) b.click();
+  });
   await page.waitForFunction(() => {
     return [...document.querySelectorAll('.session-panel')].some(p =>
       (p.querySelector('.session-bar-title')?.textContent || '').includes('/t3]'));

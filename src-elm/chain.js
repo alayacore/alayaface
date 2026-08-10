@@ -4,7 +4,6 @@
 // setConnectionChain port:
 //   { segments:   [{kind, sessionId, planId, nodeId}]
 //   , positions:  [{id, x, y, w, h, z}]      // every window, CANVAS coords
-//   , planScroll: [{planId, scrollTop, scrollLeft}]  // plan DAG scrollers
 //   , canvasScale: float }
 //
 // chain.js draws one bezier per segment as an absolutely-positioned
@@ -12,12 +11,15 @@
 // the canvas layer's transform carries the curves through pan/zoom for
 // free. No body-level SVG, no canvasZBase offset, no z cap, no per-frame
 // rAF: redraws happen only on DISCRETE events (chain change, window
-// drag/resize, plan DAG scroll, zoom — all re-emit the port from Elm).
+// drag/resize, zoom — all re-emit the port from Elm; plan DAG scroll —
+// chain.js listens to the scroll events itself and redraws).
 //
-// Window rects come from Elm (never measured). Only two DOM reads stay:
-// the node-card offset inside its plan panel (offsetParent walk, scroll-
-// independent) and the [Plan: …] button offset inside the owning
-// session — both tiny, both at redraw time only.
+// Window rects come from Elm (never measured). Points INSIDE a window
+// (node cards, the [Plan: …] button) are computed as
+//   windowCanvasPos + (elementScreenRect - windowScreenRect)
+// — a getBoundingClientRect DIFFERENCE, which automatically includes
+// every inner scroll offset (plan DAG scroll, messages scroll) without
+// any manual scroll compensation.
 //
 // Exposes window.AlayaChain.init(app) — called by transport.js after
 // the Elm app is created.
@@ -38,8 +40,7 @@
       // ── Connection CHAIN segments (P36/P39) ───────────────────────
       // One <svg class="connection-seg"> per segment, child of .canvas:
       //   kind "node" → session window edge → the node card center
-      //                  inside its plan window (plan DAG scroll offsets
-      //                  the card — compensated via planScroll);
+      //                  inside its plan window;
       //   kind "plan" → plan window edge → the session's [Plan: …]
       //                  button when visible, else the session edge.
       // z-index per segment (from Elm's window z values, bounded by the
@@ -47,24 +48,16 @@
       // below the session), plan curves at the top of their two
       // participants — so no curve is buried and none can ever reach
       // the modal overlays (z 1000000 lives OUTSIDE the canvas).
-      var payload = { segments: [], positions: [], planScroll: [], canvasScale: 1 };
+      var payload = { segments: [], positions: [], canvasScale: 1 };
       var segSvgs = [];   // {svg, path, seg} — cached per chain index
       var canvasEl = null;
+      var scrollWired = false;
 
       function posMap() {
         var m = {};
         for (var i = 0; i < payload.positions.length; i++) {
           var p = payload.positions[i];
           m[p.id] = p;
-        }
-        return m;
-      }
-
-      function scrollMap() {
-        var m = {};
-        for (var i = 0; i < payload.planScroll.length; i++) {
-          var s = payload.planScroll[i];
-          m[s.planId] = s;
         }
         return m;
       }
@@ -137,19 +130,6 @@
         return null;
       }
 
-      // Element's top-left offset relative to `ancestor` (sum of the
-      // offsetParent chain — scroll containers are skipped, so the
-      // result is scroll-independent; the caller subtracts planScroll).
-      function offsetWithin(elm, ancestor) {
-        var x = 0, y = 0, e = elm;
-        while (e && e !== ancestor) {
-          x += e.offsetLeft;
-          y += e.offsetTop;
-          e = e.offsetParent;
-        }
-        return { x: x, y: y };
-      }
-
       function connSessionPanel(sid) {
         var panels = document.querySelectorAll(".session-panel");
         for (var i = 0; i < panels.length; i++) {
@@ -209,24 +189,30 @@
           + " " + to.x.toFixed(1) + " " + to.y.toFixed(1);
       }
 
-      // Node card CENTER in canvas coordinates: plan window pos (from
-      // Elm) + the card's offset inside the plan panel (DOM, scroll-
-      // independent) − the plan DAG scroller's offset (Elm via port).
-      function nodeCenter(pos, planPanel, nodeId, scroll) {
-        var node = connNodeEl(planPanel, nodeId);
-        if (!node) return null;
-        var off = offsetWithin(node, planPanel);
-        var st = scroll || { top: 0, left: 0 };
+      // A point INSIDE a window panel → canvas coordinates:
+      //   windowCanvasPos (from Elm) + (elementScreenRect − panelScreenRect).
+      // The rect DIFFERENCE includes every inner scroll offset (plan DAG
+      // scroll, messages scroll) automatically — no manual compensation.
+      function pointInWindow(winPos, panel, el, cx, cy) {
+        if (!el) return null;
+        var er = el.getBoundingClientRect();
+        var wr = panel.getBoundingClientRect();
         return {
-          x: pos.x + off.x + node.offsetWidth / 2 - st.left,
-          y: pos.y + off.y + node.offsetHeight / 2 - st.top,
+          x: winPos.x + (er.left - wr.left) + (cx !== undefined ? cx : er.width / 2),
+          y: winPos.y + (er.top - wr.top) + (cy !== undefined ? cy : er.height / 2),
         };
       }
 
-      // Draw one chain segment. Returns the path `d` and the segment's
-      // bounding box (canvas coords), or null when a participant is
-      // missing (closed window / plan / node card).
-      function segmentGeometry(seg, positions, scrolls) {
+      // Node card CENTER in canvas coordinates.
+      function nodeCenter(winPos, planPanel, nodeId) {
+        var node = connNodeEl(planPanel, nodeId);
+        if (!node) return null;
+        return pointInWindow(winPos, planPanel, node);
+      }
+
+      // Draw one chain segment. Returns {from, to, z} in canvas coords,
+      // or null when a participant is missing (closed window/plan/node).
+      function segmentGeometry(seg, positions) {
         var sRect = positions[seg.sessionId];
         var pRect = positions[seg.planId];
         if (!sRect || !pRect) return null;
@@ -235,7 +221,7 @@
         if (!sPanel || !pPanel) return null;
 
         if (seg.kind === "node") {
-          var n = nodeCenter(pRect, pPanel, seg.nodeId, scrolls[seg.planId]);
+          var n = nodeCenter(pRect, pPanel, seg.nodeId);
           if (!n) return null;
           var from = edgeAnchor(sRect, n.x, n.y);
           return { from: from, to: n, z: pRect.z };
@@ -248,16 +234,9 @@
         var scy = sRect.y + sRect.h / 2;
         var from2 = edgeAnchor(pRect, scx, scy);
         var btn = connPlanButton(sPanel, seg.planId);
-        var to;
-        if (btn) {
-          var boff = offsetWithin(btn, sPanel);
-          to = {
-            x: sRect.x + boff.x + btn.offsetWidth / 2,
-            y: sRect.y + boff.y + btn.offsetHeight / 2,
-          };
-        } else {
-          to = edgeAnchor(sRect, pRect.x + pRect.w / 2, pRect.y + pRect.h / 2);
-        }
+        var to = btn
+          ? pointInWindow(sRect, sPanel, btn)
+          : edgeAnchor(sRect, pRect.x + pRect.w / 2, pRect.y + pRect.h / 2);
         return { from: from2, to: to, z: Math.max(pRect.z, sRect.z) };
       }
 
@@ -265,15 +244,16 @@
         var canvas = ensureCanvas();
         if (!canvas) return;
         var positions = posMap();
-        var scrolls = scrollMap();
         var i;
+        var anyFailed = false;
         // Hide/update cached svgs, create new ones as needed.
         for (i = 0; i < payload.segments.length; i++) {
           var slot = ensureSegSvg(i);
           if (!slot) return;
           var seg = payload.segments[i];
-          var g = segmentGeometry(seg, positions, scrolls);
+          var g = segmentGeometry(seg, positions);
           if (!g) {
+            anyFailed = true;
             slot.svg.style.display = "none";
             continue;
           }
@@ -305,18 +285,55 @@
         for (i = payload.segments.length; i < segSvgs.length; i++) {
           segSvgs[i].svg.style.display = "none";
         }
+        // Timing: Elm emits setConnectionChain from the SAME update that
+        // created a window, but the port can beat the vdom patch (the new
+        // panel is not in the DOM yet when we measure). A segment that
+        // failed because a participant panel was missing gets ONE
+        // deferred redraw on the next frame — discrete, idempotent, no
+        // rAF loop.
+        if (anyFailed) scheduleRetry();
+      }
+
+      var retryQueued = false;
+      function scheduleRetry() {
+        if (retryQueued) return;
+        retryQueued = true;
+        requestAnimationFrame(function () {
+          retryQueued = false;
+          drawConnections();
+        });
+      }
+
+      // Plan DAG scroll: node cards move inside the plan window, so the
+      // curves must redraw. The rect-difference coordinate math includes
+      // the scroll automatically — we only need to REDRAW. Listen to
+      // scroll events once (capture phase catches .plan-page-canvas and
+      // the messages scrollers) and redraw from the cached payload.
+      function wireScrollRedraw() {
+        if (scrollWired) return;
+        scrollWired = true;
+        document.addEventListener("scroll", function (e) {
+          var t = e.target;
+          if (!t || typeof t.closest !== "function") return;
+          if (t.closest(".plan-page-canvas") || t.closest(".messages")) {
+            drawConnections();
+          }
+        }, true);
       }
 
       on("setConnectionChain", function (data) {
         payload = data || payload;
         if (!payload.segments) payload.segments = [];
         if (!payload.positions) payload.positions = [];
-        if (!payload.planScroll) payload.planScroll = [];
         if (typeof payload.canvasScale !== "number") payload.canvasScale = 1;
+        // Debug hook: last payload Elm sent (inspected by e2e/chain-diag).
+        window.__lastChainPayload = payload;
         // Discrete redraw only — no rAF loop. Pan/zoom need no redraw
         // (the svgs live inside .canvas, the transform moves them); the
         // discrete events that change canvas geometry (drag/resize/
-        // scroll/zoom/chain) all re-emit this port.
+        // zoom/chain) re-emit this port; inner-window scrolls redraw
+        // via wireScrollRedraw.
+        wireScrollRedraw();
         drawConnections();
       });
     }

@@ -92,7 +92,6 @@ init _ =
       , planTaskStarted = Set.empty
       , planOrder = []
       , planActiveId = Nothing
-      , planScrolls = Dict.empty
       , pendingPlanOffers = Dict.empty
       , planReplaySessions = Set.empty
       , planCreating = Nothing
@@ -134,7 +133,6 @@ subscriptions model =
         [ Ports.onScroll (\{ sessionId, scrollTop, scrollHeight, clientHeight } ->
             ScrollPosition sessionId scrollTop scrollHeight clientHeight
           )
-        , Ports.onPlanScroll (\{ planId, scrollTop, scrollLeft } -> PlanScroll planId scrollTop scrollLeft)
         , Ports.onDelta (\raw -> DeltaEvent raw)
         , Ports.onFrame (\raw -> FrameEvent raw)
         , Ports.onStatus (\raw -> StatusEvent raw)

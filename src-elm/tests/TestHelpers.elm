@@ -74,7 +74,6 @@ initModelWithSession =
     , planTaskStarted = Set.empty
     , planOrder = []
     , planActiveId = Nothing
-    , planScrolls = Dict.empty
     , pendingPlanOffers = Dict.empty
     , planReplaySessions = Set.empty
     , planCreating = Nothing

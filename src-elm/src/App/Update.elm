@@ -4103,21 +4103,6 @@ update msg model =
             , Cmd.none
             )
 
-        PlanScroll planId scrollTop scrollLeft ->
-            -- Plan DAG canvas scrolled: store the scroll (chain.js
-            -- subtracts it from node-card coordinates) and redraw the
-            -- chain — the curves follow the nodes as the DAG scrolls.
-            let
-                m1 =
-                    { model
-                        | planScrolls =
-                            Dict.insert planId { top = scrollTop, left = scrollLeft } model.planScrolls
-                    }
-            in
-            ( m1
-            , Ports.setConnectionChain (chainPayload m1 m1.connectionChain)
-            )
-
         KeyDown key ctrl alt defaultPrevented ->
             -- If another handler already processed this key (e.g. textarea), skip
             if defaultPrevented then

@@ -335,7 +335,7 @@ raiseWindow model key =
 {-| Build the setConnectionChain payload from the model: the chain plus
 the canvas state chain.js needs to draw curves in canvas coordinates.
 -}
-chainPayload : Model -> List NC.ChainSegment -> { segments : List NC.ChainSegment, positions : List { id : String, x : Int, y : Int, w : Int, h : Int, z : Int }, planScroll : List { planId : String, scrollTop : Float, scrollLeft : Float }, canvasScale : Float }
+chainPayload : Model -> List NC.ChainSegment -> { segments : List NC.ChainSegment, positions : List { id : String, x : Int, y : Int, w : Int, h : Int, z : Int }, canvasScale : Float }
 chainPayload model segments =
     { segments = segments
     , positions =
@@ -348,15 +348,6 @@ chainPayload model segments =
                     , w = p.w
                     , h = p.h
                     , z = p.z
-                    }
-                )
-    , planScroll =
-        Dict.toList model.planScrolls
-            |> List.map
-                (\( planId, st ) ->
-                    { planId = planId
-                    , scrollTop = st.top
-                    , scrollLeft = st.left
                     }
                 )
     , canvasScale = model.canvasScale

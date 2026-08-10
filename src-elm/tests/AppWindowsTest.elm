@@ -338,14 +338,13 @@ suite =
                         positions
             ]
         , describe "chainPayload (P39/Phase A)"
-            [ test "carries positions, plan scroll and canvas scale" <|
+            [ test "carries positions and canvas scale" <|
                 \_ ->
                     let
                         m0 =
                             { initModelWithSession
                                 | windowPositions =
                                     Dict.insert "s1" { x = 10, y = 20, w = 560, h = 640, z = 3 } Dict.empty
-                                , planScrolls = Dict.insert "p1" { top = 12, left = 4 } Dict.empty
                                 , canvasScale = 1.5
                             }
 
@@ -354,7 +353,6 @@ suite =
                     in
                     Expect.all
                         [ \p -> Expect.equal p.positions [ { id = "s1", x = 10, y = 20, w = 560, h = 640, z = 3 } ]
-                        , \p -> Expect.equal p.planScroll [ { planId = "p1", scrollTop = 12, scrollLeft = 4 } ]
                         , \p -> Expect.within (Expect.Absolute 0.0001) p.canvasScale 1.5
                         ]
                         payload

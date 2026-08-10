@@ -194,12 +194,6 @@ type alias Model =
     , planTaskStarted : Set String
     , planOrder : List String
     , planActiveId : Maybe String
-    -- Plan DAG canvas scroll per open plan (Phase A): the plan's
-    -- .plan-page-canvas scroller reports scrollTop/scrollLeft through
-    -- the onPlanScroll port; chain.js subtracts them from node-card
-    -- coordinates so curves follow the DAG as it scrolls inside the
-    -- plan window. Missing plan = { top = 0, left = 0 }.
-    , planScrolls : Dict String PlanScrollState
     -- Keyed by (sessionId, planIndex) — the plan message's index within
     -- its session (message ids are deliberately not used).
     , pendingPlanOffers : Dict ( String, Int ) String
@@ -468,10 +462,6 @@ type Msg
     | NoOp
     | KeyDown String Bool Bool Bool
     | ScrollPosition String Float Float Float
-    -- Plan DAG canvas scroll (Phase A): the plan's .plan-page-canvas
-    -- scroller reports scrollTop/scrollLeft so chain.js can follow node
-    -- cards.
-    | PlanScroll String Float Float
 
 
 -- WINDOW / DRAG STATE
@@ -482,14 +472,6 @@ type alias WindowPos =
     , z : Int
     , w : Int
     , h : Int
-    }
-
-
--- Plan DAG scroller state (Phase A): scrollTop/scrollLeft of a plan's
--- .plan-page-canvas, reported through onPlanScroll.
-type alias PlanScrollState =
-    { top : Float
-    , left : Float
     }
 
 
