@@ -28,3 +28,10 @@ src-elm/elm.js
 
 # Go backend
 src-go/bin/
+
+# Local refactor working notes (M series): the maintenance refactor is
+# tracked in root TODO.md / REFACTOR.md, which are working files NOT
+# version-controlled. Historical P/R-series archives stay tracked under
+# docs/archive/ (root-anchored so only the working files are ignored).
+/TODO.md
+/REFACTOR.md
