@@ -137,7 +137,11 @@ alayaface-server --addr 0.0.0.0:8765 --static ../src-elm [--token <token>]
 
 > ⚠️ With `0.0.0.0` and no `--token`, anyone who can reach the port can
 > create sessions and read files via the API. Add `--token <t>` when the
-> port is exposed beyond localhost/SSH.
+> port is exposed beyond localhost/SSH. The token is injected into the
+> served page (`<meta name="alayaface-token">`) and `bridge.js` attaches
+> it automatically (RPC `Authorization: Bearer`, WS `?token=`), so the
+> browser client works unchanged; anyone who can fetch the page itself
+> also gets the token (the page is the credential).
 
 - Commands: `POST /rpc/{command}` with JSON args (mirrors Tauri `invoke`).
 - Events: WebSocket `GET /ws` pushes `{type, payload}` messages

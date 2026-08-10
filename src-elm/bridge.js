@@ -33,6 +33,21 @@
     }
   })();
 
+  // Go backend --token mode: the server injects the token into the
+  // served index document as <meta name="alayaface-token"> (Tauri has no
+  // token). Every RPC carries it as Authorization: Bearer and the WS URL
+  // gets ?token= — without this the documented --token mode would reject
+  // all requests from the shipped client (401 on every call, WS handshake
+  // failure).
+  var backendToken = (function () {
+    try {
+      var m = document.querySelector('meta[name="alayaface-token"]');
+      return m ? (m.getAttribute("content") || "") : "";
+    } catch (e) {
+      return "";
+    }
+  })();
+
   // ─── Transport ────────────────────────────────────────────────────
   // interface:
   //   invoke(cmd, args) → Promise<result>          (Tauri invoke parity)
@@ -72,8 +87,12 @@
 
     function connect() {
       var proto = location.protocol === "https:" ? "wss" : "ws";
+      var wsUrl = proto + "://" + location.host + "/ws";
+      if (backendToken) {
+        wsUrl += "?token=" + encodeURIComponent(backendToken);
+      }
       try {
-        ws = new WebSocket(proto + "://" + location.host + "/ws");
+        ws = new WebSocket(wsUrl);
       } catch (e) {
         scheduleReconnect();
         return;
@@ -103,9 +122,13 @@
         // forever on a stalled backend.
         var controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
         var timer = controller ? setTimeout(function () { controller.abort(); }, 60000) : null;
+        var headers = { "Content-Type": "application/json" };
+        if (backendToken) {
+          headers["Authorization"] = "Bearer " + backendToken;
+        }
         return fetch("/rpc/" + cmd, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: headers,
           body: JSON.stringify(args || {}),
           signal: controller ? controller.signal : undefined,
         }).then(function (res) {

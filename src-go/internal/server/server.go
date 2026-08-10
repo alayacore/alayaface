@@ -3,9 +3,13 @@
 package server
 
 import (
+	"bytes"
+	"html"
 	"log"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 
 	"github.com/gorilla/websocket"
 
@@ -71,13 +75,42 @@ func (s *Server) Routes() http.Handler {
 	return mux
 }
 
-// staticHandler serves the Elm frontend from StaticDir.
+// staticHandler serves the Elm frontend from StaticDir. When a token is
+// configured, the index document gets a
+// <meta name="alayaface-token" content="..."> tag injected so bridge.js
+// can attach the token to its RPC calls (Authorization header) and the
+// WebSocket connection (?token=). Without this the documented --token
+// mode would reject every request the shipped client makes — bridge.js
+// has no other way to learn the token (the page itself is the
+// credential, served by this same server).
 func (s *Server) staticHandler() http.Handler {
 	fs := http.FileServer(http.Dir(s.StaticDir))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache")
-		fs.ServeHTTP(w, r)
+		if s.Token == "" || !servesIndex(r.URL.Path) {
+			fs.ServeHTTP(w, r)
+			return
+		}
+		index, err := os.ReadFile(filepath.Join(s.StaticDir, "index.html"))
+		if err != nil {
+			fs.ServeHTTP(w, r)
+			return
+		}
+		meta := `<meta name="alayaface-token" content="` + html.EscapeString(s.Token) + `">`
+		headEnd := bytes.Index(bytes.ToLower(index), []byte("</head>"))
+		if headEnd < 0 {
+			headEnd = len(index)
+		}
+		index = append(index[:headEnd], append([]byte(meta), index[headEnd:]...)...)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(index)
 	})
+}
+
+// servesIndex reports whether the request path resolves to the app's
+// index document (the only page that needs the token meta tag).
+func servesIndex(path string) bool {
+	return path == "/" || path == "" || path == "/index.html"
 }
 
 // authorized reports whether the request carries the bearer token.

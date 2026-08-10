@@ -333,6 +333,14 @@ runtimes auto-switch on the presence of `window.__TAURI__`, avoiding two bridge 
     [--alayacore-bin /path/to/alayacore] \
     [--token <random>]        # optional: validated on WS/fetch to protect against other local processes
   ```
+
+  With `--token`, the server injects the token into the served index
+  document (`<meta name="alayaface-token">`); `bridge.js` reads it and
+  attaches it to every RPC (`Authorization: Bearer`) and the WebSocket
+  URL (`?token=`), so the shipped client works unchanged — no manual
+  header configuration. Note the page itself is the credential: anyone
+  who can fetch `/` also gets the token (fine for SSH-forwarded dev, not
+  a substitute for TLS + real auth).
 - Bind to `127.0.0.1` only; CORS as needed (not needed for same-origin deployment).
 - Graceful shutdown: SIGINT/SIGTERM → close all sessions (killChild) →
   `http.Server.Shutdown`.
