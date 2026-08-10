@@ -236,13 +236,19 @@ func (m *Manager) Create(cfg CreateConfig, h *hub.Hub, cache *ModelCache) (*Sess
 	s.setConnected(true)
 
 	m.Insert(s)
-	s.startReader(h, cache)
 
+	// Broadcast connected:true BEFORE starting the stdout reader. If the
+	// child dies instantly (bad args, missing binary, ...), the reader
+	// immediately observes EOF and broadcasts connected:false — with the
+	// old ordering (reader first) the false could arrive before the true,
+	// leaving the client believing a dead session is connected.
 	h.Broadcast(hub.NewEvent("core-status", StatusEvent{
 		SessionID: s.ID,
 		Connected: true,
 		Message:   fmt.Sprintf("Connected to alayacore (%s)", cfg.Binary),
 	}))
+
+	s.startReader(h, cache)
 	log.Printf("[session] created %s (dir %s)", s.ID, cfg.SessionDir)
 	return s, nil
 }

@@ -119,6 +119,17 @@ pub async fn create(cfg: SessionConfig<'_>) -> Result<String, String> {
 
     cfg.sessions.0.lock().await.insert(session_id.clone(), handle);
 
+    // Emit connected:true BEFORE spawning the stdout reader: a child
+    // that dies instantly makes the reader emit connected:false right
+    // away — with the old ordering (reader first) the false could land
+    // before the true, leaving the client believing a dead session is
+    // connected.
+    let _ = cfg.app.emit("core-status", StatusEvent {
+        session_id: session_id.clone(),
+        connected: true,
+        message: format!("Connected to alayacore ({})", cfg.binary),
+    });
+
     // Background reader for stdout
     crate::reader::spawn_stdout_reader(
         cfg.app.clone(),
@@ -129,12 +140,6 @@ pub async fn create(cfg: SessionConfig<'_>) -> Result<String, String> {
         child.clone(),
         pending_commands,
     );
-
-    let _ = cfg.app.emit("core-status", StatusEvent {
-        session_id: session_id.clone(),
-        connected: true,
-        message: format!("Connected to alayacore ({})", cfg.binary),
-    });
 
     Ok(session_id)
 }

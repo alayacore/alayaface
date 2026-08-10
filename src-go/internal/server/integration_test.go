@@ -969,3 +969,56 @@ func TestIntegrationTokenAuth(t *testing.T) {
 		t.Fatalf("rpc with token: status %d", resp2.StatusCode)
 	}
 }
+
+// ─── Core-status ordering (B5) ──────────────────────────────────────
+
+// TestIntegrationCoreStatusOrderingImmediateExit verifies that a session
+// whose child dies instantly (bad spawn) ends up with connected:false as
+// its FINAL status. create_session must broadcast connected:true BEFORE
+// starting the stdout reader — otherwise the reader's immediate
+// disconnect broadcast can arrive first and the client would believe a
+// dead session is connected (no frames, no further status updates).
+func TestIntegrationCoreStatusOrderingImmediateExit(t *testing.T) {
+	e := newTestEnv(t, "")
+
+	// A binary that exits immediately after spawn (overrides the
+	// fakecore path newTestEnv set).
+	script := filepath.Join(t.TempDir(), "alayacore")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ALAYACORE_BIN", script)
+
+	sid := e.createSession(t)
+
+	// Collect core-status events for this session until we have seen
+	// both transitions (or a timeout — a timeout means the session was
+	// reported connected and never disconnected, which is the bug).
+	// The FIRST status must be connected:true — create_session emits it
+	// BEFORE the reader starts, so a dying child's disconnect can never
+	// arrive first and leave the client believing a dead session is
+	// connected.
+	sawTrue := false
+	sawFalse := false
+	firstConnected := "unset"
+	deadline := time.Now().Add(5 * time.Second)
+	for !(sawTrue && sawFalse) && time.Now().Before(deadline) {
+		ev := e.collectUntil(t, "core-status", func(p map[string]any) bool {
+			return p["session_id"] == sid
+		}, nil)
+		if firstConnected == "unset" {
+			firstConnected = fmt.Sprintf("%v", ev["connected"])
+		}
+		if conn, _ := ev["connected"].(bool); conn {
+			sawTrue = true
+		} else {
+			sawFalse = true
+		}
+	}
+	if !sawTrue || !sawFalse {
+		t.Fatalf("expected connected:true then connected:false for the dying session, got true=%v false=%v", sawTrue, sawFalse)
+	}
+	if firstConnected != "true" {
+		t.Fatalf("first core-status for a dying session must be connected:true (the disconnect must follow), got %s", firstConnected)
+	}
+}
