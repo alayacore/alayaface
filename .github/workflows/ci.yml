@@ -81,6 +81,8 @@ jobs:
       - name: Build elm.js
         run: elm make src/Main.elm --output=elm.js
         working-directory: src-elm
+      - name: Backend command parity (Rust vs Go vs bridge)
+        run: ./scripts/check-backend-parity.sh
       - name: Install e2e deps
         run: npm install
         working-directory: e2e

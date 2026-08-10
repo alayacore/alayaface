@@ -51,6 +51,13 @@ run-go: elm
 build-go: elm
 	cd $(SRC_GO) && $(GO) build -o bin/alayaface-server ./cmd/alayaface-server
 
+# Backend command-parity check: the Elm client runs against both the
+# Tauri (Rust) commands and the Go RPC registry; drift breaks one
+# deployment silently. Also validates the command names bridge.js invokes.
+.PHONY: check-parity
+check-parity:
+	./scripts/check-backend-parity.sh
+
 # Run Go backend test suites
 test-go:
 	cd $(SRC_GO) && $(GO) test ./...
