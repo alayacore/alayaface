@@ -1404,36 +1404,6 @@ updateLevelSession target convId model =
             model
 
 
-{-| Rewrite the child plan's parent-session binding so its parent
-conversation is the fork (persisted — survives restart). `origin` is
-KEPT (it locates the plan's own dir); only `parentSessionId` moves to
-the fork.
--}
-rewriteParentSession : String -> String -> Model -> ( Model, Cmd Msg )
-rewriteParentSession planId forkId model =
-    case Dict.get planId model.planMetas of
-        Just meta ->
-            case planDirOf model planId of
-                Just planDir ->
-                    let
-                        newMeta =
-                            { meta | parentSessionId = Just forkId }
-                    in
-                    ( { model | planMetas = Dict.insert planId newMeta model.planMetas }
-                    , Ports.fsWriteFileText
-                        { path = PM.metaPathFor planDir planId
-                        , content = E.encode 2 (PM.encodeMeta newMeta)
-                        , createParents = True
-                        }
-                    )
-
-                Nothing ->
-                    ( model, Cmd.none )
-
-        Nothing ->
-            ( model, Cmd.none )
-
-
 {-| The plan's current feedback summary (from its open run; "" when the
 window/run is gone).
 -}

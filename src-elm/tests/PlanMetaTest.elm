@@ -23,7 +23,6 @@ tests =
                         , name = "analyze machine parameters"
                         , lastStatus = "completed"
                         , parentPlanId = Just "p-0"
-                        , parentSessionId = Just "s-fork"
                         }
 
                     encoded =
@@ -42,8 +41,6 @@ tests =
                             , \m -> Expect.equal "analyze machine parameters" m.name
                             , \m -> Expect.equal "completed" m.lastStatus
                             , \m -> Expect.equal (Just "p-0") m.parentPlanId
-                            , \m -> Expect.equal (Just "s-fork") m.parentSessionId
-                            , \m -> Expect.equal "s-fork" (M.parentSessionOf m)
                             ]
                             m2
 
@@ -101,8 +98,16 @@ tests =
             \_ ->
                 case D.decodeString M.decodeMeta """{ "origin": { "sessionId": "s-1", "planIndex": 1 }, "feedbacks": [], "depth": 1, "created_at": 7, "name": "p", "last_status": "completed" }""" of
                     Ok m ->
-                        Expect.equal ( m.parentPlanId, m.parentSessionId, M.parentSessionOf m )
-                            ( Nothing, Nothing, "s-1" )
+                        Expect.equal m.parentPlanId Nothing
+
+                    Err e ->
+                        Expect.fail ("decode failed: " ++ D.errorToString e)
+        , test "legacy meta carrying parent_session_id still decodes (P39/B4 — the field is ignored, lineage replaces it)" <|
+            \_ ->
+                case D.decodeString M.decodeMeta """{ "origin": { "sessionId": "s-1", "planIndex": 1 }, "feedbacks": [], "depth": 1, "created_at": 7, "name": "p", "last_status": "completed", "parent_plan_id": "p-0", "parent_session_id": "s-fork" }""" of
+                    Ok m ->
+                        Expect.equal ( m.parentPlanId, m.origin.sessionId )
+                            ( Just "p-0", "s-1" )
 
                     Err e ->
                         Expect.fail ("decode failed: " ++ D.errorToString e)
@@ -200,37 +205,14 @@ tests =
 
                         Nothing ->
                             Expect.fail "expected a binding for sess-a"
-            , test "follows the P38 fork parent session (parentSessionOf)" <|
+                        , test "matches only the CONVERSATION id — a physical fork id must be resolved by the caller (P39/B4)" <|
                 \_ ->
-                    let
-                        forked =
-                            Dict.fromList
-                                [ ( "p-1"
-                                  , { origin = { sessionId = "sess-a", planIndex = 1 }
-                                    , feedbacks = []
-                                    , depth = 1
-                                    , createdAt = 0
-                                    , name = "x"
-                                    , lastStatus = ""
-                                    , parentPlanId = Nothing
-                                    , parentSessionId = Just "sess-fork"
-                                    }
-                                  )
-                                ]
-                    in
-                    Expect.all
-                        [ -- the fork session resolves through parentSessionOf
-                        \_ ->
-                            M.planMetaForSessionIndex forked "sess-fork" 1
-                                |> Maybe.map Tuple.first
-                                |> Expect.equal (Just "p-1")
-                        -- the creation origin still matches (one rule)
-                        , \_ ->
-                            M.planMetaForSessionIndex forked "sess-a" 1
-                                |> Maybe.map Tuple.first
-                                |> Expect.equal (Just "p-1")
-                        ]
-                        ()
+                    -- The old parentSessionOf branch is gone: the query is
+                    -- conversation-keyed, so a raw fork instance id does
+                    -- NOT match (the caller resolves it through the
+                    -- lineage registry before querying — see
+                    -- Plan.Update.planMetaForMessage).
+                    Expect.equal (M.planMetaForSessionIndex sampleMetas "sess-fork" 1) Nothing
             , test "wrong plan index or unrelated session → Nothing" <|
                 \_ ->
                     Expect.all
@@ -266,7 +248,6 @@ metaOfDepth sessionId depth =
     , name = "plan-" ++ sessionId
     , lastStatus = "not_started"
     , parentPlanId = Nothing
-    , parentSessionId = Nothing
     }
 
 

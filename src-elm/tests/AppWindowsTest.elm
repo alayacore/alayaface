@@ -109,8 +109,8 @@ suite =
                                         ]
                                 , planMetas =
                                     Dict.fromList
-                                        [ ( "p1", { origin = { sessionId = "s1", planIndex = 0 }, feedbacks = [], depth = 1, createdAt = 0, name = "p1", lastStatus = "", parentPlanId = Nothing, parentSessionId = Nothing } )
-                                        , ( "p2", { origin = { sessionId = "s1", planIndex = 1 }, feedbacks = [], depth = 1, createdAt = 0, name = "p2", lastStatus = "", parentPlanId = Nothing, parentSessionId = Nothing } )
+                                        [ ( "p1", { origin = { sessionId = "s1", planIndex = 0 }, feedbacks = [], depth = 1, createdAt = 0, name = "p1", lastStatus = "", parentPlanId = Nothing } )
+                                        , ( "p2", { origin = { sessionId = "s1", planIndex = 1 }, feedbacks = [], depth = 1, createdAt = 0, name = "p2", lastStatus = "", parentPlanId = Nothing } )
                                         ]
                             }
 
@@ -394,7 +394,7 @@ suite =
                             { initModelWithSession
                                 | planMetas =
                                     Dict.fromList
-                                        [ ( "p1", { origin = { sessionId = "s1", planIndex = 0 }, feedbacks = [], depth = 1, createdAt = 0, name = "p1", lastStatus = "", parentPlanId = Nothing, parentSessionId = Nothing } )
+                                        [ ( "p1", { origin = { sessionId = "s1", planIndex = 0 }, feedbacks = [], depth = 1, createdAt = 0, name = "p1", lastStatus = "", parentPlanId = Nothing } )
                                         ]
                             }
 
@@ -415,7 +415,7 @@ suite =
                                 | sessions = Dict.insert "fork-1" forkSess initModelWithSession.sessions
                                 , planMetas =
                                     Dict.fromList
-                                        [ ( "p1", { origin = { sessionId = "s1", planIndex = 0 }, feedbacks = [], depth = 1, createdAt = 0, name = "p1", lastStatus = "", parentPlanId = Nothing, parentSessionId = Nothing } )
+                                        [ ( "p1", { origin = { sessionId = "s1", planIndex = 0 }, feedbacks = [], depth = 1, createdAt = 0, name = "p1", lastStatus = "", parentPlanId = Nothing } )
                                         ]
                                 , sessionLineage =
                                     Dict.fromList

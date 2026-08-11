@@ -2440,7 +2440,6 @@ update msg model =
                     -- cascade can walk the ancestry from the meta index
                     -- alone (ancestor windows may be closed).
                     , parentPlanId = PM.parentPlanIdOfSession (runStatesOf model) originDiskId
-                    , parentSessionId = Nothing
                     }
 
                 metaPath =

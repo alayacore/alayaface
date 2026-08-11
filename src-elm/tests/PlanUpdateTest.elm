@@ -151,7 +151,6 @@ suite =
                             , name = "x"
                             , lastStatus = ""
                             , parentPlanId = Nothing
-                            , parentSessionId = Nothing
                             }
 
                         m =
@@ -170,7 +169,6 @@ suite =
                             , name = "x"
                             , lastStatus = ""
                             , parentPlanId = Nothing
-                            , parentSessionId = Nothing
                             }
 
                         m =
@@ -180,7 +178,7 @@ suite =
                             }
                     in
                     Expect.equal ( PU.messageBoundToPlan m "live1" 2 ) True
-            , test "messageBoundToPlan follows a P38 fork parent session (same rule as the status bar)" <|
+            , test "messageBoundToPlan follows a P38 fork through the lineage registry (same rule as the status bar)" <|
                 \_ ->
                     let
                         -- The plan was created in s1; a re-run cascade
@@ -188,7 +186,8 @@ suite =
                         -- replayed plan message in s-fork must NOT
                         -- auto-create a duplicate — and the status-bar
                         -- query must bind it to the same plan (one rule,
-                        -- Plan.Meta.planMetaForSessionIndex).
+                        -- Plan.Meta.planMetaForSessionIndex; the fork id
+                        -- resolves through the lineage registry).
                         meta =
                             { origin = { sessionId = "s1", planIndex = 1 }
                             , feedbacks = []
@@ -197,7 +196,6 @@ suite =
                             , name = "x"
                             , lastStatus = "completed"
                             , parentPlanId = Nothing
-                            , parentSessionId = Just "s-fork"
                             }
 
                         m =
@@ -205,6 +203,11 @@ suite =
                                 | planMetas = Dict.insert "p1" meta Dict.empty
                                 , sessions =
                                     Dict.insert "s-fork" (T.emptySession "s-fork") initModelWithSession.sessions
+                                , sessionLineage =
+                                    Dict.fromList
+                                        [ ( "s1", SM.empty "s1" )
+                                        , ( "s-fork", { conversationId = "s1", parentInstanceId = Just "s1" } )
+                                        ]
                             }
                     in
                     Expect.equal
@@ -410,14 +413,14 @@ suite =
                     PU.resolveEventSessionId m0 "live-2" |> Expect.equal "orig-1"
             ]
         , describe "planMetaForMessage (status-bar binding)"
-            [ test "resumed fork window binds through planResumedFrom → parentSessionOf" <|
+            [ test "resumed fork window binds through planResumedFrom → lineage registry → conversation origin" <|
                 \_ ->
                     let
                         -- The plan was created in s1 and forked to s-fork;
                         -- the user views the fork through a RESUMED window
-                        -- (fresh live id). The status bar must still bind
-                        -- to p1: live → s-fork (planResumedFrom) → parent
-                        -- session (planMetaForSessionIndex).
+                        -- (fresh live id). The status bar binds: live →
+                        -- s-fork (planResumedFrom) → s1 (lineage registry)
+                        -- → meta origin.
                         meta =
                             { origin = { sessionId = "s1", planIndex = 1 }
                             , feedbacks = []
@@ -426,13 +429,17 @@ suite =
                             , name = "x"
                             , lastStatus = "completed"
                             , parentPlanId = Nothing
-                            , parentSessionId = Just "s-fork"
                             }
 
                         m =
                             { initModelWithSession
                                 | planMetas = Dict.insert "p1" meta Dict.empty
                                 , planResumedFrom = Dict.insert "live-fork" "s-fork" Dict.empty
+                                , sessionLineage =
+                                    Dict.fromList
+                                        [ ( "s1", SM.empty "s1" )
+                                        , ( "s-fork", { conversationId = "s1", parentInstanceId = Just "s1" } )
+                                        ]
                             }
                     in
                     PU.planMetaForMessage m "live-fork" 1
@@ -481,7 +488,6 @@ suite =
                             , name = "p1"
                             , lastStatus = "completed"
                             , parentPlanId = Nothing
-                            , parentSessionId = Nothing
                             }
 
                         target =
@@ -771,7 +777,6 @@ suite =
                             , name = "sub"
                             , lastStatus = ""
                             , parentPlanId = Just "p1"
-                            , parentSessionId = Nothing
                             }
 
                         m0 =
@@ -813,7 +818,6 @@ suite =
                             , name = "sub"
                             , lastStatus = ""
                             , parentPlanId = Just "p1"
-                            , parentSessionId = Nothing
                             }
 
                         m0 =
@@ -837,7 +841,7 @@ suite =
                                 | planWindows = Dict.insert "p1" win Dict.empty
                                 , planMetas =
                                     Dict.fromList
-                                        [ ( "sp1", { origin = { sessionId = "any-session", planIndex = 0 }, feedbacks = [], depth = 2, createdAt = 0, name = "sub", lastStatus = "", parentPlanId = Just "p1", parentSessionId = Nothing } )
+                                        [ ( "sp1", { origin = { sessionId = "any-session", planIndex = 0 }, feedbacks = [], depth = 2, createdAt = 0, name = "sub", lastStatus = "", parentPlanId = Just "p1" } )
                                         ]
                             }
                     in

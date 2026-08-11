@@ -74,7 +74,6 @@ metaOf planId originSid parent =
     , name = "plan-" ++ planId
     , lastStatus = "completed"
     , parentPlanId = parent
-    , parentSessionId = Nothing
     }
 
 

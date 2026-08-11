@@ -9,7 +9,6 @@ module Plan.Meta exposing
     , planMetaForSessionIndex
     , depthOf
     , parentPlanIdOfSession
-    , parentSessionOf
     , depthForOrigin
     , shouldInjectPlanPrompt
     , shouldAutoRun
@@ -100,24 +99,7 @@ type alias PlanMeta =
     -- still participate in the cascade's impact scope. Nothing = the
     -- origin is a plain session (top-level plan).
     , parentPlanId : Maybe String
-    -- P38 fork-based truncation: when a re-run cascade replaces the
-    -- parent conversation with a FORK (truncated history), the fork's
-    -- session id is recorded here. `origin` KEEPS the creation session
-    -- (it locates the plan's own dir: sessions/<origin>/plans/<planId>/);
-    -- `parentSessionId` is the session where the plan's result actually
-    -- lives (status-bar binding, feedback routing, cascade walk). The
-    -- original is the fallback when no fork happened. Persisted so the
-    -- binding survives restart.
-    , parentSessionId : Maybe String
     }
-
-
-{-| The session where the plan's result lives: the forked parent
-conversation (P38) if one replaced it, else the creation origin.
--}
-parentSessionOf : PlanMeta -> String
-parentSessionOf meta =
-    Maybe.withDefault meta.origin.sessionId meta.parentSessionId
 
 
 {-| The meta file path for a plan id (same directory as the plan file —
@@ -155,14 +137,13 @@ encodeMeta m =
             , Just ( "name", E.string m.name )
             , Just ( "last_status", E.string m.lastStatus )
             , Maybe.map (\p -> ( "parent_plan_id", E.string p )) m.parentPlanId
-            , Maybe.map (\s -> ( "parent_session_id", E.string s )) m.parentSessionId
             ]
         )
 
 
 decodeMeta : D.Decoder PlanMeta
 decodeMeta =
-    D.map8 PlanMeta
+    D.map7 PlanMeta
         (D.field "origin"
             (D.map2 Origin
                 (D.field "sessionId" D.string)
@@ -185,19 +166,14 @@ decodeMeta =
         (D.field "last_status" D.string)
         -- Lenient: old meta files (pre-P38) have no parent_plan_id.
         (D.oneOf [ D.field "parent_plan_id" D.string |> D.map Just, D.succeed Nothing ])
-        -- Lenient: pre-fork meta has no parent_session_id.
-        (D.oneOf [ D.field "parent_session_id" D.string |> D.map Just, D.succeed Nothing ])
 
 
 {-| The plan whose meta binds (sessionId, planIndex) — the plan
-auto-created from that session's Nth plan message. Matches BOTH the
-creation origin AND the current parent session (`parentSessionOf`): a
-P38 re-run fork replaces the creation session with a truncated-history
-fork, and the binding must follow it — otherwise the fork session
-renders the generic "Open plan" fallback instead of the real status-bar
-link (while `messageBoundToPlan` already knew the fork, so no duplicate
-is created). For a non-forked plan `parentSessionOf` == `origin.sessionId`,
-so the two branches are one rule.
+auto-created from that session's Nth plan message. `sessionId` is the
+CONVERSATION id (the stable identity): callers resolve a physical
+instance — a fork, a resumed live handle — through the lineage registry
+before matching, so the fork session binds without any rewritten
+binding (P39/Phase B; the old parentSessionId field is gone).
 
 UNIQUENESS CONTRACT (this is what makes the fold deterministic): a
 (sessionId, planIndex) pair binds AT MOST ONE plan — planIndex is the
@@ -214,10 +190,7 @@ planMetaForSessionIndex metas sessionId planIndex =
                     acc
 
                 Nothing ->
-                    if
-                        meta.origin.planIndex == planIndex
-                            && (meta.origin.sessionId == sessionId || parentSessionOf meta == sessionId)
-                    then
+                    if meta.origin.sessionId == sessionId && meta.origin.planIndex == planIndex then
                         Just ( planId, meta )
 
                     else
