@@ -2680,25 +2680,36 @@ update msg model =
             )
 
         PlanCascadeForkResult raw ->
-            -- P38: the fork that truncated a parent session finished.
-            -- Adopt it as the node's session (rebind + meta origin
-            -- rewrite), close the original, continue the chain.
+            -- P38: the cascade fork finished. A SUCCESS is registered and
+            -- adopted in ONE update: SessionCreated (nested, synchronous)
+            -- opens the fork window exactly like any new session, then
+            -- adoptCascadeFork rewrites the meta binding — both before
+            -- the outer update returns, so the fork session's first
+            -- render already sees the fork binding (no stale "Open plan"
+            -- flash). Because the adoption is driven by THIS event — the
+            -- only one that carries the real fork id — a user-created
+            -- session racing the fork can never be mistaken for it.
+            -- A FAILURE means nothing was truncated and no ancestor node
+            -- was reset, so the cascade must END, not linger. Leaving
+            -- planCascade armed is a latent mis-trigger: its head level
+            -- still points at the live source session, so a later
+            -- TaskDone from that session would run cascadeAfterStep's
+            -- ResumeBranchFrom — re-running downstream branches WITHOUT
+            -- any truncation. The completed plan window stays open (user
+            -- can inspect / re-run / close).
             case D.decodeValue cascadeForkResultDecoder raw of
                 Ok r ->
                     if r.ok then
-                        adoptCascadeFork update r.sessionId model
+                        let
+                            ( mReg, cReg ) =
+                                update (SessionCreated r.sessionId) model
+
+                            ( mAdopt, cAdopt ) =
+                                adoptCascadeFork update r.sessionId mReg
+                        in
+                        ( mAdopt, Cmd.batch [ cReg, cAdopt ] )
 
                     else
-                        -- The fork failed: nothing was truncated and no
-                        -- ancestor node was reset, so the cascade must
-                        -- END, not linger. Leaving planCascade armed is a
-                        -- latent mis-trigger: its head level still points
-                        -- at the live source session, so a later TaskDone
-                        -- from that session would run
-                        -- cascadeAfterStep's ResumeBranchFrom — re-running
-                        -- downstream branches WITHOUT any truncation. The
-                        -- completed plan window stays open (user can
-                        -- inspect / re-run / close).
                         ( { model
                             | planCascadeFork = Nothing
                             , planCascade = Nothing

@@ -478,9 +478,14 @@
 
     // P38: cascade fork — like fork_session but for the re-run cascade's
     // history truncation: the fork carries the node-session attributes so
-    // it replaces the parent session in place. The new id goes to a
-    // DEDICATED result port (not onSessionCreated) so the app can adopt
-    // it as the node's session instead of opening a plain new window.
+    // it replaces the parent session in place. The result (success or
+    // failure) arrives on the DEDICATED onCascadeForkResult port — the
+    // app then routes a success through SessionCreated itself, so the
+    // fork's window registration AND the adoption (meta binding rewrite)
+    // happen in ONE update: the fork session never renders with the stale
+    // pre-fork binding, and a user-created session that races the fork can
+    // never be mistaken for it (only this result event triggers the
+    // adoption path).
     on("cascadeForkSession", function (data) {
       transport.invoke("fork_session", {
         sourceSessionId: data.sourceSessionId,
@@ -496,11 +501,6 @@
         originSessionId: data.originSessionId,
         clientId: clientId,
       }).then(function (id) {
-        // Open the fork window FIRST (the original parent session is
-        // about to be closed by the adoption — without this the fork
-        // never gets a window and the conversation vanishes), then hand
-        // the id to the adoption.
-        app.ports.onSessionCreated.send(id);
         app.ports.onCascadeForkResult.send({ ok: true, sessionId: id, error: "" });
       }).catch(function (err) {
         console.error("cascade fork_session failed:", err);

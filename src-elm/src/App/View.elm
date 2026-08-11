@@ -25,6 +25,7 @@ import Plan.Types as PT
 import Plan.Meta as PM
 import Plan.Detect
 import Plan.Cascade as PC
+import Plan.Update as PU
 import Plan.View
 import Overlay.ConfirmTool
 import Overlay.Settings
@@ -1340,25 +1341,13 @@ viewPlanStatusBar model sid planIndex =
                 Html.text ""
 
 
-{-| The plan whose meta origin binds (sessionId, planIndex) — the plan
-auto-created from that session's Nth plan message. The rendered session
-may be a resume with a fresh live id — resolve sid back to the on-disk
-id before matching; the match itself (creation origin OR the P38 fork
-parent session) lives in Plan.Meta.planMetaForSessionIndex so the
-status bar and messageBoundToPlan can never drift apart.
+{-| The plan whose meta binds (sessionId, planIndex) — status-bar lookup.
+All logic lives in Plan.Update.planMetaForMessage (one binding rule,
+resume + fork aware, unit-tested); the View only renders.
 -}
 planMetaForMessage : Model -> String -> Int -> Maybe ( String, PM.PlanMeta )
-planMetaForMessage model sid planIndex =
-    let
-        onDiskId =
-            case Dict.get sid model.planResumedFrom of
-                Just orig ->
-                    orig
-
-                Nothing ->
-                    sid
-    in
-    PM.planMetaForSessionIndex model.planMetas onDiskId planIndex
+planMetaForMessage =
+    PU.planMetaForMessage
 
 
 planStatusFor : Model -> String -> Maybe PM.PlanMeta -> ( String, String, Bool )

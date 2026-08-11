@@ -406,6 +406,40 @@ suite =
                     in
                     PU.resolveEventSessionId m0 "live-2" |> Expect.equal "orig-1"
             ]
+        , describe "planMetaForMessage (status-bar binding)"
+            [ test "resumed fork window binds through planResumedFrom → parentSessionOf" <|
+                \_ ->
+                    let
+                        -- The plan was created in s1 and forked to s-fork;
+                        -- the user views the fork through a RESUMED window
+                        -- (fresh live id). The status bar must still bind
+                        -- to p1: live → s-fork (planResumedFrom) → parent
+                        -- session (planMetaForSessionIndex).
+                        meta =
+                            { origin = { sessionId = "s1", planIndex = 1 }
+                            , feedbacks = []
+                            , depth = 1
+                            , createdAt = 0
+                            , name = "x"
+                            , lastStatus = "completed"
+                            , parentPlanId = Nothing
+                            , parentSessionId = Just "s-fork"
+                            }
+
+                        m =
+                            { initModelWithSession
+                                | planMetas = Dict.insert "p1" meta Dict.empty
+                                , planResumedFrom = Dict.insert "live-fork" "s-fork" Dict.empty
+                            }
+                    in
+                    PU.planMetaForMessage m "live-fork" 1
+                        |> Maybe.map Tuple.first
+                        |> Expect.equal (Just "p1")
+            , test "no binding → Nothing (status bar renders the Open plan fallback)" <|
+                \_ ->
+                    PU.planMetaForMessage initModelWithSession "s1" 1
+                        |> Expect.equal Nothing
+            ]
         , describe "handlePlanReadTarget"
             [ test "open/import parses the plan and chains a run restore" <|
                 \_ ->

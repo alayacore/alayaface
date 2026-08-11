@@ -197,7 +197,13 @@ fork, and the binding must follow it — otherwise the fork session
 renders the generic "Open plan" fallback instead of the real status-bar
 link (while `messageBoundToPlan` already knew the fork, so no duplicate
 is created). For a non-forked plan `parentSessionOf` == `origin.sessionId`,
-so the two branches are one rule. Nothing when no plan binds the pair.
+so the two branches are one rule.
+
+UNIQUENESS CONTRACT (this is what makes the fold deterministic): a
+(sessionId, planIndex) pair binds AT MOST ONE plan — planIndex is the
+per-session ordinal of the plan message, unique at creation time, and
+forks never change it. More than one match is data corruption; the fold
+returns the first. Nothing when no plan binds the pair.
 -}
 planMetaForSessionIndex : Dict String PlanMeta -> String -> Int -> Maybe ( String, PlanMeta )
 planMetaForSessionIndex metas sessionId planIndex =

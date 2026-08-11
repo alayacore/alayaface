@@ -27,6 +27,7 @@ module Plan.Update exposing
     , planWinKeyForPath
     , findPlanIdBySession
     , resolveEventSessionId
+    , planMetaForMessage
     , eventSessionId
     , planSystemPrompt
     , runStepIn
@@ -479,6 +480,24 @@ messageBoundToPlan model sid planIndex =
             Dict.get sid model.planResumedFrom |> Maybe.withDefault sid
     in
     PM.planMetaForSessionIndex model.planMetas onDiskId planIndex /= Nothing
+
+
+{-| The plan whose meta binds (sessionId, planIndex) — the status-bar
+lookup for a plan message (the render-only counterpart of
+`messageBoundToPlan`, sharing the same rule). Resolves a resumed
+session's fresh live id back to its on-disk id first, then matches the
+creation origin OR the P38 fork parent session (Plan.Meta.
+planMetaForSessionIndex). Kept here (not in the View) so the binding
+rule is one source of truth and the resume+fork combination is
+unit-testable.
+-}
+planMetaForMessage : Model -> String -> Int -> Maybe ( String, PM.PlanMeta )
+planMetaForMessage model sid planIndex =
+    let
+        onDiskId =
+            Dict.get sid model.planResumedFrom |> Maybe.withDefault sid
+    in
+    PM.planMetaForSessionIndex model.planMetas onDiskId planIndex
 
 
 {-| The plan index of the LAST message of the list: how many plan
