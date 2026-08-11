@@ -186,6 +186,15 @@ type alias Model =
     -- P38: a fork issued to truncate a parent session (awaiting its
     -- result); the adoption rewrites bindings/meta and continues.
     , planCascadeFork : Maybe PC.CascadeForkTarget
+    -- P39/D1: the ownership-graph close set currently being torn down
+    -- (every session + plan id collected in ONE traversal by
+    -- CloseSession / PlanClose). While non-empty, nested CloseSession /
+    -- PlanClose dispatches (from StopRun's closeAndClear, from a plan's
+    -- node sessions) take the MINIMAL branch — close the window /
+    -- process only, never re-collect — so the graph is traversed
+    -- exactly once and `PlanClose ⇄ CloseSession` mutual recursion is
+    -- gone. Always cleared by the time the initiating update returns.
+    , closeSet : Set String
     -- Incremental per-session plan-message counts (M3/D4): how many
     -- messages of each session are plan messages (same predicate as
     -- Plan.Detect.isPlanMessage). Maintained O(1) per frame — a message

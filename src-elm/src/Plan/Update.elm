@@ -38,6 +38,9 @@ module Plan.Update exposing
     , restartPlanCascade
     , openNextOrStart
     , cascadeStepIn
+    , nodeSessionIdsForPlan
+    , collectCloseSetFromSession
+    , collectCloseSetFromPlan
     , subPlansOfPlan
     , runDiffLog
     , applyEffectsIn
@@ -1641,6 +1644,140 @@ subPlansOfPlan planId model =
         )
         []
         model.planMetas
+
+
+{-| Every LIVE session window bound to a node of this plan: direct
+bindings (`planNodeSessions` sid → "planId/nodeId") plus resumed
+windows (`planResumedFrom` live → orig, orig bound to the plan). Only
+sessions with an open window are returned — a closed binding's backend
+handle is already gone (resume replaced it), so closing it again would
+only produce "Session not found" noise. Node sessions can be open under
+ANY run status — e.g. a node session resumed from disk under a
+Stopped/FailedRun/Completed plan for review — so PlanClose closes them
+regardless of the run state.
+-}
+nodeSessionIdsForPlan : String -> Model -> List String
+nodeSessionIdsForPlan planId model =
+    let
+        isNodeOfPlan label =
+            String.startsWith (planId ++ "/") label
+
+        live sid =
+            Dict.member sid model.sessions
+
+        direct =
+            Dict.foldl
+                (\sid label acc ->
+                    if isNodeOfPlan label && live sid then
+                        sid :: acc
+                    else
+                        acc
+                )
+                []
+                model.planNodeSessions
+
+        viaResume =
+            Dict.foldl
+                (\liveId orig acc ->
+                    case Dict.get orig model.planNodeSessions of
+                        Just label ->
+                            if isNodeOfPlan label && live liveId then
+                                liveId :: acc
+                            else
+                                acc
+
+                        Nothing ->
+                            acc
+                )
+                []
+                model.planResumedFrom
+    in
+    List.foldl
+        (\sid acc ->
+            if List.member sid acc then
+                acc
+
+            else
+                sid :: acc
+        )
+        direct
+        viaResume
+
+
+-- ─── Ownership-graph close set (P39/D1) ────────────────────────────
+
+{-| Collect every plan and session that must close when the given
+SESSION closes — the ownership graph in ONE traversal (P34/D1):
+session → its plans (meta origin) → their node sessions → their
+sub-plans → …, visited-deduplicated and cycle-safe. Returns
+( plans, sessions ) in discovery order.
+-}
+collectCloseSetFromSession : Model -> String -> ( List String, List String )
+collectCloseSetFromSession model sid =
+    collectCloseSetHelp model
+        [ sid ]
+        (Set.singleton sid)
+        Set.empty
+        []
+
+
+{-| Same collection starting from a PLAN (its node sessions, their
+sub-plans, …). The plan itself is included in the plans list.
+-}
+collectCloseSetFromPlan : Model -> String -> ( List String, List String )
+collectCloseSetFromPlan model planId =
+    collectCloseSetHelp model
+        []
+        Set.empty
+        (Set.singleton planId)
+        [ planId ]
+        |> (\( plans, sessions ) -> ( List.reverse plans, List.reverse sessions ))
+
+
+collectCloseSetHelp :
+    Model
+    -> List String
+    -> Set String
+    -> Set String
+    -> List String
+    -> ( List String, List String )
+collectCloseSetHelp model sessionQueue visitedSessions visitedPlans planQueue =
+    case sessionQueue of
+        s :: rest ->
+            let
+                disk =
+                    Dict.get s model.planResumedFrom |> Maybe.withDefault s
+
+                plans =
+                    PM.plansOwnedBySession model.planMetas disk
+                        |> List.filter (\p -> not (Set.member p visitedPlans))
+
+                visitedPlans2 =
+                    Set.union visitedPlans (Set.fromList plans)
+
+                planQueue2 =
+                    planQueue ++ plans
+            in
+            collectCloseSetHelp model rest visitedSessions visitedPlans2 planQueue2
+
+        [] ->
+            case planQueue of
+                p :: rest ->
+                    let
+                        nodeSids =
+                            nodeSessionIdsForPlan p model
+                                |> List.filter (\s -> not (Set.member s visitedSessions))
+
+                        visitedSessions2 =
+                            Set.union visitedSessions (Set.fromList nodeSids)
+
+                        sessionQueue2 =
+                            nodeSids
+                    in
+                    collectCloseSetHelp model sessionQueue2 visitedSessions2 visitedPlans rest
+
+                [] ->
+                    ( Set.toList visitedPlans, Set.toList visitedSessions )
 
 
 {-| One log line per node whose status changed between two snapshots.

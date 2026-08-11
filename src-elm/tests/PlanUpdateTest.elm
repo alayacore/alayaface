@@ -850,4 +850,76 @@ suite =
                     in
                     PU.subPlansOfPlan "p1" m0 |> Expect.equal []
             ]
+        , describe "collectCloseSet (P39/D1 ownership graph)"
+            (let
+                metaOf originSid planId =
+                    { origin = { sessionId = originSid, planIndex = 1 }
+                    , feedbacks = []
+                    , depth = 1
+                    , createdAt = 0
+                    , name = planId
+                    , lastStatus = ""
+                    , parentPlanId = Nothing
+                    }
+
+                -- s1 owns p1; p1's node session s2 owns p2.
+                closeModel =
+                    { initModelWithSession
+                        | sessions =
+                            Dict.fromList [ ( "s1", T.emptySession "s1" ), ( "s2", T.emptySession "s2" ) ]
+                        , planMetas =
+                            Dict.fromList
+                                [ ( "p1", metaOf "s1" "p1" )
+                                , ( "p2", metaOf "s2" "p2" )
+                                ]
+                        , planNodeSessions = Dict.fromList [ ( "s2", "p1/n1" ) ]
+                    }
+             in
+             [ test "a session collects its plans → node sessions → sub-plans in ONE traversal" <|
+                    \_ ->
+                        let
+                            ( plans, sessions ) =
+                                PU.collectCloseSetFromSession closeModel "s1"
+                        in
+                        Expect.equal
+                            ( List.sort plans, List.sort sessions )
+                            ( [ "p1", "p2" ], [ "s1", "s2" ] )
+              , test "a plan collects its node sessions and their sub-plans, NOT its origin session" <|
+                    \_ ->
+                        let
+                            ( plans, sessions ) =
+                                PU.collectCloseSetFromPlan closeModel "p1"
+                        in
+                        Expect.equal
+                            ( List.sort plans, List.sort sessions )
+                            ( [ "p1", "p2" ], [ "s2" ] )
+              , test "deduplicates shared sessions/plans" <|
+                    \_ ->
+                        let
+                            m =
+                                { closeModel
+                                    | planMetas =
+                                        Dict.fromList
+                                            [ ( "p1", metaOf "s1" "p1" )
+                                            , ( "p2", metaOf "s1" "p2" )
+                                            ]
+                                    , planNodeSessions = Dict.empty
+                                }
+                        in
+                        Expect.equal
+                            ( PU.collectCloseSetFromSession m "s1" )
+                            ( [ "p1", "p2" ], [ "s1" ] )
+              , test "cycle-safe: a session that is its own plan's node session terminates" <|
+                    \_ ->
+                        let
+                            -- pathological cycle: s1 owns p1 AND is p1's node session.
+                            cyc =
+                                { closeModel
+                                    | planNodeSessions = Dict.fromList [ ( "s1", "p1/n1" ) ]
+                                }
+                        in
+                        Expect.equal
+                            ( PU.collectCloseSetFromSession cyc "s1" )
+                            ( [ "p1" ], [ "s1" ] )
+              ])
         ]

@@ -199,97 +199,146 @@ activateSessionModel model id =
         )
 
 
--- ─── Cascade close (P34) ──────────────────────────────────────────
+-- ─── Cascade close (P34/P39-D) ────────────────────────────────────
 
-{-| Close everything owned by a session, recursively:
-  - every plan whose meta.json origin is this session (its on-disk id),
-  - each such plan's node sessions (which may themselves own sub-plans —
-    recursion — closed the same way through CloseSessionFor),
-  - then the plan windows themselves.
-
-Each child plan's run is STOPPED first so it cannot respawn sessions:
-StopRun marks every non-succeeded node Canceled, then closeAndClear
-emits CloseSessionFor per bound session (window + process closed); each
-of those CloseSession calls re-enters this cascade for the node
-session's own children (R-series sub-plans).
+{-| The MINIMAL close branch, taken while the session is inside the
+ownership-graph close set (`closeSet`): tear down THIS window/process
+and fail its runner node if any — never re-collect, never recurse
+(P39/D1 — the initiating CloseSession already collected the whole set).
 -}
-closeSessionChildren : String -> Model -> ( Model, Cmd Msg )
-closeSessionChildren sid model =
+minimalCloseSession : String -> Model -> ( Model, Cmd Msg )
+minimalCloseSession id model =
     let
-        diskId =
-            Dict.get sid model.planResumedFrom |> Maybe.withDefault sid
+        -- If the closed window belongs to a plan run, fail its node
+        -- so the runner retries/continues instead of hanging.
+        -- (Cascade-closed node sessions are already Canceled by
+        -- StopRun, so they do NOT emit a spurious disconnect.)
+        -- The event carries the CONVERSATION id (resolved like every
+        -- other session-bearing event): a closed RESUME of a node
+        -- session has a fresh live id, and passing it raw would miss
+        -- the node binding — the node would stay Running forever.
+        runnerFailCmd =
+            case findPlanIdBySession model id of
+                Just _ ->
+                    Task.perform
+                        (\t ->
+                            PlanRunFrame (Time.posixToMillis t)
+                                (R.SessionDisconnected (PU.resolveEventSessionId model id) "Session window closed")
+                        )
+                        Time.now
 
-        childPlanIds =
-            PM.plansOwnedBySession model.planMetas diskId
+                Nothing ->
+                    Cmd.none
     in
-    List.foldl closeChildPlan ( model, Cmd.none ) childPlanIds
-
-
-closeChildPlan : String -> ( Model, Cmd Msg ) -> ( Model, Cmd Msg )
-closeChildPlan planId ( model, cmds ) =
-    let
-        ( m1, c1 ) =
-            update (PlanClose planId) model
-    in
-    ( m1, Cmd.batch [ cmds, c1 ] )
-
-
-{-| Every LIVE session window bound to a node of this plan: direct
-bindings (`planNodeSessions` sid → "planId/nodeId") plus resumed
-windows (`planResumedFrom` live → orig, orig bound to the plan). Only
-sessions with an open window are returned — a closed binding's backend
-handle is already gone (resume replaced it), so closing it again would
-only produce "Session not found" noise. Node sessions can be open under
-ANY run status — e.g. a node session resumed from disk under a
-Stopped/FailedRun/Completed plan for review — so PlanClose closes them
-regardless of the run state.
--}
-nodeSessionIdsForPlan : String -> Model -> List String
-nodeSessionIdsForPlan planId model =
-    let
-        isNodeOfPlan label =
-            String.startsWith (planId ++ "/") label
-
-        live sid =
-            Dict.member sid model.sessions
-
-        direct =
-            Dict.foldl
-                (\sid label acc ->
-                    if isNodeOfPlan label && live sid then
-                        sid :: acc
-                    else
-                        acc
-                )
-                []
-                model.planNodeSessions
-
-        viaResume =
-            Dict.foldl
-                (\liveId orig acc ->
-                    case Dict.get orig model.planNodeSessions of
-                        Just label ->
-                            if isNodeOfPlan label && live liveId then
-                                liveId :: acc
-                            else
-                                acc
-
-                        Nothing ->
-                            acc
-                )
-                []
-                model.planResumedFrom
-    in
-    List.foldl
-        (\sid acc ->
-            if List.member sid acc then
-                acc
+    ( { model
+        | sessions = Dict.remove id model.sessions
+        , sessionOrder = List.filter (\k -> k /= id) model.sessionOrder
+        , sessionNums = Dict.remove id model.sessionNums
+        , windowPositions = Dict.remove id model.windowPositions
+        , planNodeSessions = Dict.remove id model.planNodeSessions
+        , planResumedFrom = Dict.remove id model.planResumedFrom
+        , planTaskStarted = Set.remove id model.planTaskStarted
+        , connectionChain = dropChainSession model.connectionChain id
+        , activeId =
+            if model.activeId == Just id then
+                List.head (List.reverse (List.filter (\k -> k /= id) model.sessionOrder))
 
             else
-                sid :: acc
-        )
-        direct
-        viaResume
+                model.activeId
+      }
+    , Cmd.batch
+        [ Ports.closeSession { sessionId = id }
+        , runnerFailCmd
+        , Ports.setConnectionChain (chainPayload model model.connectionChain)
+        ]
+    )
+
+
+{-| The MINIMAL close branch for a plan, taken while the plan is inside
+the ownership-graph close set: stop its active run (nodes Canceled →
+closeAndClear closes the sessions it knows — all inside closeSet, so
+those dispatches are minimal too), close the node-session windows under
+ANY run status, drop queued creates, remove the window. Never
+re-collects (P39/D1).
+-}
+minimalPlanClose : String -> Model -> ( Model, Cmd Msg )
+minimalPlanClose planId model =
+    let
+        -- 1. If the run is still active (InProgress/Paused), stop it
+        --    first: StopRun → nodes Canceled → closeAndClear closes the
+        --    sessions it knows (all inside closeSet → minimal) and the
+        --    run cannot respawn. Terminal runs are NOT re-stopped: it
+        --    would overwrite planRunStatuses (e.g. Completed → Stopped)
+        --    and break the status bar.
+        ( m1, stopCmd ) =
+            case Dict.get planId model.planWindows of
+                Just win ->
+                    case win.run of
+                        Just run ->
+                            if List.member run.status [ PT.InProgress, PT.Paused ] then
+                                runStepIn update planId 0 R.StopRun model
+
+                            else
+                                ( model, Cmd.none )
+
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        -- 2. Close every remaining live session bound to this plan's
+        --    nodes (direct + resumed ids) — catches windows open under
+        --    terminal runs and resumed windows that StopRun's
+        --    closeAndClear could not reach.
+        nodeSids =
+            PU.nodeSessionIdsForPlan planId m1
+
+        ( m2, closeNodeCmds ) =
+            List.foldl
+                (\sid ( m, cmds ) ->
+                    let
+                        ( m2a, c2a ) =
+                            update (CloseSession sid) m
+                    in
+                    ( m2a, Cmd.batch [ cmds, c2a ] )
+                )
+                ( m1, Cmd.none )
+                nodeSids
+    in
+    -- 3. Drop queued creates for this plan too (their sessions would
+    --    only be created and immediately orphan-closed), remove the
+    --    plan window.
+    ( { m2
+        | planWindows = Dict.remove planId m2.planWindows
+        , planOrder = List.filter (\k -> k /= planId) m2.planOrder
+        , windowPositions = Dict.remove planId m2.windowPositions
+        , planCreateQueue =
+            List.filter
+                (\task ->
+                    case task of
+                        RunnerCreate qpid _ ->
+                            qpid /= planId
+
+                        UserCreate _ ->
+                            True
+                )
+                m2.planCreateQueue
+        , planActiveId =
+            if m2.planActiveId == Just planId then
+                List.head (List.reverse (List.filter (\k -> k /= planId) m2.planOrder))
+
+            else
+                m2.planActiveId
+        , connectionChain =
+            List.filter (\seg -> seg.planId /= planId) m2.connectionChain
+      }
+    , Cmd.batch
+        [ stopCmd
+        , closeNodeCmds
+        , Ports.setConnectionChain (chainPayload m2 m2.connectionChain)
+        ]
+    )
 
 
 {-| Fixed plan mode (D2, R2): the planner hint injected via `--system`
@@ -646,61 +695,55 @@ update msg model =
                     ( model, Cmd.none )
 
         CloseSession id ->
-            -- Cascade-close the session's children first (P34): plans
-            -- owned by this session (meta origin) and their node
-            -- sessions, recursively. Each child plan's run is STOPPED
-            -- (no respawn), its node sessions are closed, and the plan
-            -- window itself is closed; a node session's own children
-            -- (sub-plans, recursion) cascade the same way.
-            let
-                ( m0, cascadeCmd ) =
-                    closeSessionChildren id model
+            -- P39/D1: ownership-graph close. The FIRST close of a
+            -- session collects the WHOLE owned set (this session's plans
+            -- → their node sessions → their sub-plans → …, one
+            -- traversal) and marks it in `closeSet`; every nested
+            -- dispatch (a plan's node sessions, StopRun's
+            -- closeAndClear) then takes the MINIMAL branch below — no
+            -- re-collection, no `PlanClose ⇄ CloseSession` mutual
+            -- recursion. The set is cleared before this update returns.
+            if Set.member id model.closeSet then
+                minimalCloseSession id model
 
-                -- If the closed window belongs to a plan run, fail its node
-                -- so the runner retries/continues instead of hanging.
-                -- (Cascade-closed node sessions are already Canceled by
-                -- StopRun, so they do NOT emit a spurious disconnect.)
-                -- The event carries the CONVERSATION id (resolved like
-                -- every other session-bearing event): a closed RESUME of a
-                -- node session has a fresh live id, and passing it raw
-                -- would miss the node binding (which matches the original
-                -- conversation id) — the node would stay Running forever.
-                runnerFailCmd =
-                    case findPlanIdBySession m0 id of
-                        Just _ ->
-                            Task.perform
-                                (\t ->
-                                    PlanRunFrame (Time.posixToMillis t)
-                                        (R.SessionDisconnected (PU.resolveEventSessionId m0 id) "Session window closed")
-                                )
-                                Time.now
+            else
+                let
+                    ( plans, sessions ) =
+                        PU.collectCloseSetFromSession model id
 
-                        Nothing ->
-                            Cmd.none
-            in
-            ( { m0
-                | sessions = Dict.remove id m0.sessions
-                , sessionOrder = List.filter (\k -> k /= id) m0.sessionOrder
-                , sessionNums = Dict.remove id m0.sessionNums
-                , windowPositions = Dict.remove id m0.windowPositions
-                , planNodeSessions = Dict.remove id m0.planNodeSessions
-                , planResumedFrom = Dict.remove id m0.planResumedFrom
-                , planTaskStarted = Set.remove id m0.planTaskStarted
-                , connectionChain = dropChainSession m0.connectionChain id
-                , activeId =
-                    if m0.activeId == Just id then
-                        List.head (List.reverse (List.filter (\k -> k /= id) m0.sessionOrder))
+                    m1 =
+                        { model | closeSet = Set.fromList (plans ++ sessions) }
 
-                    else
-                        m0.activeId
-              }
-            , Cmd.batch
-                [ Ports.closeSession { sessionId = id }
-                , runnerFailCmd
-                , cascadeCmd
-                , Ports.setConnectionChain (chainPayload m0 m0.connectionChain)
-                ]
-            )
+                    -- Close every plan first (StopRun stops respawn; each
+                    -- plan's node sessions close via minimal dispatches),
+                    -- then every session window.
+                    ( m2, planCmds ) =
+                        List.foldl
+                            (\pid ( m, c ) ->
+                                let
+                                    ( m2a, c2a ) =
+                                        update (PlanClose pid) m
+                                in
+                                ( m2a, Cmd.batch [ c, c2a ] )
+                            )
+                            ( m1, Cmd.none )
+                            plans
+
+                    ( m3, sessionCmds ) =
+                        List.foldl
+                            (\sid ( m, c ) ->
+                                let
+                                    ( m2b, c2b ) =
+                                        update (CloseSession sid) m
+                                in
+                                ( m2b, Cmd.batch [ c, c2b ] )
+                            )
+                            ( m2, Cmd.none )
+                            sessions
+                in
+                ( { m3 | closeSet = Set.empty }
+                , Cmd.batch [ planCmds, sessionCmds ]
+                )
 
         -- Transport Events
         DeltaEvent raw ->
@@ -2556,87 +2599,50 @@ update msg model =
                 )
 
         PlanClose planId ->
-            -- Cascade (P35): closing a plan window also closes the node
-            -- session windows BELOW it — under ANY run status (node
-            -- sessions resumed from disk under a Stopped/FailedRun/
-            -- Completed plan are still open and must close too).
-            --
-            -- 1. If the run is still active (InProgress/Paused), stop it
-            --    first: StopRun → nodes Canceled → closeAndClear closes
-            --    the sessions it knows (and the run cannot respawn).
-            --    Terminal runs are NOT re-stopped: it would overwrite
-            --    planRunStatuses (e.g. Completed → Stopped) and break
-            --    the status bar.
-            -- 2. Close every remaining live session bound to this
-            --    plan's nodes (direct + resumed ids) — catches windows
-            --    open under terminal runs and resumed windows that
-            --    StopRun's closeAndClear could not reach.
-            -- 3. Remove the plan window.
-            let
-                ( m1, stopCmd ) =
-                    case Dict.get planId model.planWindows of
-                        Just win ->
-                            case win.run of
-                                Just run ->
-                                    if List.member run.status [ PT.InProgress, PT.Paused ] then
-                                        runStepIn update planId 0 R.StopRun model
+            -- P39/D1: ownership-graph close, mirroring CloseSession —
+            -- the FIRST close of a plan collects the whole owned set
+            -- (its node sessions → their sub-plans → …) in ONE
+            -- traversal and marks it in `closeSet`; nested dispatches
+            -- (node sessions, StopRun's closeAndClear) take the minimal
+            -- branch. No `PlanClose ⇄ CloseSession` mutual recursion.
+            if Set.member planId model.closeSet then
+                minimalPlanClose planId model
 
-                                    else
-                                        ( model, Cmd.none )
+            else
+                let
+                    ( plans, sessions ) =
+                        PU.collectCloseSetFromPlan model planId
 
-                                Nothing ->
-                                    ( model, Cmd.none )
+                    m1 =
+                        { model | closeSet = Set.fromList (plans ++ sessions) }
 
-                        Nothing ->
-                            ( model, Cmd.none )
+                    ( m2, planCmds ) =
+                        List.foldl
+                            (\pid ( m, c ) ->
+                                let
+                                    ( m2a, c2a ) =
+                                        update (PlanClose pid) m
+                                in
+                                ( m2a, Cmd.batch [ c, c2a ] )
+                            )
+                            ( m1, Cmd.none )
+                            plans
 
-                nodeSids =
-                    nodeSessionIdsForPlan planId m1
-
-                ( m2, closeNodeCmds ) =
-                    List.foldl
-                        (\sid ( m, cmds ) ->
-                            let
-                                ( m2a, c2a ) =
-                                    update (CloseSession sid) m
-                            in
-                            ( m2a, Cmd.batch [ cmds, c2a ] )
-                        )
-                        ( m1, Cmd.none )
-                        nodeSids
-            in
-            -- Drop queued creates for this plan too: their sessions would
-            -- only be created and immediately orphan-closed.
-            ( { m2
-                | planWindows = Dict.remove planId m2.planWindows
-                , planOrder = List.filter (\k -> k /= planId) m2.planOrder
-                , windowPositions = Dict.remove planId m2.windowPositions
-                , planCreateQueue =
-                    List.filter
-                        (\task ->
-                            case task of
-                                RunnerCreate qpid _ ->
-                                    qpid /= planId
-
-                                UserCreate _ ->
-                                    True
-                        )
-                        m2.planCreateQueue
-                , planActiveId =
-                    if m2.planActiveId == Just planId then
-                        List.head (List.reverse (List.filter (\k -> k /= planId) m2.planOrder))
-
-                    else
-                        m2.planActiveId
-                , connectionChain =
-                    List.filter (\seg -> seg.planId /= planId) m2.connectionChain
-              }
-            , Cmd.batch
-                [ stopCmd
-                , closeNodeCmds
-                , Ports.setConnectionChain (chainPayload m2 m2.connectionChain)
-                ]
-            )
+                    ( m3, sessionCmds ) =
+                        List.foldl
+                            (\sid ( m, c ) ->
+                                let
+                                    ( m2b, c2b ) =
+                                        update (CloseSession sid) m
+                                in
+                                ( m2b, Cmd.batch [ c, c2b ] )
+                            )
+                            ( m2, Cmd.none )
+                            sessions
+                in
+                ( { m3 | closeSet = Set.empty }
+                , Cmd.batch [ planCmds, sessionCmds ]
+                )
 
         -- ─── Plan runner ────────────────────────────────────────────
 
@@ -3199,40 +3205,46 @@ update msg model =
             )
 
         DeleteSession id ->
+            -- P39/D1: the deleted dir contains the session's plans +
+            -- node sessions on disk, so their windows/processes must go
+            -- too — same ownership-graph collection as CloseSession.
             let
-                -- Cascade-close children first (P34): the deleted dir
-                -- contains the session's plans + node sessions on disk,
-                -- so their windows/processes must go too.
-                ( mC, cascadeCmd ) =
-                    closeSessionChildren id model
+                ( plans, sessions ) =
+                    PU.collectCloseSetFromSession model id
 
-                -- If the deleted dir belongs to a running session, drop
-                -- its window too (delete_session_dir closes the process).
-                cleaned =
-                    if Dict.member id mC.sessions then
-                        { mC
-                            | sessions = Dict.remove id mC.sessions
-                            , sessionOrder = List.filter (\k -> k /= id) mC.sessionOrder
-                            , sessionNums = Dict.remove id mC.sessionNums
-                            , windowPositions = Dict.remove id mC.windowPositions
-                            , planNodeSessions = Dict.remove id mC.planNodeSessions
-                            , planResumedFrom = Dict.remove id mC.planResumedFrom
-                            , connectionChain = dropChainSession mC.connectionChain id
-                            , activeId =
-                                if mC.activeId == Just id then
-                                    List.head (List.reverse (List.filter (\k -> k /= id) mC.sessionOrder))
+                m1 =
+                    { model | closeSet = Set.fromList (plans ++ sessions) }
 
-                                else
-                                    mC.activeId
-                        }
-                    else
-                        mC
+                ( m2, planCmds ) =
+                    List.foldl
+                        (\pid ( m, c ) ->
+                            let
+                                ( m2a, c2a ) =
+                                    update (PlanClose pid) m
+                            in
+                            ( m2a, Cmd.batch [ c, c2a ] )
+                        )
+                        ( m1, Cmd.none )
+                        plans
+
+                ( m3, sessionCmds ) =
+                    List.foldl
+                        (\sid ( m, c ) ->
+                            let
+                                ( m2b, c2b ) =
+                                    update (CloseSession sid) m
+                            in
+                            ( m2b, Cmd.batch [ c, c2b ] )
+                        )
+                        ( m2, Cmd.none )
+                        sessions
             in
-            ( { cleaned | sessionManagerError = Nothing }
+            ( { m3 | closeSet = Set.empty, sessionManagerError = Nothing }
             , Cmd.batch
-                [ Ports.deleteSessionDir { sessionId = id, planId = Nothing, nodeId = Nothing, originSessionId = Nothing }
-                , cascadeCmd
-                , Ports.setConnectionChain (chainPayload cleaned cleaned.connectionChain)
+                [ planCmds
+                , sessionCmds
+                , Ports.deleteSessionDir { sessionId = id, planId = Nothing, nodeId = Nothing, originSessionId = Nothing }
+                , Ports.setConnectionChain (chainPayload m3 m3.connectionChain)
                 ]
             )
 

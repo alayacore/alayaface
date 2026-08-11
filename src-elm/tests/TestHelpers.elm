@@ -71,6 +71,7 @@ initModelWithSession =
     , planCascadeOpenQueue = []
     , planSuppressFeedback = Set.empty
     , planCascadeFork = Nothing
+    , closeSet = Set.empty
     , planMessageCounts = Dict.empty
     , planTaskStarted = Set.empty
     , planOrder = []
