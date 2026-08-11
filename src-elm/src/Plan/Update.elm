@@ -469,7 +469,10 @@ duplicate plan.
 The match itself (creation origin OR the P38 fork parent session) lives
 in Plan.Meta.planMetaForSessionIndex — the same rule the status bar
 uses, so a fork session can never "know" a plan for duplicate-suppression
-while showing the generic "Open plan" fallback.
+while showing the generic "Open plan" fallback. P39/Phase B: the fork
+session's physical id is resolved through the lineage registry to its
+CONVERSATION id first (the node binding and meta origin are both
+conversation-keyed), so the fork never needs a rewritten binding.
 -}
 messageBoundToPlan : Model -> String -> Int -> Bool
 messageBoundToPlan model sid planIndex =
@@ -478,26 +481,32 @@ messageBoundToPlan model sid planIndex =
         -- renders with a fresh live id — resolve before comparing.
         onDiskId =
             Dict.get sid model.planResumedFrom |> Maybe.withDefault sid
+
+        convId =
+            SM.resolveConversation model.sessionLineage onDiskId
     in
-    PM.planMetaForSessionIndex model.planMetas onDiskId planIndex /= Nothing
+    PM.planMetaForSessionIndex model.planMetas convId planIndex /= Nothing
 
 
 {-| The plan whose meta binds (sessionId, planIndex) — the status-bar
 lookup for a plan message (the render-only counterpart of
 `messageBoundToPlan`, sharing the same rule). Resolves a resumed
-session's fresh live id back to its on-disk id first, then matches the
-creation origin OR the P38 fork parent session (Plan.Meta.
-planMetaForSessionIndex). Kept here (not in the View) so the binding
-rule is one source of truth and the resume+fork combination is
-unit-testable.
+session's fresh live id back to its on-disk id, then through the
+lineage registry to its CONVERSATION id (a P38 fork instance resolves
+to the conversation its meta origin is keyed by), before matching.
+Kept here (not in the View) so the binding rule is one source of truth
+and the resume+fork combination is unit-testable.
 -}
 planMetaForMessage : Model -> String -> Int -> Maybe ( String, PM.PlanMeta )
 planMetaForMessage model sid planIndex =
     let
         onDiskId =
             Dict.get sid model.planResumedFrom |> Maybe.withDefault sid
+
+        convId =
+            SM.resolveConversation model.sessionLineage onDiskId
     in
-    PM.planMetaForSessionIndex model.planMetas onDiskId planIndex
+    PM.planMetaForSessionIndex model.planMetas convId planIndex
 
 
 {-| The plan index of the LAST message of the list: how many plan
@@ -956,8 +965,13 @@ feedbackCompletedPlan planId now model =
 
                     -- P38: the session where the result lives may be a
                     -- FORK of the creation origin (truncated history).
+                    -- P39/Phase B: resolve the conversation's HEAD
+                    -- physical instance through the lineage registry (the
+                    -- fork registered itself at adoption); a pre-lineage
+                    -- root falls back to the conversation id itself.
                     parentSid =
-                        PM.parentSessionOf meta
+                        SM.headInstanceFor model.sessionLineage meta.origin.sessionId
+                            |> Maybe.withDefault meta.origin.sessionId
 
                     currentSummary =
                         summaryOf planId model
@@ -1147,6 +1161,7 @@ forkRequestFor planId liveOrigin summary model =
                                       , planId = ""
                                       , nodeId = ""
                                       , forkSource = liveSid
+                                      , originSessionId = ""
                                       }
                                     , plainArgs
                                     )
@@ -1162,6 +1177,7 @@ forkRequestFor planId liveOrigin summary model =
                                       , planId = levelPlanId
                                       , nodeId = levelNodeId
                                       , forkSource = liveSid
+                                      , originSessionId = Maybe.withDefault "" args.originSessionId
                                       }
                                     , { sourceSessionId = liveSid
                                       , historyId = historyId
@@ -1207,12 +1223,15 @@ forkLevelFor planId model =
             ( "", "" )
 
 
-{-| P38: adopt the fork that truncated a parent session. The fork (new
-session id) becomes the node's session: rebind the node, point the head
-level at the fork, rewrite the child plan's meta origin (persisted so
-the binding survives restart), drop the processed level, close the
-ORIGINAL session (safe after the rebind — its disconnect finds no node),
-then send the feedback prompt to the fork and resume the node.
+{-| P38: adopt the fork that truncated a parent session. P39/Phase B:
+the fork is a NEW PHYSICAL INSTANCE of the SAME conversation (not a new
+identity) — so the adoption registers its lineage (memory + writes
+sessions/<...>/session.meta.json) and the node binding is NOT rewritten:
+it stays the conversation id, and frames from the fork resolve through
+the registry. Then: reset the delegated ancestor node, point the head
+level at the conversation, close the ORIGINAL instance (safe — after
+the reset its disconnect finds no Running node), send the feedback
+prompt to the fork (the new head) and resume the node.
 -}
 adoptCascadeFork : Dispatch -> String -> Model -> ( Model, Cmd Msg )
 adoptCascadeFork dispatch forkId model =
@@ -1222,24 +1241,43 @@ adoptCascadeFork dispatch forkId model =
 
         Just target ->
             let
+                -- The conversation this fork belongs to = the fork
+                -- source's conversation (resolved like every event).
+                convId =
+                    resolveEventSessionId model target.forkSource
+
+                lineageMeta =
+                    { conversationId = convId
+                    , parentInstanceId = Just target.forkSource
+                    }
+
+                mLineage =
+                    { model
+                        | sessionLineage = Dict.insert forkId lineageMeta model.sessionLineage
+                    }
+
+                lineageCmd =
+                    Ports.fsWriteFileText
+                        { path = forkMetaPath model.homeDir target forkId
+                        , content = E.encode 2 (SM.encode lineageMeta)
+                        , createParents = True
+                        }
+
                 m1 =
-                    rebindForkNode target forkId model
+                    rebindForkNode target convId mLineage
 
                 m2 =
-                    updateLevelSession target forkId m1
+                    updateLevelSession target convId m1
 
-                ( m3, metaCmd ) =
-                    rewriteParentSession target.childPlanId forkId m2
+                m3 =
+                    advanceCascade target.childPlanId m2
 
-                m4 =
-                    advanceCascade target.childPlanId m3
-
-                ( m5, closeCmd ) =
+                ( m4, closeCmd ) =
                     if target.forkSource == "" then
-                        ( m4, Cmd.none )
+                        ( m3, Cmd.none )
 
                     else
-                        dispatch (CloseSession target.forkSource) m4
+                        dispatch (CloseSession target.forkSource) m3
 
                 feedbackCmd =
                     Ports.sendPrompt
@@ -1254,7 +1292,7 @@ adoptCascadeFork dispatch forkId model =
 
                     else
                         Task.perform
-                            (\t -> PlanRunFrame (Time.posixToMillis t) (R.ResumeDelegatedNode forkId))
+                            (\t -> PlanRunFrame (Time.posixToMillis t) (R.ResumeDelegatedNode convId))
                             Time.now
 
                 -- The deferred D11 close: the plan window stays open
@@ -1263,73 +1301,89 @@ adoptCascadeFork dispatch forkId model =
                 closePlanCmd =
                     Task.perform (\_ -> PlanClose target.childPlanId) Time.now
 
-                m6 =
-                    { m5
+                m5 =
+                    { m4
                         | planCascadeFork = Nothing
                         -- The fork replays its (truncated) history: mark
                         -- it so plan messages inside are not auto-created
                         -- (also covers the SessionCreated ordering race).
-                        , planReplaySessions = Set.insert forkId m5.planReplaySessions
+                        , planReplaySessions = Set.insert forkId m4.planReplaySessions
                     }
             in
-            ( m6, Cmd.batch [ metaCmd, closeCmd, feedbackCmd, resumeCmd, closePlanCmd ] )
+            ( m5, Cmd.batch [ lineageCmd, closeCmd, feedbackCmd, resumeCmd, closePlanCmd ] )
 
 
-{-| Rebind the ancestor node to the fork: Succeeded → WaitingForPlan
-with sessionId = forkId, run back to InProgress; the planNodeSessions
-label moves from the original session to the fork.
+{-| The fork's session.meta.json path: a plan-node fork lives nested
+under sessions/<origin>/plans/<planId>/<nodeId>/<forkId>/, a plain fork
+at sessions/<forkId>/ — matching where the backend created the fork.
+-}
+forkMetaPath : String -> PC.CascadeForkTarget -> String -> String
+forkMetaPath homeDir target forkId =
+    if target.planId == "" then
+        sessionsDir homeDir ++ "/" ++ forkId ++ "/session.meta.json"
+
+    else
+        sessionsDir homeDir
+            ++ "/"
+            ++ target.originSessionId
+            ++ "/plans/"
+            ++ target.planId
+            ++ "/"
+            ++ target.nodeId
+            ++ "/"
+            ++ forkId
+            ++ "/session.meta.json"
+
+
+{-| Reset the delegated ancestor node Succeeded → WaitingForPlan and
+restore its conversation binding (closeAndClear dropped it on
+completion) so ResumeDelegatedNode / TaskDone routing find it again.
+The binding is the CONVERSATION id — the fork is a new instance of the
+same conversation (resolved through the lineage registry), so the node
+is NOT rewritten to the fork's physical id (P39/Phase B).
 -}
 rebindForkNode : PC.CascadeForkTarget -> String -> Model -> Model
-rebindForkNode target forkId model =
+rebindForkNode target convId model =
     if target.planId == "" then
         model
 
     else
-        let
-            m1 =
-                case Dict.get target.planId model.planWindows of
-                    Just win ->
-                        case win.run of
-                            Just run ->
-                                let
-                                    nodes =
-                                        Dict.update target.nodeId
-                                            (Maybe.map
-                                                (\n ->
-                                                    if n.status == PT.Succeeded then
-                                                        { n | status = PT.WaitingForPlan, conversationId = Just forkId }
+        case Dict.get target.planId model.planWindows of
+            Just win ->
+                case win.run of
+                    Just run ->
+                        let
+                            nodes =
+                                Dict.update target.nodeId
+                                    (Maybe.map
+                                        (\n ->
+                                            if n.status == PT.Succeeded then
+                                                { n | status = PT.WaitingForPlan, conversationId = Just convId }
 
-                                                    else
-                                                        { n | conversationId = Just forkId }
-                                                )
-                                            )
-                                            run.nodes
-                                in
-                                setPlanWin target.planId
-                                    (\w -> { w | run = Just { run | nodes = nodes, status = PT.InProgress } })
-                                    model
-
-                            Nothing ->
-                                model
+                                            else
+                                                n
+                                        )
+                                    )
+                                    run.nodes
+                        in
+                        setPlanWin target.planId
+                            (\w -> { w | run = Just { run | nodes = nodes, status = PT.InProgress } })
+                            model
 
                     Nothing ->
                         model
 
-            label =
-                target.planId ++ "/" ++ target.nodeId
-
-            planNodeSessions =
-                Dict.insert forkId label (Dict.remove target.forkSource model.planNodeSessions)
-        in
-        { m1 | planNodeSessions = planNodeSessions }
+            Nothing ->
+                model
 
 
-{-| Point the cascade head level at the fork: the level's nodeSessionId
-must match the fork id so the resumed node's TaskDone is recognized for
-the branch re-run.
+{-| Point the cascade head level's nodeSessionId at the CONVERSATION id
+(not the fork's physical id): the resumed node's TaskDone carries the
+conversation id (resolved through the registry), so the level must
+match on it for the branch re-run.
 -}
 updateLevelSession : PC.CascadeForkTarget -> String -> Model -> Model
-updateLevelSession target forkId model =
+updateLevelSession target convId model =
     case model.planCascade of
         Just cs ->
             let
@@ -1337,7 +1391,7 @@ updateLevelSession target forkId model =
                     List.map
                         (\l ->
                             if l.nodeSessionId == target.forkSource then
-                                { l | nodeSessionId = forkId }
+                                { l | nodeSessionId = convId }
 
                             else
                                 l
@@ -1394,13 +1448,20 @@ summaryOf planId model =
 {-| Truncate the plan's origin session at its LAST `[Plan Result]`
 insertion point (inclusive) — the old result and everything after it.
 Resolves the live session id (resumed sessions differ from the on-disk
-origin id). No-op when the origin is closed or has no insertion point.
+origin id). P39/Phase B: the truncation target is the conversation's
+HEAD physical instance (a fork replaced the creation session). No-op
+when the origin is closed or has no insertion point.
 -}
 truncateOrigin : String -> Model -> Model
 truncateOrigin planId model =
     case Dict.get planId model.planMetas of
         Just meta ->
-            case NC.liveSessionForOrigin model.sessions model.planResumedFrom (PM.parentSessionOf meta) of
+            let
+                headSid =
+                    SM.headInstanceFor model.sessionLineage meta.origin.sessionId
+                        |> Maybe.withDefault meta.origin.sessionId
+            in
+            case NC.liveSessionForOrigin model.sessions model.planResumedFrom headSid of
                 Just liveSid ->
                     case Dict.get liveSid model.sessions of
                         Just s ->

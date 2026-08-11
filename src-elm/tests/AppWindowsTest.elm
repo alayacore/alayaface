@@ -14,6 +14,7 @@ import App.Windows as W
 import App.Update as AU
 import App.NodeConnection as NC
 import Session.Types as T
+import Session.Meta as SM
 import TestHelpers exposing (initModelWithSession)
 
 
@@ -403,7 +404,7 @@ suite =
                     Expect.equal
                         ( List.map .kind chain, List.map .planId chain, List.map .sessionId chain )
                         ( [ "plan" ], [ "p1" ], [ "s1" ] )
-            , test "P38: a FORKED parent conversation resolves the plan segment to the fork" <|
+            , test "P38/P39: a FORKED parent conversation resolves the plan segment to the fork (lineage head)" <|
                 \_ ->
                     let
                         forkSess =
@@ -414,7 +415,12 @@ suite =
                                 | sessions = Dict.insert "fork-1" forkSess initModelWithSession.sessions
                                 , planMetas =
                                     Dict.fromList
-                                        [ ( "p1", { origin = { sessionId = "s1", planIndex = 0 }, feedbacks = [], depth = 1, createdAt = 0, name = "p1", lastStatus = "", parentPlanId = Nothing, parentSessionId = Just "fork-1" } )
+                                        [ ( "p1", { origin = { sessionId = "s1", planIndex = 0 }, feedbacks = [], depth = 1, createdAt = 0, name = "p1", lastStatus = "", parentPlanId = Nothing, parentSessionId = Nothing } )
+                                        ]
+                                , sessionLineage =
+                                    Dict.fromList
+                                        [ ( "s1", SM.empty "s1" )
+                                        , ( "fork-1", { conversationId = "s1", parentInstanceId = Just "s1" } )
                                         ]
                             }
 

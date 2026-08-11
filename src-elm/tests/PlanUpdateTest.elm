@@ -9,11 +9,14 @@ These are the "direct tests" replacing the previous indirect coverage.
 
 import Expect
 import Json.Encode as E
+import Set
 import Test exposing (Test, describe, test)
 import Dict
 import App.Types as AT
 import Plan.Update as PU
 import Plan.Types as PT
+import Plan.Meta as PM
+import Plan.Cascade as PC
 import Session.Meta as SM
 import Session.Types as T
 import TestHelpers exposing (initModelWithSession)
@@ -439,6 +442,113 @@ suite =
                 \_ ->
                     PU.planMetaForMessage initModelWithSession "s1" 1
                         |> Expect.equal Nothing
+            ]
+        , describe "adoptCascadeFork (P39/Phase B lineage)"
+            [ test "registers the fork's lineage and keeps the node bound to the conversation id" <|
+                \_ ->
+                    let
+                        -- The ancestor plan p0 has a Succeeded node n1
+                        -- whose session (conv "s1") was forked to "fork-x".
+                        n1 =
+                            { nodeId = "n1"
+                            , status = PT.Succeeded
+                            , attempts = 1
+                            , maxAttempts = 3
+                            , conversationId = Nothing
+                            , lastSessionId = Just "s1"
+                            , attemptSessions = [ "s1" ]
+                            , failures = []
+                            , startedAt = Just 1
+                            , finishedAt = Just 2
+                            , output = Just "old"
+                            }
+
+                        runP0 =
+                            let
+                                base =
+                                    PT.emptyRunState "r0" plan
+                            in
+                            { base | status = PT.InProgress, nodes = Dict.insert "n1" n1 base.nodes }
+
+                        winP0 =
+                            { planWindowWithPlan | run = Just runP0 }
+
+                        metaP1 =
+                            { origin = { sessionId = "s1", planIndex = 1 }
+                            , feedbacks = []
+                            , depth = 1
+                            , createdAt = 0
+                            , name = "p1"
+                            , lastStatus = "completed"
+                            , parentPlanId = Nothing
+                            , parentSessionId = Nothing
+                            }
+
+                        target =
+                            { childPlanId = "p1"
+                            , summary = "new"
+                            , planId = "p0"
+                            , nodeId = "n1"
+                            , forkSource = "s1"
+                            , originSessionId = "s1"
+                            }
+
+                        cascade =
+                            { rootPlanId = "p1"
+                            , rootOldSummary = "old"
+                            , levels =
+                                [ { planId = "p0"
+                                  , nodeId = "n1"
+                                  , nodeSessionId = "s1"
+                                  , oldSummary = "old"
+                                  }
+                                ]
+                            }
+
+                        m0 =
+                            { initModelWithSession
+                                | sessions = Dict.insert "s1" (T.emptySession "s1") initModelWithSession.sessions
+                                , planWindows = Dict.insert "p0" winP0 Dict.empty
+                                , planMetas = Dict.insert "p1" metaP1 Dict.empty
+                                , planCascade = Just cascade
+                                , planCascadeFork = Just target
+                            }
+
+                        ( m1, _ ) =
+                            PU.adoptCascadeFork stubDispatch "fork-x" m0
+                    in
+                    Expect.all
+                        [ -- lineage registered: fork → conversation s1, parent s1
+                        \m ->
+                            Dict.get "fork-x" m.sessionLineage
+                                |> Expect.equal
+                                    (Just { conversationId = "s1", parentInstanceId = Just "s1" })
+                        -- node keeps the CONVERSATION binding and is reset to WaitingForPlan
+                        , \m ->
+                            case Dict.get "p0" m.planWindows |> Maybe.andThen .run |> Maybe.andThen (\r -> Dict.get "n1" r.nodes) of
+                                Just n ->
+                                    Expect.equal
+                                        ( n.status, n.conversationId, Maybe.map .status (Dict.get "p0" m.planWindows |> Maybe.andThen .run) )
+                                        ( PT.WaitingForPlan, Just "s1", Just PT.InProgress )
+
+                                Nothing ->
+                                    Expect.fail "node n1 missing"
+                        -- head level points at the conversation id (TaskDone matching)
+                        , \m ->
+                            case m.planCascade of
+                                Just cs ->
+                                    Expect.equal
+                                        (List.map .nodeSessionId cs.levels)
+                                        [ "s1" ]
+
+                                Nothing ->
+                                    Expect.fail "cascade missing"
+                        -- fork consumed; fork session marked as replay
+                        , \m ->
+                            Expect.equal ( m.planCascadeFork, Set.member "fork-x" m.planReplaySessions )
+                                ( Nothing, True )
+                        ]
+                        m1
             ]
         , describe "handlePlanReadTarget"
             [ test "open/import parses the plan and chains a run restore" <|

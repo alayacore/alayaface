@@ -120,8 +120,9 @@ type alias Model =
     -- batch lets the home listing be misrouted into the scan and
     -- desynchronize it, leaving planMetas empty after a restart).
     , planMetaScanPending : Bool
-    -- Two-level dir scan: planMetaDirQueue holds the remaining
-    -- sessions/<uuid>/plans dirs to list; planMetaDirListing is the dir
+    -- Directory scan: planMetaDirQueue holds the remaining directories
+    -- to list across ALL levels (sessions/<uuid>/plans, then each
+    -- <planId>/, then each <nodeId>/); planMetaDirListing is the dir
     -- whose listing the next FsListDirResult belongs to (Nothing + empty
     -- queue while loading = waiting for the sessions/ listing).
     , planMetaDirQueue : List String
@@ -146,6 +147,14 @@ type alias Model =
     -- (lineage first — plan origins resolve against it). Each successful
     -- read registers instanceId → SessionMeta in `sessionLineage`.
     , planMetaSessionQueue : List String
+    -- P39/Phase B: nested plan NODE session lineage. Plan node sessions
+    -- live at sessions/<origin>/plans/<planId>/<nodeId>/<uuid>/, so the
+    -- rebuild lists the <planId>/ dirs (planMetaDirQueue, which holds
+    -- ALL directory levels: plans/, <planId>/, <nodeId>/) to discover
+    -- their <uuid>/ session dirs and queue <uuid>/session.meta.json
+    -- here. Without this a forked node session's lineage is lost on
+    -- restart and its frames can no longer route to the node.
+    , planMetaNodeMetaQueue : List String
     -- P39/Phase B: session lineage registry — physical session instance
     -- id → its stable conversation id (+ parent instance pointer). Built
     -- from the session.meta.json scan and on session creation; used to

@@ -29,6 +29,7 @@ windows (auto-closed on completion, D11) still participate.
 import Dict exposing (Dict)
 import Plan.Types as PT
 import Plan.Meta as PM
+import Session.Meta as SM
 import Session.Types as T
 
 
@@ -83,6 +84,7 @@ impactScope :
     { planMetas : Dict String PM.PlanMeta
     , runs : Dict String (Maybe PT.RunState)
     , sessions : Dict String T.SessionState
+    , sessionLineage : Dict String SM.SessionMeta
     }
     -> String
     -> ImpactScope
@@ -102,9 +104,12 @@ impactScope ctx rootPlanId =
         Just rm ->
             let
                 -- P38: the result lives in the parent conversation, which
-                -- may be a fork of the creation origin.
+                -- may be a fork of the creation origin. P39/Phase B: the
+                -- physical session to operate on is the conversation's
+                -- HEAD instance (the fork registered itself at adoption);
+                -- a pre-lineage root falls back to the conversation id.
                 rootSid =
-                    PM.parentSessionOf rm
+                    headOf ctx rm.origin.sessionId
 
                 rootIdx =
                     findInsertionIndex rootPlanId (messagesOf ctx rootSid)
@@ -139,10 +144,24 @@ impactScope ctx rootPlanId =
             }
 
 
+{-| The conversation's HEAD physical instance (fallback: the
+conversation id itself when the registry has no entry — pre-lineage
+roots are their own head).
+-}
+headOf :
+    { a | sessionLineage : Dict String SM.SessionMeta }
+    -> String
+    -> String
+headOf ctx conversationId =
+    SM.headInstanceFor ctx.sessionLineage conversationId
+        |> Maybe.withDefault conversationId
+
+
 walkLevels :
     { planMetas : Dict String PM.PlanMeta
     , runs : Dict String (Maybe PT.RunState)
     , sessions : Dict String T.SessionState
+    , sessionLineage : Dict String SM.SessionMeta
     }
     -> String
     -> List ImpactLevel
@@ -154,21 +173,26 @@ walkLevels ctx planId acc =
 
         Just meta ->
             let
-                -- P38: where THIS plan's result lives (a fork may have
-                -- replaced the creation origin).
-                originSid =
-                    PM.parentSessionOf meta
+                -- P39/Phase B: the conversation this plan's result lives
+                -- in (stable — the node binding is keyed by it) and the
+                -- HEAD physical instance (where truncation + live checks
+                -- actually operate).
+                originConv =
+                    meta.origin.sessionId
+
+                originHead =
+                    headOf ctx originConv
             in
             -- The session where THIS plan's result lives must be open
             -- (feedback + truncation need the live session).
-            if not (Dict.member originSid ctx.sessions) then
+            if not (Dict.member originHead ctx.sessions) then
                 ( acc, Nothing )
 
             else
                 case meta.parentPlanId of
                     Nothing ->
                         -- top-level plan: chain ends at its plain origin
-                        ( acc, Just originSid )
+                        ( acc, Just originHead )
 
                     Just parentId ->
                         let
@@ -177,7 +201,7 @@ walkLevels ctx planId acc =
                                     |> Maybe.andThen identity
 
                             ( nodeId, branch ) =
-                                case bindingInRun originSid parentRun of
+                                case bindingInRun originConv parentRun of
                                     Just ( nid, branchIds ) ->
                                         ( Just nid, branchIds )
 
@@ -188,7 +212,9 @@ walkLevels ctx planId acc =
                                 Dict.get parentId ctx.planMetas
 
                             parentOrigin =
-                                parentMeta |> Maybe.map PM.parentSessionOf |> Maybe.withDefault ""
+                                parentMeta
+                                    |> Maybe.map (\m -> headOf ctx m.origin.sessionId)
+                                    |> Maybe.withDefault ""
 
                             parentName =
                                 parentMeta |> Maybe.map .name |> Maybe.withDefault parentId
@@ -200,7 +226,7 @@ walkLevels ctx planId acc =
                                 { planId = parentId
                                 , planName = parentName
                                 , nodeId = nodeId
-                                , nodeSessionId = originSid
+                                , nodeSessionId = originConv
                                 , truncateSessionId = parentOrigin
                                 , truncateUserMessages = countUserMessagesAfter parentIdx (messagesOf ctx parentOrigin)
                                 , branchNodes = branch
@@ -299,6 +325,11 @@ type alias CascadeForkTarget =
     , planId : String
     , nodeId : String
     , forkSource : String
+    -- The plan's owning session id (dir id): locates the fork's on-disk
+    -- dir for the lineage meta write
+    -- (sessions/<origin>/plans/<planId>/<nodeId>/<forkId>/ for a plan
+    -- node fork; "" for a plain fork, which lives at sessions/<forkId>/).
+    , originSessionId : String
     }
 
 

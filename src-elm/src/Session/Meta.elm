@@ -5,6 +5,7 @@ module Session.Meta exposing
     , decode
     , metaPathFor
     , resolveConversation
+    , headInstanceFor
     )
 
 {-| Session lineage (P39/Phase B): per-session metadata written by the
@@ -32,6 +33,7 @@ for pre-P39 data.
 import Dict exposing (Dict)
 import Json.Decode as D
 import Json.Encode as E
+import Set exposing (Set)
 
 
 type alias SessionMeta =
@@ -86,3 +88,37 @@ resolveConversation registry instanceId =
     Dict.get instanceId registry
         |> Maybe.map .conversationId
         |> Maybe.withDefault instanceId
+
+
+{-| The HEAD (latest) physical instance of a conversation: the instance
+whose id is not any other instance's parent. Fork chains are linear
+(each cascade fork closes its parent), so exactly one instance is never
+a parent — that one is the head. Nothing when the registry has no
+instance for the conversation (a pre-lineage root resolves to itself by
+convention — callers fall back to the conversation id).
+-}
+headInstanceFor : Dict String SessionMeta -> String -> Maybe String
+headInstanceFor registry convId =
+    let
+        instances =
+            Dict.filter (\_ m -> m.conversationId == convId) registry
+
+        parents : Set String
+        parents =
+            Set.fromList (List.filterMap .parentInstanceId (Dict.values instances))
+    in
+    Dict.foldl
+        (\instanceId _ acc ->
+            case acc of
+                Just _ ->
+                    acc
+
+                Nothing ->
+                    if Set.member instanceId parents then
+                        Nothing
+
+                    else
+                        Just instanceId
+        )
+        Nothing
+        instances

@@ -7,6 +7,7 @@ import Json.Encode as E
 import Plan.Cascade as C
 import Plan.Meta as M
 import Plan.Types as PT
+import Session.Meta as SM
 import Session.Types as T
 import Test exposing (Test, describe, test)
 
@@ -120,7 +121,7 @@ runC =
     }
 
 
-ctxFor : Dict String (List T.Message) -> { planMetas : Dict String M.PlanMeta, runs : Dict String (Maybe PT.RunState), sessions : Dict String T.SessionState }
+ctxFor : Dict String (List T.Message) -> { planMetas : Dict String M.PlanMeta, runs : Dict String (Maybe PT.RunState), sessions : Dict String T.SessionState, sessionLineage : Dict String SM.SessionMeta }
 ctxFor sessions =
     let
         sessionWith sid msgs =
@@ -140,6 +141,7 @@ ctxFor sessions =
             ]
     , runs = Dict.fromList [ ( "b", Just runB ), ( "c", Just runC ) ]
     , sessions = Dict.map sessionWith sessions
+    , sessionLineage = Dict.empty
     }
 
 

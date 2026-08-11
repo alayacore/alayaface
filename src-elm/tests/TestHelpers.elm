@@ -62,6 +62,7 @@ initModelWithSession =
     , planMetaScanReqId = Nothing
     , planMetaReadReqId = Nothing
     , planMetaSessionQueue = []
+    , planMetaNodeMetaQueue = []
     , sessionLineage = Dict.empty
     , fsReqCounter = 0
     , planRunStatuses = Dict.empty

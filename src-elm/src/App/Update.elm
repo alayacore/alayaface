@@ -70,11 +70,12 @@ updateActiveSession model fn =
 {-| Inputs for the P38 impact-scope walk: metas (ancestry), runs (node
 bindings / branch / summaries), sessions (insertion points / user
 message counts). -}
-scopeCtx : Model -> { planMetas : Dict String PM.PlanMeta, runs : Dict String (Maybe PT.RunState), sessions : Dict String T.SessionState }
+scopeCtx : Model -> { planMetas : Dict String PM.PlanMeta, runs : Dict String (Maybe PT.RunState), sessions : Dict String T.SessionState, sessionLineage : Dict String SM.SessionMeta }
 scopeCtx model =
     { planMetas = model.planMetas
     , runs = Dict.map (\_ w -> w.run) model.planWindows
     , sessions = model.sessions
+    , sessionLineage = model.sessionLineage
     }
 
 
@@ -1737,69 +1738,122 @@ update msg model =
                             in
                             case model.planMetaDirListing of
                                 Just dir ->
-                                    -- A sessions/<uuid>/plans listing:
-                                    -- each SUBDIR is a plan (P28 nests
-                                    -- plan files in their own dir), so the
-                                    -- meta path is
-                                    -- <plansDir>/<planId>/<planId>.meta.json
-                                    -- — built directly, no third listing
-                                    -- level needed.
+                                    -- Directory levels (each listed in
+                                    -- turn via planMetaDirQueue):
+                                    --   sessions/<origin>/plans          → subdirs are PLANS
+                                    --   sessions/<origin>/plans/<planId> → subdirs are NODE dirs (+ work/)
+                                    --   .../plans/<planId>/<nodeId>      → subdirs are node SESSION dirs (<uuid>/)
+                                    -- The plans level queues each plan's
+                                    -- meta read AND lists the plan dir;
+                                    -- the plan level queues its node dirs;
+                                    -- the node level queues the nested
+                                    -- session.meta.json reads (P39/Phase B
+                                    -- — forked node sessions' lineage must
+                                    -- survive restart).
                                     let
-                                        planDirsIn =
+                                        dirsIn =
                                             parsed
                                                 |> List.filter (\e -> e.isDir && e.name /= ".." && e.name /= ".")
                                                 |> List.map .name
 
-                                        newReadQueue =
-                                            model.planMetaReadQueue
-                                                ++ List.map (\p -> dir ++ "/" ++ p ++ "/" ++ p ++ ".meta.json") planDirsIn
-                                    in
-                                    case model.planMetaDirQueue of
-                                        next :: rest ->
-                                            let
-                                                ( reqId, m1 ) =
-                                                    nextFsReq model
-                                            in
-                                            ( { m1
-                                                | planMetaDirQueue = rest
-                                                , planMetaDirListing = Just next
-                                                , planMetaReadQueue = newReadQueue
-                                                , planMetaScanReqId = Just reqId
-                                              }
-                                            , Ports.fsListDir { reqId = reqId, path = next }
-                                            )
+                                        segs =
+                                            String.split "/" dir |> List.filter ((/=) "")
 
-                                        [] ->
-                                            -- All plans dirs listed: start
-                                            -- reading — session lineage
-                                            -- metas first (P39/Phase B),
-                                            -- then every plan meta.
-                                            let
-                                                readQueue =
-                                                    model.planMetaSessionQueue ++ newReadQueue
-                                            in
-                                            case readQueue of
-                                                r :: rs ->
+                                        listNext m =
+                                            case m.planMetaDirQueue of
+                                                next :: rest ->
                                                     let
                                                         ( reqId, m1 ) =
-                                                            nextFsReq model
+                                                            nextFsReq m
                                                     in
                                                     ( { m1
-                                                        | planMetaDirListing = Nothing
-                                                        , planMetaScanReqId = Nothing
-                                                        , planMetaReading = Just r
-                                                        , planMetaReadReqId = Just reqId
-                                                        , planMetaSessionQueue = []
-                                                        , planMetaReadQueue = rs
-                                                        , planMetaLoading = False
+                                                        | planMetaDirQueue = rest
+                                                        , planMetaDirListing = Just next
+                                                        , planMetaScanReqId = Just reqId
                                                       }
-                                                    , Ports.fsReadFileText { reqId = reqId, path = r }
+                                                    , Ports.fsListDir { reqId = reqId, path = next }
                                                     )
 
                                                 [] ->
-                                                    ( { model | planMetaDirListing = Nothing, planMetaScanReqId = Nothing, planMetaLoading = False }
-                                                    , Cmd.none
-                                                    )
+                                                    -- All directories
+                                                    -- listed: start reading
+                                                    -- — top-level lineage
+                                                    -- metas, then nested
+                                                    -- node-session lineage,
+                                                    -- then every plan meta.
+                                                    let
+                                                        readQueue =
+                                                            m.planMetaSessionQueue
+                                                                ++ m.planMetaNodeMetaQueue
+                                                                ++ m.planMetaReadQueue
+                                                    in
+                                                    case readQueue of
+                                                        r :: rs ->
+                                                            let
+                                                                ( reqId, m1 ) =
+                                                                    nextFsReq m
+                                                            in
+                                                            ( { m1
+                                                                | planMetaDirListing = Nothing
+                                                                , planMetaScanReqId = Nothing
+                                                                , planMetaReading = Just r
+                                                                , planMetaReadReqId = Just reqId
+                                                                , planMetaSessionQueue = []
+                                                                , planMetaNodeMetaQueue = []
+                                                                , planMetaReadQueue = rs
+                                                                , planMetaLoading = False
+                                                              }
+                                                            , Ports.fsReadFileText { reqId = reqId, path = r }
+                                                            )
+
+                                                        [] ->
+                                                            ( { m | planMetaDirListing = Nothing, planMetaScanReqId = Nothing, planMetaLoading = False }
+                                                            , Cmd.none
+                                                            )
+                                    in
+                                    case List.reverse segs of
+                                        "plans" :: _ ->
+                                            -- A sessions/<uuid>/plans
+                                            -- listing: each subdir is a
+                                            -- plan (P28 nests plan files in
+                                            -- their own dir), so queue the
+                                            -- plan meta read AND the plan
+                                            -- dir listing (to reach nested
+                                            -- node sessions).
+                                            let
+                                                newReadQueue =
+                                                    model.planMetaReadQueue
+                                                        ++ List.map (\p -> dir ++ "/" ++ p ++ "/" ++ p ++ ".meta.json") dirsIn
+
+                                                newDirQueue =
+                                                    model.planMetaDirQueue
+                                                        ++ List.map (\p -> dir ++ "/" ++ p) dirsIn
+                                            in
+                                            listNext { model | planMetaReadQueue = newReadQueue, planMetaDirQueue = newDirQueue }
+
+                                        _ :: "plans" :: _ ->
+                                            -- A plan dir listing: subdirs
+                                            -- are node dirs (and work/) —
+                                            -- queue them for listing (the
+                                            -- node level yields the nested
+                                            -- session.meta.json paths).
+                                            listNext
+                                                { model
+                                                    | planMetaDirQueue =
+                                                        model.planMetaDirQueue
+                                                            ++ List.map (\n -> dir ++ "/" ++ n) (List.filter ((/=) "work") dirsIn)
+                                                }
+
+                                        _ ->
+                                            -- A node dir listing: subdirs
+                                            -- are node session dirs (<uuid>)
+                                            -- — queue their lineage metas.
+                                            listNext
+                                                { model
+                                                    | planMetaNodeMetaQueue =
+                                                        model.planMetaNodeMetaQueue
+                                                            ++ List.map (\n -> dir ++ "/" ++ n ++ "/session.meta.json") dirsIn
+                                                }
 
                                 Nothing ->
                                     -- The sessions/ listing: queue every
