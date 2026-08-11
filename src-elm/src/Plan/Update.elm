@@ -26,6 +26,7 @@ module Plan.Update exposing
     , findResumedLive
     , planWinKeyForPath
     , findPlanIdBySession
+    , resolveEventSessionId
     , eventSessionId
     , planSystemPrompt
     , runStepIn
@@ -619,6 +620,25 @@ planWinKeyForPath path =
         base
 
 
+{-| Resolve an event-carrying session id to the CONVERSATION id the
+runner matches nodes on: a fresh live id from resume_session maps back
+to its original on-disk dir id (planResumedFrom), then through the
+session lineage registry (P39/Phase B — a fork instance routes to the
+conversation its node is bound to; for root sessions the conversation
+id IS the instance id, so pre-fork behavior is unchanged). Every
+session-bearing event must be resolved through this before reaching the
+runner — a raw live id would silently miss the node binding (e.g.
+closing a resumed node session would leave its node stuck Running).
+-}
+resolveEventSessionId : Model -> String -> String
+resolveEventSessionId model sid =
+    let
+        origId =
+            Dict.get sid model.planResumedFrom |> Maybe.withDefault sid
+    in
+    SM.resolveConversation model.sessionLineage origId
+
+
 {-| Find the plan window whose run owns the given session id. A resumed
 session id (fresh UUID) is resolved back to its original on-disk dir id
 via planResumedFrom; the id is then resolved through the session
@@ -629,11 +649,8 @@ conversation id IS the instance id, so pre-fork behavior is unchanged).
 findPlanIdBySession : Model -> String -> Maybe String
 findPlanIdBySession model sid =
     let
-        origId =
-            Dict.get sid model.planResumedFrom |> Maybe.withDefault sid
-
         convId =
-            SM.resolveConversation model.sessionLineage origId
+            resolveEventSessionId model sid
     in
     Dict.foldl
         (\pid win acc ->
@@ -1637,10 +1654,15 @@ subPlansOfPlan planId model =
                 Just win ->
                     case win.run of
                         Just run ->
+                            -- Only WaitingForPlan nodes bind a delegated
+                            -- sub-plan's session; filterMap drops nodes
+                            -- without a conversation binding (no "" sentinel
+                            -- that could false-match an empty origin id).
                             Dict.foldl
                                 (\_ n acc ->
                                     if n.status == PT.WaitingForPlan then
-                                        Maybe.withDefault "" n.conversationId :: acc
+                                        Maybe.map (\sid -> sid :: acc) n.conversationId
+                                            |> Maybe.withDefault acc
 
                                     else
                                         acc
@@ -1955,10 +1977,16 @@ planEventFromFrame model ev =
                 -- P39/Phase B: frames carry the PHYSICAL instance id;
                 -- the runner matches nodes by CONVERSATION id, so
                 -- resolve through the lineage registry first (root
-                -- sessions: identity).
+                -- sessions: identity). The resolution MUST go through
+                -- planResumedFrom like findPlanIdBySession does: a
+                -- RESUMED node session streams frames under its fresh
+                -- live id, and the node binding is the original
+                -- conversation id — resolving the raw id alone would
+                -- produce a TaskDone/SessionError the runner cannot
+                -- match (node stuck Running forever).
                 let
                     convId =
-                        SM.resolveConversation model.sessionLineage ev.sessionId
+                        resolveEventSessionId model ev.sessionId
                 in
                 case ev.json of
                     Just json ->

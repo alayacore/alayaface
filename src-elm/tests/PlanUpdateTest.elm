@@ -335,6 +335,44 @@ suite =
                     in
                     Expect.equal (PU.findPlanIdBySession m0 "stranger") Nothing
             ]
+        , describe "resolveEventSessionId"
+            [ test "resumed live ids resolve through planResumedFrom THEN the registry" <|
+                \_ ->
+                    let
+                        m0 =
+                            { initModelWithSession
+                                | planResumedFrom = Dict.fromList [ ( "live-2", "orig-1" ) ]
+                                , sessionLineage =
+                                    Dict.fromList
+                                        [ ( "orig-1", SM.empty "conv-9" )
+                                        , ( "fork-3", { conversationId = "conv-9", parentInstanceId = Just "orig-1" } )
+                                        ]
+                            }
+                    in
+                    -- live-2 is a resume of orig-1 → conversation conv-9;
+                    -- fork-3 is a fork instance → conv-9; an unknown id
+                    -- falls back to itself (root identity).
+                    Expect.all
+                        [ \_ -> PU.resolveEventSessionId m0 "live-2" |> Expect.equal "conv-9"
+                        , \_ -> PU.resolveEventSessionId m0 "fork-3" |> Expect.equal "conv-9"
+                        , \_ -> PU.resolveEventSessionId m0 "unknown" |> Expect.equal "unknown"
+                        ]
+                        ()
+            , test "resumed live id without a registry entry resolves to its original dir id" <|
+                \_ ->
+                    let
+                        -- Node sessions are their own conversation roots
+                        -- and are NOT registered (runner-created sessions
+                        -- skip the registry); the resolved id must be the
+                        -- ORIGINAL dir id — the node's binding — not the
+                        -- fresh live id.
+                        m0 =
+                            { initModelWithSession
+                                | planResumedFrom = Dict.fromList [ ( "live-2", "orig-1" ) ]
+                            }
+                    in
+                    PU.resolveEventSessionId m0 "live-2" |> Expect.equal "orig-1"
+            ]
         , describe "handlePlanReadTarget"
             [ test "open/import parses the plan and chains a run restore" <|
                 \_ ->
@@ -529,5 +567,103 @@ suite =
                             PU.restartPlanCascade stubDispatch "p1" initModelWithSession
                     in
                     Expect.equal m1 initModelWithSession
+            ]
+        , describe "subPlansOfPlan"
+            [ test "returns sub-plans whose origin session matches a WaitingForPlan node's conversation" <|
+                \_ ->
+                    let
+                        baseRun =
+                            PT.emptyRunState "run-1" plan
+
+                        nodes =
+                            case Dict.get "t1" baseRun.nodes of
+                                Just n ->
+                                    Dict.insert "t1" { n | status = PT.WaitingForPlan, conversationId = Just "node-sess-1" } baseRun.nodes
+
+                                Nothing ->
+                                    baseRun.nodes
+
+                        win =
+                            { planWindowWithPlan | run = Just { baseRun | status = PT.InProgress, nodes = nodes } }
+
+                        meta originSid =
+                            { origin = { sessionId = originSid, planIndex = 0 }
+                            , feedbacks = []
+                            , depth = 2
+                            , createdAt = 0
+                            , name = "sub"
+                            , lastStatus = ""
+                            , parentPlanId = Just "p1"
+                            , parentSessionId = Nothing
+                            }
+
+                        m0 =
+                            { initModelWithSession
+                                | planWindows = Dict.insert "p1" win Dict.empty
+                                , planMetas =
+                                    Dict.fromList
+                                        [ ( "sp1", meta "node-sess-1" )
+                                        , ( "sp2", meta "node-sess-1" )
+                                        , ( "other", meta "unrelated-sess" )
+                                        ]
+                            }
+                    in
+                    PU.subPlansOfPlan "p1" m0
+                        |> List.sort
+                        |> Expect.equal [ "sp1", "sp2" ]
+            , test "a WaitingForPlan node without a conversation binding yields no bogus empty-string match" <|
+                \_ ->
+                    let
+                        baseRun =
+                            PT.emptyRunState "run-1" plan
+
+                        nodes =
+                            case Dict.get "t1" baseRun.nodes of
+                                Just n ->
+                                    Dict.insert "t1" { n | status = PT.WaitingForPlan, conversationId = Nothing } baseRun.nodes
+
+                                Nothing ->
+                                    baseRun.nodes
+
+                        win =
+                            { planWindowWithPlan | run = Just { baseRun | status = PT.InProgress, nodes = nodes } }
+
+                        meta originSid =
+                            { origin = { sessionId = originSid, planIndex = 0 }
+                            , feedbacks = []
+                            , depth = 2
+                            , createdAt = 0
+                            , name = "sub"
+                            , lastStatus = ""
+                            , parentPlanId = Just "p1"
+                            , parentSessionId = Nothing
+                            }
+
+                        m0 =
+                            { initModelWithSession
+                                | planWindows = Dict.insert "p1" win Dict.empty
+                                , planMetas = Dict.fromList [ ( "sp1", meta "" ) ]
+                            }
+                    in
+                    PU.subPlansOfPlan "p1" m0 |> Expect.equal []
+            , test "Pending nodes (not delegated) are not sub-plan owners" <|
+                \_ ->
+                    let
+                        baseRun =
+                            PT.emptyRunState "run-1" plan
+
+                        win =
+                            { planWindowWithPlan | run = Just { baseRun | status = PT.InProgress } }
+
+                        m0 =
+                            { initModelWithSession
+                                | planWindows = Dict.insert "p1" win Dict.empty
+                                , planMetas =
+                                    Dict.fromList
+                                        [ ( "sp1", { origin = { sessionId = "any-session", planIndex = 0 }, feedbacks = [], depth = 2, createdAt = 0, name = "sub", lastStatus = "", parentPlanId = Just "p1", parentSessionId = Nothing } )
+                                        ]
+                            }
+                    in
+                    PU.subPlansOfPlan "p1" m0 |> Expect.equal []
             ]
         ]

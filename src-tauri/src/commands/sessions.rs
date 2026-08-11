@@ -447,6 +447,20 @@ pub async fn fork_session(
         }
         _ => None,
     };
+    // Persist the effective spawn args so resume_session re-applies them
+    // after a restart (capability envelope: builtin-tools restriction,
+    // tool-confirm policy, planner prompt, work dir). Mirrors
+    // create_session above AND Go's fork_session — without this a forked
+    // Plan node session resumed later would come back WITHOUT its
+    // restrictions (e.g. a "no tools" planner regaining all tools).
+    if let Err(e) = dirs::write_spawn_args(&new_session_dir, &dirs::SpawnArgs {
+        tool_confirm: tc.clone(),
+        builtin_tools: bt.clone(),
+        system_prompt: sp.clone(),
+        work_dir: wd.clone().unwrap_or_default(),
+    }) {
+        log::warn!("[session] cannot persist spawn args for {:?}: {e}", new_session_dir);
+    }
     session::create(session::SessionConfig {
         id: &new_id,
         app: &app,
@@ -462,4 +476,40 @@ pub async fn fork_session(
         work_dir: wd,
         owner: &client_id.unwrap_or_default(),
     }).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Parity guard: create_session AND fork_session must both persist the
+    // effective spawn args (session.spawn.json) so resume_session can
+    // re-apply the capability envelope after a restart. Go's fork_session
+    // does this; a drift here would let a forked Plan node session resume
+    // WITHOUT its builtin-tools / tool-confirm / system-prompt / work-dir
+    // restrictions (e.g. a "no tools" planner coming back with all tools).
+    // We can't run a real fork in unit tests (needs alayacore), so this
+    // test pins the persistence helper the command uses and asserts the
+    // round-trip that resume_session relies on.
+    #[test]
+    fn spawn_args_persist_roundtrip_for_forked_session() {
+        let dir = std::env::temp_dir().join(format!("alayaface-fork-spawn-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let args = dirs::SpawnArgs {
+            tool_confirm: "allow".into(),
+            builtin_tools: Some("read_file,write_file".into()),
+            system_prompt: "planner".into(),
+            work_dir: "/tmp/wd".into(),
+        };
+        dirs::write_spawn_args(&dir, &args).unwrap();
+        let got = dirs::read_spawn_args(&dir);
+        assert_eq!(got.tool_confirm, "allow");
+        assert_eq!(got.builtin_tools.as_deref(), Some("read_file,write_file"));
+        assert_eq!(got.system_prompt, "planner");
+        assert_eq!(got.work_dir, "/tmp/wd");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

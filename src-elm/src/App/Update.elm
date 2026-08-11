@@ -659,13 +659,18 @@ update msg model =
                 -- so the runner retries/continues instead of hanging.
                 -- (Cascade-closed node sessions are already Canceled by
                 -- StopRun, so they do NOT emit a spurious disconnect.)
+                -- The event carries the CONVERSATION id (resolved like
+                -- every other session-bearing event): a closed RESUME of a
+                -- node session has a fresh live id, and passing it raw
+                -- would miss the node binding (which matches the original
+                -- conversation id) — the node would stay Running forever.
                 runnerFailCmd =
                     case findPlanIdBySession m0 id of
                         Just _ ->
                             Task.perform
                                 (\t ->
                                     PlanRunFrame (Time.posixToMillis t)
-                                        (R.SessionDisconnected id "Session window closed")
+                                        (R.SessionDisconnected (PU.resolveEventSessionId m0 id) "Session window closed")
                                 )
                                 Time.now
 
@@ -932,11 +937,18 @@ update msg model =
                                 case findPlanIdBySession model ev.sessionId of
                                     Just _ ->
                                         -- P39/Phase B: route by CONVERSATION
-                                        -- id (root sessions: identity).
+                                        -- id (root sessions: identity). Must
+                                        -- resolve through planResumedFrom too:
+                                        -- a resumed node session disconnects
+                                        -- under its fresh live id, and the
+                                        -- node binds the original
+                                        -- conversation id — a raw resolve
+                                        -- would drop the failure and leave
+                                        -- the node Running forever.
                                         Task.perform
                                             (\t ->
                                                 PlanRunFrame (Time.posixToMillis t)
-                                                    (R.SessionDisconnected (SM.resolveConversation model.sessionLineage ev.sessionId) ev.message)
+                                                    (R.SessionDisconnected (PU.resolveEventSessionId model ev.sessionId) ev.message)
                                             )
                                             Time.now
 
@@ -2677,7 +2689,23 @@ update msg model =
                         adoptCascadeFork update r.sessionId model
 
                     else
-                        ( { model | planCascadeFork = Nothing }, Cmd.none )
+                        -- The fork failed: nothing was truncated and no
+                        -- ancestor node was reset, so the cascade must
+                        -- END, not linger. Leaving planCascade armed is a
+                        -- latent mis-trigger: its head level still points
+                        -- at the live source session, so a later TaskDone
+                        -- from that session would run
+                        -- cascadeAfterStep's ResumeBranchFrom — re-running
+                        -- downstream branches WITHOUT any truncation. The
+                        -- completed plan window stays open (user can
+                        -- inspect / re-run / close).
+                        ( { model
+                            | planCascadeFork = Nothing
+                            , planCascade = Nothing
+                            , planCascadeOpenQueue = []
+                          }
+                        , Cmd.none
+                        )
 
                 Err _ ->
                     ( model, Cmd.none )
