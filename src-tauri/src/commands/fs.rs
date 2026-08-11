@@ -176,10 +176,10 @@ fn guess_mime(path: &std::path::Path) -> &str {
 /// IPC must not OOM the backend — a multi-GB media file would otherwise
 /// be loaded whole.
 const MAX_DATA_URI_FILE_SIZE: u64 = 64 << 20; // 64 MiB
-const MAX_TEXT_FILE_SIZE: u64 = 16 << 20; // 16 MiB
+pub const MAX_TEXT_FILE_SIZE: u64 = 16 << 20; // 16 MiB
 
 /// Verify a file is within `limit` before reading it whole.
-fn check_file_size(path: &std::path::Path, limit: u64) -> Result<(), String> {
+pub fn check_file_size(path: &std::path::Path, limit: u64) -> Result<(), String> {
     let meta = std::fs::metadata(path).map_err(|e| format!("Cannot read file: {}", e))?;
     if meta.len() > limit {
         return Err(format!(

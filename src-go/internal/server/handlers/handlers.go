@@ -70,6 +70,9 @@ func Registry() map[string]Command {
 		"fs_write_file_text":    FsWriteFileText,
 		"fs_read_file_text":     FsReadFileText,
 		"fs_delete_file":        FsDeleteFile,
+		// content-addressed object store (C architecture)
+		"object_put": ObjectPut,
+		"object_get": ObjectGet,
 		// mcp auth
 		"start_mcp_auth_flow": StartMcpAuthFlow,
 		"fill_mcp_auth_url":   FillMcpAuthUrl,

@@ -68,6 +68,11 @@ port module Ports exposing
     , onFsReadFileDataUri
     , onFsWriteResult
     , onFsReadResult
+      -- Content-addressed object store (C architecture)
+    , objectPut
+    , objectGet
+    , onObjectPut
+    , onObjectGet
       -- MCP Auth Flow
     , startMcpAuthFlow
     , fillMcpAuthUrl
@@ -194,6 +199,11 @@ port fsResolvePath : { path : String } -> Cmd msg
 port fsHomeDir : {} -> Cmd msg
 port fsWriteFileText : { path : String, content : String, createParents : Bool } -> Cmd msg
 port fsReadFileText : { reqId : String, path : String } -> Cmd msg
+-- C architecture: content-addressed object store. objectPut stores the
+-- content and returns its sha256 hash (dedup by content); objectGet
+-- reads an object back by hash.
+port objectPut : { reqId : String, content : String } -> Cmd msg
+port objectGet : { reqId : String, hash : String } -> Cmd msg
 port startMcpAuthFlow : { sessionId : String, serverName : String, authUrl : String } -> Cmd msg
 port fillMcpAuthUrl : { sessionId : String, serverName : String, authUrl : String } -> Cmd msg
 
@@ -221,6 +231,10 @@ port onFsWriteResult : (E.Value -> msg) -> Sub msg
 -- { reqId, ok, content, error } — reqId matches the fsReadFileText
 -- request (meta scan / plan open / run load share the same port).
 port onFsReadResult : (E.Value -> msg) -> Sub msg
+-- { reqId, ok, hash, error } — reqId matches the objectPut request.
+port onObjectPut : (E.Value -> msg) -> Sub msg
+-- { reqId, ok, content, error } — reqId matches the objectGet request.
+port onObjectGet : (E.Value -> msg) -> Sub msg
 
 
 -- Focus / Scroll

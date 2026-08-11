@@ -673,6 +673,36 @@
         });
     });
 
+    on("objectPut", function (data) {
+      transport.invoke("object_put", { content: data.content })
+        .then(function (res) {
+          app.ports.onObjectPut.send({
+            reqId: data.reqId, ok: true, hash: (res && res.hash) || "", error: "",
+          });
+        })
+        .catch(function (err) {
+          app.ports.onObjectPut.send({
+            reqId: data.reqId, ok: false, hash: "",
+            error: String((err && err.message) || err),
+          });
+        });
+    });
+
+    on("objectGet", function (data) {
+      transport.invoke("object_get", { hash: data.hash })
+        .then(function (content) {
+          app.ports.onObjectGet.send({
+            reqId: data.reqId, ok: true, content: content, error: "",
+          });
+        })
+        .catch(function (err) {
+          app.ports.onObjectGet.send({
+            reqId: data.reqId, ok: false, content: "",
+            error: String((err && err.message) || err),
+          });
+        });
+    });
+
     on("startMcpAuthFlow", function (data) {
       transport.invoke("start_mcp_auth_flow", {
         sessionId: data.sessionId,
