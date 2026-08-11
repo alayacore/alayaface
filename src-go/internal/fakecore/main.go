@@ -48,6 +48,36 @@ import (
 // filename semantics, like real alayacore).
 var sessionFile string
 
+// histMsg is one recorded message of this session's history. The fake
+// maintains it so `fork` can truncate it into the new session file and
+// the forked process can REPLAY it on startup (mirroring real
+// alayacore: a forked session streams its truncated history) — the E2E
+// cascade relies on this to exercise the fork session's replay
+// suppression and status-bar binding.
+type histMsg struct {
+	Role    string `json:"role"` // "user" | "assistant"
+	Content string `json:"content"`
+	ID      string `json:"id"` // history id ("hist-N" / "a-N")
+}
+
+// history accumulates this session's messages (user echoes + assistant
+// replies) in arrival order.
+var history []histMsg
+
+// versionSuffix: when /tmp/alayaface-fakecore-version-2.marker exists,
+// every normal reply is suffixed with its content. The E2E writes it
+// before a cascade RE-RUN so the new run's node summaries differ from
+// the first run — the cascade gate then propagates and forks the parent
+// conversation (a deterministic way to force summary change without
+// touching the plan fixture).
+func versionSuffix() string {
+	b, err := os.ReadFile(filepath.Join(os.TempDir(), "alayaface-fakecore-version-2.marker"))
+	if err != nil {
+		return ""
+	}
+	return " " + strings.TrimSpace(string(b))
+}
+
 // planJSON is the fenced plan document emitted by plan mode AND replayed
 // on resume (see replayResumedHistory) — it must carry the alayaface-plan
 // marker so the UI's plan detection sees it.
@@ -131,9 +161,11 @@ func streamReply() {
 	echoID("At", aid1, " world")
 	echoID("AT", aid1, "")
 	echoID("AR", rid, "")
-	echoID("At", aid2, "Received prompt: "+stagedText)
+	echoID("At", aid2, "Received prompt: "+stagedText+versionSuffix())
 	echoID("AT", aid2, "")
 	writeFrame("SM", `{"type":"task","data":{"in_progress":false,"task_error":false}}`)
+	// Record the reply (merged) for fork-history replay.
+	history = append(history, histMsg{"assistant", "Hello world\n\nReceived prompt: " + stagedText + versionSuffix(), aid2})
 }
 
 func coOk(id string, output map[string]any) {
@@ -175,12 +207,21 @@ func handleCmd(raw string) {
 			coErr(msg.ID, "fork needs <historyId> <targetFile>")
 			return
 		}
+		historyID := fields[0]
 		target := fields[len(fields)-1]
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			coErr(msg.ID, "cannot create fork dir")
 			return
 		}
-		if err := os.WriteFile(target, []byte(`{"history":[{"id":"`+fields[0]+`"}]}`), 0o644); err != nil {
+		// The fork's session.alaya carries exactly the truncated history
+		// (up to and including historyID); the forked process replays it
+		// on startup — mirrors real alayacore.
+		payload, _ := json.Marshal(map[string]any{
+			"version": 1,
+			"forked":  true,
+			"history": truncateHistory(historyID),
+		})
+		if err := os.WriteFile(target, payload, 0o644); err != nil {
 			coErr(msg.ID, "cannot write session file")
 			return
 		}
@@ -259,8 +300,14 @@ func main() {
 	if sessionFile != "" {
 		if _, err := os.Stat(sessionFile); err == nil {
 			wasResume = true
+			// The file already exists (resume OR a fork wrote the truncated
+			// history into it): leave it untouched so replayForkedHistory /
+			// replayResumedHistory can read the real content. Only a
+			// BRAND-NEW session gets the placeholder (real alayacore
+			// creates session.alaya on first start).
+		} else {
+			_ = os.WriteFile(sessionFile, []byte(`{"version":1}`), 0o644)
 		}
-		_ = os.WriteFile(sessionFile, []byte(`{"version":1}`), 0o644)
 	}
 
 	// Startup system message, like alayacore announcing its task. The
@@ -289,6 +336,7 @@ func main() {
 	// arrives AFTER all replayed content. The frontend removes its replay
 	// suppression marker ONLY on this frame (no fallback for older cores).
 	if wasResume {
+		replayForkedHistory()
 		replayResumedHistory()
 	}
 	writeFrame("SM", `{"type":"session","data":{"state":"ready"}}`)
@@ -306,6 +354,9 @@ func main() {
 			staged++
 			if frame.Tag == "UT" {
 				stagedText += frame.Value
+				// Record the user message (echo id = current msgSeq, the
+				// same id the echo carries) for fork-history replay.
+				history = append(history, histMsg{"user", frame.Value, "hist-" + fmt.Sprint(msgSeq)})
 			}
 		case "UE":
 			if staged > 0 {
@@ -372,23 +423,83 @@ func main() {
 // JSON (the Create Plan offer detector scans the final AT content), then
 // a normal reply and the task-done frame.
 func planReply() {
-	echoID("AT", nextReplyID(), "Here is the plan:\n```json\n"+planJSON+"\n```\nI'll wait for you to create it.")
+	pid := nextReplyID()
+	echoID("AT", pid, "Here is the plan:\n```json\n"+planJSON+"\n```\nI'll wait for you to create it.")
 	echoID("AR", nextReplyID(), "")
+	history = append(history, histMsg{"assistant", "Here is the plan:\n```json\n" + planJSON + "\n```\nI'll wait for you to create it.", pid})
 	// NOTE: deliberately NOT calling streamReply() afterwards — the plan
 	// message must stay the session's LAST message so the frontend's
 	// delayed auto-open (PlanOfferSettle) confirms it as the newest.
 }
 
+// truncateHistory returns the session's history up to AND INCLUDING the
+// message with the given history id (the fork point) — the truncated
+// history the fork replays. Missing id → the whole history.
+func truncateHistory(historyID string) []histMsg {
+	for i, m := range history {
+		if m.ID == historyID {
+			return history[:i+1]
+		}
+	}
+	return history
+}
+
+// replayForkedHistory replays a FORKED session's truncated history
+// (written by the source's `fork` command into session.alaya): user
+// messages as UT echoes, assistant messages as At/AT content blocks —
+// the same wire format as replayResumedHistory, so the client's replay
+// suppression and status-bar binding are exercised against the fork's
+// real (truncated) history. No-op when the session file is not a fork.
+func replayForkedHistory() {
+	if sessionFile == "" {
+		return
+	}
+	var f struct {
+		Forked  bool      `json:"forked"`
+		History []histMsg `json:"history"`
+	}
+	b, err := os.ReadFile(sessionFile)
+	if err != nil {
+		return
+	}
+	if json.Unmarshal(b, &f) != nil || !f.Forked {
+		return
+	}
+	// Same timing rationale as replayResumedHistory: real alayacore's
+	// replay takes real time, so the frames land AFTER the client's
+	// SessionCreated handler registered the fresh id — exercising the
+	// replay-suppression path instead of the pending-event buffer.
+	time.Sleep(400 * time.Millisecond)
+	for _, m := range f.History {
+		switch m.Role {
+		case "user":
+			writeFrame("UT", "\x00"+m.ID+"\x00"+m.Content)
+		case "assistant":
+			writeFrame("At", "\x00"+m.ID+"\x00"+m.Content)
+			writeFrame("AT", "\x00"+m.ID+"\x00")
+		}
+	}
+}
+
 // replayResumedHistory mirrors real alayacore's resume behavior: history
 // content frames are replayed BEFORE the boot SM frame. The fake replays
-// a canned plan-message history when the session file was saved at least
-// once ("saved":true) — i.e. the session was closed and is being resumed.
-// The E2E uses this to verify that a plan message inside a replayed
-// history does NOT auto-create a duplicate plan window (the frontend
-// suppresses detection while the session is in planReplaySessions).
+// a canned plan-message history for LEGACY sessions (saved before
+// fakecore kept a real history — restart-e2e). A session whose file
+// carries a real history (a FORK wrote the truncated history, or a
+// future save) replays THAT via replayForkedHistory instead, so the two
+// never double-replay.
 func replayResumedHistory() {
 	if sessionFile == "" {
 		return
+	}
+	var f struct {
+		Forked  bool      `json:"forked"`
+		History []histMsg `json:"history"`
+	}
+	if b, err := os.ReadFile(sessionFile); err == nil {
+		if json.Unmarshal(b, &f) == nil && (f.Forked || len(f.History) > 0) {
+			return
+		}
 	}
 	// Real alayacore's history replay takes real time, so its content
 	// frames typically arrive AFTER the resume RPC response (and after

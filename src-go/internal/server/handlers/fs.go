@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -278,6 +279,7 @@ func FsWriteFileText(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	if err := os.WriteFile(args.Path, []byte(args.Content), 0o644); err != nil {
 		return fmt.Errorf("Cannot write file: %w", err)
 	}
+	log.Printf("[fs] wrote %s (%d bytes)", args.Path, len(args.Content))
 	return writeResult(w, nil)
 }
 
