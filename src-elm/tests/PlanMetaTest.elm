@@ -191,6 +191,55 @@ tests =
                         ]
                         ()
             ]
+        , describe "planMetaForSessionIndex (status-bar binding)"
+            [ test "matches the creation origin (non-forked plan)" <|
+                \_ ->
+                    case M.planMetaForSessionIndex sampleMetas "sess-a" 1 of
+                        Just ( planId, _ ) ->
+                            Expect.equal True (List.member planId [ "p-1", "p-2" ])
+
+                        Nothing ->
+                            Expect.fail "expected a binding for sess-a"
+            , test "follows the P38 fork parent session (parentSessionOf)" <|
+                \_ ->
+                    let
+                        forked =
+                            Dict.fromList
+                                [ ( "p-1"
+                                  , { origin = { sessionId = "sess-a", planIndex = 1 }
+                                    , feedbacks = []
+                                    , depth = 1
+                                    , createdAt = 0
+                                    , name = "x"
+                                    , lastStatus = ""
+                                    , parentPlanId = Nothing
+                                    , parentSessionId = Just "sess-fork"
+                                    }
+                                  )
+                                ]
+                    in
+                    Expect.all
+                        [ -- the fork session resolves through parentSessionOf
+                        \_ ->
+                            M.planMetaForSessionIndex forked "sess-fork" 1
+                                |> Maybe.map Tuple.first
+                                |> Expect.equal (Just "p-1")
+                        -- the creation origin still matches (one rule)
+                        , \_ ->
+                            M.planMetaForSessionIndex forked "sess-a" 1
+                                |> Maybe.map Tuple.first
+                                |> Expect.equal (Just "p-1")
+                        ]
+                        ()
+            , test "wrong plan index or unrelated session → Nothing" <|
+                \_ ->
+                    Expect.all
+                        [ \_ -> M.planMetaForSessionIndex sampleMetas "sess-a" 2 |> Expect.equal Nothing
+                        , \_ -> M.planMetaForSessionIndex sampleMetas "sess-other" 1 |> Expect.equal Nothing
+                        , \_ -> M.planMetaForSessionIndex Dict.empty "sess-a" 1 |> Expect.equal Nothing
+                        ]
+                        ()
+            ]
         ]
 
 

@@ -6,6 +6,7 @@ module Plan.Meta exposing
     , decodeMeta
     , metaPathFor
     , plansOwnedBySession
+    , planMetaForSessionIndex
     , depthOf
     , parentPlanIdOfSession
     , parentSessionOf
@@ -186,6 +187,38 @@ decodeMeta =
         (D.oneOf [ D.field "parent_plan_id" D.string |> D.map Just, D.succeed Nothing ])
         -- Lenient: pre-fork meta has no parent_session_id.
         (D.oneOf [ D.field "parent_session_id" D.string |> D.map Just, D.succeed Nothing ])
+
+
+{-| The plan whose meta binds (sessionId, planIndex) — the plan
+auto-created from that session's Nth plan message. Matches BOTH the
+creation origin AND the current parent session (`parentSessionOf`): a
+P38 re-run fork replaces the creation session with a truncated-history
+fork, and the binding must follow it — otherwise the fork session
+renders the generic "Open plan" fallback instead of the real status-bar
+link (while `messageBoundToPlan` already knew the fork, so no duplicate
+is created). For a non-forked plan `parentSessionOf` == `origin.sessionId`,
+so the two branches are one rule. Nothing when no plan binds the pair.
+-}
+planMetaForSessionIndex : Dict String PlanMeta -> String -> Int -> Maybe ( String, PlanMeta )
+planMetaForSessionIndex metas sessionId planIndex =
+    Dict.foldl
+        (\planId meta acc ->
+            case acc of
+                Just _ ->
+                    acc
+
+                Nothing ->
+                    if
+                        meta.origin.planIndex == planIndex
+                            && (meta.origin.sessionId == sessionId || parentSessionOf meta == sessionId)
+                    then
+                        Just ( planId, meta )
+
+                    else
+                        Nothing
+        )
+        Nothing
+        metas
 
 
 {-| Every plan id whose meta `origin` is the given ON-DISK session id.

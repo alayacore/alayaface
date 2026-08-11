@@ -464,6 +464,11 @@ deliberately NOT used: they are per-session implementation details that
 may differ across cores/restores, while the order of plan messages is
 stable. Replay guard: a replayed historical message must not create a
 duplicate plan.
+
+The match itself (creation origin OR the P38 fork parent session) lives
+in Plan.Meta.planMetaForSessionIndex — the same rule the status bar
+uses, so a fork session can never "know" a plan for duplicate-suppression
+while showing the generic "Open plan" fallback.
 -}
 messageBoundToPlan : Model -> String -> Int -> Bool
 messageBoundToPlan model sid planIndex =
@@ -473,16 +478,7 @@ messageBoundToPlan model sid planIndex =
         onDiskId =
             Dict.get sid model.planResumedFrom |> Maybe.withDefault sid
     in
-    Dict.foldl
-        (\_ meta acc ->
-            acc
-                || (meta.origin.sessionId == onDiskId && meta.origin.planIndex == planIndex)
-                -- P38: a fork may have replaced the creation session
-                -- (truncated history); the binding follows it.
-                || (PM.parentSessionOf meta == onDiskId && meta.origin.planIndex == planIndex)
-        )
-        False
-        model.planMetas
+    PM.planMetaForSessionIndex model.planMetas onDiskId planIndex /= Nothing
 
 
 {-| The plan index of the LAST message of the list: how many plan

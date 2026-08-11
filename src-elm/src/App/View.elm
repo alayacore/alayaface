@@ -1341,13 +1341,14 @@ viewPlanStatusBar model sid planIndex =
 
 
 {-| The plan whose meta origin binds (sessionId, planIndex) — the plan
-auto-created from that session's Nth plan message.
+auto-created from that session's Nth plan message. The rendered session
+may be a resume with a fresh live id — resolve sid back to the on-disk
+id before matching; the match itself (creation origin OR the P38 fork
+parent session) lives in Plan.Meta.planMetaForSessionIndex so the
+status bar and messageBoundToPlan can never drift apart.
 -}
 planMetaForMessage : Model -> String -> Int -> Maybe ( String, PM.PlanMeta )
 planMetaForMessage model sid planIndex =
-    -- meta origin records the session's ON-DISK id (plans live under it);
-    -- the rendered session may be a resume with a fresh live id — resolve
-    -- sid back to the on-disk id before comparing.
     let
         onDiskId =
             case Dict.get sid model.planResumedFrom of
@@ -1357,25 +1358,7 @@ planMetaForMessage model sid planIndex =
                 Nothing ->
                     sid
     in
-    Dict.foldl
-        (\planId meta acc ->
-            case acc of
-                Just _ ->
-                    acc
-
-                Nothing ->
-                    -- Binding is session + plan index (the order of
-                    -- plan messages in a session is stable; message
-                    -- ids are per-session implementation details and
-                    -- deliberately not used for matching).
-                    if meta.origin.sessionId == onDiskId && meta.origin.planIndex == planIndex then
-                        Just ( planId, meta )
-
-                    else
-                        Nothing
-        )
-        Nothing
-        model.planMetas
+    PM.planMetaForSessionIndex model.planMetas onDiskId planIndex
 
 
 planStatusFor : Model -> String -> Maybe PM.PlanMeta -> ( String, String, Bool )
