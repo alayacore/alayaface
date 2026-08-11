@@ -3,7 +3,7 @@
 //
 //   session S (plan mode) → "give me a plan" → plan P1 auto-creates
 //   → Run → completed → [Plan Result] inserted into S
-//   → RE-RUN with the version-2 marker (fakecore replies differ, so the
+//   → RE-RUN with the version marker (fakecore replies differ, so the
 //     cascade gate passes) → S is FORKED to S' (session.alaya truncated
 //     up to the old [Plan Result], then replayed by the forked process)
 //     → S' registers its lineage + replays the truncated history + gets
@@ -71,7 +71,7 @@ const SRCGO = path.join(ROOT, 'src-go');
 execSync(`mkdir -p "${artifacts}" "${home}"`);
 // Shared markers: clean everything so the FIRST run exercises the
 // fail-once path; the hang marker is pre-seeded (R1: no task timeouts).
-execSync('rm -f /tmp/alayaface-fakecore-fail-once-*.marker /tmp/alayaface-fakecore-hang-once-*.marker /tmp/alayaface-fakecore-version-2.marker');
+execSync('rm -f /tmp/alayaface-fakecore-fail-once-*.marker /tmp/alayaface-fakecore-hang-once-*.marker /tmp/alayaface-fakecore-version.marker');
 {
   const t3Prompt = 'review the draft and fix any issues (hang-once marker)';
   const h = createHash('sha256').update(t3Prompt).digest('hex').slice(0, 16);
@@ -213,8 +213,8 @@ try {
   assert(planFilesBefore === 1, 'exactly one plan dir before re-run, got: ' + planFilesBefore);
   console.log('PASS: first run completed, [Plan Result] in S (no v2)');
 
-  // ── 6. RE-RUN with version-2 marker → gate passes → fork ──────────
-  writeFileSync(path.join(tmpdir(), 'alayaface-fakecore-version-2.marker'), 'v2');
+  // ── 6. RE-RUN with version marker → gate passes → fork ──────────
+  writeFileSync(path.join(tmpdir(), 'alayaface-fakecore-version.marker'), 'v2');
   await reopenPlanViaStatusBar();
   assert(await clickByText('button.plan-strip-btn', 'Run'), 're-Run button');
   // Impact-scope confirmation (the old result sits in S).
@@ -329,6 +329,79 @@ try {
   assert(planFilesAfterRestart === 1, 'no duplicate plan after restart+resume, got: ' + planFilesAfterRestart);
   await shot(page, '05-after-restart.png');
   console.log('PASS: after refresh, resuming the fork (head) rebinds the status bar via the rebuilt lineage (no duplicate plan)');
+
+  // ── 9. CHAINED fork: re-run the plan AGAIN on the resumed head (S') ─
+  // Marker content → "v3": the new run's summaries differ from v2, so
+  // the cascade gate passes again and S' is forked to S'' — the lineage
+  // chain grows S → S' → S''. The plan's status bar lives in the
+  // resumed S' window.
+  writeFileSync(path.join(tmpdir(), 'alayaface-fakecore-version.marker'), 'v3');
+  await reopenPlanViaStatusBar();
+  assert(await clickByText('button.plan-strip-btn', 'Run'), 'chained re-Run button');
+  await page.waitForSelector('.cascade-page .confirm-page-btn-allow', { timeout: 10000 }).catch(() => {});
+  await page.evaluate(() => {
+    const b = document.querySelector('.cascade-page .confirm-page-btn-allow');
+    if (b) b.click();
+  });
+  await page.waitForFunction(() => {
+    const bars = [...document.querySelectorAll('.plan-offer-btn')].map(e => e.textContent || '');
+    if (bars.length === 0) return false;
+    if (bars.some(t => t.includes('Open plan'))) return false;
+    if (!bars.some(t => t.includes('Completed'))) return false;
+    const msgs = [...document.querySelectorAll('.message-content')].map(e => e.textContent || '');
+    return msgs.some(t => t.includes('[Plan Result]') && t.includes('findings v3'));
+  }, { timeout: E2E_TIMEOUT });
+  await sleep(800);
+  await shot(page, '06-chained-fork.png');
+
+  // Multi-level lineage on disk: root → fork1 (parent root) → fork2
+  // (parent fork1), all sharing the root's conversation id.
+  const sessionsRoot2 = path.join(home, '.alayaface', 'sessions');
+  const lineage2 = [];
+  for (const sid of readdirSync(sessionsRoot2).filter(d => !d.endsWith('.tmp'))) {
+    const f = path.join(sessionsRoot2, sid, 'session.meta.json');
+    if (existsSync(f)) lineage2.push({ sid, meta: JSON.parse(readFileSync(f, 'utf8')) });
+  }
+  assert(lineage2.length === 3, 'three lineage metas (root + 2 forks), got: ' + JSON.stringify(lineage2));
+  const root2 = lineage2.find(e => !e.meta.parent_instance_id);
+  const fork1 = lineage2.find(e => e.meta.parent_instance_id === root2.sid);
+  const fork2 = lineage2.find(e => e.meta.parent_instance_id === fork1.sid);
+  assert(root2 && fork1 && fork2, 'lineage chain root→fork1→fork2, got: ' + JSON.stringify(lineage2));
+  assert(fork2.meta.conversation_id === root2.sid, 'fork2 conversation = root, got: ' + JSON.stringify(lineage2));
+  const fork1Sid = fork1.sid;
+  const fork2Sid = fork2.sid;
+  console.log('PASS: chained fork lineage on disk: ' + root2.sid + ' → ' + fork1Sid + ' → ' + fork2Sid);
+
+  // ── 10. RESTART with a 3-deep chain ────────────────────────────────
+  // headInstanceFor must resolve the HEAD to fork2 (the only instance
+  // that is nobody's parent) — resuming it replays the truncated history
+  // and binds the status bar via the REBUILT lineage.
+  await page.reload({ waitUntil: 'networkidle0', timeout: 30000 });
+  await waitFor('.global-menu-btn');
+  await sleep(2000); // close_all_sessions + planMetas/lineage scan settle
+  await page.click('.global-menu-btn');
+  await waitFor('.global-menu-panel');
+  assert(await clickByText('.global-menu-item', 'Session Manager'), 'Session Manager menu item (chained refresh)');
+  await page.waitForSelector('.sel-page-item', { timeout: 10000 });
+  const resumedHead = await page.evaluate((fid) => {
+    const items = [...document.querySelectorAll('.sel-page-item')];
+    for (const it of items) {
+      const name = it.querySelector('.sel-page-item-name')?.textContent || '';
+      const btn = [...it.querySelectorAll('button')].find(b => b.textContent.trim() === 'Resume');
+      if (name === fid.slice(0, 8) && btn && !btn.disabled) { btn.click(); return true; }
+    }
+    return false;
+  }, fork2Sid);
+  assert(resumedHead, 'head (fork2) Resume clickable after chained refresh');
+  await page.waitForFunction(() => {
+    const bars = [...document.querySelectorAll('.plan-offer-btn')].map(e => e.textContent || '');
+    if (bars.length === 0) return false;
+    if (bars.some(t => t.includes('Open plan'))) return false;
+    return bars.some(t => t.includes('E2E Demo') && t.includes('Completed'));
+  }, { timeout: 30000 });
+  await sleep(600);
+  await shot(page, '07-chained-restart.png');
+  console.log('PASS: after chained refresh, head resolution found fork2 (3-deep) and it rebinds via the rebuilt lineage');
 
   console.log('\nALL PASS ✅');
   console.log('screenshots:');

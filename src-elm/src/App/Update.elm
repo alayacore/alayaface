@@ -70,12 +70,13 @@ updateActiveSession model fn =
 {-| Inputs for the P38 impact-scope walk: metas (ancestry), runs (node
 bindings / branch / summaries), sessions (insertion points / user
 message counts). -}
-scopeCtx : Model -> { planMetas : Dict String PM.PlanMeta, runs : Dict String (Maybe PT.RunState), sessions : Dict String T.SessionState, sessionLineage : Dict String SM.SessionMeta }
+scopeCtx : Model -> { planMetas : Dict String PM.PlanMeta, runs : Dict String (Maybe PT.RunState), sessions : Dict String T.SessionState, sessionLineage : Dict String SM.SessionMeta, planResumedFrom : Dict String String }
 scopeCtx model =
     { planMetas = model.planMetas
     , runs = Dict.map (\_ w -> w.run) model.planWindows
     , sessions = model.sessions
     , sessionLineage = model.sessionLineage
+    , planResumedFrom = model.planResumedFrom
     }
 
 

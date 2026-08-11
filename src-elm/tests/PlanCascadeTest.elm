@@ -120,7 +120,7 @@ runC =
     }
 
 
-ctxFor : Dict String (List T.Message) -> { planMetas : Dict String M.PlanMeta, runs : Dict String (Maybe PT.RunState), sessions : Dict String T.SessionState, sessionLineage : Dict String SM.SessionMeta }
+ctxFor : Dict String (List T.Message) -> { planMetas : Dict String M.PlanMeta, runs : Dict String (Maybe PT.RunState), sessions : Dict String T.SessionState, sessionLineage : Dict String SM.SessionMeta, planResumedFrom : Dict String String }
 ctxFor sessions =
     let
         sessionWith sid msgs =
@@ -141,6 +141,7 @@ ctxFor sessions =
     , runs = Dict.fromList [ ( "b", Just runB ), ( "c", Just runC ) ]
     , sessions = Dict.map sessionWith sessions
     , sessionLineage = Dict.empty
+    , planResumedFrom = Dict.empty
     }
 
 
@@ -305,6 +306,44 @@ tests =
                         , \s -> Expect.equal 0 (List.sum (List.map .truncateUserMessages s.levels))
                         ]
                         scope
+            , test "a RESUMED fork (head) still shows the insertion point (P39-B5 chained restart)" <|
+                \_ ->
+                    -- After a restart: the plan's origin conversation is
+                    -- s1, the head instance is the FORK s-fork (registry),
+                    -- and the fork is shown via a fresh live id. The
+                    -- impact scope must resolve head→fork→live and find
+                    -- the old [Plan Result] — otherwise the chained
+                    -- re-run silently skips the cascade (no confirmation).
+                    let
+                        base =
+                            ctxFor sessionMap
+
+                        s1msgs =
+                            Dict.get "s1" sessionMap |> Maybe.withDefault []
+
+                        liveFork =
+                            let
+                                liveBase =
+                                    T.emptySession "live-fork"
+                            in
+                            { liveBase | messages = s1msgs }
+
+                        ctx =
+                            { base
+                                | sessions =
+                                    Dict.insert "live-fork" liveFork
+                                        (Dict.remove "s1" base.sessions)
+                                , planResumedFrom = Dict.fromList [ ( "live-fork", "s-fork" ) ]
+                                , sessionLineage =
+                                    Dict.fromList
+                                        [ ( "s1", SM.empty "s1" )
+                                        , ( "s-fork", { conversationId = "s1", parentInstanceId = Just "s1" } )
+                                        ]
+                            }
+                    in
+                    Expect.equal
+                        (C.impactScope ctx "a").rootHasInsertion
+                        True
             , test "closePlanIds = non-chain plans owned by truncated sessions" <|
                 \_ ->
                     let

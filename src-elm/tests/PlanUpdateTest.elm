@@ -558,6 +558,44 @@ suite =
                                 ( Nothing, True )
                         ]
                         m1
+            , test "a RESUMED fork source resolves the lineage parent to the ON-DISK instance (chained fork, P39-B5)" <|
+                \_ ->
+                    -- Second chained fork: the source (s1) is shown via a
+                    -- resumed live id. The fork's lineage parent must be
+                    -- s1 (on-disk), NOT the fresh live id — otherwise the
+                    -- chain S → S' → S'' breaks (the live id has no meta).
+                    let
+                        target =
+                            { childPlanId = "p1"
+                            , summary = "new"
+                            , planId = ""
+                            , nodeId = ""
+                            , forkSource = "live-s1"
+                            , originSessionId = ""
+                            }
+
+                        cascade =
+                            { rootPlanId = "p1"
+                            , rootOldSummary = "old"
+                            , levels = []
+                            , phase = PC.WaitingFork
+                            , currentPlanId = "p1"
+                            , currentSummary = "new"
+                            }
+
+                        m0 =
+                            { initModelWithSession
+                                | planCascade = Just cascade
+                                , planCascadeFork = Just target
+                                , planResumedFrom = Dict.fromList [ ( "live-s1", "s1" ) ]
+                            }
+
+                        ( m1, _ ) =
+                            PU.cascadeStepIn stubDispatch (PC.InstanceReady (Ok "fork-x")) m0
+                    in
+                    Expect.equal
+                        (Dict.get "fork-x" m1.sessionLineage)
+                        (Just { conversationId = "s1", parentInstanceId = Just "s1" })
             ]
         , describe "handlePlanReadTarget"
             [ test "open/import parses the plan and chains a run restore" <|

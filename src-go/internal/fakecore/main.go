@@ -64,14 +64,16 @@ type histMsg struct {
 // replies) in arrival order.
 var history []histMsg
 
-// versionSuffix: when /tmp/alayaface-fakecore-version-2.marker exists,
+// versionSuffix: when /tmp/alayaface-fakecore-version.marker exists,
 // every normal reply is suffixed with its content. The E2E writes it
 // before a cascade RE-RUN so the new run's node summaries differ from
-// the first run — the cascade gate then propagates and forks the parent
-// conversation (a deterministic way to force summary change without
-// touching the plan fixture).
+// the previous run — the cascade gate then propagates and forks the
+// parent conversation (a deterministic way to force summary change
+// without touching the plan fixture). The content doubles as the
+// version tag ("v2", "v3", …), so successive re-runs can differ from
+// each other (chained forks).
 func versionSuffix() string {
-	b, err := os.ReadFile(filepath.Join(os.TempDir(), "alayaface-fakecore-version-2.marker"))
+	b, err := os.ReadFile(filepath.Join(os.TempDir(), "alayaface-fakecore-version.marker"))
 	if err != nil {
 		return ""
 	}
@@ -228,26 +230,17 @@ func handleCmd(raw string) {
 		coOk(msg.ID, map[string]any{"message": "forked"})
 	case "save":
 		// Empty input = save to the --session file (real alayacore
-		// semantics). Overwrite with a marker so tests can verify the
-		// graceful-close save arrived before the process exited. A file
-		// that already carries a REAL history (a FORK wrote the truncated
-		// history there) keeps it — clobbering it would make a later
-		// resume replay the canned history instead of the fork's.
+		// semantics). Write the session's COMPLETE history (the replayed
+		// fork history + every message received since) so a later resume
+		// replays everything — real alayacore appends all messages to
+		// session.alaya, so a forked session's file contains both the
+		// truncated history AND the post-fork messages. No history (a
+		// fresh/plain session) → the legacy marker (restart-e2e).
 		if sessionFile != "" {
-			var f struct {
-				Forked  bool      `json:"forked"`
-				History []histMsg `json:"history"`
-			}
-			hasHistory := false
-			if b, err := os.ReadFile(sessionFile); err == nil {
-				if json.Unmarshal(b, &f) == nil && (f.Forked || len(f.History) > 0) {
-					hasHistory = true
-				}
-			}
 			var payload []byte
-			if hasHistory {
+			if len(history) > 0 {
 				payload, _ = json.Marshal(map[string]any{
-					"version": 1, "saved": true, "forked": f.Forked, "history": f.History,
+					"version": 1, "saved": true, "history": history,
 				})
 			} else {
 				payload = []byte(`{"version":1,"saved":true}`)
@@ -465,12 +458,16 @@ func truncateHistory(historyID string) []histMsg {
 	return history
 }
 
-// replayForkedHistory replays a FORKED session's truncated history
-// (written by the source's `fork` command into session.alaya): user
+// replayForkedHistory replays a session's real history (written by the
+// source's `fork` — truncated — or by a later `save` — complete): user
 // messages as UT echoes, assistant messages as At/AT content blocks —
 // the same wire format as replayResumedHistory, so the client's replay
-// suppression and status-bar binding are exercised against the fork's
-// real (truncated) history. No-op when the session file is not a fork.
+// suppression and status-bar binding are exercised against the real
+// history. The replayed messages are ALSO recorded into `history`, so a
+// later `save` writes the complete conversation (real alayacore appends
+// everything to session.alaya); msgSeq/replySeq advance past the
+// replayed ids so new messages cannot collide with them. No-op when the
+// session file carries no history.
 func replayForkedHistory() {
 	if sessionFile == "" {
 		return
@@ -483,7 +480,7 @@ func replayForkedHistory() {
 	if err != nil {
 		return
 	}
-	if json.Unmarshal(b, &f) != nil || !f.Forked {
+	if json.Unmarshal(b, &f) != nil || len(f.History) == 0 {
 		return
 	}
 	// Same timing rationale as replayResumedHistory: real alayacore's
@@ -491,7 +488,12 @@ func replayForkedHistory() {
 	// SessionCreated handler registered the fresh id — exercising the
 	// replay-suppression path instead of the pending-event buffer.
 	time.Sleep(400 * time.Millisecond)
+	assistantCount := 0
 	for _, m := range f.History {
+		history = append(history, m)
+		if m.Role == "assistant" {
+			assistantCount++
+		}
 		switch m.Role {
 		case "user":
 			writeFrame("UT", "\x00"+m.ID+"\x00"+m.Content)
@@ -500,6 +502,10 @@ func replayForkedHistory() {
 			writeFrame("AT", "\x00"+m.ID+"\x00")
 		}
 	}
+	// New messages get ids AFTER the replayed ones (no collision: every
+	// fakecore process numbers its own messages from 0).
+	msgSeq = len(f.History)
+	replySeq = assistantCount
 }
 
 // replayResumedHistory mirrors real alayacore's resume behavior: history

@@ -35,6 +35,7 @@ import Plan.Types as PT
 import Plan.Meta as PM
 import Session.Meta as SM
 import Session.Types as T
+import App.NodeConnection as NC
 
 
 -- ─── Impact scope (confirmation display) ───────────────────────────
@@ -89,6 +90,7 @@ impactScope :
     , runs : Dict String (Maybe PT.RunState)
     , sessions : Dict String T.SessionState
     , sessionLineage : Dict String SM.SessionMeta
+    , planResumedFrom : Dict String String
     }
     -> String
     -> ImpactScope
@@ -166,6 +168,7 @@ walkLevels :
     , runs : Dict String (Maybe PT.RunState)
     , sessions : Dict String T.SessionState
     , sessionLineage : Dict String SM.SessionMeta
+    , planResumedFrom : Dict String String
     }
     -> String
     -> List ImpactLevel
@@ -188,8 +191,10 @@ walkLevels ctx planId acc =
                     headOf ctx originConv
             in
             -- The session where THIS plan's result lives must be open
-            -- (feedback + truncation need the live session).
-            if not (Dict.member originHead ctx.sessions) then
+            -- (feedback + truncation need the live session). Resolve
+            -- resumes: after a restart the head is shown via a fresh
+            -- live id (planResumedFrom live → head).
+            if NC.liveSessionForOrigin ctx.sessions ctx.planResumedFrom originHead == Nothing then
                 ( acc, Nothing )
 
             else
@@ -256,9 +261,13 @@ closePlans ctx truncSessions chainIds =
         ctx.planMetas
 
 
-messagesOf : { a | sessions : Dict String T.SessionState } -> String -> List T.Message
+messagesOf : { a | sessions : Dict String T.SessionState, planResumedFrom : Dict String String } -> String -> List T.Message
 messagesOf ctx sid =
-    Dict.get sid ctx.sessions
+    -- Resolve a resumed live id first: after a restart the conversation
+    -- head is shown via a FRESH id (planResumedFrom live → on-disk id),
+    -- and the messages live under the live id.
+    NC.liveSessionForOrigin ctx.sessions ctx.planResumedFrom sid
+        |> Maybe.andThen (\liveId -> Dict.get liveId ctx.sessions)
         |> Maybe.map .messages
         |> Maybe.withDefault []
 

@@ -1205,9 +1205,18 @@ registerForkInstance dispatch forkId model =
                 convId =
                     resolveEventSessionId model target.forkSource
 
+                -- The lineage parent must be the ON-DISK instance id: a
+                -- resumed fork source carries its FRESH live id (which
+                -- has no meta file and no registry entry), while the
+                -- chain is keyed by on-disk ids. A live id whose resume
+                -- map points at the real instance resolves back to it.
+                parentInstanceId =
+                    Dict.get target.forkSource model.planResumedFrom
+                        |> Maybe.withDefault target.forkSource
+
                 lineageMeta =
                     { conversationId = convId
-                    , parentInstanceId = Just target.forkSource
+                    , parentInstanceId = Just parentInstanceId
                     }
 
                 mLineage =
