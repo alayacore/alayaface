@@ -177,6 +177,39 @@ suite =
                             }
                     in
                     Expect.equal ( PU.messageBoundToPlan m "live1" 2 ) True
+            , test "messageBoundToPlan follows a P38 fork parent session (same rule as the status bar)" <|
+                \_ ->
+                    let
+                        -- The plan was created in s1; a re-run cascade
+                        -- forked it to s-fork (truncated history). The
+                        -- replayed plan message in s-fork must NOT
+                        -- auto-create a duplicate — and the status-bar
+                        -- query must bind it to the same plan (one rule,
+                        -- Plan.Meta.planMetaForSessionIndex).
+                        meta =
+                            { origin = { sessionId = "s1", planIndex = 1 }
+                            , feedbacks = []
+                            , depth = 1
+                            , createdAt = 0
+                            , name = "x"
+                            , lastStatus = "completed"
+                            , parentPlanId = Nothing
+                            , parentSessionId = Just "s-fork"
+                            }
+
+                        m =
+                            { initModelWithSession
+                                | planMetas = Dict.insert "p1" meta Dict.empty
+                                , sessions =
+                                    Dict.insert "s-fork" (T.emptySession "s-fork") initModelWithSession.sessions
+                            }
+                    in
+                    Expect.equal
+                        ( PU.messageBoundToPlan m "s-fork" 1
+                        , PU.messageBoundToPlan m "s1" 1
+                        , PU.messageBoundToPlan m "other" 1
+                        )
+                        ( True, True, False )
             , test "findResumedLive maps an on-disk id back to a live session" <|
                 \_ ->
                     let
