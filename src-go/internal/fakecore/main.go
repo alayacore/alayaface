@@ -229,9 +229,30 @@ func handleCmd(raw string) {
 	case "save":
 		// Empty input = save to the --session file (real alayacore
 		// semantics). Overwrite with a marker so tests can verify the
-		// graceful-close save arrived before the process exited.
+		// graceful-close save arrived before the process exited. A file
+		// that already carries a REAL history (a FORK wrote the truncated
+		// history there) keeps it — clobbering it would make a later
+		// resume replay the canned history instead of the fork's.
 		if sessionFile != "" {
-			if err := os.WriteFile(sessionFile, []byte(`{"version":1,"saved":true}`), 0o644); err != nil {
+			var f struct {
+				Forked  bool      `json:"forked"`
+				History []histMsg `json:"history"`
+			}
+			hasHistory := false
+			if b, err := os.ReadFile(sessionFile); err == nil {
+				if json.Unmarshal(b, &f) == nil && (f.Forked || len(f.History) > 0) {
+					hasHistory = true
+				}
+			}
+			var payload []byte
+			if hasHistory {
+				payload, _ = json.Marshal(map[string]any{
+					"version": 1, "saved": true, "forked": f.Forked, "history": f.History,
+				})
+			} else {
+				payload = []byte(`{"version":1,"saved":true}`)
+			}
+			if err := os.WriteFile(sessionFile, payload, 0o644); err != nil {
 				coErr(msg.ID, "cannot write session file")
 				return
 			}

@@ -279,7 +279,9 @@ try {
   assert(forkEntry.meta.conversation_id === rootEntry.sid,
     'fork lineage conversation_id = original session, got: ' + JSON.stringify(lineageFiles));
   assert(forkEntry.meta.parent_instance_id === rootEntry.sid, 'fork parent = original session');
-  console.log('PASS: fork lineage: ' + rootEntry.sid + ' (root) → ' + forkEntry.sid + ' (fork) in session.meta.json');
+  const rootSid = rootEntry.sid;
+  const forkSid = forkEntry.sid;
+  console.log('PASS: fork lineage: ' + rootSid + ' (root) → ' + forkSid + ' (fork) in session.meta.json');
 
   // e) The original S window is gone (adoption closed it); the fork
   //    session (with the plan status bar) is the active one.
@@ -287,6 +289,46 @@ try {
   assert(panelCount >= 1, 'fork session window present, got: ' + panelCount);
   await shot(page, '04-final.png');
   console.log('PASS: original session closed, fork session takes over');
+
+  // ── 8. RESTART consistency (P39-B5) ───────────────────────────────
+  // Page refresh: close_all_sessions gracefully saves every session
+  // (fakecore's save KEEPS the fork's truncated history), then the
+  // plan-meta scan rebuilds planMetas AND the lineage registry from the
+  // session.meta.json files. Resume the FORK (the conversation HEAD) →
+  // it replays its truncated history → the replayed plan message binds
+  // the status bar through the REBUILT registry (no "Open plan").
+  await page.reload({ waitUntil: 'networkidle0', timeout: 30000 });
+  await waitFor('.global-menu-btn');
+  await sleep(2000); // close_all_sessions + planMetas/lineage scan settle
+  await page.click('.global-menu-btn');
+  await waitFor('.global-menu-panel');
+  assert(await clickByText('.global-menu-item', 'Session Manager'), 'Session Manager menu item (refresh)');
+  // The overlay list may be considered non-visible by Puppeteer (scroll
+  // container); wait for presence, not visibility.
+  await page.waitForSelector('.sel-page-item', { timeout: 10000 });
+  const resumedFork = await page.evaluate((fid) => {
+    const items = [...document.querySelectorAll('.sel-page-item')];
+    for (const it of items) {
+      const name = it.querySelector('.sel-page-item-name')?.textContent || '';
+      const btn = [...it.querySelectorAll('button')].find(b => b.textContent.trim() === 'Resume');
+      if (name === fid.slice(0, 8) && btn && !btn.disabled) { btn.click(); return true; }
+    }
+    return false;
+  }, forkSid);
+  assert(resumedFork, 'fork (head) session Resume clickable after refresh');
+  // The resumed fork replays its truncated history; the replayed plan
+  // message must bind via the REBUILT lineage registry.
+  await page.waitForFunction(() => {
+    const bars = [...document.querySelectorAll('.plan-offer-btn')].map(e => e.textContent || '');
+    if (bars.length === 0) return false;
+    if (bars.some(t => t.includes('Open plan'))) return false;
+    return bars.some(t => t.includes('E2E Demo') && t.includes('Completed'));
+  }, { timeout: 30000 });
+  await sleep(600);
+  const planFilesAfterRestart = findPlanDirs().length;
+  assert(planFilesAfterRestart === 1, 'no duplicate plan after restart+resume, got: ' + planFilesAfterRestart);
+  await shot(page, '05-after-restart.png');
+  console.log('PASS: after refresh, resuming the fork (head) rebinds the status bar via the rebuilt lineage (no duplicate plan)');
 
   console.log('\nALL PASS ✅');
   console.log('screenshots:');
