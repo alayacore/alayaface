@@ -4,7 +4,8 @@ module Plan.Update exposing
     , planDirIn
     , planDirOf
     , planFilePathOf
-    , planOriginSessionId
+    , planOriginSessionDir
+    , sessionDirForCreate
     , runStatesOf
     , onDiskSessionId
     , planDirEntryDecoder
@@ -102,23 +103,35 @@ sessionsDir home =
     home ++ "/.alayaface/sessions"
 
 
--- The plan's directory under its owning session:
--- sessions/<originSessionId>/plans/<planId>
-planDirIn : String -> String -> String -> String
-planDirIn home originSessionId planId =
-    sessionsDir home ++ "/" ++ originSessionId ++ "/plans/" ++ planId
+-- The plan's directory: under its owning session's REAL on-disk dir
+-- (sessions/<id> for a top-level session, the nested node-session dir
+-- for a plan child — P28: top level is never a plan child), followed by
+-- plans/<planId>. `sessionDirs` maps every known session id → its
+-- on-disk dir (recorded at creation, rebuilt by the meta scan). Unknown
+-- ids fall back to the top-level path (pre-P39 data / in-flight
+-- creates). Passing the id alone and joining sessions/<id> was the P28
+-- bug: a plan child (node session) leaked its plans/ to the sessions/
+-- top level.
+planDirIn : String -> Dict String String -> String -> String -> String
+planDirIn home sessionDirMap originSessionId planId =
+    let
+        originDir =
+            Dict.get originSessionId sessionDirMap
+                |> Maybe.withDefault (sessionsDir home ++ "/" ++ originSessionId)
+    in
+    originDir ++ "/plans/" ++ planId
 
 
 {-| The plan's on-disk directory, resolved from the planMetas index: the
 origin session's ON-DISK id (resumes get fresh live ids whose dir does
 not exist — the plan must live under the original dir id, which is what
-PlanSaveReady records).
+PlanSaveReady records), resolved to its REAL directory via sessionDirs.
 -}
 planDirOf : Model -> String -> Maybe String
 planDirOf model planId =
     case Dict.get planId model.planMetas of
         Just meta ->
-            Just (planDirIn model.homeDir meta.origin.sessionId planId)
+            Just (planDirIn model.homeDir model.sessionDirMap meta.origin.sessionId planId)
 
         Nothing ->
             Nothing
@@ -131,13 +144,43 @@ planFilePathOf model planId =
     Maybe.map (\d -> d ++ "/" ++ planId ++ ".json") (planDirOf model planId)
 
 
-{-| The owning session's ON-DISK id for a plan (meta origin). Plan node
-sessions are created/resumed nested under this session's dir.
+{-| The owning session's ON-DISK DIRECTORY for a plan (meta origin id,
+resolved through sessionDirs). Plan node sessions are created/resumed
+NESTED under this dir — passing the DIRECTORY (not just the id) keeps
+nested node sessions (plan children) inside their real subtree instead
+of leaking to the sessions/ top level (P28 layout bug).
 -}
-planOriginSessionId : Model -> String -> Maybe String
-planOriginSessionId model planId =
+planOriginSessionDir : Model -> String -> Maybe String
+planOriginSessionDir model planId =
     Dict.get planId model.planMetas
-        |> Maybe.map (.origin >> .sessionId)
+        |> Maybe.andThen
+            (\meta ->
+                Dict.get meta.origin.sessionId model.sessionDirMap
+                    |> Maybe.withDefault (sessionsDir model.homeDir ++ "/" ++ meta.origin.sessionId)
+                    |> Just
+            )
+
+
+{-| The on-disk directory of a session being created: top-level
+sessions/<id> for plain sessions; the NESTED node-session dir
+<originDir>/plans/<planId>/<nodeId>/<id> for plan children (P28 layout —
+children never leak to the sessions/ top level). Mirrors the backend's
+dirs.CreatePlanSessionDirFrom. Recorded in sessionDirMap at
+SessionCreated.
+-}
+sessionDirForCreate : Model -> String -> String
+sessionDirForCreate model id =
+    case model.planCreating of
+        Just (RunnerCreate planId nodeId) ->
+            case planOriginSessionDir model planId of
+                Just originDir ->
+                    originDir ++ "/plans/" ++ planId ++ "/" ++ nodeId ++ "/" ++ id
+
+                Nothing ->
+                    sessionsDir model.homeDir ++ "/" ++ id
+
+        _ ->
+            sessionsDir model.homeDir ++ "/" ++ id
 
 
 {-| Every open plan's run-state nodes, keyed by planId (empty dict for
@@ -1256,8 +1299,9 @@ registerForkInstance dispatch forkId model =
 
 
 {-| The fork's session.meta.json path: a plan-node fork lives nested
-under sessions/<origin>/plans/<planId>/<nodeId>/<forkId>/, a plain fork
+under <originSessionDir>/plans/<planId>/<nodeId>/<forkId>/, a plain fork
 at sessions/<forkId>/ — matching where the backend created the fork.
+originSessionId now carries the origin's REAL directory (P28 fix).
 -}
 forkMetaPath : String -> PC.CascadeForkTarget -> String -> String
 forkMetaPath homeDir target forkId =
@@ -1265,9 +1309,7 @@ forkMetaPath homeDir target forkId =
         sessionsDir homeDir ++ "/" ++ forkId ++ "/session.meta.json"
 
     else
-        sessionsDir homeDir
-            ++ "/"
-            ++ target.originSessionId
+        target.originSessionId
             ++ "/plans/"
             ++ target.planId
             ++ "/"
@@ -1969,7 +2011,7 @@ nodeSessionArgsIn planId nodeId model =
     , workDir = planWorkDir planId model
     , planId = Just planId
     , nodeId = Just nodeId
-    , originSessionId = planOriginSessionId model planId
+    , originSessionId = planOriginSessionDir model planId
     }
 
 

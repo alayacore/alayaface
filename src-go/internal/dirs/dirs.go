@@ -244,15 +244,16 @@ func SanitizeDirComponent(s string) string {
 }
 
 // CreatePlanSessionDirFrom creates a PLAN NODE session directory nested
-// under sessions/<originSessionId>/plans/<planId>/<nodeId>/<uuid>/, so
-// the sessions/ top level only ever contains plain (non-plan) sessions
-// and every plan lives inside the session that created it. All id
-// components are sanitized with SanitizeDirComponent; preset selects the
-// config template like CreateSessionDirFrom.
-func CreatePlanSessionDirFrom(sessionsDir, originSessionId, planId, nodeId, uuid, preset string) (string, error) {
+// under <originSessionDir>/plans/<planId>/<nodeId>/<uuid>/, where
+// originSessionDir is the owning session's REAL directory (the frontend
+// passes sessions/<id> for a top-level session or the nested node-session
+// dir for a plan child — P28: the sessions/ top level only ever contains
+// plain sessions). All id components are sanitized with
+// SanitizeDirComponent; preset selects the config template like
+// CreateSessionDirFrom.
+func CreatePlanSessionDirFrom(sessionsDir, originSessionDir, planId, nodeId, uuid, preset string) (string, error) {
 	parent := filepath.Join(
-		sessionsDir,
-		SanitizeDirComponent(originSessionId),
+		originSessionDir,
 		"plans",
 		SanitizeDirComponent(planId),
 		SanitizeDirComponent(nodeId),

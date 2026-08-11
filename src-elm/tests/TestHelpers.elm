@@ -64,6 +64,7 @@ initModelWithSession =
     , planMetaSessionQueue = []
     , planMetaNodeMetaQueue = []
     , sessionLineage = Dict.empty
+    , sessionDirMap = Dict.empty
     , fsReqCounter = 0
     , planRunStatuses = Dict.empty
     , planCascadePreview = Nothing

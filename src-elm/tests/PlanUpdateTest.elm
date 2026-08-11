@@ -99,6 +99,50 @@ suite =
                 \_ ->
                     PU.planWinKeyForPath "plans/demo-1/demo-1"
                         |> Expect.equal "demo-1"
+            , test "planDirIn follows the origin's REAL directory when known (P28 layout fix)" <|
+                \_ ->
+                    let
+                        home = "/h"
+                        -- a plan child (node session) nested under the
+                        -- top-level session's plan subtree
+                        dirMap =
+                            Dict.fromList
+                                [ ( "s1", "/h/.alayaface/sessions/s1" )
+                                , ( "node-1", "/h/.alayaface/sessions/s1/plans/p1/t1/node-1" )
+                                ]
+                    in
+                    Expect.equal
+                        ( PU.planDirIn home dirMap "node-1" "sub" )
+                        "/h/.alayaface/sessions/s1/plans/p1/t1/node-1/plans/sub"
+            , test "planDirIn falls back to the top-level path for unknown origins" <|
+                \_ ->
+                    Expect.equal
+                        ( PU.planDirIn "/h" Dict.empty "s9" "p9" )
+                        "/h/.alayaface/sessions/s9/plans/p9"
+            , test "sessionDirForCreate nests plan children, top-levels plain sessions" <|
+                \_ ->
+                    let
+                        m0 =
+                            { initModelWithSession
+                                | planCreating = Just (AT.RunnerCreate "p1" "t1")
+                                , planMetas =
+                                    Dict.fromList
+                                        [ ( "p1", { origin = { sessionId = "s1", planIndex = 1 }, feedbacks = [], depth = 1, createdAt = 0, name = "p1", lastStatus = "", parentPlanId = Nothing } )
+                                        ]
+                                , sessionDirMap =
+                                    Dict.fromList
+                                        [ ( "s1", "/h/.alayaface/sessions/s1" ) ]
+                                , homeDir = "/h"
+                            }
+                    in
+                    Expect.equal
+                        ( PU.sessionDirForCreate m0 "uuid-1" )
+                        "/h/.alayaface/sessions/s1/plans/p1/t1/uuid-1"
+            , test "sessionDirForCreate uses the top level for plain sessions" <|
+                \_ ->
+                    Expect.equal
+                        ( PU.sessionDirForCreate { initModelWithSession | homeDir = "/h" } "uuid-1" )
+                        "/h/.alayaface/sessions/uuid-1"
             , test "nextFsReq allocates monotonic ids" <|
                 \_ ->
                     let

@@ -141,7 +141,7 @@ func TestCreatePlanSessionDirFromNests(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		sessionDir, err := CreatePlanSessionDirFrom(sessions, "sess-1", "demo plan/x", "t1", "uuid-1", "")
+		sessionDir, err := CreatePlanSessionDirFrom(sessions, filepath.Join(sessions, "sess-1"), "demo plan/x", "t1", "uuid-1", "")
 		if err != nil {
 			t.Fatal(err)
 		}

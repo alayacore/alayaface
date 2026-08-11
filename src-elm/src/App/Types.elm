@@ -161,6 +161,14 @@ type alias Model =
     -- resolve frame events / bindings to the CONVERSATION id (stable
     -- across forks). See Session.Meta.
     , sessionLineage : Dict String SM.SessionMeta
+    -- P28 layout fix: every known session id → its ON-DISK DIRECTORY.
+    -- Top-level sessions live at sessions/<id>; plan NODE sessions are
+    -- NESTED at sessions/<origin>/plans/<planId>/<nodeId>/<id>. Plans
+    -- created by a node session must live inside that nested dir — using
+    -- the id to join sessions/<id> leaked plan children to the sessions/
+    -- top level. Recorded at SessionCreated, rebuilt by the meta scan.
+    -- (sessionDirMap, to distinguish from `sessionDirs` = the manager list)
+    , sessionDirMap : Dict String String
     -- Monotonic counter for fs request ids (fsListDir/fsReadFileText
     -- only — the two ports shared by the plan-meta scan and the normal
     -- UI flows). Every request gets a unique id so responses can be

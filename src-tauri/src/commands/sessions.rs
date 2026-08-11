@@ -138,17 +138,18 @@ pub async fn create_session(
 /// Build the on-disk path of a plan NODE session:
 /// sessions/<originSessionId>/plans/<planId>/<nodeId>/<sessionId>.
 /// Plain sessions (no planId) stay at sessions/<sessionId>. The P28
-/// layout is the ONLY layout — no legacy fallbacks.
+/// layout is the ONLY layout — no legacy fallbacks. originSessionDir is
+/// the owning session's REAL directory (the frontend passes it — P28
+/// fix: plan children never leak to the sessions/ top level).
 fn plan_session_dir_for(
     sessions_root: &std::path::Path,
-    origin_session_id: &str,
+    origin_session_dir: &str,
     plan_id: &str,
     node_id: &str,
     session_id: &str,
 ) -> std::path::PathBuf {
     if !plan_id.trim().is_empty() {
-        return sessions_root
-            .join(dirs::sanitize_dir_component(origin_session_id))
+        return std::path::PathBuf::from(origin_session_dir)
             .join("plans")
             .join(dirs::sanitize_dir_component(plan_id))
             .join(dirs::sanitize_dir_component(node_id))

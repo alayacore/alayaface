@@ -174,14 +174,17 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 }
 
 // planSessionDirFor builds the on-disk path of a plan NODE session:
-// sessions/<originSessionId>/plans/<planId>/<nodeId>/<sessionId>.
-// Plain sessions (no planId) stay at sessions/<sessionId>. The P28
-// layout is the ONLY layout — no legacy fallbacks.
-func planSessionDirFor(sessionsRoot, originSessionId, planId, nodeId, sessionId string) string {
+// <originSessionDir>/plans/<planId>/<nodeId>/<sessionId>. The frontend
+// passes the owning session's REAL directory (sessions/<id> for a
+// top-level session, the NESTED node-session dir for a plan child — P28:
+// the sessions/ top level is never a plan child), so nested node
+// sessions never leak to the top level. Plain sessions (no planId) stay
+// at sessions/<sessionId>. The P28 layout is the ONLY layout — no
+// legacy fallbacks.
+func planSessionDirFor(sessionsRoot, originSessionDir, planId, nodeId, sessionId string) string {
 	if strings.TrimSpace(planId) != "" {
 		return filepath.Join(
-			sessionsRoot,
-			dirs.SanitizeDirComponent(originSessionId),
+			originSessionDir,
 			"plans",
 			dirs.SanitizeDirComponent(planId),
 			dirs.SanitizeDirComponent(nodeId),

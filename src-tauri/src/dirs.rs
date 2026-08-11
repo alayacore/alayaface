@@ -207,21 +207,21 @@ pub fn sanitize_dir_component(s: &str) -> String {
 }
 
 /// Create a PLAN NODE session directory nested under
-/// sessions/<originSessionId>/plans/<planId>/<nodeId>/<uuid>/, so the
-/// sessions/ top level only ever contains plain (non-plan) sessions and
-/// every plan lives inside the session that created it. All id
-/// components are sanitized with `sanitize_dir_component`. Mirrors Go
-/// CreatePlanSessionDirFrom.
+/// <originSessionDir>/plans/<planId>/<nodeId>/<uuid>/, where
+/// originSessionDir is the owning session's REAL directory (the frontend
+/// passes sessions/<id> for a top-level session or the nested node-session
+/// dir for a plan child — P28: the sessions/ top level only ever contains
+/// plain sessions). All id components are sanitized with
+/// `sanitize_dir_component`. Mirrors Go CreatePlanSessionDirFrom.
 pub fn create_session_dir_nested(
     sessions_dir: &PathBuf,
-    origin_session_id: &str,
+    origin_session_dir: &str,
     plan_id: &str,
     node_id: &str,
     uuid: &str,
     preset: &str,
 ) -> Result<PathBuf, String> {
-    let parent = sessions_dir
-        .join(sanitize_dir_component(origin_session_id))
+    let parent = PathBuf::from(origin_session_dir)
         .join("plans")
         .join(sanitize_dir_component(plan_id))
         .join(sanitize_dir_component(node_id));
@@ -511,7 +511,7 @@ mod tests {
             let (config, sessions) = ensure().unwrap();
             std::fs::write(config.join("model.conf"), "name: \"Real\"\n").unwrap();
 
-            let dir = create_session_dir_nested(&sessions, "sess-1", "demo plan/x", "t1", "uuid-1", "").unwrap();
+            let dir = create_session_dir_nested(&sessions, &sessions.join("sess-1").to_string_lossy(), "demo plan/x", "t1", "uuid-1", "").unwrap();
             let want = sessions.join("sess-1").join("plans").join("demo_plan_x").join("t1").join("uuid-1");
             assert_eq!(dir, want);
             assert!(dir.join("config").join("model.conf").exists());

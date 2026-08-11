@@ -500,6 +500,15 @@ update msg model =
 
                             else
                                 model.sessionLineage
+                        -- P28 layout fix: record this session's REAL
+                        -- on-disk directory (top-level for plain
+                        -- sessions, the nested node-session dir for plan
+                        -- children) so plans created by it live in the
+                        -- right subtree.
+                        , sessionDirMap =
+                            Dict.insert id
+                                (sessionDirForCreate model id)
+                                model.sessionDirMap
                         , pendingEvents = Dict.remove id model.pendingEvents
                     }
 
@@ -1891,12 +1900,21 @@ update msg model =
                                         _ ->
                                             -- A node dir listing: subdirs
                                             -- are node session dirs (<uuid>)
-                                            -- — queue their lineage metas.
+                                            -- — queue their lineage metas AND
+                                            -- record each session's REAL
+                                            -- (nested) directory so plans it
+                                            -- creates stay in this subtree
+                                            -- (P28 layout fix).
                                             listNext
                                                 { model
                                                     | planMetaNodeMetaQueue =
                                                         model.planMetaNodeMetaQueue
                                                             ++ List.map (\n -> dir ++ "/" ++ n ++ "/session.meta.json") dirsIn
+                                                    , sessionDirMap =
+                                                        List.foldl
+                                                            (\n acc -> Dict.insert n (dir ++ "/" ++ n) acc)
+                                                            model.sessionDirMap
+                                                            dirsIn
                                                 }
 
                                 Nothing ->
@@ -1932,6 +1950,13 @@ update msg model =
                                                 , planMetaDirListing = Just next
                                                 , planMetaSessionQueue = sessionMetaQueue
                                                 , planMetaScanReqId = Just reqId
+                                                -- P28 layout fix: record the
+                                                -- top-level session dirs.
+                                                , sessionDirMap =
+                                                    List.foldl
+                                                        (\n acc -> Dict.insert n (sessionsDir model.homeDir ++ "/" ++ n) acc)
+                                                        model.sessionDirMap
+                                                        sessionDirs
                                               }
                                             , Ports.fsListDir { reqId = reqId, path = next }
                                             )
@@ -2439,7 +2464,7 @@ update msg model =
                     { origin0 | sessionId = originDiskId }
 
                 planDir =
-                    planDirIn model.homeDir originDiskId planId
+                    planDirIn model.homeDir model.sessionDirMap originDiskId planId
 
                 path =
                     planDir ++ "/" ++ planId ++ ".json"
@@ -3029,7 +3054,7 @@ update msg model =
                                                             , planNodeSessions =
                                                                 Dict.insert convId (planId ++ "/" ++ nodeId) model.planNodeSessions
                                                           }
-                                                        , Ports.resumeSession { sessionId = convId, workDir = planWorkDir planId model, planId = Just planId, nodeId = Just nodeId, originSessionId = planOriginSessionId model planId }
+                                                        , Ports.resumeSession { sessionId = convId, workDir = planWorkDir planId model, planId = Just planId, nodeId = Just nodeId, originSessionId = planOriginSessionDir model planId }
                                                         )
 
                                         Nothing ->
@@ -3055,7 +3080,7 @@ update msg model =
                                                                     , planNodeSessions =
                                                                         Dict.insert sid (planId ++ "/" ++ nodeId) model.planNodeSessions
                                                                   }
-                                                                , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model, planId = Just planId, nodeId = Just nodeId, originSessionId = planOriginSessionId model planId }
+                                                                , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model, planId = Just planId, nodeId = Just nodeId, originSessionId = planOriginSessionDir model planId }
                                                                 )
 
                                                 Nothing ->
@@ -3098,7 +3123,7 @@ update msg model =
                             , planNodeSessions =
                                 Dict.insert sid (planId ++ "/" ++ nodeId) model.planNodeSessions
                           }
-                        , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model, planId = Just planId, nodeId = Just nodeId, originSessionId = planOriginSessionId model planId }
+                        , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model, planId = Just planId, nodeId = Just nodeId, originSessionId = planOriginSessionDir model planId }
                         )
 
         PlanToggleInfo ->

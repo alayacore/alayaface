@@ -884,13 +884,16 @@ func TestIntegrationNestedPlanSessionDir(t *testing.T) {
 		return p["session_id"] == originSid && p["tag"] == "SM" && js != nil && js["type"] == "task"
 	})
 
-	// Plan node session goes NESTED under the ORIGIN session's dir (id
-	// with '/' + spaces exercises the sanitizer; create and resume must
-	// agree on the mapping).
+	// Plan node session goes NESTED under the ORIGIN session's dir. The
+	// originSessionId parameter carries the origin's REAL DIRECTORY
+	// (sessions/<id> for a top-level session — P28 fix: the frontend
+	// passes the directory, not the bare id, so plan children of plan
+	// children stay nested too). id with '/' + spaces exercises the
+	// sanitizer; create and resume must agree on the mapping.
 	workDir := filepath.Join(sessionsRoot, originSid, "plans", "demo 1", "work")
 	body := e.rpcOK(t, "create_session", map[string]any{
 		"binaryPath": "", "configPath": "", "toolConfirm": nil,
-		"workDir": workDir, "planId": "demo 1", "nodeId": "t1/x", "originSessionId": originSid,
+		"workDir": workDir, "planId": "demo 1", "nodeId": "t1/x", "originSessionId": filepath.Join(sessionsRoot, originSid),
 	})
 	var sid string
 	if err := json.Unmarshal(body, &sid); err != nil {
@@ -940,7 +943,7 @@ func TestIntegrationNestedPlanSessionDir(t *testing.T) {
 	e.rpcOK(t, "close_session", map[string]any{"sessionId": sid})
 	body = e.rpcOK(t, "resume_session", map[string]any{
 		"sessionId": sid, "binaryPath": "", "workDir": workDir,
-		"planId": "demo 1", "nodeId": "t1/x", "originSessionId": originSid,
+		"planId": "demo 1", "nodeId": "t1/x", "originSessionId": filepath.Join(sessionsRoot, originSid),
 	})
 	var newID string
 	if err := json.Unmarshal(body, &newID); err != nil {
@@ -956,7 +959,7 @@ func TestIntegrationNestedPlanSessionDir(t *testing.T) {
 	e.rpcErr(t, "resume_session", map[string]any{"sessionId": sid, "binaryPath": ""})
 
 	// Delete with originSessionId/planId/nodeId removes the nested dir.
-	e.rpcOK(t, "delete_session_dir", map[string]any{"sessionId": sid, "planId": "demo 1", "nodeId": "t1/x", "originSessionId": originSid})
+	e.rpcOK(t, "delete_session_dir", map[string]any{"sessionId": sid, "planId": "demo 1", "nodeId": "t1/x", "originSessionId": filepath.Join(sessionsRoot, originSid)})
 	if _, err := os.Stat(nestedDir); err == nil {
 		t.Fatal("nested plan session dir not deleted")
 	}
