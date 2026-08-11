@@ -1297,7 +1297,7 @@ viewPlanStatusBar model sid planIndex =
                     meta.name
 
                 ( statusLabel, statusClass, canRestart ) =
-                    planStatusFor model planId (Just meta)
+                    planStatusFor model sid planId (Just meta)
             in
             Html.div [ Attr.class "plan-offer" ]
                 [ Html.button
@@ -1346,37 +1346,49 @@ planMetaForMessage =
     PU.planMetaForMessage
 
 
-planStatusFor : Model -> String -> Maybe PM.PlanMeta -> ( String, String, Bool )
-planStatusFor model planId meta =
-    case Dict.get planId model.planWindows of
-        Just win ->
-            case win.run of
-                Just run ->
-                    runStatusView run.status
-
-                Nothing ->
-                    runStatusView PT.NotStarted
-
-        Nothing ->
-            -- Window closed (auto-close on completion, or never opened):
-            -- fall back to the last known run status kept in memory, then
-            -- to the status persisted in meta.json (survives restarts).
-            case Dict.get planId model.planRunStatuses of
+planStatusFor : Model -> String -> String -> Maybe PM.PlanMeta -> ( String, String, Bool )
+planStatusFor model sid planId meta =
+    -- C 架构：会话版本视图优先——同一 plan 在不同会话版本里状态不同
+    --（老会话看到旧状态；这是"老会话 A 显示已执行"bug 的修复）。
+    case PU.versionPlanStatus model sid planId of
+        Just statusStr ->
+            case PT.runStatusFromString statusStr of
                 Just st ->
                     runStatusView st
 
                 Nothing ->
-                    case meta of
-                        Just m ->
-                            case PT.runStatusFromString m.lastStatus of
-                                Just st ->
-                                    runStatusView st
+                    ( "Open", "created", False )
+
+        Nothing ->
+            case Dict.get planId model.planWindows of
+                Just win ->
+                    case win.run of
+                        Just run ->
+                            runStatusView run.status
+
+                        Nothing ->
+                            runStatusView PT.NotStarted
+
+                Nothing ->
+                    -- Window closed (auto-close on completion, or never opened):
+                    -- fall back to the last known run status kept in memory, then
+                    -- to the status persisted in meta.json (survives restarts).
+                    case Dict.get planId model.planRunStatuses of
+                        Just st ->
+                            runStatusView st
+
+                        Nothing ->
+                            case meta of
+                                Just m ->
+                                    case PT.runStatusFromString m.lastStatus of
+                                        Just st ->
+                                            runStatusView st
+
+                                        Nothing ->
+                                            ( "Open", "created", False )
 
                                 Nothing ->
                                     ( "Open", "created", False )
-
-                        Nothing ->
-                            ( "Open", "created", False )
 
 
 {-| The (label, css-class, can-restart) triple for a run status — used by

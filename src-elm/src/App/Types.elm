@@ -47,6 +47,8 @@ import Session.Selector as Sel
 import Session.Types as T
 import Session.Meta as SM
 import App.NodeConnection as NC
+import Arch.Values as AV
+import Arch.Freeze as Freeze
 
 
 type alias Flags =
@@ -255,6 +257,15 @@ type alias Model =
     -- tracks which segments are connected.
     , connectionChain : List NC.ChainSegment
     , homeDir : String
+    -- C 架构（docs/arch-persistent.md）：不可变版本
+    -- 会话版本引用（会话 id → refs：head + versions），run 摘要缓存
+    -- （hash → RunSummary），版本解码缓存（hash → Version），以及
+    -- 版本固化队列（串行：一次一个固化，reqId 0..n 只匹配活动项）。
+    , sessionRefs : Dict String AV.SessionRefs
+    , runSummaries : Dict String AV.RunSummary
+    , versionCache : Dict String AV.Version
+    , freezeActive : Maybe Freeze.FreezeState
+    , freezeQueue : List Freeze.FreezeState
     }
 
 
@@ -271,6 +282,9 @@ type Msg
     | FrameEvent E.Value
     | StatusEvent E.Value
     | RpcError E.Value
+      -- C 架构：对象存储结果（reqId 匹配的 object_put / object_get）
+    | ObjectPutResult E.Value
+    | ObjectGetResult E.Value
       -- User actions
     | SendPrompt
     | CancelTask

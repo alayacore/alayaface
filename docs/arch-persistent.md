@@ -194,7 +194,7 @@ Plan 的 Run.nodes[nodeId].session = 节点会话的 VersionRef（引用）
 - **C1 — 值类型 + 对象存储** ✅ 已完成
   - `PlanDef`/`Run`/`Version` 类型（Elm）+ 后端 `object_put/get`（Go/Rust 对称 + 测试）
   - `session.refs.json` 编解码；版本固化（plan 完成时把工作副本固化为 Version）
-- **C2 — 版本化 plan 状态（本 bug 的核心修复）**
+- **C2 — 版本化 plan 状态（本 bug 的核心修复）** ✅ 已完成（C2a）
   - `Version.planViews` + 状态栏/窗口按版本解析
   - 重跑 = 版本派生（老版本保留，老会话显示旧状态）
   - **验证**：用户 bug 场景 e2e（老会话 A 保持未执行）

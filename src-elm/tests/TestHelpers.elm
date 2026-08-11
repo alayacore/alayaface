@@ -88,4 +88,9 @@ initModelWithSession =
     , planResumedFrom = Dict.empty
     , connectionChain = []
     , homeDir = ""
+    , sessionRefs = Dict.empty
+    , runSummaries = Dict.empty
+    , versionCache = Dict.empty
+    , freezeActive = Nothing
+    , freezeQueue = []
     }

@@ -40,6 +40,29 @@ import Plan.Detect
 import Plan.Frames
 import Overlay.HelpWindow exposing (HelpItem, filterHelpItems)
 import Ports
+import Arch.Values as AV
+import Arch.Freeze as Freeze
+
+
+{-| 启动版本固化队列中下一个待固化项（串行：一次一个，reqId 只匹配
+活动项）。队列空 → 清空 freezeActive。
+-}
+startNextFreeze : Model -> ( Model, Cmd Msg )
+startNextFreeze model =
+    case model.freezeQueue of
+        next :: rest ->
+            let
+                putCmds =
+                    Freeze.initialPuts next
+                        |> List.map
+                            (\( reqId, content ) ->
+                                Ports.objectPut { reqId = String.fromInt reqId, content = content }
+                            )
+            in
+            ( { model | freezeActive = Just next, freezeQueue = rest }, Cmd.batch putCmds )
+
+        [] ->
+            ( { model | freezeActive = Nothing }, Cmd.none )
 
 
 -- Constants (window/canvas/zoom constants moved to App/Windows)
@@ -89,6 +112,30 @@ cascadeForkResultDecoder =
         (\ok sessionId error -> { ok = ok, sessionId = sessionId, error = error })
         (D.field "ok" D.bool)
         (D.field "sessionId" D.string)
+        (D.field "error" D.string)
+
+
+{-| C 架构：object_put 结果（{ reqId, ok, hash, error }）。
+-}
+objectPutResultDecoder : D.Decoder { reqId : String, ok : Bool, hash : String, error : String }
+objectPutResultDecoder =
+    D.map4
+        (\reqId ok hash error -> { reqId = reqId, ok = ok, hash = hash, error = error })
+        (D.field "reqId" D.string)
+        (D.field "ok" D.bool)
+        (D.field "hash" D.string)
+        (D.field "error" D.string)
+
+
+{-| C 架构：object_get 结果（{ reqId, ok, content, error }）。
+-}
+objectGetResultDecoder : D.Decoder { reqId : String, ok : Bool, content : String, error : String }
+objectGetResultDecoder =
+    D.map4
+        (\reqId ok content error -> { reqId = reqId, ok = ok, content = content, error = error })
+        (D.field "reqId" D.string)
+        (D.field "ok" D.bool)
+        (D.field "content" D.string)
         (D.field "error" D.string)
 
 
@@ -1946,7 +1993,15 @@ update msg model =
                                             List.map (\n -> sessionsDir model.homeDir ++ "/" ++ n ++ "/plans") sessionDirs
 
                                         sessionMetaQueue =
-                                            List.map (\n -> sessionsDir model.homeDir ++ "/" ++ n ++ "/session.meta.json") sessionDirs
+                                            List.concatMap
+                                                (\n ->
+                                                    [ sessionsDir model.homeDir ++ "/" ++ n ++ "/session.meta.json"
+                                                    -- C 架构：会话版本引用
+                                                    -- （sessions/<uuid>/session.refs.json）
+                                                    , sessionsDir model.homeDir ++ "/" ++ n ++ "/session.refs.json"
+                                                    ]
+                                                )
+                                                sessionDirs
                                     in
                                     case planDirs of
                                         next :: rest ->
@@ -2192,11 +2247,121 @@ update msg model =
                                         in
                                         { w | view = { wv | saving = False } }
                                     )
-                        in
-                        ( model2, Cmd.none )
+                        in                        ( model2, Cmd.none )
 
                     else
                         ( setPlanErrors [ error ] model, Cmd.none )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        -- C 架构：object_put 结果（版本固化进度推进）。
+        ObjectPutResult raw ->            case D.decodeValue objectPutResultDecoder raw of
+                Ok r ->
+                    if not r.ok then
+                        -- 对象写入失败：中止当前固化，启动队列下一个。
+                        startNextFreeze { model | freezeActive = Nothing, freezeQueue = [] }
+
+                    else
+                        case model.freezeActive of
+                            Nothing ->
+                                ( model, Cmd.none )
+
+                            Just st ->
+                                let
+                                    st2 =
+                                        Freeze.onPutResult (String.toInt r.reqId |> Maybe.withDefault -1) (Just r.hash) st
+                                in
+                                if Freeze.isComplete st2 then
+                                    -- 版本对象已写：更新会话引用 + 写 refs 文件，
+                                    -- 然后启动队列中下一个固化。
+                                    let
+                                        versionHash =
+                                            Maybe.withDefault "" st2.versionHash
+
+                                        refs0 =
+                                            Dict.get st2.sessionId model.sessionRefs
+                                                |> Maybe.withDefault (AV.SessionRefs st2.sessionId "" [])
+
+                                        refs =
+                                            { refs0
+                                                | head = versionHash
+                                                , versions = refs0.versions ++ [ versionHash ]
+                                            }
+
+                                        m1 =
+                                            { model
+                                                | freezeActive = Nothing
+                                                , sessionRefs = Dict.insert st2.sessionId refs model.sessionRefs
+                                                , runSummaries =
+                                                    Dict.union
+                                                        (Freeze.runSummaries st2)
+                                                        model.runSummaries
+                                                , versionCache =
+                                                    case st2.built of
+                                                        Just v ->
+                                                            Dict.insert versionHash v model.versionCache
+
+                                                        Nothing ->
+                                                            model.versionCache
+                                            }
+
+                                        refsPath =
+                                            PU.sessionsDir model.homeDir ++ "/" ++ st2.sessionId ++ "/session.refs.json"
+
+                                        ( m2, nextCmd ) =
+                                            startNextFreeze m1
+                                    in
+                                    ( m2
+                                    , Cmd.batch
+                                        [ nextCmd
+                                        , Ports.fsWriteFileText
+                                            { path = refsPath
+                                            , content = AV.refsContent refs
+                                            , createParents = True
+                                            }
+                                        ]
+                                    )
+
+                                else
+                                    case Freeze.buildVersion st2 of
+                                        Just version ->
+                                            -- 块/run 全部就绪 → 固化版本对象本身。
+                                            let
+                                                content =
+                                                    AV.versionContent version
+
+                                                st3 =
+                                                    { st2 | built = Just version }
+                                            in
+                                            ( { model | freezeActive = Just st3 }
+                                            , Ports.objectPut
+                                                { reqId = String.fromInt (Freeze.versionReq st3)
+                                                , content = content
+                                                }
+                                            )
+
+                                        Nothing ->
+                                            -- 还有块/run 未就绪：继续等。
+                                            ( { model | freezeActive = Just st2 }, Cmd.none )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        -- C 架构：object_get 结果（把版本内容载入缓存，状态栏按版本解析）。
+        ObjectGetResult raw ->
+            case D.decodeValue objectGetResultDecoder raw of
+                Ok r ->
+                    if r.ok then
+                        case D.decodeString AV.decodeVersion r.content of
+                            Ok v ->
+                                ( { model | versionCache = Dict.insert r.reqId v model.versionCache }, Cmd.none )
+
+                            Err _ ->
+                                ( model, Cmd.none )
+
+                    else
+                        ( model, Cmd.none )
 
                 Err _ ->
                     ( model, Cmd.none )
@@ -2219,9 +2384,29 @@ update msg model =
                             path =
                                 Maybe.withDefault "" model.planMetaReading
 
-                            m1 =
+                            ( m1, extraCmd ) =
                                 if res.ok then
-                                    if String.endsWith "/session.meta.json" path then
+                                    if String.endsWith "/session.refs.json" path then
+                                        -- C 架构：会话版本引用
+                                        -- （sessions/<uuid>/session.refs.json）
+                                        -- 载入 sessionRefs，并触发 head 版本
+                                        -- 内容加载（状态栏按版本解析）。
+                                        case D.decodeString AV.decodeSessionRefs res.content of
+                                            Ok refs ->
+                                                let
+                                                    m2 =
+                                                        { model | sessionRefs = Dict.insert refs.id refs model.sessionRefs }
+                                                in
+                                                if refs.head /= "" && not (Dict.member refs.head model.versionCache) then
+                                                    ( m2, Ports.objectGet { reqId = refs.head, hash = refs.head } )
+
+                                                else
+                                                    ( m2, Cmd.none )
+
+                                            Err _ ->
+                                                ( model, Cmd.none )
+
+                                    else if String.endsWith "/session.meta.json" path then
                                         -- P39/Phase B: a session lineage
                                         -- meta (sessions/<uuid>/session.meta.json)
                                         -- registers instanceId → SessionMeta.
@@ -2236,10 +2421,12 @@ update msg model =
                                                             _ ->
                                                                 path
                                                 in
-                                                { model | sessionLineage = Dict.insert instanceId sm model.sessionLineage }
+                                                ( { model | sessionLineage = Dict.insert instanceId sm model.sessionLineage }
+                                                , Cmd.none
+                                                )
 
                                             Err _ ->
-                                                model
+                                                ( model, Cmd.none )
 
                                     else
                                         case D.decodeString PM.decodeMeta res.content of
@@ -2257,15 +2444,17 @@ update msg model =
                                                             |> Maybe.withDefault path
                                                             |> String.dropRight (String.length ".meta.json")
                                                 in
-                                                { model | planMetas = Dict.insert planId meta model.planMetas }
+                                                ( { model | planMetas = Dict.insert planId meta model.planMetas }
+                                                , Cmd.none
+                                                )
 
                                             Err _ ->
-                                                model
+                                                ( model, Cmd.none )
 
                                 else
                                     -- A failed meta read (missing/corrupt
                                     -- file): skip it, keep the chain going.
-                                    model
+                                    ( model, Cmd.none )
                         in
                         case m1.planMetaReadQueue of
                             next :: rest ->
@@ -2278,11 +2467,16 @@ update msg model =
                                     , planMetaReadQueue = rest
                                     , planMetaReadReqId = Just reqId2
                                   }
-                                , Ports.fsReadFileText { reqId = reqId2, path = next }
+                                , Cmd.batch
+                                    [ Ports.fsReadFileText { reqId = reqId2, path = next }
+                                    , extraCmd
+                                    ]
                                 )
 
                             [] ->
-                                ( { m1 | planMetaReading = Nothing, planMetaReadReqId = Nothing }, Cmd.none )
+                                ( { m1 | planMetaReading = Nothing, planMetaReadReqId = Nothing }
+                                , extraCmd
+                                )
 
                     else
                         case model.planReadTarget of
@@ -2739,6 +2933,25 @@ update msg model =
                                     Set.union model.planSuppressFeedback (Set.fromList scope.closePlanIds)
                             }
 
+                        -- C 架构：确认时固化"重跑前的世界"——被重跑会话
+                        -- 的 V0（plan 保持重跑前的旧状态/未执行）。之后
+                        -- 完成时固化的新版本属于 fork 出的工作副本，老
+                        -- 会话（resume）将看到 V0（老状态隔离）。
+                        ( mFreeze, freezeCmd ) =
+                            if scope.rootSessionId /= "" then
+                                let
+                                    rootDiskId =
+                                        onDiskSessionId model scope.rootSessionId
+                                in
+                                if findPlanIdBySession model rootDiskId == Nothing then
+                                    PU.freezeSessionVersion m0 rootDiskId Nothing
+
+                                else
+                                    ( m0, Cmd.none )
+
+                            else
+                                ( m0, Cmd.none )
+
                         ( m1, closeCmd ) =
                             List.foldl
                                 (\pid ( m, c ) ->
@@ -2748,7 +2961,7 @@ update msg model =
                                     in
                                     ( m2, Cmd.batch [ c, c2 ] )
                                 )
-                                ( m0, Cmd.none )
+                                ( mFreeze, Cmd.none )
                                 scope.closePlanIds
 
                         queue =
@@ -2758,7 +2971,7 @@ update msg model =
                         ( m3, openCmd ) =
                             openNextOrStart { m1 | planCascadeOpenQueue = queue }
                     in
-                    ( m3, Cmd.batch [ closeCmd, openCmd ] )
+                    ( m3, Cmd.batch [ closeCmd, openCmd, freezeCmd ] )
 
                 Nothing ->
                     ( model, Cmd.none )

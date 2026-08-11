@@ -56,6 +56,9 @@ module Plan.Update exposing
     , planEventFromFrame
     , lastAssistantOutput
     , lastAssistantIsPlan
+    , runSummaryForPlan
+    , freezeSessionVersion
+    , versionPlanStatus
     )
 
 {-| Plan Mode update logic (M2): auto-create / feedback / restart
@@ -90,6 +93,8 @@ import Plan.Cascade as PC
 import Plan.Detect
 import Plan.Frames
 import Ports
+import Arch.Values as AV
+import Arch.Freeze as Freeze
 
 
 {-| The main message dispatcher (App/Update.update), injected so plan
@@ -1088,11 +1093,214 @@ feedbackCompletedPlan planId now model =
 
                     ( m1, metaCmd ) =
                         appendMetaFeedback planId fb model
+
+                    -- C 架构：plan 完成 → 把**当前工作副本会话**（结果
+                    -- 插入的那个）固化为不可变版本（planViews[planId] =
+                    -- 新 run；其他 plan 按当前状态固化）。重跑路径下
+                    -- 工作副本是 fork 出的新会话（其版本 = 重跑后世界），
+                    -- 而重跑前的会话在确认时已固化（V0，plan 保持旧状态）。
+                    -- 只对顶层会话固化（节点会话的版本化在 C3）。
+                    ( m2, freezeCmd ) =
+                        case liveOrigin of
+                            Just liveSid ->
+                                let
+                                    originDiskId =
+                                        onDiskSessionId model liveSid
+                                in
+                                if findPlanIdBySession model originDiskId == Nothing then
+                                    freezeSessionVersion m1 originDiskId (Just planId)
+
+                                else
+                                    ( m1, Cmd.none )
+
+                            Nothing ->
+                                ( m1, Cmd.none )
                 in
-                ( m1, Cmd.batch [ feedbackCmd, resumeCmd, metaCmd ] )
+                ( m2, Cmd.batch [ feedbackCmd, resumeCmd, metaCmd, freezeCmd ] )
 
             Nothing ->
                 ( model, Cmd.none )
+
+
+-- ─── C 架构：版本固化（docs/arch-persistent.md §4.2）──────────────
+
+{-| 把 plan 的当前运行状态固化为不可变 RunSummary（版本化状态的最小
+信息：状态栏 / plan 概览）。优先 live window 的 run；窗口关闭（plan
+完成自动关）时回退到内存缓存 planRunStatuses / meta.lastStatus——已
+执行的 plan 在窗口关闭后仍必须记录为已执行（否则固化时被当成未执行）。
+-}
+runSummaryForPlan : Model -> String -> Maybe AV.RunSummary
+runSummaryForPlan model planId =
+    case Dict.get planId model.planWindows of
+        Just win ->
+            case win.run of
+                Just run ->
+                    Just
+                        { runId = run.runId
+                        , status = PT.runStatusToString run.status
+                        , startedAt = Maybe.withDefault 0 run.startedAt
+                        , finishedAt = run.finishedAt
+                        , summary = PC.feedbackSummary run
+                        }
+
+                Nothing ->
+                    persistedRunSummary model planId
+
+        Nothing ->
+            persistedRunSummary model planId
+
+
+{-| 窗口关闭后的 run 摘要回退：从内存缓存 planRunStatuses（最新）或
+meta.lastStatus（持久化快照）构建；summary 取 meta 最后一条 feedback。
+-}
+persistedRunSummary : Model -> String -> Maybe AV.RunSummary
+persistedRunSummary model planId =
+    let
+        statusStr =
+            case Dict.get planId model.planRunStatuses of
+                Just st ->
+                    Just (PT.runStatusToString st)
+
+                Nothing ->
+                    Dict.get planId model.planMetas
+                        |> Maybe.andThen (\meta -> PT.runStatusFromString meta.lastStatus)
+                        |> Maybe.map PT.runStatusToString
+
+        summary =
+            Dict.get planId model.planMetas
+                |> Maybe.map PM.lastFeedbackText
+                |> Maybe.withDefault ""
+    in
+    case statusStr of
+        Just st ->
+            Just
+                { runId = planId
+                , status = st
+                , startedAt = 0
+                , finishedAt = Nothing
+                , summary = summary
+                }
+
+        Nothing ->
+            Nothing
+
+
+{-| C 架构：从会话版本（该会话 head 的 planViews）解析 plan 的显示
+状态——同一 plan 在不同版本里状态不同（老会话看到旧状态）。返回
+run status 字符串（PT.runStatusToString 形式）；Nothing = 该会话尚
+无版本记录（回退现有全局状态逻辑）。`sid` 可以是 live id（经
+planResumedFrom 解析到 on-disk id 查 refs）。
+-}
+versionPlanStatus : Model -> String -> String -> Maybe String
+versionPlanStatus model sid planId =
+    let
+        onDiskId =
+            Dict.get sid model.planResumedFrom |> Maybe.withDefault sid
+    in
+    case Dict.get onDiskId model.sessionRefs of
+        Just refs ->
+            case Dict.get refs.head model.versionCache of
+                Just version ->
+                    case Dict.get planId version.planViews of
+                        Just maybeRun ->
+                            case maybeRun of
+                                Just runHash ->
+                                    case Dict.get runHash model.runSummaries of
+                                        Just run ->
+                                            Just run.status
+
+                                        Nothing ->
+                                            Nothing
+
+                                Nothing ->
+                                    Just "not-started"
+
+                        Nothing ->
+                            Nothing
+
+                Nothing ->
+                    Nothing
+
+        Nothing ->
+            Nothing
+
+
+{-| 固化指定会话的当前版本：消息切块 + 该会话所有 plan 的状态
+（有 run → RunSummary；未执行 → Nothing）→ 新 Version（parent = 旧
+head）→ 激活固化（或入队）。
+-}
+freezeSessionVersion : Model -> String -> Maybe String -> ( Model, Cmd Msg )
+freezeSessionVersion model sessionId runPlanId =
+    let
+        messages =
+            Dict.get sessionId model.sessions
+                |> Maybe.map .messages
+                |> Maybe.withDefault []
+
+        -- 该会话拥有的 plan（C：id 稳定，直接按 meta origin 匹配）
+        ownedPids =
+            Dict.foldl
+                (\pid meta acc ->
+                    if meta.origin.sessionId == sessionId then
+                        pid :: acc
+
+                    else
+                        acc
+                )
+                []
+                model.planMetas
+
+        -- 本次完成的 plan 强制记录为已执行（即使窗口已关）
+        otherPids =
+            List.filter
+                (\pid -> Just pid /= runPlanId)
+                ownedPids
+
+        runs =
+            List.filterMap
+                (\pid -> Maybe.map (\r -> ( pid, r )) (runSummaryForPlan model pid))
+                otherPids
+                ++ (case runPlanId of
+                        Just pid ->
+                            case runSummaryForPlan model pid of
+                                Just r ->
+                                    [ ( pid, r ) ]
+
+                                Nothing ->
+                                    []
+
+                        Nothing ->
+                            []
+                   )
+
+        unexecuted =
+            List.filter
+                (\pid -> Just pid /= runPlanId && runSummaryForPlan model pid == Nothing)
+                ownedPids
+
+        parent =
+            Dict.get sessionId model.sessionRefs
+                |> Maybe.map .head
+
+        st =
+            Freeze.begin sessionId messages runs unexecuted parent
+    in
+    case model.freezeActive of
+        Just _ ->
+            -- 串行固化：已有固化在进行，本固化入队（reqId 只在活动项
+            -- 上有意义，覆盖会导致结果错配）。
+            ( { model | freezeQueue = model.freezeQueue ++ [ st ] }, Cmd.none )
+
+        Nothing ->
+            let
+                putCmds =
+                    Freeze.initialPuts st
+                        |> List.map
+                            (\( reqId, content ) ->
+                                Ports.objectPut { reqId = String.fromInt reqId, content = content }
+                            )
+            in
+            ( { model | freezeActive = Just st }, Cmd.batch putCmds )
 
 
 -- ─── Cascade state-machine wiring (P39/Phase C) ────────────────────
@@ -1151,6 +1359,10 @@ cascadeOnPlanCompleted dispatch planId now model =
                 ( m2, c2 ) =
                     cascadeStepIn dispatch (PC.PlanCompleted planId summary) m1
             in
+            -- C 架构：cascade（重跑）路径**不在这里固化**——本事件先于
+            -- fork（结果插入新工作副本），此时固化会捕获"重跑前世界"
+            -- 并覆盖确认时固化的 V0。重跑后的版本固化在 C2b（工作副本
+            -- 归属重构后，fork 会话 = 同一 Session 的 head）完成。
             ( m2, Cmd.batch [ metaCmd, c2 ] )
 
 

@@ -18,6 +18,7 @@ import Plan.Types as PT
 import Plan.Meta as PM
 import Plan.Cascade as PC
 import Session.Meta as SM
+import Arch.Values as AV
 import Session.Types as T
 import TestHelpers exposing (initModelWithSession)
 
@@ -457,7 +458,63 @@ suite =
                     PU.resolveEventSessionId m0 "live-2" |> Expect.equal "orig-1"
             ]
         , describe "planMetaForMessage (status-bar binding)"
-            [ test "resumed fork window binds through planResumedFrom → lineage registry → conversation origin" <|
+            [ test "versionPlanStatus: plan status resolves from the session's version view (C)" <|
+                \_ ->
+                    -- V0 (A unexecuted, B completed) → A shows not-started,
+                    -- B shows completed — from the VERSION, not the global
+                    -- plan state.
+                    let
+                        runB =
+                            AV.RunSummary "r-b" "completed" 1 (Just 2) "## b"
+
+                        v0 =
+                            { blocks = [ "b0" ]
+                            , planViews = Dict.fromList [ ( "pA", Nothing ), ( "pB", Just "run-b" ) ]
+                            , parent = Nothing
+                            }
+
+                        m =
+                            { initModelWithSession
+                                | sessionRefs =
+                                    Dict.insert "s1"
+                                        (AV.SessionRefs "s1" "v0" [ "v0" ])
+                                        Dict.empty
+                                , versionCache = Dict.insert "v0" v0 Dict.empty
+                                , runSummaries = Dict.insert "run-b" runB Dict.empty
+                            }
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal (PU.versionPlanStatus m "s1" "pA") (Just "not-started")
+                        , \_ -> Expect.equal (PU.versionPlanStatus m "s1" "pB") (Just "completed")
+                        , \_ -> Expect.equal (PU.versionPlanStatus m "s1" "unknown") Nothing
+                        ]
+                        ()
+            , test "versionPlanStatus: a resumed live id resolves to the on-disk session (C)" <|
+                \_ ->
+                    let
+                        v0 =
+                            { blocks = []
+                            , planViews = Dict.fromList [ ( "pA", Just "run-a" ) ]
+                            , parent = Nothing
+                            }
+
+                        m =
+                            { initModelWithSession
+                                | planResumedFrom = Dict.insert "live-s1" "s1" Dict.empty
+                                , sessionRefs =
+                                    Dict.insert "s1"
+                                        (AV.SessionRefs "s1" "v0" [ "v0" ])
+                                        Dict.empty
+                                , versionCache = Dict.insert "v0" v0 Dict.empty
+                                , runSummaries = Dict.insert "run-a" (AV.RunSummary "r-a" "completed" 1 (Just 2) "## a") Dict.empty
+                            }
+                    in
+                    Expect.equal (PU.versionPlanStatus m "live-s1" "pA") (Just "completed")
+            , test "no refs yet → Nothing (falls back to the current global status)" <|
+                \_ ->
+                    PU.versionPlanStatus initModelWithSession "s1" "pA"
+                        |> Expect.equal Nothing
+            , test "resumed fork window binds through planResumedFrom → lineage registry → conversation origin" <|
                 \_ ->
                     let
                         -- The plan was created in s1 and forked to s-fork;

@@ -27,7 +27,7 @@
 import puppeteer from 'puppeteer-core';
 import { execSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
@@ -302,6 +302,70 @@ try {
   assert(planPages === 0, 'no plan windows remain, got: ' + planPages);
   console.log('PASS: plan windows closed after the cascade');
 
+  // ── 9. C-architecture regression: resume the OLD session (pre-rerun
+  //        world) — plan A must still show "Created" (not Completed),
+  //        plan B "Completed". The old session's version (V0, frozen at
+  //        confirm) isolates its plan state from the rerun.
+  const sessionsRoot = path.join(home, '.alayaface', 'sessions');
+  // The old session's close+save (async) must have flushed session.alaya
+  // with plan B's messages before we read it back.
+  let oldSid = null;
+  for (let tries = 0; tries < 20 && !oldSid; tries++) {
+    await sleep(500);
+    const allSids = readdirSync(sessionsRoot).filter(d => !d.endsWith('.tmp'));
+    for (const sid of allSids) {
+      try {
+        const p = path.join(sessionsRoot, sid, 'session.alaya');
+        const content = readFileSync(p, 'utf8');
+        if (content.includes('E2E Demo Beta')) { oldSid = sid; break; }
+      } catch (e) {
+        console.log('[debug] read fail', sid.slice(0, 8), String(e).slice(0, 80));
+      }
+    }
+  }
+  assert(oldSid, 'old session (with plan B) found on disk');
+  // The old session's version (V0, frozen at confirm) must be on disk:
+  // session.refs.json + its head version object.
+  try {
+    const refsPath = path.join(sessionsRoot, oldSid, 'session.refs.json');
+    const refsTxt = readFileSync(refsPath, 'utf8');
+    const refs = JSON.parse(refsTxt);
+    const vObj = readFileSync(path.join(home, '.alayaface', 'objects', refs.head, 'content.json'), 'utf8');
+    assert(refsTxt.includes('"head"') && vObj.includes('"planViews"'), 'old session version + head object on disk');
+    console.log('PASS: old session version (V0) persisted to session.refs.json + objects/');
+  } catch (e) {
+    throw new Error('old session version missing on disk: ' + String(e));
+  }
+  await page.click('.global-menu-btn');
+  await waitFor('.global-menu-panel');
+  assert(await clickByText('.global-menu-item', 'Session Manager'), 'Session Manager menu item');
+  await page.waitForSelector('.sel-page-item', { timeout: 10000 });
+  await sleep(600);
+  const resumedOld = await page.evaluate((fid) => {
+    const items = [...document.querySelectorAll('.sel-page-item')];
+    for (const it of items) {
+      const name = it.querySelector('.sel-page-item-name')?.textContent || '';
+      if (!name.includes(fid.slice(0, 8))) continue;
+      const btn = [...it.querySelectorAll('button')].find(b => b.textContent.trim() === 'Resume');
+      if (btn) { btn.click(); return true; }
+    }
+    return false;
+  }, oldSid);
+  assert(resumedOld, 'old session resume clicked: ' + oldSid.slice(0, 8));
+  await waitFor('.session-panel');
+  await sleep(1200);
+  const oldBars = await page.$$eval('.plan-offer-btn', els => els.map(e => e.textContent || ''));
+  const oldA = oldBars.filter(t => t.includes('E2E Demo') && !t.includes('Beta'));
+  const oldB = oldBars.filter(t => t.includes('E2E Demo Beta'));
+  // Two worlds coexist: the rerun's fork session (A=Completed) and the
+  // resumed OLD session (A=Created, B=Completed) — version-isolated plan
+  // state. The old session must contribute a Created A and a Completed B.
+  assert(oldA.some(t => t.includes('Created')),
+    'old session world: A stays Created (version view), got: ' + JSON.stringify(oldBars));
+  assert(oldB.some(t => t.includes('Completed')),
+    'old session world: B shows Completed, got: ' + JSON.stringify(oldBars));
+  console.log('PASS: old session keeps A=Created, B=Completed (version-isolated plan state)');
+
   console.log('\nALL PASS ✅');
   console.log('screenshots:\n  ' + readdirSync(artifacts).map(f => path.join(artifacts, f)).join('\n  '));
 } catch (err) {
@@ -317,5 +381,9 @@ try {
 } finally {
   killServer();
   if (browser) await browser.close().catch(() => {});
-  try { rmSync(tmp, { recursive: true, force: true }); } catch { /* already gone */ }
+  if (!process.env.ALAYAFACE_KEEP_ARTIFACTS) {
+    try { rmSync(tmp, { recursive: true, force: true }); } catch { /* already gone */ }
+  } else {
+    console.log('artifacts kept at:', tmp);
+  }
 }

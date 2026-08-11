@@ -106,6 +106,11 @@ init _ =
       , planResumedFrom = Dict.empty
       , connectionChain = []
       , homeDir = ""
+      , sessionRefs = Dict.empty
+      , runSummaries = Dict.empty
+      , versionCache = Dict.empty
+      , freezeActive = Nothing
+      , freezeQueue = []
       }
     , Cmd.batch
         [ -- Reclaim orphaned sessions from a previous page (refresh):
@@ -160,6 +165,8 @@ subscriptions model =
         , Ports.onFsReadFileDataUri (\raw -> FsReadFileResult raw)
         , Ports.onFsWriteResult (\raw -> FsWriteResult raw)
         , Ports.onFsReadResult (\raw -> FsReadResult raw)
+        , Ports.onObjectPut (\raw -> ObjectPutResult raw)
+        , Ports.onObjectGet (\raw -> ObjectGetResult raw)
         , Ports.onFsResolvePath (\result -> FsResolvePathResult result)
         , Ports.onWindowMaximized (\v -> WindowMaximized v)
         , Evts.onResize (\_ _ -> RequerySize)

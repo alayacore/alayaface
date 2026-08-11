@@ -10,6 +10,7 @@ module Plan.Meta exposing
     , depthOf
     , parentPlanIdOfSession
     , depthForOrigin
+    , lastFeedbackText
     , shouldInjectPlanPrompt
     , shouldAutoRun
     )
@@ -272,6 +273,19 @@ depthForOrigin metas runStates originSid =
 
         Nothing ->
             1
+
+
+{-| 最后一条 feedback 的文本（C 架构：窗口关闭后固化 run 摘要时的
+summary 来源）。
+-}
+lastFeedbackText : PlanMeta -> String
+lastFeedbackText meta =
+    case List.reverse meta.feedbacks of
+        fb :: _ ->
+            fb.text
+
+        [] ->
+            ""
 
 
 {-| Whether a plan's node sessions get the plan system prompt: only
