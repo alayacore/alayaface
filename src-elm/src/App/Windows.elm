@@ -25,6 +25,7 @@ module App.Windows exposing
     , centeredPlanPos
     , planPositionBelowSession
     , nodeSessionPositionBesidePlan
+    , forkInheritPos
     , applyZoom
     , bringIntoView
     , addPlanWindow
@@ -58,9 +59,11 @@ defaultWinW = 560
 defaultWinH : Int
 defaultWinH = 640
 
--- Plan windows default larger (DAG canvas + header need room).
+-- Plan windows use the SAME default width as session windows (the DAG
+-- canvas adapts; a plan sits below its owning session so the left edges
+-- align); height stays larger for the header + canvas.
 planDefaultWinW : Int
-planDefaultWinW = 680
+planDefaultWinW = 560
 
 planDefaultWinH : Int
 planDefaultWinH = 720
@@ -528,6 +531,24 @@ nodeSessionPositionBesidePlan model planId =
 
         Nothing ->
             centeredSessionPos model
+
+
+{-| P39/D8: a cascade-fork replacement session opens at the SAME spot as
+the window it replaces (the `forkSource` session) — the fork is a new
+physical instance of the same conversation and the old window is closed
+right after, so the user sees no window jump. Inherits position AND
+size (x/y/w/h); only the z is fresh. Nothing when no cascade fork is in
+flight or the source window is already gone.
+-}
+forkInheritPos : Model -> Maybe WindowPos
+forkInheritPos model =
+    case model.planCascadeFork of
+        Just target ->
+            Dict.get target.forkSource model.windowPositions
+                |> Maybe.map (\p -> { p | z = model.nextZIndex })
+
+        Nothing ->
+            Nothing
 
 
 {-| Apply a zoom factor centered on viewport point (mx, my): the canvas

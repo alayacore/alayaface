@@ -200,6 +200,16 @@ try {
   console.log('PASS: plan auto-created from session S');
 
   // ── 5. First run → Completed + [Plan Result] in S ────────────────
+  // The plan window width must match the session window width.
+  const winWidths = await page.evaluate(() => {
+    const sp = document.querySelector('.session-panel');
+    const pp = document.querySelector('.plan-panel');
+    const w = el => (el ? getComputedStyle(el).width : null);
+    return { s: w(sp), p: w(pp) };
+  });
+  assert(winWidths.s && winWidths.p && winWidths.s === winWidths.p,
+    'plan window width matches the session window width, got: ' + JSON.stringify(winWidths));
+  console.log('PASS: plan window width matches the session window (' + winWidths.p + ')');
   assert(await clickByText('button.plan-strip-btn', 'Run'), 'Run button');
   await page.waitForFunction(() => {
     return [...document.querySelectorAll('.plan-offer-btn')].some(e => e.textContent.includes('Completed'));
@@ -214,6 +224,13 @@ try {
   console.log('PASS: first run completed, [Plan Result] in S (no v2)');
 
   // ── 6. RE-RUN with version marker → gate passes → fork ──────────
+  // Remember the ORIGINAL session window's spot: the fork replacement
+  // (S') must open at the SAME position (P39/D8 no window jump).
+  const sPosBefore = await page.evaluate(() => {
+    const p = document.querySelector('.session-panel');
+    const cs = getComputedStyle(p);
+    return { left: cs.left, top: cs.top, width: cs.width, height: cs.height };
+  });
   writeFileSync(path.join(tmpdir(), 'alayaface-fakecore-version.marker'), 'v2');
   await reopenPlanViaStatusBar();
   assert(await clickByText('button.plan-strip-btn', 'Run'), 're-Run button');
@@ -284,9 +301,19 @@ try {
   console.log('PASS: fork lineage: ' + rootSid + ' (root) → ' + forkSid + ' (fork) in session.meta.json');
 
   // e) The original S window is gone (adoption closed it); the fork
-  //    session (with the plan status bar) is the active one.
+  //    session (with the plan status bar) is the active one — and it
+  //    opened at the SAME spot as the window it replaced.
   const panelCount = await page.$$eval('.session-panel', els => els.length);
   assert(panelCount >= 1, 'fork session window present, got: ' + panelCount);
+  const sPosAfter = await page.evaluate(() => {
+    const p = document.querySelector('.session-panel:not(.plan-panel)');
+    const cs = getComputedStyle(p);
+    return { left: cs.left, top: cs.top, width: cs.width, height: cs.height };
+  });
+  assert(JSON.stringify(sPosAfter) === JSON.stringify(sPosBefore),
+    'fork session window opened at the replaced window\'s position, got before=' +
+      JSON.stringify(sPosBefore) + ' after=' + JSON.stringify(sPosAfter));
+  console.log('PASS: fork session window inherits the replaced window\'s position');
   await shot(page, '04-final.png');
   console.log('PASS: original session closed, fork session takes over');
 

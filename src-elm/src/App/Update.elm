@@ -442,17 +442,26 @@ update msg model =
                                 model.windowPositions
                             else
                                 let
+                                    -- Rule 0 (P39/D8): a cascade-fork
+                                    -- replacement session opens at the SAME
+                                    -- spot as the window it replaces (the
+                                    -- old window is closed right after).
                                     -- Rule 2: a runner-created / resumed
                                     -- node session opens beside its plan
                                     -- window (stacking with an offset);
                                     -- plain creates center on the viewport.
                                     pos =
-                                        case pendingNodePlanId model of
-                                            Just planId ->
-                                                nodeSessionPositionBesidePlan model planId
+                                        case forkInheritPos model of
+                                            Just fp ->
+                                                fp
 
                                             Nothing ->
-                                                centeredSessionPos model
+                                                case pendingNodePlanId model of
+                                                    Just planId ->
+                                                        nodeSessionPositionBesidePlan model planId
+
+                                                    Nothing ->
+                                                        centeredSessionPos model
                                 in
                                 Dict.insert id pos model.windowPositions
                         -- The z bump is applied by raiseWindow below
