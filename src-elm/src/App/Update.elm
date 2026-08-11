@@ -2733,32 +2733,44 @@ update msg model =
             )
 
         PlanCascadeForkResult raw ->
-            -- P38: the cascade fork finished. A SUCCESS is registered and
-            -- adopted in ONE update: SessionCreated (nested, synchronous)
-            -- opens the fork window exactly like any new session, then
-            -- adoptCascadeFork rewrites the meta binding — both before
-            -- the outer update returns, so the fork session's first
-            -- render already sees the fork binding (no stale "Open plan"
-            -- flash). Because the adoption is driven by THIS event — the
-            -- only one that carries the real fork id — a user-created
-            -- session racing the fork can never be mistaken for it.
+            -- P38/P39: the cascade fork finished. A SUCCESS is registered
+            -- and adopted in ONE update: SessionCreated (nested,
+            -- synchronous) opens the fork window exactly like any new
+            -- session, then the machine's InstanceReady effect list runs
+            -- (RegisterFork + InsertResult + ResumeNode) — all before the
+            -- outer update returns, so the fork session's first render
+            -- already sees the fork binding (no stale "Open plan" flash).
+            -- Because the adoption is driven by THIS event — the only one
+            -- that carries the real fork id — a user-created session
+            -- racing the fork can never be mistaken for it.
             -- A FAILURE means nothing was truncated and no ancestor node
             -- was reset, so the cascade must END, not linger. Leaving
             -- planCascade armed is a latent mis-trigger: its head level
             -- still points at the live source session, so a later
-            -- TaskDone from that session would run cascadeAfterStep's
-            -- ResumeBranchFrom — re-running downstream branches WITHOUT
-            -- any truncation. The completed plan window stays open (user
-            -- can inspect / re-run / close).
+            -- TaskDone from that session would run the machine's
+            -- BranchRerun — re-running downstream branches WITHOUT any
+            -- truncation. The completed plan window stays open (user can
+            -- inspect / re-run / close).
             case D.decodeValue cascadeForkResultDecoder raw of
                 Ok r ->
                     if r.ok then
+                        -- P39/Phase C: register the fork window exactly
+                        -- like any new session (nested, synchronous), then
+                        -- feed InstanceReady to the cascade machine — the
+                        -- adoption (lineage registration + close old
+                        -- instance + insert result + resume node) is now
+                        -- driven by the machine's effects, in this same
+                        -- outer update, so the fork session's first render
+                        -- already sees the fork binding (no stale
+                        -- "Open plan" flash). Only this event carries the
+                        -- real fork id, so a user-created session racing
+                        -- the fork can never be mistaken for it.
                         let
                             ( mReg, cReg ) =
                                 update (SessionCreated r.sessionId) model
 
                             ( mAdopt, cAdopt ) =
-                                adoptCascadeFork update r.sessionId mReg
+                                PU.cascadeStepIn update (PC.InstanceReady (Ok r.sessionId)) mReg
                         in
                         ( mAdopt, Cmd.batch [ cReg, cAdopt ] )
 

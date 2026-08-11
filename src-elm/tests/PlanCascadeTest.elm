@@ -400,7 +400,8 @@ tests =
                                 [ \c -> Expect.equal "a" c.rootPlanId
                                 , \c -> Expect.equal [ "b", "c" ] (List.map .planId c.levels)
                                 , \c -> Expect.equal [ "t2", "p2" ] (List.map .nodeId c.levels)
-                                , \c -> Expect.equal [ "s1", "s2" ] (List.map .nodeSessionId c.levels)
+                                , \c -> Expect.equal [ "s1", "s2" ] (List.map .conversationId c.levels)
+                                , \c -> Expect.equal C.WaitingPlan c.phase
                                 ]
                                 cs
 
@@ -432,4 +433,202 @@ tests =
                         Err e ->
                             Expect.fail ("decode failed: " ++ D.errorToString e)
             ]
+        , describe "cascadeStep (P39/Phase C state machine)"
+            (let
+                mkLevel planId nodeId convId old =
+                    { planId = planId
+                    , nodeId = nodeId
+                    , conversationId = convId
+                    , oldSummary = old
+                    }
+
+                mkState phase levels currentPlan currentSummary =
+                    { rootPlanId = "a"
+                    , rootOldSummary = "old-root"
+                    , levels = levels
+                    , phase = phase
+                    , currentPlanId = currentPlan
+                    , currentSummary = currentSummary
+                    }
+
+                lvlB =
+                    mkLevel "b" "t2" "s1" "old-b"
+
+                lvlC =
+                    mkLevel "c" "p2" "s2" "old-c"
+             in
+             [ test "ReRunConfirmed arms the machine in WaitingPlan" <|
+                    \_ ->
+                        let
+                            ( cs2, effects ) =
+                                C.cascadeStep (C.ReRunConfirmed (mkState C.Done [] "a" "x")) (mkState C.Done [] "a" "x")
+                        in
+                        Expect.equal ( cs2.phase, effects ) ( C.WaitingPlan, [] )
+              , test "root completes with a CHANGED summary → ForkInstance" <|
+                    \_ ->
+                        let
+                            cs =
+                                mkState C.WaitingPlan [ lvlB ] "a" ""
+
+                            ( cs2, effects ) =
+                                C.cascadeStep (C.PlanCompleted "a" "new-root") cs
+                        in
+                        Expect.all
+                            [ \_ -> Expect.equal ( cs2.phase, effects ) ( C.WaitingFork, [ C.ForkInstance "a" ] )
+                            , \_ -> Expect.equal ( cs2.currentPlanId, cs2.currentSummary ) ( "a", "new-root" )
+                            ]
+                            ()
+              , test "root completes UNCHANGED (gate hit) → silently Done" <|
+                    \_ ->
+                        let
+                            ( cs2, effects ) =
+                                C.cascadeStep (C.PlanCompleted "a" "old-root") (mkState C.WaitingPlan [ lvlB ] "a" "")
+                        in
+                        Expect.equal ( cs2.phase, effects ) ( C.Done, [] )
+              , test "unrelated plan completion in WaitingPlan is ignored" <|
+                    \_ ->
+                        let
+                            cs =
+                                mkState C.WaitingPlan [ lvlB ] "a" ""
+
+                            ( cs2, effects ) =
+                                C.cascadeStep (C.PlanCompleted "zzz" "x") cs
+                        in
+                        Expect.equal ( cs2, effects ) ( cs, [] )
+              , test "InstanceReady success → RegisterFork + InsertResult + ResumeNode (head level)" <|
+                    \_ ->
+                        let
+                            ( cs2, effects ) =
+                                C.cascadeStep (C.InstanceReady (Ok "fork-1")) (mkState C.WaitingFork [ lvlB ] "a" "new-root")
+                        in
+                        Expect.equal
+                            ( cs2.phase, effects )
+                            ( C.WaitingNode
+                            , [ C.RegisterFork "fork-1"
+                              , C.InsertResult "a" "fork-1" "new-root"
+                              , C.ResumeNode "b" "t2" "s1"
+                              ]
+                            )
+              , test "InstanceReady success with NO levels → register + insert only" <|
+                    \_ ->
+                        let
+                            ( cs2, effects ) =
+                                C.cascadeStep (C.InstanceReady (Ok "fork-1")) (mkState C.WaitingFork [] "a" "new-root")
+                        in
+                        Expect.equal
+                            ( cs2.phase, effects )
+                            ( C.WaitingNode
+                            , [ C.RegisterFork "fork-1"
+                              , C.InsertResult "a" "fork-1" "new-root"
+                              ]
+                            )
+              , test "InstanceReady failure → Done (nothing was truncated)" <|
+                    \_ ->
+                        let
+                            ( cs2, effects ) =
+                                C.cascadeStep (C.InstanceReady (Err "boom")) (mkState C.WaitingFork [ lvlB ] "a" "")
+                        in
+                        Expect.equal ( cs2.phase, effects ) ( C.Done, [] )
+              , test "InsertInPlace (no fork point) → insert + resume, no lineage" <|
+                    \_ ->
+                        let
+                            ( cs2, effects ) =
+                                C.cascadeStep (C.InsertInPlace "s1") (mkState C.WaitingFork [ lvlB ] "a" "new-root")
+                        in
+                        Expect.equal
+                            ( cs2.phase, effects )
+                            ( C.WaitingNode
+                            , [ C.InsertResult "a" "s1" "new-root"
+                              , C.ResumeNode "b" "t2" "s1"
+                              ]
+                            )
+              , test "NodeSucceeded on the head node → BranchRunning + BranchRerun" <|
+                    \_ ->
+                        let
+                            ( cs2, effects ) =
+                                C.cascadeStep (C.NodeSucceeded "b" "t2") (mkState C.WaitingNode [ lvlB ] "a" "")
+                        in
+                        Expect.equal ( cs2.phase, effects ) ( C.BranchRunning, [ C.BranchRerun "b" "t2" ] )
+              , test "NodeSucceeded for a different node is ignored" <|
+                    \_ ->
+                        let
+                            cs =
+                                mkState C.WaitingNode [ lvlB ] "a" ""
+
+                            ( cs2, effects ) =
+                                C.cascadeStep (C.NodeSucceeded "b" "OTHER") cs
+                        in
+                        Expect.equal ( cs2, effects ) ( cs, [] )
+              , test "LevelFailed on the head node → Done" <|
+                    \_ ->
+                        let
+                            ( cs2, effects ) =
+                                C.cascadeStep (C.LevelFailed "b" "t2") (mkState C.WaitingNode [ lvlB ] "a" "")
+                        in
+                        Expect.equal ( cs2.phase, effects ) ( C.Done, [] )
+              , test "head completes UNCHANGED (gate hit) → Done" <|
+                    \_ ->
+                        let
+                            ( cs2, effects ) =
+                                C.cascadeStep (C.PlanCompleted "b" "old-b") (mkState C.BranchRunning [ lvlB ] "a" "")
+                        in
+                        Expect.equal ( cs2.phase, effects ) ( C.Done, [] )
+              , test "head completes CHANGED → drop the level, fork the next (multi-level propagation)" <|
+                    \_ ->
+                        let
+                            ( cs2, effects ) =
+                                C.cascadeStep (C.PlanCompleted "b" "new-b") (mkState C.BranchRunning [ lvlB, lvlC ] "a" "")
+                        in
+                        Expect.equal
+                            ( cs2.phase, cs2.levels, effects )
+                            ( C.WaitingFork, [ lvlC ], [ C.ForkInstance "b" ] )
+              , test "multi-level end-to-end: root → fork → node → branch → head → next fork" <|
+                    \_ ->
+                        let
+                            s0 =
+                                mkState C.WaitingPlan [ lvlB, lvlC ] "a" ""
+
+                            ( s1, e1 ) =
+                                C.cascadeStep (C.PlanCompleted "a" "new-root") s0
+
+                            ( s2, e2 ) =
+                                C.cascadeStep (C.InstanceReady (Ok "fork-1")) s1
+
+                            ( s3, e3 ) =
+                                C.cascadeStep (C.NodeSucceeded "b" "t2") s2
+
+                            ( s4, e4 ) =
+                                C.cascadeStep (C.PlanCompleted "b" "new-b") s3
+
+                            ( s5, e5 ) =
+                                C.cascadeStep (C.InstanceReady (Ok "fork-2")) s4
+                        in
+                        Expect.all
+                            [ \_ ->
+                                Expect.equal
+                                    [ s1.phase, s2.phase, s3.phase, s4.phase, s5.phase ]
+                                    [ C.WaitingFork, C.WaitingNode, C.BranchRunning, C.WaitingFork, C.WaitingNode ]
+                            , \_ ->
+                                Expect.equal e1 [ C.ForkInstance "a" ]
+                            , \_ ->
+                                Expect.equal e2
+                                    [ C.RegisterFork "fork-1", C.InsertResult "a" "fork-1" "new-root", C.ResumeNode "b" "t2" "s1" ]
+                            , \_ -> Expect.equal e3 [ C.BranchRerun "b" "t2" ]
+                            , \_ -> Expect.equal e4 [ C.ForkInstance "b" ]
+                            , \_ ->
+                                Expect.equal e5
+                                    [ C.RegisterFork "fork-2", C.InsertResult "b" "fork-2" "new-b", C.ResumeNode "c" "p2" "s2" ]
+                            ]
+                            ()
+              , test "events in the wrong phase are ignored (zero ordering assumptions)" <|
+                    \_ ->
+                        let
+                            cs =
+                                mkState C.WaitingPlan [ lvlB ] "a" ""
+
+                            ( cs2, effects ) =
+                                C.cascadeStep (C.NodeSucceeded "b" "t2") cs
+                        in
+                        Expect.equal ( cs2, effects ) ( cs, [] )
+              ])
         ]

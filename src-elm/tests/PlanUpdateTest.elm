@@ -450,8 +450,8 @@ suite =
                     PU.planMetaForMessage initModelWithSession "s1" 1
                         |> Expect.equal Nothing
             ]
-        , describe "adoptCascadeFork (P39/Phase B lineage)"
-            [ test "registers the fork's lineage and keeps the node bound to the conversation id" <|
+        , describe "cascadeStepIn (P39/Phase C machine wiring)"
+            [ test "InstanceReady registers the fork's lineage and the ResumeNode effect keeps the conversation binding" <|
                 \_ ->
                     let
                         -- The ancestor plan p0 has a Succeeded node n1
@@ -505,10 +505,13 @@ suite =
                             , levels =
                                 [ { planId = "p0"
                                   , nodeId = "n1"
-                                  , nodeSessionId = "s1"
+                                  , conversationId = "s1"
                                   , oldSummary = "old"
                                   }
                                 ]
+                            , phase = PC.WaitingFork
+                            , currentPlanId = "p1"
+                            , currentSummary = "new"
                             }
 
                         m0 =
@@ -521,7 +524,7 @@ suite =
                             }
 
                         ( m1, _ ) =
-                            PU.adoptCascadeFork stubDispatch "fork-x" m0
+                            PU.cascadeStepIn stubDispatch (PC.InstanceReady (Ok "fork-x")) m0
                     in
                     Expect.all
                         [ -- lineage registered: fork → conversation s1, parent s1
@@ -539,13 +542,13 @@ suite =
 
                                 Nothing ->
                                     Expect.fail "node n1 missing"
-                        -- head level points at the conversation id (TaskDone matching)
+                        -- machine advanced to WaitingNode (resume in flight)
                         , \m ->
                             case m.planCascade of
                                 Just cs ->
                                     Expect.equal
-                                        (List.map .nodeSessionId cs.levels)
-                                        [ "s1" ]
+                                        ( cs.phase, List.map .conversationId cs.levels )
+                                        ( PC.WaitingNode, [ "s1" ] )
 
                                 Nothing ->
                                     Expect.fail "cascade missing"

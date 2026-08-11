@@ -3,10 +3,14 @@ module Plan.Cascade exposing
     , ImpactScope
     , CascadeLevel
     , CascadeState
+    , CascadePhase(..)
     , CascadeForkTarget
+    , Event(..)
+    , Effect(..)
     , impactScope
     , needsConfirm
     , buildCascadeState
+    , cascadeStep
     , findInsertionIndex
     , countUserMessagesAfter
     , truncateMessagesAt
@@ -290,47 +294,89 @@ bindingInRun sid maybeRun =
 -- ─── Cascade execution state ───────────────────────────────────────
 
 {-| Execution state for one ancestor level: when the child completes and
-its summary changed, `nodeSessionId` is truncated, the node is reset
-Succeeded → WaitingForPlan and resumed; once it succeeds, its transitive
-downstream in the ancestor re-runs (ResumeBranchFrom); when the ancestor
-completes, `oldSummary` gates the propagation upward.
+its summary changed, the level's delegated node is resumed; once it
+succeeds, its transitive downstream in the ancestor re-runs
+(ResumeBranchFrom); when the ancestor completes, `oldSummary` gates the
+propagation upward. `conversationId` is the node session's STABLE
+identity (P39/Phase B — fork instances resolve to it through the
+registry; the old physical `nodeSessionId` is gone).
 -}
 type alias CascadeLevel =
     { planId : String
     , nodeId : String
-    , nodeSessionId : String
+    , conversationId : String
     , oldSummary : String
     }
+
+
+{-| Phase of an active re-run cascade:
+- `WaitingPlan` — the root (or a head level's branch) is running; its
+  completion event decides gate → propagate or end.
+- `WaitingFork` — a truncating fork is in flight (InstanceReady), or
+  the executor is about to insert in place (InsertInPlace).
+- `WaitingNode` — the delegated node was resumed; its answer
+  (NodeSucceeded / LevelFailed) decides the branch re-run.
+- `BranchRunning` — the head plan's downstream branch is re-running;
+  its completion (PlanCompleted) propagates to the next level.
+- `Done` — terminal (gate hit, failure, fork error): further events
+  are ignored.
+-}
+type CascadePhase
+    = WaitingPlan
+    | WaitingFork
+    | WaitingNode
+    | BranchRunning
+    | Done
 
 
 type alias CascadeState =
     { rootPlanId : String
     , rootOldSummary : String
     , levels : List CascadeLevel
+    , phase : CascadePhase
+    -- The plan currently being propagated (root, then each level in
+    -- turn) and its NEW summary — needed when the fork/insert resolves
+    -- to build the [Plan Result] feedback.
+    , currentPlanId : String
+    , currentSummary : String
     }
 
 
-{-| A fork issued to TRUNCATE a parent session's history (P38): instead
-of truncating in memory (which never persists — session.alaya is written
-by alayacore), the cascade forks the parent session at the message
-before the old `[Plan Result]`. The fork's session.alaya on disk really
-only contains the truncated history, so reopening after a restart shows
-the correct state. `planId`/`nodeId` = the ancestor node the fork
-replaces ("" for a plain origin); `forkSource` = the live session being
-forked.
+{-| Machine events — the ONLY way the cascade state changes. The
+executor translates runner/frame events into these (zero ordering
+assumptions: the phase guards what applies, D4). `PlanCompleted`
+carries the plan's CURRENT feedback summary so the gate (summary
+unchanged → silently end) lives inside the machine.
 -}
-type alias CascadeForkTarget =
-    { childPlanId : String
-    , summary : String
-    , planId : String
-    , nodeId : String
-    , forkSource : String
-    -- The plan's owning session id (dir id): locates the fork's on-disk
-    -- dir for the lineage meta write
-    -- (sessions/<origin>/plans/<planId>/<nodeId>/<forkId>/ for a plan
-    -- node fork; "" for a plain fork, which lives at sessions/<forkId>/).
-    , originSessionId : String
-    }
+type Event
+    = ReRunConfirmed CascadeState
+    | PlanCompleted String String
+    | NodeSucceeded String String
+    | LevelFailed String String
+    | InstanceReady (Result String String)
+    | InsertInPlace String
+
+
+{-| Effects the machine asks the executor to perform. The executor has
+the Model (live sessions, messages, spawn args, fork targets); the
+machine only says WHAT to do, with the ids the machine knows.
+-}
+type Effect
+    = ForkInstance String
+    -- planId: truncate-fork that plan's parent conversation (the
+    -- executor falls back to InsertInPlace when there is no fork point)
+    | InsertResult String String String
+    -- planId, instanceId, summary: send the [Plan Result] feedback
+    | ResumeNode String String String
+    -- planId, nodeId, conversationId: reset Succeeded → WaitingForPlan
+    -- and resume the delegated node
+    | BranchRerun String String
+    -- planId, nodeId: reset the node's transitive downstream branch
+    | RegisterFork String
+    -- forkId: register the fork's lineage (memory + session.meta.json)
+    -- and close the old head instance
+    | OpenAncestor String
+    -- planId: reopen a closed ancestor window (its run is needed)
 
 
 {-| Build the execution state from a confirmed scope. Requires every
@@ -359,7 +405,7 @@ buildCascadeState scope runs =
                                     (\run ->
                                         { planId = lvl.planId
                                         , nodeId = nodeId
-                                        , nodeSessionId = lvl.nodeSessionId
+                                        , conversationId = lvl.nodeSessionId
                                         , oldSummary = feedbackSummary run
                                         }
                                     )
@@ -377,7 +423,165 @@ buildCascadeState scope runs =
             { rootPlanId = scope.rootPlanId
             , rootOldSummary = rootOld
             , levels = levels
+            , phase = WaitingPlan
+            , currentPlanId = scope.rootPlanId
+            , currentSummary = rootOld
             }
+
+
+{-| A fork issued to TRUNCATE a parent session's history (P38/P39): the
+cascade forks the parent session at the message before the old
+`[Plan Result]`, so the fork's session.alaya on disk really only
+contains the truncated history. `planId`/`nodeId` = the ancestor node
+the fork replaces ("" for a plain origin); `forkSource` = the live
+session being forked; `originSessionId` locates the fork's on-disk dir
+for the lineage meta write.
+-}
+type alias CascadeForkTarget =
+    { childPlanId : String
+    , summary : String
+    , planId : String
+    , nodeId : String
+    , forkSource : String
+    , originSessionId : String
+    }
+
+
+-- ─── State machine (P39/Phase C) ───────────────────────────────────
+
+{-| One machine step: pure, one event at a time, no ordering assumptions
+(D4 — the executor feeds events as they arrive; the phase guards what
+applies; anything else is ignored). Returns the new state and the
+effects to perform (which the executor translates with the Model).
+-}
+cascadeStep : Event -> CascadeState -> ( CascadeState, List Effect )
+cascadeStep ev cs =
+    case ev of
+        ReRunConfirmed cs0 ->
+            -- The executor built the state (runs are not available in
+            -- the machine); the confirm arms the machine.
+            ( { cs0 | phase = WaitingPlan }, [] )
+
+        PlanCompleted planId summary ->
+            case cs.phase of
+                WaitingPlan ->
+                    if planId == cs.rootPlanId then
+                        if summary == cs.rootOldSummary then
+                            -- gate: nothing changed — silently end.
+                            ( { cs | phase = Done }, [] )
+
+                        else
+                            ( { cs
+                                | phase = WaitingFork
+                                , currentPlanId = planId
+                                , currentSummary = summary
+                              }
+                            , [ ForkInstance planId ]
+                            )
+
+                    else
+                        ( cs, [] )
+
+                BranchRunning ->
+                    case List.head cs.levels of
+                        Just lvl ->
+                            if planId == lvl.planId then
+                                if summary == lvl.oldSummary then
+                                    ( { cs | phase = Done }, [] )
+
+                                else
+                                    ( { cs
+                                        | phase = WaitingFork
+                                        , levels = List.drop 1 cs.levels
+                                        , currentPlanId = planId
+                                        , currentSummary = summary
+                                      }
+                                    , [ ForkInstance planId ]
+                                    )
+
+                            else
+                                ( cs, [] )
+
+                        Nothing ->
+                            ( cs, [] )
+
+                _ ->
+                    ( cs, [] )
+
+        NodeSucceeded planId nodeId ->
+            case ( cs.phase, List.head cs.levels ) of
+                ( WaitingNode, Just lvl ) ->
+                    if planId == lvl.planId && nodeId == lvl.nodeId then
+                        ( { cs | phase = BranchRunning }
+                        , [ BranchRerun planId nodeId ]
+                        )
+
+                    else
+                        ( cs, [] )
+
+                _ ->
+                    ( cs, [] )
+
+        LevelFailed planId nodeId ->
+            case ( cs.phase, List.head cs.levels ) of
+                ( WaitingNode, Just lvl ) ->
+                    if planId == lvl.planId && nodeId == lvl.nodeId then
+                        ( { cs | phase = Done }, [] )
+
+                    else
+                        ( cs, [] )
+
+                _ ->
+                    ( cs, [] )
+
+        InstanceReady result ->
+            case cs.phase of
+                WaitingFork ->
+                    case result of
+                        Ok forkId ->
+                            let
+                                resumeEffects =
+                                    case List.head cs.levels of
+                                        Just lvl ->
+                                            [ ResumeNode lvl.planId lvl.nodeId lvl.conversationId ]
+
+                                        Nothing ->
+                                            []
+                            in
+                            ( { cs | phase = WaitingNode }
+                            , RegisterFork forkId
+                                :: InsertResult cs.currentPlanId forkId cs.currentSummary
+                                :: resumeEffects
+                            )
+
+                        Err _ ->
+                            -- Fork failed: nothing was truncated, no node
+                            -- was reset — end the cascade.
+                            ( { cs | phase = Done }, [] )
+
+                _ ->
+                    ( cs, [] )
+
+        InsertInPlace instanceId ->
+            case cs.phase of
+                WaitingFork ->
+                    -- No fork point: the executor truncated in memory and
+                    -- inserts into the head instance directly.
+                    let
+                        resumeEffects =
+                            case List.head cs.levels of
+                                Just lvl ->
+                                    [ ResumeNode lvl.planId lvl.nodeId lvl.conversationId ]
+
+                                Nothing ->
+                                    []
+                    in
+                    ( { cs | phase = WaitingNode }
+                    , InsertResult cs.currentPlanId instanceId cs.currentSummary :: resumeEffects
+                    )
+
+                _ ->
+                    ( cs, [] )
 
 
 -- ─── Truncation helpers ───────────────────────────────────────────

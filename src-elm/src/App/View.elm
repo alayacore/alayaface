@@ -1035,13 +1035,9 @@ viewPlanCascadeOverlay model =
                     , Html.div [ Attr.class "cascade-scope" ]
                         [ viewCascadeChain scope ]
                     , Html.div [ Attr.class "cascade-warning" ]
-                        [ Html.text "The old result and everything after it is truncated in each affected session, then the new result is inserted and the chain continues upward." ]
-                    , if totalUser > 0 then
-                        Html.div [ Attr.class "cascade-user-warning" ]
-                            [ Html.text ("⚠ " ++ String.fromInt totalUser ++ " of your message(s) typed after the old results will be removed.") ]
-
-                      else
-                        Html.text ""
+                        [ Html.text ("重跑将截断父会话旧结果及其后续（含你的 " ++ String.fromInt totalUser ++ " 条消息）") ]
+                    , Html.div [ Attr.class "cascade-warning-sub" ]
+                        [ Html.text "截断后新结果插入该会话，级联继续向上传播；祖先节点会重新回答并重跑其下游分支。" ]
                     , if List.isEmpty scope.closePlanIds then
                         Html.text ""
 
