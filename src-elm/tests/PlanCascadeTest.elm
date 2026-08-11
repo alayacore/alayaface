@@ -65,6 +65,18 @@ planResultMsg planId summary =
     msg T.User (C.insertPrefix planId summary)
 
 
+{-| A plan JSON message as the model emits it (Plan.Detect.isPlanMessage
+matches the ```json fence + alayaface-plan type marker).
+-}
+planMsg : String -> T.Message
+planMsg name =
+    msg T.Assistant
+        ("```json\n{\"type\":\"alayaface-plan\",\"schema_version\":1,\"name\":\""
+            ++ name
+            ++ "\",\"tasks\":[]}\n```"
+        )
+
+
 metaOf : String -> String -> Maybe String -> M.PlanMeta
 metaOf planId originSid parent =
     { origin = { sessionId = originSid, planIndex = 1 }
@@ -191,6 +203,94 @@ tests =
             , test "no insertion → Nothing" <|
                 \_ ->
                     Expect.equal Nothing (C.findInsertionIndex "a" [ msg T.User "plain" ])
+            ]
+        , describe "findPlanAnchor"
+            [ test "index right after the planIndex-th plan message" <|
+                \_ ->
+                    let
+                        msgs =
+                            [ msg T.User "intro"
+                            , planMsg "A"
+                            , msg T.User "between"
+                            , planMsg "B"
+                            ]
+                    in
+                    Expect.equal (Just 4) (C.findPlanAnchor 2 msgs)
+            , test "planIndex <= 0 → Nothing" <|
+                \_ ->
+                    Expect.equal Nothing (C.findPlanAnchor 0 [ planMsg "A" ])
+            , test "planIndex out of range → Nothing (plan message truncated away)" <|
+                \_ ->
+                    Expect.equal Nothing (C.findPlanAnchor 3 [ planMsg "A" ])
+            , test "no plan messages → Nothing" <|
+                \_ ->
+                    Expect.equal Nothing (C.findPlanAnchor 1 [ msg T.User "x" ])
+            ]
+        , describe "anchorIndexFor"
+            [ test "old [Plan Result] feedback wins over the creation anchor" <|
+                \_ ->
+                    let
+                        msgs =
+                            [ planMsg "A"
+                            , msg T.User "between"
+                            , planResultMsg "a" "old"
+                            , msg T.Assistant "after"
+                            ]
+                    in
+                    Expect.equal (Just 2) (C.anchorIndexFor 1 "a" msgs)
+            , test "old feedback appended PAST another plan → creation anchor wins" <|
+                \_ ->
+                    -- Pre-D8 bug: A completed late and its feedback was
+                    -- appended AFTER plan B (whose plan JSON and result
+                    -- sit between A's plan and A's feedback). Re-running
+                    -- A must anchor at A's creation point, not behind B.
+                    let
+                        msgs =
+                            [ planMsg "A"
+                            , planMsg "B"
+                            , planResultMsg "b" "b-result"
+                            , planResultMsg "a" "a-late"
+                            ]
+                    in
+                    Expect.equal (Just 1) (C.anchorIndexFor 1 "a" msgs)
+            , test "old feedback with only user messages between → feedback wins" <|
+                \_ ->
+                    -- A's own feedback sits after its plan JSON plus user
+                    -- conversation (no other plan in between): the normal
+                    -- re-run keeps the conversation before the old result
+                    -- and replaces from there.
+                    let
+                        msgs =
+                            [ planMsg "A"
+                            , msg T.User "user typed while running"
+                            , planResultMsg "a" "old"
+                            , msg T.Assistant "after"
+                            ]
+                    in
+                    Expect.equal (Just 2) (C.anchorIndexFor 1 "a" msgs)
+            , test "no old result → creation anchor (a mid-conversation plan replaces what follows)" <|
+                \_ ->
+                    let
+                        msgs =
+                            [ msg T.User "intro"
+                            , planMsg "A"
+                            , planMsg "B"
+                            , planResultMsg "b" "b-result"
+                            ]
+                    in
+                    Expect.equal (Just 2) (C.anchorIndexFor 1 "a" msgs)
+            , test "no old result + anchor at the very end → Nothing (plain append)" <|
+                \_ ->
+                    let
+                        msgs =
+                            [ msg T.User "intro"
+                            , planMsg "A"
+                            ]
+                    in
+                    Expect.equal Nothing (C.anchorIndexFor 1 "a" msgs)
+            , test "no anchor at all → Nothing" <|
+                \_ ->
+                    Expect.equal Nothing (C.anchorIndexFor 1 "a" [ msg T.User "x" ])
             ]
         , describe "countUserMessagesAfter"
             [ test "counts only User messages after the insertion" <|
@@ -364,6 +464,66 @@ tests =
                     in
                     Expect.equal ( C.needsConfirm scope, C.needsConfirm fresh )
                         ( True, False )
+            , test "P39/D8: a mid-conversation plan that never completed still anchors the scope" <|
+                \_ ->
+                    -- plan "a" (planIndex 1) never completed here: another
+                    -- plan B and its result sit after A's plan JSON. The
+                    -- scope must anchor at A's CREATION point (right after
+                    -- its plan JSON) — replacing what follows (B and the
+                    -- typed follow-up) instead of appending to the end.
+                    let
+                        msgs =
+                            [ msg T.User "intro"
+                            , planMsg "A"
+                            , planMsg "B"
+                            , planResultMsg "b" "b-result"
+                            , msg T.User "typed after"
+                            ]
+
+                        scope =
+                            C.impactScope (ctxFor (Dict.fromList [ ( "s1", msgs ) ])) "a"
+                    in
+                    Expect.all
+                        [ \s -> Expect.equal True s.rootHasInsertion
+                        , \s -> Expect.equal 2 s.rootUserMessages
+                        , \s -> Expect.equal [ "sib" ] s.closePlanIds
+                        ]
+                        scope
+            , test "P39/D8: first run with nothing after the plan → no confirmation (plain append)" <|
+                \_ ->
+                    let
+                        msgs =
+                            [ msg T.User "intro"
+                            , planMsg "A"
+                            ]
+
+                        scope =
+                            C.impactScope (ctxFor (Dict.fromList [ ( "s1", msgs ) ])) "a"
+                    in
+                    Expect.equal ( scope.rootHasInsertion, C.needsConfirm scope )
+                        ( False, False )
+            , test "P39/D8: closePlans matches by conversation — a fork head truncation closes plans created on the root instance" <|
+                \_ ->
+                    -- The root conversation s1 was forked (head = s-fork):
+                    -- truncating the head must still close plan "sib"
+                    -- whose meta records the ORIGINAL instance id.
+                    let
+                        base =
+                            ctxFor sessionMap
+
+                        ctx =
+                            { base
+                                | sessionLineage =
+                                    Dict.fromList
+                                        [ ( "s1", SM.empty "s1" )
+                                        , ( "s-fork", { conversationId = "s1", parentInstanceId = Just "s1" } )
+                                        ]
+                            }
+
+                        scope =
+                            C.impactScope ctx "a"
+                    in
+                    Expect.equal [ "sib" ] scope.closePlanIds
             , test "closed origin session stops the walk (no feedback possible)" <|
                 \_ ->
                     let
@@ -402,13 +562,13 @@ tests =
                             , withHistory "h-2" (msg T.Assistant "drop")
                             ]
                     in
-                    Expect.equal (Just "h-1") (C.forkHistoryId "a" msgs)
+                    Expect.equal (Just "h-1") (C.forkHistoryId 1 "a" msgs)
             , test "no insertion → Nothing" <|
                 \_ ->
-                    Expect.equal Nothing (C.forkHistoryId "a" [ msg T.User "x" ])
+                    Expect.equal Nothing (C.forkHistoryId 1 "a" [ msg T.User "x" ])
             , test "insertion at index 0 → Nothing (nothing to fork at)" <|
                 \_ ->
-                    Expect.equal Nothing (C.forkHistoryId "a" [ planResultMsg "a" "r" ])
+                    Expect.equal Nothing (C.forkHistoryId 1 "a" [ planResultMsg "a" "r" ])
             , test "predecessor without historyId → Nothing (fallback to in-memory)" <|
                 \_ ->
                     let
@@ -417,7 +577,30 @@ tests =
                             , planResultMsg "a" "old"
                             ]
                     in
-                    Expect.equal Nothing (C.forkHistoryId "a" msgs)
+                    Expect.equal Nothing (C.forkHistoryId 1 "a" msgs)
+            , test "P39/D8: no old result → forks at the plan JSON (keeps it, drops what follows)" <|
+                \_ ->
+                    let
+                        msgs =
+                            [ withHistory "h-0" (msg T.User "intro")
+                            , withHistory "h-1" (planMsg "A")
+                            , withHistory "h-2" (planMsg "B")
+                            , withHistory "h-3" (planResultMsg "b" "b-result")
+                            ]
+                    in
+                    -- plan "a" never completed: its anchor is right after
+                    -- its plan JSON (index 1 → fork at h-1 keeps the
+                    -- plan JSON and drops plan B and everything after).
+                    Expect.equal (Just "h-1") (C.forkHistoryId 1 "a" msgs)
+            , test "P39/D8: no old result + anchor at the very end → Nothing (plain append)" <|
+                \_ ->
+                    let
+                        msgs =
+                            [ withHistory "h-0" (msg T.User "intro")
+                            , withHistory "h-1" (planMsg "A")
+                            ]
+                    in
+                    Expect.equal Nothing (C.forkHistoryId 1 "a" msgs)
             ]
         , describe "buildCascadeState"
             [ test "captures node ids and old summaries for every level" <|
@@ -446,14 +629,26 @@ tests =
 
                         Nothing ->
                             Expect.fail "buildCascadeState returned Nothing"
-            , test "missing ancestor run → Nothing (level cannot run)" <|
+            , test "P39/D8: root without a run (FIRST run) still builds the cascade" <|
                 \_ ->
+                    -- A plan that never completed but has an anchor is
+                    -- confirmed and armed BEFORE it runs; the machine is
+                    -- built with no old summary to compare against.
                     let
                         scope =
                             C.impactScope (ctxFor sessionMap) "a"
                     in
-                    C.buildCascadeState scope Dict.empty
-                        |> Expect.equal Nothing
+                    case C.buildCascadeState scope Dict.empty of
+                        Just cs ->
+                            Expect.all
+                                [ \c -> Expect.equal "a" c.rootPlanId
+                                , \c -> Expect.equal "" c.rootOldSummary
+                                , \c -> Expect.equal C.WaitingPlan c.phase
+                                ]
+                                cs
+
+                        Nothing ->
+                            Expect.fail "first-run cascade must build"
             ]
         , describe "roundtrip through encodePlan-style JSON"
             [ test "meta parentPlanId survives encode/decode" <|

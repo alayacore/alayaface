@@ -12,6 +12,8 @@ module Plan.Cascade exposing
     , buildCascadeState
     , cascadeStep
     , findInsertionIndex
+    , anchorIndexFor
+    , findPlanAnchor
     , countUserMessagesAfter
     , truncateMessagesAt
     , forkHistoryId
@@ -31,6 +33,7 @@ windows (auto-closed on completion, D11) still participate.
 -}
 
 import Dict exposing (Dict)
+import Plan.Detect
 import Plan.Types as PT
 import Plan.Meta as PM
 import Session.Meta as SM
@@ -117,8 +120,15 @@ impactScope ctx rootPlanId =
                 rootSid =
                     headOf ctx rm.origin.sessionId
 
+                -- P39/D8: the truncation anchor is the plan's LAST old
+                -- [Plan Result] feedback when it ever completed in this
+                -- session; otherwise it falls back to the plan's CREATION
+                -- anchor (the message right after its plan JSON) — so a
+                -- plan that lives in the MIDDLE of a conversation (other
+                -- plans/messages after it) replaces what follows it
+                -- instead of appending to the very end.
                 rootIdx =
-                    findInsertionIndex rootPlanId (messagesOf ctx rootSid)
+                    anchorIndexFor rm.origin.planIndex rootPlanId (messagesOf ctx rootSid)
 
                 -- P38: the cascade is only needed when the root already
                 -- completed (its old result sits in the origin session —
@@ -146,7 +156,11 @@ impactScope ctx rootPlanId =
             , rootUserMessages = countUserMessagesAfter rootIdx (messagesOf ctx rootSid)
             , levels = levels
             , topSessionId = topSid
-            , closePlanIds = closePlans { planMetas = ctx.planMetas } truncSessions chainIds
+            , closePlanIds =
+                closePlans
+                    { planMetas = ctx.planMetas, sessionLineage = ctx.sessionLineage }
+                    truncSessions
+                    chainIds
             }
 
 
@@ -229,7 +243,16 @@ walkLevels ctx planId acc =
                                 parentMeta |> Maybe.map .name |> Maybe.withDefault parentId
 
                             parentIdx =
-                                findInsertionIndex parentId (messagesOf ctx parentOrigin)
+                                -- Same anchor rule as the root: the
+                                -- parent's old feedback, else its creation
+                                -- anchor (a parent that never completed
+                                -- still replaces what follows its plan).
+                                case parentMeta of
+                                    Just pm ->
+                                        anchorIndexFor pm.origin.planIndex parentId (messagesOf ctx parentOrigin)
+
+                                    Nothing ->
+                                        Nothing
 
                             level =
                                 { planId = parentId
@@ -244,14 +267,23 @@ walkLevels ctx planId acc =
                         walkLevels ctx parentId (acc ++ [ level ])
 
 
-closePlans : { planMetas : Dict String PM.PlanMeta } -> List String -> List String -> List String
+closePlans : { planMetas : Dict String PM.PlanMeta, sessionLineage : Dict String SM.SessionMeta } -> List String -> List String -> List String
 closePlans ctx truncSessions chainIds =
+    -- P39/D8: match by CONVERSATION, not physical instance — the
+    -- truncation target is the conversation's HEAD instance (a fork
+    -- replaced the creation instance), while plan metas record the
+    -- creation instance id. A plan whose origin conversation is being
+    -- truncated must close even when its meta predates the fork.
+    let
+        truncConvs =
+            List.map (SM.resolveConversation ctx.sessionLineage) truncSessions
+    in
     Dict.foldl
         (\pid meta acc ->
             if List.member pid chainIds then
                 acc
 
-            else if List.member meta.origin.sessionId truncSessions then
+            else if List.member (SM.resolveConversation ctx.sessionLineage meta.origin.sessionId) truncConvs then
                 pid :: acc
 
             else
@@ -425,7 +457,19 @@ buildCascadeState scope runs =
                 scope.levels
     in
     if Dict.get scope.rootPlanId runs == Nothing then
-        Nothing
+        -- P39/D8: the root may never have run (a FIRST run whose
+        -- creation anchor is followed by other messages — the confirm
+        -- flow arms the cascade and the completion drives the same
+        -- truncate/fork/insert path). Nothing to compare against: the
+        -- gate (old summary "") passes on any completion.
+        Just
+            { rootPlanId = scope.rootPlanId
+            , rootOldSummary = ""
+            , levels = levels
+            , phase = WaitingPlan
+            , currentPlanId = scope.rootPlanId
+            , currentSummary = ""
+            }
 
     else
         Just
@@ -613,6 +657,76 @@ findInsertionIndex planId messages =
         |> List.maximum
 
 
+{-| The plan's CREATION anchor: the index right AFTER its plan JSON
+message (the session's `planIndex`-th plan message, 1-based, counted
+with the same Plan.Detect predicate as auto-creation). The anchor is
+where a plan that never completed in this session belongs — replacing
+what follows it instead of appending to the very end. Nothing when the
+planIndex is unknown (<= 0) or out of range (the plan message was
+truncated away by an earlier re-run).
+-}
+findPlanAnchor : Int -> List T.Message -> Maybe Int
+findPlanAnchor planIndex messages =
+    if planIndex <= 0 then
+        Nothing
+
+    else
+        messages
+            |> List.indexedMap Tuple.pair
+            |> List.filter (\( _, m ) -> Plan.Detect.isPlanMessage m.content)
+            |> List.drop (planIndex - 1)
+            |> List.head
+            |> Maybe.map (\( i, _ ) -> i + 1)
+
+
+{-| The truncation/insertion anchor for a plan: its LAST old
+`[Plan Result]` feedback when it ever completed in this session,
+otherwise its CREATION anchor (right after the plan JSON). Nothing when
+there is neither — or the creation anchor sits at the very end of the
+session (nothing follows the plan: plain append, unchanged).
+
+One refinement: when OTHER plan messages sit between the creation
+anchor and the old feedback, the feedback was appended PAST them (the
+pre-D8 append-to-end bug) — the plan's result must not live behind
+later plans, so the creation anchor wins and the plan replaces
+everything after its plan JSON.
+-}
+anchorIndexFor : Int -> String -> List T.Message -> Maybe Int
+anchorIndexFor planIndex planId messages =
+    case ( findInsertionIndex planId messages, findPlanAnchor planIndex messages ) of
+        ( Just i, Just a ) ->
+            if a < i && hasPlanMessageBetween a i messages then
+                Just a
+
+            else
+                Just i
+
+        ( Just i, Nothing ) ->
+            Just i
+
+        ( Nothing, Just a ) ->
+            if a >= List.length messages then
+                Nothing
+
+            else
+                Just a
+
+        ( Nothing, Nothing ) ->
+            Nothing
+
+
+{-| Whether any PLAN message (Plan.Detect predicate) sits in
+messages[from..to-1] — the sign that an old feedback was appended past
+other plans instead of right after its own plan JSON.
+-}
+hasPlanMessageBetween : Int -> Int -> List T.Message -> Bool
+hasPlanMessageBetween from to messages =
+    messages
+        |> List.drop from
+        |> List.take (max 0 (to - from))
+        |> List.any (\m -> Plan.Detect.isPlanMessage m.content)
+
+
 {-| Number of USER-authored messages after the insertion point (the
 [Plan Result] message itself and everything after it will be truncated).
 0 when there is no insertion point.
@@ -639,15 +753,17 @@ truncateMessagesAt idx messages =
 
 
 {-| The alayacore content id to fork AT: the message immediately BEFORE
-the plan's last `[Plan Result]` insertion. A fork "up to" that content
-id yields a session whose history is exactly the truncated history
-(everything before the old result). Nothing when there is no insertion
-point or the predecessor carries no history id (fall back to the
-in-memory truncation).
+the plan's anchor — its last `[Plan Result]` insertion (a fork "up to"
+that content id yields a session whose history is exactly the truncated
+history, everything before the old result) or, for a plan that never
+completed, its plan JSON message itself (the fork keeps the plan JSON
+and drops everything after it). Nothing when there is no anchor or the
+predecessor carries no history id (fall back to the in-memory
+truncation).
 -}
-forkHistoryId : String -> List T.Message -> Maybe String
-forkHistoryId planId messages =
-    case findInsertionIndex planId messages of
+forkHistoryId : Int -> String -> List T.Message -> Maybe String
+forkHistoryId planIndex planId messages =
+    case anchorIndexFor planIndex planId messages of
         Just idx ->
             if idx <= 0 then
                 Nothing

@@ -1387,7 +1387,17 @@ forkRequestFor planId liveOrigin summary model =
         Just liveSid ->
             case Dict.get liveSid model.sessions of
                 Just s ->
-                    case PC.forkHistoryId planId s.messages of
+                    -- P39/D8: the fork point resolves through the plan's
+                    -- anchor (old feedback, else creation anchor) so a
+                    -- plan that never completed still replaces what
+                    -- follows it.
+                    let
+                        planIndex =
+                            Dict.get planId model.planMetas
+                                |> Maybe.map (.origin >> .planIndex)
+                                |> Maybe.withDefault 0
+                    in
+                    case PC.forkHistoryId planIndex planId s.messages of
                         Nothing ->
                             Nothing
 
@@ -1526,12 +1536,16 @@ cascadeAfterRunnerStep dispatch planId ev run2 model =
             ( model, Cmd.none )
 
 
-{-| Truncate the plan's origin session at its LAST `[Plan Result]`
-insertion point (inclusive) — the old result and everything after it.
-Resolves the live session id (resumed sessions differ from the on-disk
-origin id). P39/Phase B: the truncation target is the conversation's
-HEAD physical instance (a fork replaced the creation session). No-op
-when the origin is closed or has no insertion point.
+{-| Truncate the plan's origin session at its anchor — the LAST
+`[Plan Result]` insertion point (inclusive: the old result and
+everything after it is dropped), or, for a plan that never completed in
+this session, its CREATION anchor (right after its plan JSON: a plan in
+the middle of a conversation replaces what follows it instead of
+appending to the very end). Resolves the live session id (resumed
+sessions differ from the on-disk origin id). P39/Phase B: the
+truncation target is the conversation's HEAD physical instance (a fork
+replaced the creation session). No-op when the origin is closed or has
+no anchor.
 -}
 truncateOrigin : String -> Model -> Model
 truncateOrigin planId model =
@@ -1546,7 +1560,7 @@ truncateOrigin planId model =
                 Just liveSid ->
                     case Dict.get liveSid model.sessions of
                         Just s ->
-                            case PC.findInsertionIndex planId s.messages of
+                            case PC.anchorIndexFor meta.origin.planIndex planId s.messages of
                                 Just idx ->
                                     { model
                                         | sessions =

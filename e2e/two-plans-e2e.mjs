@@ -1,0 +1,304 @@
+#!/usr/bin/env node
+// Two-plans-in-one-session E2E — regression for the user-reported bug:
+// "same session has plans A and B; re-running B replaces what follows B,
+// but A's result is appended to the very end instead of replacing what
+// follows A".
+//
+// Flow:
+//   1. session S (plan mode) → "Create a plan Alpha" → plan A (planIndex 1)
+//      — top-level plans WAIT for the user's Run click, so A sits
+//        NotStarted while the session continues.
+//   2. S → "Create a plan Beta" → plan B (planIndex 2) auto-creates.
+//   3. Run B → B completes → its [Plan Result] lands in S.
+//   4. Open A (its [Plan: …] status-bar link is FIRST — A's plan JSON
+//      comes before B's) → Run A.
+//      P39/D8: A never completed — its anchor is its CREATION point, and
+//      B's plan/result follow it, so the confirmation overlay MUST
+//      appear ("truncate … N messages") — the pre-fix behavior ran
+//      straight through and appended A's result to the very end.
+//   5. Confirm → A completes → assertions:
+//        * exactly ONE [Plan Result] in S — A's (B's was truncated away,
+//          together with B's plan JSON);
+//        * A's result carries the [Plan: e2e-demo-…] link;
+//        * the confirm overlay was actually shown (regression hook).
+//
+// Screenshots land in the artifact dir; ALL PASS printed on success.
+
+import puppeteer from 'puppeteer-core';
+import { execSync, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import net from 'node:net';
+
+const ROOT = path.resolve(import.meta.dirname, '..');
+const CHROME = '/usr/bin/google-chrome';
+const E2E_TIMEOUT = 120000;
+
+function assert(cond, msg) {
+  if (!cond) throw new Error('ASSERT FAILED: ' + msg);
+}
+
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.listen(0, '127.0.0.1', () => {
+      const port = srv.address().port;
+      srv.close(() => resolve(port));
+    });
+    srv.on('error', reject);
+  });
+}
+
+function waitPort(port, ms) {
+  const deadline = Date.now() + ms;
+  return new Promise((resolve, reject) => {
+    const tick = () => {
+      const sock = net.connect(port, '127.0.0.1');
+      sock.on('connect', () => { sock.destroy(); resolve(); });
+      sock.on('error', () => {
+        sock.destroy();
+        if (Date.now() > deadline) reject(new Error('server port timeout'));
+        else setTimeout(tick, 250);
+      });
+    };
+    tick();
+  });
+}
+
+const tmp = mkdtempSync(path.join(tmpdir(), 'alayaface-two-plans-e2e-'));
+const home = path.join(tmp, 'home');
+const artifacts = path.join(tmp, 'shots');
+const SRCGO = path.join(ROOT, 'src-go');
+execSync(`mkdir -p "${artifacts}" "${home}"`);
+// Clean shared markers; pre-seed the hang-once marker so B's t3 (and
+// later A's t3) succeed on the first try (no hang wait). The fail-once
+// marker stays ABSENT: B's t2 fails once then retries; A's t2 sees the
+// marker and succeeds immediately (fast second run).
+execSync('rm -f /tmp/alayaface-fakecore-fail-once-*.marker /tmp/alayaface-fakecore-hang-once-*.marker /tmp/alayaface-fakecore-version.marker');
+{
+  const t3Prompt = 'review the draft and fix any issues (hang-once marker)';
+  const h = createHash('sha256').update(t3Prompt).digest('hex').slice(0, 16);
+  writeFileSync(path.join(tmpdir(), `alayaface-fakecore-hang-once-${h}.marker`), 'hung-once');
+}
+console.log('artifacts:', tmp);
+
+// ── 1. build binaries ───────────────────────────────────────────────
+const fakecore = path.join(tmp, 'fakecore');
+const serverBin = path.join(tmp, 'alayaface-server');
+execSync('go build -o "' + fakecore + '" ./internal/fakecore', { cwd: SRCGO, stdio: 'inherit' });
+execSync('go build -o "' + serverBin + '" ./cmd/alayaface-server', { cwd: SRCGO, stdio: 'inherit' });
+
+// ── 2. start Go backend (fresh HOME) ────────────────────────────────
+const port = await freePort();
+const base = `http://127.0.0.1:${port}`;
+const srv = spawn(serverBin, ['--addr', `127.0.0.1:${port}`, '--static', '../src-elm', '--alayacore-bin', fakecore], {
+  cwd: SRCGO,
+  env: { ...process.env, HOME: home },
+  stdio: ['ignore', 'pipe', 'pipe'],
+});
+let srvOut = '';
+srv.stdout.on('data', d => { srvOut += d; process.stdout.write('[srv!] ' + d); });
+srv.stderr.on('data', d => process.stdout.write('[srv-err] ' + d));
+function killServer() {
+  try { srv.kill('SIGTERM'); } catch { /* already gone */ }
+}
+function onSignal(sig) {
+  killServer();
+  process.exit(0);
+}
+process.on('SIGINT', () => onSignal('SIGINT'));
+process.on('SIGTERM', () => onSignal('SIGTERM'));
+await waitPort(port, 30000);
+console.log('backend up on', base);
+
+async function shot(page, name) {
+  try { await page.screenshot({ path: path.join(artifacts, name) }); } catch { /* ignore */ }
+}
+
+let browser = null;
+let page = null;
+try {
+  // ── 3. Chrome headless ────────────────────────────────────────────
+  browser = await puppeteer.launch({
+    executablePath: CHROME,
+    headless: true,
+    args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--window-size=1440,920'],
+  });
+  page = await browser.newPage();
+  await page.setViewport({ width: 1440, height: 920 });
+  page.on('pageerror', e => console.log('[pageerror]', e.message));
+  page.on('console', m => console.log('[console.' + m.type() + ']', m.text()));
+
+  const waitFor = (sel, ms = 30000) => page.waitForSelector(sel, { timeout: ms });
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const clickByText = async (sel, text) => {
+    const handles = await page.$$(sel);
+    for (const h of handles) {
+      const t = await h.evaluate(el => el.textContent || '');
+      if (t.includes(text)) { await h.click(); return true; }
+    }
+    return false;
+  };
+
+  // ── 4. Session S → plan A ─────────────────────────────────────────
+  await page.goto(base + '/', { waitUntil: 'networkidle0', timeout: 30000 });
+  await waitFor('.global-menu-btn');
+  await page.click('.global-menu-btn');
+  await waitFor('.global-menu-panel');
+  assert(await clickByText('.global-menu-item', 'New Session'), 'New Session menu item');
+  await waitFor('.session-panel');
+  await sleep(600);
+
+  const sendPrompt = async (text) => {
+    // Focus the newest session's input and TYPE for real (Elm's
+    // controlled component responds to real keyboard events reliably;
+    // programmatic value+input events are flaky under Puppeteer).
+    const focused = await page.evaluate(() => {
+      const panels = [...document.querySelectorAll('.session-panel')];
+      let bestN = -1;
+      for (const p of panels) {
+        const m = (p.querySelector('.session-bar-title')?.textContent || '').match(/Session (\d+)/);
+        const n = m ? parseInt(m[1], 10) : -1;
+        if (n > bestN) bestN = n;
+      }
+      for (const p of panels) {
+        const m = (p.querySelector('.session-bar-title')?.textContent || '').match(/Session (\d+)/);
+        const n = m ? parseInt(m[1], 10) : -1;
+        if (n !== bestN) continue;
+        const ta = p.querySelector('textarea.input-text');
+        if (ta) { ta.focus(); return true; }
+      }
+      return false;
+    });
+    if (!focused) throw new Error('sendPrompt: no input to focus');
+    await page.keyboard.type(text, { delay: 5 });
+    await sleep(150);
+    const clicked = await page.evaluate(() => {
+      const p = [...document.querySelectorAll('.session-panel')].find(x => x.querySelector('.send-btn'));
+      if (!p) return false;
+      const ta = p.querySelector('textarea.input-text');
+      if (!ta || !ta.value.trim()) return false;
+      const btn = p.querySelector('.send-btn');
+      btn.click();
+      return true;
+    });
+    if (!clicked) throw new Error('sendPrompt: no staged text to send: ' + text);
+    console.log('[sendPrompt] sent:', text.slice(0, 40));
+    await sleep(400);
+  };
+
+  // Plan A (planIndex 1) — top-level plans wait for Run.
+  await sendPrompt('Create a plan Alpha for the two-plans e2e');
+  await page.waitForFunction(() => document.querySelectorAll('.plan-page').length === 1, { timeout: 30000 });
+  await sleep(600);
+  await shot(page, '01-plan-a-created.png');
+  console.log('PASS: plan A auto-created (waiting for Run)');
+
+  // ── 5. Plan B (planIndex 2) → run it to completion ────────────────
+  await sendPrompt('Create a plan Beta for the two-plans e2e');
+  // fakecore names the SECOND plan "E2E Demo Beta" — wait for its
+  // status-bar link to appear (B's plan JSON is in S and the plan
+  // window is now B).
+  await page.waitForFunction(() => {
+    return [...document.querySelectorAll('.plan-offer-btn')].some(e => (e.textContent || '').includes('E2E Demo Beta'));
+  }, { timeout: 30000 });
+  await sleep(800);
+  await shot(page, '02-b-created.png');
+  // Click RUN on plan B's own window (data-plan starts with
+  // e2e-demo-beta; A's window is e2e-demo-<ts>).
+  const runB = await page.evaluate(() => {
+    const win = [...document.querySelectorAll('.plan-panel')].find(p =>
+      (p.getAttribute('data-plan') || '').startsWith('e2e-demo-beta'));
+    const btn = win && win.querySelector('button.plan-strip-btn');
+    if (btn) { btn.click(); return true; }
+    return false;
+  });
+  assert(runB, 'Run button (plan B window)');
+  await page.waitForFunction(() => {
+    return [...document.querySelectorAll('.plan-offer-btn')].some(e => e.textContent.includes('Completed'));
+  }, { timeout: E2E_TIMEOUT });
+  await sleep(800);
+  await shot(page, '03-b-completed.png');
+  const msgsB = await page.$$eval('.message-content', els => els.map(e => e.textContent || ''));
+  const bResults = msgsB.filter(t => t.startsWith('[Plan Result]'));
+  assert(bResults.length === 1 && /\[Plan: e2e-demo-beta-\d+\]/.test(bResults[0]),
+    'B completed → its [Plan: e2e-demo-beta-…] result is in S, got: ' + JSON.stringify(bResults));
+  console.log('PASS: plan B ran to completion, its [Plan Result] is in S');
+
+  // ── 6. Open plan A via its [Plan: …] status-bar link (FIRST one) ──
+  const openedA = await page.evaluate(() => {
+    const b = [...document.querySelectorAll('button')].find(e => /^\[Plan: /.test((e.textContent || '').trim()));
+    if (b) { b.click(); return true; }
+    return false;
+  });
+  assert(openedA, 'plan A status-bar link present');
+  await page.waitForFunction(() => document.querySelectorAll('.plan-page').length === 1, { timeout: 10000 });
+  await sleep(400);
+
+  // ── 7. Run A → the confirmation overlay MUST appear (P39/D8) ─────
+  // Plan A's window: data-plan starts with e2e-demo- but NOT beta.
+  const runA = await page.evaluate(() => {
+    const win = [...document.querySelectorAll('.plan-panel')].find(p => {
+      const d = p.getAttribute('data-plan') || '';
+      return d.startsWith('e2e-demo-') && !d.startsWith('e2e-demo-beta');
+    });
+    const btn = win && win.querySelector('button.plan-strip-btn');
+    if (btn) { btn.click(); return true; }
+    return false;
+  });
+  assert(runA, 'Run button (plan A window)');
+  const confirmShown = await page.waitForSelector('.cascade-page .confirm-page-btn-allow', { timeout: 10000 })
+    .then(() => true)
+    .catch(() => false);
+  assert(confirmShown,
+    'plan A (never completed, followed by B) must show the impact-scope confirmation before running');
+  await shot(page, '03-confirm-overlay.png');
+  await page.evaluate(() => {
+    const b = document.querySelector('.cascade-page .confirm-page-btn-allow');
+    if (b) b.click();
+  });
+  console.log('PASS: confirmation overlay shown for plan A (creation-anchor truncation)');
+
+  // ── 8. A completes → assertions ───────────────────────────────────
+  await page.waitForFunction(() => {
+    const msgs = [...document.querySelectorAll('.message-content')].map(e => e.textContent || '');
+    return msgs.some(t => /\[Plan: e2e-demo-\d+\]/.test(t) && t.includes('[Plan Result]'));
+  }, { timeout: E2E_TIMEOUT });
+  await sleep(800);
+  await shot(page, '04-final.png');
+
+  const msgs = await page.$$eval('.message-content', els => els.map(e => e.textContent || ''));
+  const results = msgs.filter(t => t.startsWith('[Plan Result]'));
+  assert(results.length === 1,
+    'exactly ONE [Plan Result] remains (A\'s; B\'s was truncated away), got: ' + JSON.stringify(results));
+  assert(/\[Plan: e2e-demo-\d+\]/.test(results[0]) && !/e2e-demo-beta/.test(results[0]),
+    "A's [Plan Result] carries the [Plan: e2e-demo-…] link (not Beta), got: " + results[0].slice(0, 120));
+  assert(!msgs.some(t => t.includes('E2E Demo Beta')),
+    "plan B's plan JSON + result are gone (truncated at A's creation anchor)");
+  console.log('PASS: A\'s [Plan Result] sits after A (B\'s plan/result replaced, not appended past)');
+
+  // Plan windows are gone (A auto-closed on completion; B was closed at
+  // confirm).
+  const planPages = await page.$$eval('.plan-page', els => els.length);
+  assert(planPages === 0, 'no plan windows remain, got: ' + planPages);
+  console.log('PASS: plan windows closed after the cascade');
+
+  console.log('\nALL PASS ✅');
+  console.log('screenshots:\n  ' + readdirSync(artifacts).map(f => path.join(artifacts, f)).join('\n  '));
+} catch (err) {
+  if (page) {
+    await shot(page, 'failure.png').catch(() => {});
+    try {
+      const txt = await page.evaluate(() => document.body.innerText.slice(0, 3000));
+      console.log('[page-text]', txt.replace(/\n+/g, ' | ').slice(0, 2500));
+    } catch { /* ignore */ }
+  }
+  console.error('E2E FAILED:', err.message);
+  process.exitCode = 1;
+} finally {
+  killServer();
+  if (browser) await browser.close().catch(() => {});
+  try { rmSync(tmp, { recursive: true, force: true }); } catch { /* already gone */ }
+}

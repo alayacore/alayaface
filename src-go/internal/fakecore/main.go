@@ -433,14 +433,32 @@ func main() {
 	smModelList()
 }
 
+// planSeq numbers plan documents emitted by planReply: the SECOND plan
+// of a session gets a distinct name ("E2E Demo Beta") so the UI/e2e can
+// tell the two plan windows apart (same fixture, different planId).
+// Single-plan e2es (fork/plan/restart) are unaffected (first plan keeps
+// "E2E Demo").
+var planSeq int
+
 // planReply emits a complete assistant text frame carrying a fenced plan
 // JSON (the Create Plan offer detector scans the final AT content), then
 // a normal reply and the task-done frame.
 func planReply() {
+	planSeq++
+	name := "E2E Demo"
+	if planSeq >= 2 {
+		name = "E2E Demo Beta"
+	}
+	body := strings.Replace(planJSON, `"name": "E2E Demo"`, `"name": "`+name+`"`, 1)
 	pid := nextReplyID()
-	echoID("AT", pid, "Here is the plan:\n```json\n"+planJSON+"\n```\nI'll wait for you to create it.")
+	echoID("AT", pid, "Here is the plan:\n```json\n"+body+"\n```\nI'll wait for you to create it.")
 	echoID("AR", nextReplyID(), "")
-	history = append(history, histMsg{"assistant", "Here is the plan:\n```json\n" + planJSON + "\n```\nI'll wait for you to create it.", pid})
+	history = append(history, histMsg{"assistant", "Here is the plan:\n```json\n" + body + "\n```\nI'll wait for you to create it.", pid})
+	// Mark the task complete (in_progress:false) so the frontend leaves
+	// "task running" state (send button back to Send) — without this a
+	// session that creates a SECOND plan can never send it (the button
+	// stays Cancel).
+	writeFrame("SM", `{"type":"task","data":{"in_progress":false,"task_error":false}}`)
 	// NOTE: deliberately NOT calling streamReply() afterwards — the plan
 	// message must stay the session's LAST message so the frontend's
 	// delayed auto-open (PlanOfferSettle) confirms it as the newest.
