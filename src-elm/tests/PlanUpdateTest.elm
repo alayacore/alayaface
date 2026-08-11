@@ -494,6 +494,122 @@ suite =
                     PU.planMetaForMessage initModelWithSession "s1" 1
                         |> Expect.equal Nothing
             ]
+        , describe "planRunningForSession (input disabled while a plan runs)"
+            [ test "InProgress plan of the conversation → True" <|
+                \_ ->
+                    let
+                        meta =
+                            { origin = { sessionId = "s1", planIndex = 1 }
+                            , feedbacks = []
+                            , depth = 1
+                            , createdAt = 0
+                            , name = "x"
+                            , lastStatus = "running"
+                            , parentPlanId = Nothing
+                            }
+
+                        baseRun =
+                            PT.emptyRunState "r1" plan
+
+                        m =
+                            { initModelWithSession
+                                | planMetas = Dict.insert "p1" meta Dict.empty
+                                , planWindows =
+                                    Dict.insert "p1"
+                                        { planWindowWithPlan | run = Just { baseRun | status = PT.InProgress } }
+                                        Dict.empty
+                            }
+                    in
+                    PU.planRunningForSession m "s1"
+                        |> Expect.equal True
+            , test "a RESUMED/FORKED instance of the conversation → True" <|
+                \_ ->
+                    let
+                        meta =
+                            { origin = { sessionId = "s1", planIndex = 1 }
+                            , feedbacks = []
+                            , depth = 1
+                            , createdAt = 0
+                            , name = "x"
+                            , lastStatus = "running"
+                            , parentPlanId = Nothing
+                            }
+
+                        baseRun =
+                            PT.emptyRunState "r1" plan
+
+                        m =
+                            { initModelWithSession
+                                | planMetas = Dict.insert "p1" meta Dict.empty
+                                , planWindows =
+                                    Dict.insert "p1"
+                                        { planWindowWithPlan | run = Just { baseRun | status = PT.InProgress } }
+                                        Dict.empty
+                                , planResumedFrom = Dict.insert "live-fork" "s-fork" Dict.empty
+                                , sessionLineage =
+                                    Dict.fromList
+                                        [ ( "s1", SM.empty "s1" )
+                                        , ( "s-fork", { conversationId = "s1", parentInstanceId = Just "s1" } )
+                                        ]
+                            }
+                    in
+                    PU.planRunningForSession m "live-fork"
+                        |> Expect.equal True
+            , test "Completed/NotStarted/Stopped plan → False (input enabled again)" <|
+                \_ ->
+                    let
+                        meta =
+                            { origin = { sessionId = "s1", planIndex = 1 }
+                            , feedbacks = []
+                            , depth = 1
+                            , createdAt = 0
+                            , name = "x"
+                            , lastStatus = "completed"
+                            , parentPlanId = Nothing
+                            }
+
+                        baseRun =
+                            PT.emptyRunState "r1" plan
+
+                        m =
+                            { initModelWithSession
+                                | planMetas = Dict.insert "p1" meta Dict.empty
+                                , planWindows =
+                                    Dict.insert "p1"
+                                        { planWindowWithPlan | run = Just { baseRun | status = PT.Completed } }
+                                        Dict.empty
+                            }
+                    in
+                    PU.planRunningForSession m "s1"
+                        |> Expect.equal False
+            , test "plan of ANOTHER session → False" <|
+                \_ ->
+                    let
+                        meta =
+                            { origin = { sessionId = "s2", planIndex = 1 }
+                            , feedbacks = []
+                            , depth = 1
+                            , createdAt = 0
+                            , name = "x"
+                            , lastStatus = "running"
+                            , parentPlanId = Nothing
+                            }
+
+                        baseRun =
+                            PT.emptyRunState "r1" plan
+
+                        m =
+                            { initModelWithSession
+                                | planMetas = Dict.insert "p1" meta Dict.empty
+                                , planWindows =
+                                    Dict.insert "p1"
+                                        { planWindowWithPlan | run = Just { baseRun | status = PT.InProgress } }
+                                        Dict.empty
+                            }
+                    in
+                    PU.planRunningForSession m "s1"
+                        |> Expect.equal False
+            ]
         , describe "cascadeStepIn (P39/Phase C machine wiring)"
             [ test "InstanceReady registers the fork's lineage and the ResumeNode effect keeps the conversation binding" <|
                 \_ ->

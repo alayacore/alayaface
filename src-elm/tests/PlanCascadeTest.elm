@@ -160,17 +160,19 @@ ctxFor sessions =
 sessionMap : Dict String (List T.Message)
 sessionMap =
     Dict.fromList
-        [ -- root A's origin: old result + a user follow-up after it
+        [ -- root A's origin: plan JSON + old result + a follow-up after
           ( "s1"
           , [ msg T.User "hello"
+            , planMsg "A"
             , planResultMsg "a" "result-a"
             , msg T.Assistant "done"
             , msg T.User "my follow-up"
             ]
           )
-        , -- B's origin: old result, nothing after
+        , -- B's origin: plan JSON + old result, nothing after
           ( "s2"
           , [ msg T.User "orig"
+            , planMsg "B"
             , planResultMsg "b" "result-b"
             ]
           )
@@ -182,29 +184,7 @@ sessionMap =
 tests : Test
 tests =
     describe "Plan.Cascade (P38)"
-        [ describe "findInsertionIndex"
-            [ test "finds the LAST [Plan Result] message for the plan" <|
-                \_ ->
-                    let
-                        msgs =
-                            [ planResultMsg "a" "first"
-                            , msg T.User "middle"
-                            , planResultMsg "a" "second"
-                            ]
-                    in
-                    Expect.equal (Just 2) (C.findInsertionIndex "a" msgs)
-            , test "other plans' results do not match" <|
-                \_ ->
-                    let
-                        msgs =
-                            [ planResultMsg "b" "other-plan" ]
-                    in
-                    Expect.equal Nothing (C.findInsertionIndex "a" msgs)
-            , test "no insertion → Nothing" <|
-                \_ ->
-                    Expect.equal Nothing (C.findInsertionIndex "a" [ msg T.User "plain" ])
-            ]
-        , describe "findPlanAnchor"
+        [ describe "findPlanAnchor"
             [ test "index right after the planIndex-th plan message" <|
                 \_ ->
                     let
@@ -227,8 +207,13 @@ tests =
                     Expect.equal Nothing (C.findPlanAnchor 1 [ msg T.User "x" ])
             ]
         , describe "anchorIndexFor"
-            [ test "old [Plan Result] feedback wins over the creation anchor" <|
+            [ test "the plan's creation point is the anchor even when an old result exists" <|
                 \_ ->
+                    -- Unified semantics: a plan's result ALWAYS replaces
+                    -- what follows its plan JSON — the old [Plan Result]
+                    -- feedback is not a separate anchor (input is
+                    -- disabled while the plan runs, so nothing
+                    -- legitimately sits between the plan and its result).
                     let
                         msgs =
                             [ planMsg "A"
@@ -237,13 +222,13 @@ tests =
                             , msg T.Assistant "after"
                             ]
                     in
-                    Expect.equal (Just 2) (C.anchorIndexFor 1 "a" msgs)
-            , test "old feedback appended PAST another plan → creation anchor wins" <|
+                    Expect.equal (Just 1) (C.anchorIndexFor 1 msgs)
+            , test "old feedback appended PAST another plan → still the creation anchor" <|
                 \_ ->
-                    -- Pre-D8 bug: A completed late and its feedback was
-                    -- appended AFTER plan B (whose plan JSON and result
-                    -- sit between A's plan and A's feedback). Re-running
-                    -- A must anchor at A's creation point, not behind B.
+                    -- Pre-D8 bug data: A completed late, its feedback was
+                    -- appended after plan B. The anchor is A's creation
+                    -- point regardless — B (and the late feedback) are
+                    -- replaced.
                     let
                         msgs =
                             [ planMsg "A"
@@ -252,23 +237,8 @@ tests =
                             , planResultMsg "a" "a-late"
                             ]
                     in
-                    Expect.equal (Just 1) (C.anchorIndexFor 1 "a" msgs)
-            , test "old feedback with only user messages between → feedback wins" <|
-                \_ ->
-                    -- A's own feedback sits after its plan JSON plus user
-                    -- conversation (no other plan in between): the normal
-                    -- re-run keeps the conversation before the old result
-                    -- and replaces from there.
-                    let
-                        msgs =
-                            [ planMsg "A"
-                            , msg T.User "user typed while running"
-                            , planResultMsg "a" "old"
-                            , msg T.Assistant "after"
-                            ]
-                    in
-                    Expect.equal (Just 2) (C.anchorIndexFor 1 "a" msgs)
-            , test "no old result → creation anchor (a mid-conversation plan replaces what follows)" <|
+                    Expect.equal (Just 1) (C.anchorIndexFor 1 msgs)
+            , test "a mid-conversation plan replaces what follows" <|
                 \_ ->
                     let
                         msgs =
@@ -278,8 +248,8 @@ tests =
                             , planResultMsg "b" "b-result"
                             ]
                     in
-                    Expect.equal (Just 2) (C.anchorIndexFor 1 "a" msgs)
-            , test "no old result + anchor at the very end → Nothing (plain append)" <|
+                    Expect.equal (Just 2) (C.anchorIndexFor 1 msgs)
+            , test "anchor at the very end → Nothing (plain append)" <|
                 \_ ->
                     let
                         msgs =
@@ -287,24 +257,24 @@ tests =
                             , planMsg "A"
                             ]
                     in
-                    Expect.equal Nothing (C.anchorIndexFor 1 "a" msgs)
+                    Expect.equal Nothing (C.anchorIndexFor 1 msgs)
             , test "no anchor at all → Nothing" <|
                 \_ ->
-                    Expect.equal Nothing (C.anchorIndexFor 1 "a" [ msg T.User "x" ])
+                    Expect.equal Nothing (C.anchorIndexFor 1 [ msg T.User "x" ])
             ]
         , describe "countUserMessagesAfter"
-            [ test "counts only User messages after the insertion" <|
+            [ test "counts only User messages after the anchor" <|
                 \_ ->
                     let
                         msgs =
-                            [ planResultMsg "a" "r"
+                            [ planMsg "A"
                             , msg T.Assistant "answer"
                             , msg T.User "typed"
                             , msg T.Tool "tool"
                             ]
                     in
-                    Expect.equal 1 (C.countUserMessagesAfter (C.findInsertionIndex "a" msgs) msgs)
-            , test "no insertion → 0" <|
+                    Expect.equal 1 (C.countUserMessagesAfter (C.anchorIndexFor 1 msgs) msgs)
+            , test "no anchor → 0" <|
                 \_ ->
                     Expect.equal 0 (C.countUserMessagesAfter Nothing [ msg T.User "x" ])
             ]
@@ -553,32 +523,7 @@ tests =
                         |> Expect.equal Nothing
             ]
         , describe "forkHistoryId"
-            [ test "history id of the message before the last insertion" <|
-                \_ ->
-                    let
-                        msgs =
-                            [ withHistory "h-1" (msg T.User "keep")
-                            , planResultMsg "a" "old"
-                            , withHistory "h-2" (msg T.Assistant "drop")
-                            ]
-                    in
-                    Expect.equal (Just "h-1") (C.forkHistoryId 1 "a" msgs)
-            , test "no insertion → Nothing" <|
-                \_ ->
-                    Expect.equal Nothing (C.forkHistoryId 1 "a" [ msg T.User "x" ])
-            , test "insertion at index 0 → Nothing (nothing to fork at)" <|
-                \_ ->
-                    Expect.equal Nothing (C.forkHistoryId 1 "a" [ planResultMsg "a" "r" ])
-            , test "predecessor without historyId → Nothing (fallback to in-memory)" <|
-                \_ ->
-                    let
-                        msgs =
-                            [ msg T.User "keep"
-                            , planResultMsg "a" "old"
-                            ]
-                    in
-                    Expect.equal Nothing (C.forkHistoryId 1 "a" msgs)
-            , test "P39/D8: no old result → forks at the plan JSON (keeps it, drops what follows)" <|
+            [ test "forks at the plan JSON (keeps it, drops what follows)" <|
                 \_ ->
                     let
                         msgs =
@@ -588,11 +533,27 @@ tests =
                             , withHistory "h-3" (planResultMsg "b" "b-result")
                             ]
                     in
-                    -- plan "a" never completed: its anchor is right after
-                    -- its plan JSON (index 1 → fork at h-1 keeps the
-                    -- plan JSON and drops plan B and everything after).
-                    Expect.equal (Just "h-1") (C.forkHistoryId 1 "a" msgs)
-            , test "P39/D8: no old result + anchor at the very end → Nothing (plain append)" <|
+                    -- Unified semantics: the fork point is the plan's
+                    -- plan JSON — fork "up to" h-1 keeps the plan JSON
+                    -- and drops plan B and everything after.
+                    Expect.equal (Just "h-1") (C.forkHistoryId 1 msgs)
+            , test "no plan message → Nothing" <|
+                \_ ->
+                    Expect.equal Nothing (C.forkHistoryId 1 [ msg T.User "x" ])
+            , test "plan at index 0 → Nothing (nothing to fork at)" <|
+                \_ ->
+                    Expect.equal Nothing (C.forkHistoryId 1 [ planMsg "A" ])
+            , test "plan JSON without historyId → Nothing (fallback to in-memory)" <|
+                \_ ->
+                    let
+                        msgs =
+                            [ msg T.User "keep"
+                            , planMsg "A"
+                            , planMsg "B"
+                            ]
+                    in
+                    Expect.equal Nothing (C.forkHistoryId 1 msgs)
+            , test "anchor at the very end → Nothing (plain append)" <|
                 \_ ->
                     let
                         msgs =
@@ -600,7 +561,7 @@ tests =
                             , withHistory "h-1" (planMsg "A")
                             ]
                     in
-                    Expect.equal Nothing (C.forkHistoryId 1 "a" msgs)
+                    Expect.equal Nothing (C.forkHistoryId 1 msgs)
             ]
         , describe "buildCascadeState"
             [ test "captures node ids and old summaries for every level" <|

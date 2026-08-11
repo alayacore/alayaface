@@ -216,11 +216,28 @@ try {
     return false;
   });
   assert(runB, 'Run button (plan B window)');
+  // P39/D8: while plan B runs, the origin session's input is disabled.
+  await sleep(700);
+  const disabledDuringB = await page.evaluate(() => {
+    const p = [...document.querySelectorAll('.session-panel')].find(x => x.querySelector('.send-btn'));
+    const ta = p && p.querySelector('textarea.input-text');
+    return ta ? ta.disabled : false;
+  });
+  assert(disabledDuringB, 'session input disabled while plan B runs');
+  console.log('PASS: session input disabled while plan B is running');
   await page.waitForFunction(() => {
     return [...document.querySelectorAll('.plan-offer-btn')].some(e => e.textContent.includes('Completed'));
   }, { timeout: E2E_TIMEOUT });
   await sleep(800);
   await shot(page, '03-b-completed.png');
+  // Input must be re-enabled once the plan completed.
+  const enabledAfterB = await page.evaluate(() => {
+    const p = [...document.querySelectorAll('.session-panel')].find(x => x.querySelector('.send-btn'));
+    const ta = p && p.querySelector('textarea.input-text');
+    return ta ? !ta.disabled : false;
+  });
+  assert(enabledAfterB, 'session input re-enabled after plan B completed');
+  console.log('PASS: session input re-enabled after plan B completed');
   const msgsB = await page.$$eval('.message-content', els => els.map(e => e.textContent || ''));
   const bResults = msgsB.filter(t => t.startsWith('[Plan Result]'));
   assert(bResults.length === 1 && /\[Plan: e2e-demo-beta-\d+\]/.test(bResults[0]),

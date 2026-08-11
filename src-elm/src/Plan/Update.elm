@@ -29,6 +29,7 @@ module Plan.Update exposing
     , findPlanIdBySession
     , resolveEventSessionId
     , planMetaForMessage
+    , planRunningForSession
     , eventSessionId
     , planSystemPrompt
     , runStepIn
@@ -553,6 +554,35 @@ planMetaForMessage model sid planIndex =
             SM.resolveConversation model.sessionLineage onDiskId
     in
     PM.planMetaForSessionIndex model.planMetas convId planIndex
+
+
+{-| Whether a plan whose origin CONVERSATION is the given session is
+currently RUNNING (InProgress). While a plan executes, the session's
+input is disabled: the plan's result replaces everything after its plan
+JSON, so a user message sent mid-run would be truncated away by the
+completion (and would corrupt the "plan is the last meaningful message"
+invariant the creation anchor relies on). Resolves resumed/forked
+instances to the conversation.
+-}
+planRunningForSession : Model -> String -> Bool
+planRunningForSession model sid =
+    let
+        convId =
+            resolveEventSessionId model sid
+    in
+    Dict.foldl
+        (\pid meta acc ->
+            acc
+                || (meta.origin.sessionId == convId
+                        && (Dict.get pid model.planWindows
+                                |> Maybe.andThen .run
+                                |> Maybe.map (\r -> r.status == PT.InProgress)
+                                |> Maybe.withDefault False
+                           )
+                   )
+        )
+        False
+        model.planMetas
 
 
 {-| The plan index of the LAST message of the list: how many plan
@@ -1387,17 +1417,17 @@ forkRequestFor planId liveOrigin summary model =
         Just liveSid ->
             case Dict.get liveSid model.sessions of
                 Just s ->
-                    -- P39/D8: the fork point resolves through the plan's
-                    -- anchor (old feedback, else creation anchor) so a
-                    -- plan that never completed still replaces what
-                    -- follows it.
+                    -- P39/D8: the fork point is the plan's CREATION
+                    -- anchor (its plan JSON's history id) — the fork
+                    -- keeps the plan JSON and everything before it and
+                    -- drops what follows.
                     let
                         planIndex =
                             Dict.get planId model.planMetas
                                 |> Maybe.map (.origin >> .planIndex)
                                 |> Maybe.withDefault 0
                     in
-                    case PC.forkHistoryId planIndex planId s.messages of
+                    case PC.forkHistoryId planIndex s.messages of
                         Nothing ->
                             Nothing
 
@@ -1536,16 +1566,13 @@ cascadeAfterRunnerStep dispatch planId ev run2 model =
             ( model, Cmd.none )
 
 
-{-| Truncate the plan's origin session at its anchor — the LAST
-`[Plan Result]` insertion point (inclusive: the old result and
-everything after it is dropped), or, for a plan that never completed in
-this session, its CREATION anchor (right after its plan JSON: a plan in
-the middle of a conversation replaces what follows it instead of
-appending to the very end). Resolves the live session id (resumed
-sessions differ from the on-disk origin id). P39/Phase B: the
-truncation target is the conversation's HEAD physical instance (a fork
-replaced the creation session). No-op when the origin is closed or has
-no anchor.
+{-| Truncate the plan's origin session at its anchor — the plan's
+CREATION point (right after its plan JSON): a plan's result replaces
+what follows its plan, never appended past later plans. Resolves the
+live session id (resumed sessions differ from the on-disk origin id).
+P39/Phase B: the truncation target is the conversation's HEAD physical
+instance (a fork replaced the creation session). No-op when the origin
+is closed or has no anchor.
 -}
 truncateOrigin : String -> Model -> Model
 truncateOrigin planId model =
@@ -1560,7 +1587,7 @@ truncateOrigin planId model =
                 Just liveSid ->
                     case Dict.get liveSid model.sessions of
                         Just s ->
-                            case PC.anchorIndexFor meta.origin.planIndex planId s.messages of
+                            case PC.anchorIndexFor meta.origin.planIndex s.messages of
                                 Just idx ->
                                     { model
                                         | sessions =

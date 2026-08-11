@@ -1577,6 +1577,16 @@ viewInputBar model session =
         hasStaged =
             not (List.isEmpty session.staged)
 
+        -- P39/D8: while a plan of this conversation is RUNNING, the
+        -- session input is disabled — the plan's result replaces
+        -- everything after its plan JSON, so a message typed mid-run
+        -- would be truncated away by the completion.
+        planBlocking =
+            PU.planRunningForSession model session.id
+
+        inputDisabled =
+            not session.connected || planBlocking
+
         inputClass =
             "session-input-bar" ++ (if not hasMessages then " session-input-bar-centered" else "")
     in
@@ -1592,7 +1602,13 @@ viewInputBar model session =
                 , Html.textarea
                     [ Attr.id ("msg-input-" ++ session.id)
                     , Attr.class "input-text"
-                    , Attr.placeholder "Type a message…"
+                    , Attr.placeholder
+                        (if planBlocking then
+                            "Plan is running — input disabled until it completes…"
+
+                         else
+                            "Type a message…"
+                        )
                     , Attr.value session.input
                     , Ev.onInput (\v -> ForSession session.id (SetInput v))
                     , Ev.preventDefaultOn "keydown" <|
@@ -1604,7 +1620,7 @@ viewInputBar model session =
                             else
                                 ( NoOp, False )
                         ) (D.field "key" D.string) (D.field "ctrlKey" D.bool) (D.field "shiftKey" D.bool)
-                    , Attr.disabled (not session.connected)
+                    , Attr.disabled inputDisabled
                     , Attr.rows model.inputRows
                     ]
                     []
@@ -1615,14 +1631,14 @@ viewInputBar model session =
                         [ Attr.class "footer-btn"
                         , Ev.onClick (ForSession session.id OpenFilePicker)
                         , Attr.title "Attach media"
-                        , Attr.disabled (not session.connected)
+                        , Attr.disabled inputDisabled
                         ]
                         [ Html.text "📎" ]
                     , Html.button
                         [ Attr.class "footer-btn"
                         , Ev.onClick (ForSession session.id OpenModelSelector)
                         , Attr.title "Select model"
-                        , Attr.disabled (not session.connected)
+                        , Attr.disabled inputDisabled
                         ]
                         [ Html.text "🧠" ]
                     , Html.button
@@ -1637,7 +1653,7 @@ viewInputBar model session =
                         [ Attr.class ("send-btn" ++ (if session.taskRunning then " cancel" else ""))
                         , Ev.onClick
                             (if session.taskRunning then ForSession session.id CancelTask else ForSession session.id SendPrompt)
-                        , Attr.disabled (not session.connected)
+                        , Attr.disabled inputDisabled
                         ]
                         [ if session.taskRunning then Html.text "Cancel" else Html.text "Send" ]
                     ]
