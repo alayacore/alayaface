@@ -236,7 +236,12 @@ viewNoSessionPanel model =
     Html.div [ Attr.class "chat-area chat-area-centered no-sessions" ]
         [ Html.div [ Attr.class "hs-container-inline" ]
             [ Html.div [ Attr.class "hs-logo" ] [ Html.text "AlayaFace" ]
-            , Html.div [ Attr.class "hs-tagline" ] [ Html.text "No session open — use ⚙ New Session to start" ]
+            , Html.div [ Attr.class "hs-tagline" ] [ Html.text "No session open — start a new conversation" ]
+            , Html.button
+                [ Attr.class "no-sessions-cta"
+                , Ev.onClick CreateSession
+                ]
+                [ Html.text "+ New Session" ]
             ]
         ]
 
