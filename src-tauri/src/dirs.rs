@@ -214,7 +214,7 @@ pub fn sanitize_dir_component(s: &str) -> String {
 /// plain sessions). All id components are sanitized with
 /// `sanitize_dir_component`. Mirrors Go CreatePlanSessionDirFrom.
 pub fn create_session_dir_nested(
-    sessions_dir: &PathBuf,
+    _sessions_dir: &PathBuf,
     origin_session_dir: &str,
     plan_id: &str,
     node_id: &str,

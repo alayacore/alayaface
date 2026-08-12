@@ -44,7 +44,10 @@ pub struct SessionHandle {
 /// evicts the OLDEST entries beyond the cap (FIFO), so the newest
 /// calls — the ones most likely to still get a reply — survive.
 /// Mirrors the Go internal/session/pendingCmds guard (M5/D6).
-pub(crate) struct PendingCommands {
+/// `pub` because it appears in the signature of the public
+/// `spawn_stdout_reader` and the public `SessionHandle::pending_commands`
+/// field; its internals stay private.
+pub struct PendingCommands {
     inner: tokio::sync::Mutex<PendingCommandsInner>,
 }
 
