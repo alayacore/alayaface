@@ -59,6 +59,8 @@ module Plan.Update exposing
     , runSummaryForPlan
     , freezeSessionVersion
     , versionPlanStatus
+    , workCopyId
+    , sessionIdOfWorkCopy
     )
 
 {-| Plan Mode update logic (M2): auto-create / feedback / restart
@@ -1183,6 +1185,33 @@ persistedRunSummary model planId =
 
         Nothing ->
             Nothing
+
+
+{-| C2b（§8.1）：Session.id → 当前工作副本（alayacore 会话 id）。
+无映射（root 会话的工作副本 = 自身）→ 返回自身。UI 命令
+（sendPrompt / cancel / close 等）用它发到正确的 alayacore 会话。
+-}
+workCopyId : Model -> String -> String
+workCopyId model sessionId =
+    Dict.get sessionId model.sessionWorkCopies |> Maybe.withDefault sessionId
+
+
+{-| C2b（§8.1）：alayacore 工作副本 id → Session.id（稳定身份）。
+反查 sessionWorkCopies；无映射 → 自身（root）。入站帧用它路由到
+会话条目。
+-}
+sessionIdOfWorkCopy : Model -> String -> String
+sessionIdOfWorkCopy model coreId =
+    Dict.foldl
+        (\sid core acc ->
+            if core == coreId then
+                sid
+
+            else
+                acc
+        )
+        coreId
+        model.sessionWorkCopies
 
 
 {-| C 架构：从会话版本（该会话 head 的 planViews）解析 plan 的显示

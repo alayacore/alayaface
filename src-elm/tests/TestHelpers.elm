@@ -93,4 +93,5 @@ initModelWithSession =
     , versionCache = Dict.empty
     , freezeActive = Nothing
     , freezeQueue = []
+    , sessionWorkCopies = Dict.empty
     }

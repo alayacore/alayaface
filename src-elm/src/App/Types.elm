@@ -266,6 +266,11 @@ type alias Model =
     , versionCache : Dict String AV.Version
     , freezeActive : Maybe Freeze.FreezeState
     , freezeQueue : List Freeze.FreezeState
+    -- C2b（§8.1）：Session 的稳定身份与其当前工作副本（alayacore
+    -- 会话）的映射：Session.id → 工作副本 coreId。无 fork/resume 时
+    -- 缺省 = 自身（查无 → 自身）。窗口/管理器始终以 Session.id 为
+    -- 身份；命令经正向查（workCopyId）、帧经反查（sessionIdOfWorkCopy）。
+    , sessionWorkCopies : Dict String String
     }
 
 

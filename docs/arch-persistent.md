@@ -198,6 +198,7 @@ Plan 的 Run.nodes[nodeId].session = 节点会话的 VersionRef（引用）
   - `Version.planViews` + 状态栏/窗口按版本解析
   - 重跑 = 版本派生（老版本保留，老会话显示旧状态）
   - **验证**：用户 bug 场景 e2e（老会话 A 保持未执行）
+- **C2b — 会话所有权（窗口 = Session 视图 + 工作副本映射）** 设计完成，待实施（见 §8.1）
 - **C3 — 递归与级联在值模型下**
   - 节点会话/子 plan 引用版本值；级联 = 版本链传播
   - 删除级联 fork 交接（保留状态机语义，改版本载体）
@@ -209,6 +210,107 @@ Plan 的 Run.nodes[nodeId].session = 节点会话的 VersionRef（引用）
   - 删 P39 相关的兼容补丁；REFACTOR.md 归档到 docs/archive/
 
 ---
+
+## 8.1 C2b 设计：会话所有权（已想透，2026-08 用户确认"先想好再动手"）
+
+### 目标（D3/D9 落地）
+
+1. **窗口 = Session 视图**：窗口 key 永远 = `Session.id`（= plan 创建时的会话 id，稳定）。fork/resume 只换**工作副本**，不换窗口身份。
+2. **工作副本映射**：`sessionWorkCopies : Dict SessionId CoreId`（Session.id → 当前 alayacore 会话 id）。
+3. **删血缘**：不再有 conversation/instance 之分；`resolveConversation`/`headInstanceFor`/`sessionLineage` 全部删除。
+
+### 核心不变式
+
+- **I-A**：`Session.id` = 该会话第一个 alayacore 会话 id（root）。**永不改变**。
+- **I-B**：窗口（sessionOrder / sessionNums / windowPositions / activeId / sessions Dict 的 key）= **Session.id**（**最终架构，方案 A**：UI 状态按 UI 身份组织，不因"改动面"妥协——工作副本只是边界细节）。
+- **I-C**：`sessionWorkCopies[Session.id]` = 当前工作副本 coreId。无 fork/resume 时 = Session.id 自身（**映射可以缺省**：查无 → 自身）。
+- **I-D**：帧路由：coreId → Session.id（反查 workCopies；无 → 自身）→ `sessions[Session.id]` 更新。
+- **I-E**：命令（sendPrompt / cancel / setModel / closeSession / scroll）：`Session.id` → `workCopyId`（正向查 workCopies；无 → 自身）→ coreId。
+- **I-F**：绑定（`planMetaForMessage` / `messageBoundToPlan`）：**直接按 Session.id 匹配 planMetas origin**（删 resolveConversation 步骤）——plan origin 永远 = Session.id。
+- **I-G**：`sessions` 里**永远不会**出现"多个 coreId 属于同一 Session"——每个 Session 恰好一个条目（工作副本切换时条目内容被替换/帧接管，旧 coreId 的条目被移除）。
+- **I-H**（robust）：**工作副本生命周期显式**——创建（fork/resume）→ 关闭（fork 换新时删旧目录；Session 关闭时随所有权图）；失效（进程死/目录丢）→ 检测并回退。
+
+### 各路径设计
+
+**1. 普通创建（New Session / 节点会话）**
+- `SessionCreated(coreId)`：Session.id = coreId（首个工作副本 = 自身，workCopies 不设或设 coreId→coreId）；sessions[coreId] = 初始；窗口 key = coreId。**现状不变**。
+- 创建时初始化 `session.refs.json`（空版本，head=""）→ **有 refs = Session 根**（管理器显示依据；重启恢复依据）。
+
+**2. 重跑 fork（核心）**
+- 确认时固化 V₀（C2a 已有）。
+- `PlanCascadeForkResult` → 嵌套 `SessionCreated(S')`：**fork 分支**：
+  - `sessionId = plan origin（meta.origin.sessionId = Session.id）`——**不是 `target.forkSource`（那是 live 工作副本，可能有 resume 差异）** ← 这是 C2b 探索失败的具体 bug（用 forkSource 当 Session.id，resume 后错位 → 绑定失败 "Open plan"）。
+  - `sessionWorkCopies[Session.id] = S'`（新工作副本）。
+  - **sessions[Session.id] = S' 的初始内容**（sessionsAfterBuffer，含 buffer 的 fork 重放帧；空则空）。
+  - 窗口 key 保持 Session.id（sessionOrder/sessionNums/windowPositions 不动；**删 forkInheritPos**——窗口没换 key，位置天然保留）。
+  - `planReplaySessions` 标记 **Session.id**（重放帧路由到 Session.id 后一致）。
+  - 不写血缘（删 session.meta.json 写入）。
+- `RegisterFork` effect（`registerForkInstance`）改造：
+  - **只关旧工作副本进程**：`Ports.closeSession { sessionId = workCopyId(Session.id) 的旧值 }`（裸端口，不清前端 sessions 条目——旧 coreId 条目保留到被新帧覆盖？**或**：关进程后旧 coreId 条目由 CloseSession 事件清理——**设计**：fork 分支已把 sessions[Session.id] 覆盖为 S' 内容，旧 coreId 条目（sessions[旧coreId]？——**方案 A 下 sessions key = Session.id，旧条目就是 sessions[Session.id]**——**已被覆盖**——**所以旧 coreId（= 原 Session.id 或原 workCopy）**——**关进程即可，无前端清理**）✓。
+  - 清 `planCascadeFork`；关子 plan 窗口（确认时已排队）。
+- 级联完成固化（C2a 跳过，C2b 补上）：`freezeSessionVersion Session.id（消息 = sessions[workCopyId(Session.id)]）`——固化 V₁（A 已执行）→ head = V₁。老 V₀ 保留。
+
+**3. resume（会话管理器 / 节点）**
+- `ResumeSession(Session.id)` → `resume_session`（后端从磁盘文件恢复，**从 Session 根目录的 session.alaya？还是工作副本目录？**——见"重启"）。
+- `SessionCreated(liveId)` resume 分支：
+  - `sessionWorkCopies[Session.id] = liveId`（新工作副本）。
+  - sessions[Session.id] = liveId 的初始内容（buffer）。
+  - 窗口 key = Session.id（现状 resume 分支已把窗口 key 保持 origId？——**确认**：现状 resume 分支 `Dict.insert id` 是 liveId 作为新条目——**C2b 改为**：窗口 key = Session.id（origId），不新建条目）。
+  - `planReplaySessions` 标记 Session.id。
+- **节点会话 resume**（PlanOpenNodeSession）：节点会话不是顶层 Session——**C3 处理**（C2b 聚焦顶层）。
+
+**4. 帧路由**（Delta/Frame/Status/RpcError）
+- `sid = sessionIdOfWorkCopy model ev.sessionId`（反查 workCopies；无 → 自身）→ `Dict.get sid model.sessions` → 更新 sessions[sid]、planMessageCounts[sid]、planReplaySessions 按 sid。
+
+**5. 命令**（SendPrompt / CancelTask / SetModel / ConfirmTool / McpCancel / scrollToBottom / Dom.focus）
+- 所有 `Ports.sendPrompt { sessionId = ... }` 等：`sessionId = workCopyId model Session.id`（正向查 workCopies）。
+- `CloseSession(Session.id)`：关**工作副本**进程（`workCopyId`）+ 前端清理（sessions 移除 Session.id、窗口、workCopies 移除、plan 所有权图关闭）。
+
+**6. 绑定**（planMetaForMessage / messageBoundToPlan / findPlanIdBySession）
+- 删 `resolveConversation` 步骤：`convId = sid`（Session.id）→ planMetas[(Session.id, planIndex)]。
+- **节点会话**的绑定（findPlanIdBySession）：C2b 先保留现状逻辑（节点会话的 lastSessionId/conversationId 匹配），C3 统一。
+
+**7. 会话管理器**
+- 列磁盘目录：**有 `session.refs.json` = Session 根**（显示）；无 refs = 工作副本/未初始化（不显示）。
+- Resume：`ResumeSession(Session.id)` → 恢复工作副本（见"重启"）。
+
+**8. 重启恢复**
+- 扫描：读各目录 `session.refs.json` → Session 根 + head 版本（C2a 已有）。**同时读 workCopy 记录**。
+- **工作副本记录**：fork/resume 时把当前工作副本目录 id 写进 `session.refs.json`（新字段 `"workCopy": "<coreId>"`）→ 重启后：resume Session 时**恢复 workCopy 目录的 session.alaya**（它是 head 的物化）→ `workCopies[Session.id] = resume liveId`。
+- **旧版本只读**（D8）：用户回退/查看旧版本 = 渲染对象存储快照（C4）。
+
+**9. 关闭/删除**
+- `CloseSession(Session.id)`：关工作副本进程（workCopyId）+ 清 Session 条目 + 所有权图（plan/节点/子 plan）。
+- `DeleteSession(Session.id)`：删 Session 根目录 + 工作副本目录（对象存储对象可留作 GC——开放项）。
+
+### 探索发现（已定位的坑）
+
+- **坑 1（已修）**：C2b 初版把 `target.forkSource`（live 工作副本）当 Session.id——会话被 resume 后 live ≠ 创建 id → 窗口 key 错位 → `planMetaForMessage` 按错误 key 匹配 → 状态栏 "Open plan"。**修正**：Session.id = plan origin（`meta.origin.sessionId`），forkSource 只是工作副本。
+- **坑 2（待查）**：fork-e2e 流程中 S 疑似被 resume（产生额外 live id）——来源未定位（可能 `openPlanFile` 的 run 恢复路径）。C2b 正确实现（窗口 = Session.id）后**不影响正确性**（resume live 只是工作副本），但需单测锁定。
+
+### Robust 设计（失败路径显式处理）
+
+| 场景 | 处理 |
+|---|---|
+| **工作副本进程死 / 目录丢** | 后端 close/进程死亡事件 → 若该 coreId 是某 Session 的工作副本（workCopies 值）→ 标记 `workCopyLost`（UI 提示"工作副本已失效，可恢复"）；Session 条目保留（refs/版本还在）；恢复 = resume（重建工作副本） |
+| **孤儿工作副本目录** | fork 成功后，删除**上一个工作副本目录**（除 Session 根外）：`delete_session_dir`（后端已有）→ 磁盘始终只有 Session 根（身份+refs）+ 当前工作副本；删除失败仅留档（GC 兜底） |
+| **workCopy 记录失效**（refs.workCopy 指向的目录被删） | resume 时先试 workCopy 目录；不存在 → 回退 Session 根目录（可能旧内容，UI 提示"恢复的是旧工作副本"）；再失败 → 报错（用户可删会话重建） |
+| **fork 幂等** | 每个 fork 恰好一次 SessionCreated（PlanCascadeForkResult 驱动，后端不广播——已确认）；单测锁死"一次创建、窗口 key 恰好一次赋值" |
+| **refs 写失败** | 版本固化失败 → 状态栏回退（C2a 已有）；不阻塞运行 |
+| **resume 竞态** | resume 的 liveId 在 workCopies 建立前来的帧 → bufferPendingEvent（按 coreId）；SessionCreated(resume 分支) 建立 workCopies 后 flush → sessions[Session.id] |
+
+### 实施步骤（每步可验证、可提交）
+
+1. **C2b-1 基础设施**：`workCopyId`/`sessionIdOfWorkCopy`（已有，stash）；sessions key 语义文档化；单测（正向/反向映射、无映射回退）。
+2. **C2b-2 绑定简化**：删 `resolveConversation`（planMetaForMessage 直接按 Session.id）——单测（普通/fork/resume 场景绑定）。
+3. **C2b-3 fork 分支修正**：SessionCreated fork 分支用 `meta.origin.sessionId`（Session.id）作窗口 key + workCopies；`registerForkInstance` 只关旧工作副本（裸 closeSession）+ 清 planCascadeFork；删 forkInheritPos；级联完成固化 V₁；**fork 后删旧工作副本目录**。
+4. **C2b-4 帧路由 + 命令映射**：coreId → Session.id；命令 Session.id → coreId。
+5. **C2b-5 resume 归属**：resume 分支 workCopies[Session.id] = liveId（窗口 key 保持 Session.id）；`session.refs.json` 加 workCopy 字段。
+6. **C2b-6 管理器 + 重启**：管理器按 refs 过滤；重启恢复 workCopy（含回退）。
+7. **C2b-7 删除血缘**：sessionLineage / headInstanceFor / resolveConversation / SM.decode / session.meta.json 读写全删。
+8. **e2e 重写**：fork-e2e 断言（无新会话条目、窗口 key 稳定、绑定正常、v2 显示）；two-plans（老会话隔离保持）；restart（workCopy 恢复）。
+
+
 
 ## 9. 已确认决策（待用户逐条批准，批准后不要改）
 
