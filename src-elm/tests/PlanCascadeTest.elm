@@ -275,20 +275,6 @@ tests =
                 \_ ->
                     Expect.equal 0 (C.countUserMessagesAfter Nothing [ msg T.User "x" ])
             ]
-        , describe "truncateMessagesAt"
-            [ test "drops the insertion and everything after" <|
-                \_ ->
-                    let
-                        msgs =
-                            [ msg T.User "keep"
-                            , planResultMsg "a" "r"
-                            , msg T.Assistant "drop"
-                            ]
-                    in
-                    C.truncateMessagesAt 1 msgs
-                        |> List.map .content
-                        |> Expect.equal [ "keep" ]
-            ]
         , describe "transitiveSuccessors"
             [ test "chain: direct + indirect dependents" <|
                 \_ ->
@@ -695,26 +681,13 @@ tests =
                               , C.InsertResult "a" "fork-1" "new-root"
                               ]
                             )
-              , test "InstanceReady failure → Done (nothing was truncated)" <|
+              , test "InstanceReady failure → Done + CascadeError (nothing was truncated, no fallback)" <|
                     \_ ->
                         let
                             ( cs2, effects ) =
                                 C.cascadeStep (C.InstanceReady (Err "boom")) (mkState C.WaitingFork [ lvlB ] "a" "")
                         in
-                        Expect.equal ( cs2.phase, effects ) ( C.Done, [] )
-              , test "InsertInPlace (no fork point) → insert + resume, no lineage" <|
-                    \_ ->
-                        let
-                            ( cs2, effects ) =
-                                C.cascadeStep (C.InsertInPlace "s1") (mkState C.WaitingFork [ lvlB ] "a" "new-root")
-                        in
-                        Expect.equal
-                            ( cs2.phase, effects )
-                            ( C.WaitingNode
-                            , [ C.InsertResult "a" "s1" "new-root"
-                              , C.ResumeNode "b" "t2" "s1"
-                              ]
-                            )
+                        Expect.equal ( cs2.phase, effects ) ( C.Done, [ C.CascadeError "a" "boom" ] )
               , test "NodeSucceeded on the head node → BranchRunning + BranchRerun" <|
                     \_ ->
                         let

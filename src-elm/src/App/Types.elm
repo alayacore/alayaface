@@ -185,6 +185,13 @@ type alias Model =
     -- P38: a fork issued to truncate a parent session (awaiting its
     -- result); the adoption rewrites bindings/meta and continues.
     , planCascadeFork : Maybe PC.CascadeForkTarget
+    -- A cascade-truncation failure (fork could not be issued or failed):
+    -- the reason is shown on the plan window's error banner, the cascade
+    -- has ended, and NOTHING was truncated or inserted (a non-durable
+    -- in-memory truncation would resurrect after a restart). Non-Nothing
+    -- also keeps the completed plan window open so the error stays
+    -- visible. Cleared when a new run / confirm / cancel starts.
+    , planCascadeError : Maybe String
     -- P39/D1: the ownership-graph close set currently being torn down
     -- (every session + plan id collected in ONE traversal by
     -- CloseSession / PlanClose). While non-empty, nested CloseSession /

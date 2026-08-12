@@ -3165,10 +3165,10 @@ update msg model =
                                                 PC.impactScope (scopeCtx model) pid
                                         in
                                         if PC.needsConfirm scope then
-                                            ( { model | planCascadePreview = Just scope }, Cmd.none )
+                                            ( { model | planCascadePreview = Just scope, planCascadeError = Nothing }, Cmd.none )
 
                                         else
-                                            ( model
+                                            ( { model | planCascadeError = Nothing }
                                             , Task.perform (\t -> PlanRunStartAt (Time.posixToMillis t)) Time.now
                                             )
 
@@ -3196,6 +3196,7 @@ update msg model =
                             { model
                                 | planSuppressFeedback =
                                     Set.union model.planSuppressFeedback (Set.fromList scope.closePlanIds)
+                                , planCascadeError = Nothing
                             }
 
                         -- C architecture: on confirm, freeze "the world
@@ -3249,6 +3250,7 @@ update msg model =
                 , planCascade = Nothing
                 , planCascadeOpenQueue = []
                 , planCascadeFork = Nothing
+                , planCascadeError = Nothing
               }
             , Cmd.none
             )
@@ -3326,12 +3328,20 @@ update msg model =
                         ( mFinal, Cmd.batch [ cReg, cAdopt, cFinal ] )
 
                     else
-                        ( { model
+                        -- The fork FAILED: nothing was truncated and no
+                        -- ancestor node was reset — feed the machine so it
+                        -- surfaces the error (CascadeError effect) and ends
+                        -- cleanly. The completed plan window stays open with
+                        -- the error banner; the user can inspect / re-run.
+                        let
+                            ( mFail, cFail ) =
+                                PU.cascadeStepIn update (PC.InstanceReady (Err r.error)) model
+                        in
+                        ( { mFail
                             | planCascadeFork = Nothing
-                            , planCascade = Nothing
                             , planCascadeOpenQueue = []
                           }
-                        , Cmd.none
+                        , cFail
                         )
 
                 Err _ ->
@@ -3358,7 +3368,7 @@ update msg model =
         -- window is fresh (win.run == Nothing), so this is exactly the
         -- same start as a manual Run click on the active window.
         PlanAutoRunStart planId ts ->
-            runStepIn update planId ts R.StartRun (startRunIn planId ts model)
+            runStepIn update planId ts R.StartRun (startRunIn planId ts { model | planCascadeError = Nothing })
 
         PlanRunPause ->
             case model.planActiveId of
@@ -3378,8 +3388,10 @@ update msg model =
 
         PlanRunRestart planId ->
             -- R4 (D9): skip succeeded nodes; reset the rest and cascade
-            -- to sub-plans of waiting (delegated) nodes.
-            restartPlanCascade update planId model
+            -- to sub-plans of waiting (delegated) nodes. A fresh start
+            -- also clears any previous cascade error (the banner stays
+            -- until the next run overwrites it).
+            restartPlanCascade update planId { model | planCascadeError = Nothing }
 
         PlanRunStop ->
             case model.planActiveId of

@@ -749,6 +749,92 @@ suite =
                         , \mm -> Expect.equal (Set.member "s1" mm.planReplaySessions) True
                         ]
                         m1
+            , test "fork with NO fork point → error, cascade ends, session untouched, no feedback (no fallback)" <|
+                \_ ->
+                    -- Regression (user bug): the pre-fix code "truncated in
+                    -- memory" when the fork could not be issued (plan JSON
+                    -- message without a history id). That truncation was
+                    -- NOT written to session.alaya — after a restart the
+                    -- old history resurrected and the result appeared at
+                    -- the END of the conversation, past later plans. The
+                    -- fix: surface a cascade error instead, truncate
+                    -- nothing, insert nothing.
+                    let
+                        meta =
+                            { origin = { sessionId = "s1", planIndex = 1 }
+                            , feedbacks = []
+                            , depth = 1
+                            , createdAt = 0
+                            , name = "p1"
+                            , lastStatus = ""
+                            , parentPlanId = Nothing
+                            }
+
+                        cascade =
+                            { rootPlanId = "p1"
+                            , rootOldSummary = ""
+                            , levels = []
+                            , phase = PC.WaitingPlan
+                            , currentPlanId = "p1"
+                            , currentSummary = ""
+                            }
+
+                        -- The plan JSON message carries NO history id (a
+                        -- core that does not emit one) → forkHistoryId is
+                        -- Nothing → the fork cannot be issued.
+                        sessionMsgs =
+                            [ planMessage "hi"
+                            , planMessage fencedPlan
+                            ]
+
+                        session0 =
+                            T.emptySession "s1"
+
+                        sessionWithMsgs =
+                            { session0 | messages = sessionMsgs }
+
+                        m0 =
+                            { initModelWithSession
+                                | sessions =
+                                    Dict.insert "s1" sessionWithMsgs initModelWithSession.sessions
+                                , planMetas = Dict.insert "p1" meta Dict.empty
+                                , planWindows = Dict.insert "p1" planWindowWithPlan Dict.empty
+                                , planCascade = Just cascade
+                            }
+
+                        ( m1, _ ) =
+                            PU.cascadeStepIn stubDispatch (PC.PlanCompleted "p1" "new") m0
+                    in
+                    Expect.all
+                        [ \mm ->
+                            -- the cascade ended with a recorded error
+                            Expect.equal
+                                ( mm.planCascade, mm.planCascadeError )
+                                ( Nothing
+                                , Just "Cannot insert the plan result: no fork point (the plan message carries no history id)."
+                                )
+                        , \mm ->
+                            -- the origin conversation is untouched (no
+                            -- in-memory truncation)
+                            case Dict.get "s1" mm.sessions of
+                                Just s ->
+                                    Expect.equal
+                                        (List.map .content s.messages)
+                                        [ "hi", fencedPlan ]
+
+                                Nothing ->
+                                    Expect.fail "session s1 missing"
+                        , \mm ->
+                            -- the plan window carries the error banner
+                            case Dict.get "p1" mm.planWindows |> Maybe.map (.view >> .errors) of
+                                Just errs ->
+                                    Expect.equal errs
+                                        [ "Cannot insert the plan result: no fork point (the plan message carries no history id)." ]
+
+                                Nothing ->
+                                    Expect.fail "plan window p1 missing"
+                        ]
+                        m1
             ]
         , describe "handlePlanReadTarget"
             [ test "open/import parses the plan and chains a run restore" <|

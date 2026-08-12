@@ -808,11 +808,14 @@ runStepIn dispatch planId now ev model =
                                         cascadeOnPlanCompleted dispatch planId now model2
                                 in
                                 ( mF
-                                , if mF.planCascadeFork == Nothing then
+                                , if mF.planCascadeFork == Nothing && mF.planCascadeError == Nothing then
                                     -- D11: no fork pending — close the
                                     -- window right after the feedback is
                                     -- queued (Failed/Stopped windows stay
-                                    -- for review/retry).
+                                    -- for review/retry). A cascade ERROR
+                                    -- also keeps the window open: the
+                                    -- error banner must stay visible (the
+                                    -- result was NOT inserted).
                                     Cmd.batch
                                         [ cF
                                         , Task.perform (\_ -> PlanClose planId) Time.now
@@ -869,13 +872,24 @@ startRunIn planId ts model =
                             { baseRun | concurrency = PT.defaultConcurrency }
 
                         win2 =
+                            let
+                                -- A fresh run clears the window's error
+                                -- banner (e.g. a previous cascade-error
+                                -- message); the next failure re-sets it.
+                                baseView =
+                                    win.view
+
+                                wv2 =
+                                    { baseView | errors = [] }
+                            in
                             case win.run of
                                 Just _ ->
-                                    { win | run = Just run }
+                                    { win | view = wv2, run = Just run }
 
                                 Nothing ->
                                     { win
-                                        | run = Just run
+                                        | view = wv2
+                                        , run = Just run
                                         , runPath = Maybe.map runPathFor win.view.path
                                         , selectedNode = Nothing
                                         , runLog = []
@@ -1381,9 +1395,12 @@ applyCascadeEffect dispatch e ( m, cmds ) =
         PC.ForkInstance planId ->
             let
                 ( m1, c1 ) =
-                    forkOrInsertInPlace dispatch planId m
+                    forkParentForCascade planId m
             in
             ( m1, Cmd.batch [ cmds, c1 ] )
+
+        PC.CascadeError planId reason ->
+            ( setCascadeError planId reason m, cmds )
 
         PC.InsertResult planId instanceId summary ->
             ( m
@@ -1432,14 +1449,16 @@ applyCascadeEffect dispatch e ( m, cmds ) =
                     ( m, cmds )
 
 
-{-| ForkInstance effect: fork the plan's parent conversation at the
-message before its old [Plan Result] (the fork really truncates on
-disk), or — when there is no fork point (first run / predecessor
-without a history id) — truncate in memory and feed InsertInPlace to
-the machine so it inserts into the head instance directly.
+{-| ForkInstance effect: fork the plan's parent conversation at its
+CREATION anchor (the plan JSON's history id — the fork really truncates
+on disk). If the fork cannot be issued (origin closed / no fork point),
+surface a cascade error and end the cascade — NO in-memory truncation
+fallback: a truncation that is not written to session.alaya would
+resurrect the old history after a restart, putting the new result at
+the END of the conversation (the very bug the creation anchor fixes).
 -}
-forkOrInsertInPlace : Dispatch -> String -> Model -> ( Model, Cmd Msg )
-forkOrInsertInPlace dispatch planId model =
+forkParentForCascade : String -> Model -> ( Model, Cmd Msg )
+forkParentForCascade planId model =
     case Dict.get planId model.planMetas of
         Just meta ->
             let
@@ -1457,26 +1476,42 @@ forkOrInsertInPlace dispatch planId model =
                     summaryOf planId model
             in
             case forkRequestFor planId liveOrigin summary model of
-                Just ( target, args ) ->
+                Ok ( target, args ) ->
                     ( { model | planCascadeFork = Just target }
                     , Ports.cascadeForkSession args
                     )
 
-                Nothing ->
-                    let
-                        mTrunc =
-                            truncateOrigin planId model
-
-                        -- C2b: first completion without a fork point —
-                        -- the result is inserted back into the current
-                        -- work copy's live core id (after resume ≠ Session.id).
-                        ( m1, c1 ) =
-                            cascadeStepIn dispatch (PC.InsertInPlace (workCopyId model headSid)) mTrunc
-                    in
-                    ( m1, c1 )
+                Err reason ->
+                    -- Nothing was truncated, nothing inserted: end the
+                    -- cascade and tell the user. The completed run and
+                    -- its feedback are preserved in run.json / meta.json
+                    -- (the feedback entry was recorded before this step),
+                    -- so a re-run after fixing the cause works.
+                    ( setCascadeError planId reason
+                        { model | planCascade = Nothing, planCascadeFork = Nothing }
+                    , Cmd.none
+                    )
 
         Nothing ->
             ( model, Cmd.none )
+
+
+{-| Record a cascade failure on the given plan window (error banner)
+and remember it so the completion flow keeps the window open instead of
+auto-closing it (D11) — the user must SEE why the result was not
+inserted. The origin conversation is left untouched.
+-}
+setCascadeError : String -> String -> Model -> Model
+setCascadeError planId reason model =
+    setPlanWin planId
+        (\w ->
+            let
+                wv =
+                    w.view
+            in
+            { w | view = { wv | errors = [ reason ], saving = False } }
+        )
+        { model | planCascadeError = Just reason }
 
 
 {-| RegisterFork effect (C2b/C3): the forked session is just a new
@@ -1550,6 +1585,7 @@ registerForkInstance dispatch forkId model =
                 m3 =
                     { m2
                         | planCascadeFork = Nothing
+                        , planCascadeError = Nothing
                         , planReplaySessions = Set.insert sessionId m2.planReplaySessions
                         -- The old work copy's live is closed; clear the
                         -- temporary marker.
@@ -1648,16 +1684,24 @@ type alias CascadeForkArgs =
 
 {-| Whether to truncate the parent session via a FORK, and with which
 args. Only when the live origin session exists and has a fork point (the
-history id of the message before the plan's old insertion). The fork
-replaces the delegated ancestor node (root → head level, head → next
-level; none → plain origin), so it carries the node's preset / tools /
-plan system prompt and lands in the plan's nested node-session dir.
+history id of the plan's CREATION anchor — its plan JSON message). The
+fork replaces the delegated ancestor node (root → head level, head →
+next level; none → plain origin), so it carries the node's preset /
+tools / plan system prompt and lands in the plan's nested node-session
+dir.
+
+The fork is the ONLY truncation mechanism — it really rewrites the
+parent's session.alaya on disk. When it cannot be issued the caller
+must surface an `Err` and abort the cascade: a non-durable in-memory
+truncation would resurrect the old history after a restart (the plan's
+result would reappear at the END of the conversation, past later plans
+— the exact bug this anchor design fixes).
 -}
-forkRequestFor : String -> Maybe String -> String -> Model -> Maybe ( PC.CascadeForkTarget, CascadeForkArgs )
+forkRequestFor : String -> Maybe String -> String -> Model -> Result String ( PC.CascadeForkTarget, CascadeForkArgs )
 forkRequestFor planId liveOrigin summary model =
     case liveOrigin of
         Nothing ->
-            Nothing
+            Err "Cannot insert the plan result: the origin session is not open."
 
         Just liveSid ->
             -- C2b: the backend source session = liveSid (the work copy's
@@ -1677,7 +1721,7 @@ forkRequestFor planId liveOrigin summary model =
                     in
                     case PC.forkHistoryId planIndex s.messages of
                         Nothing ->
-                            Nothing
+                            Err "Cannot insert the plan result: no fork point (the plan message carries no history id)."
 
                         Just historyId ->
                             let
@@ -1698,7 +1742,7 @@ forkRequestFor planId liveOrigin summary model =
                                     }
                             in
                             if levelPlanId == "" then
-                                Just
+                                Ok
                                     ( { childPlanId = planId
                                       , summary = summary
                                       , planId = ""
@@ -1714,7 +1758,7 @@ forkRequestFor planId liveOrigin summary model =
                                     args =
                                         nodeSessionArgsIn levelPlanId levelNodeId model
                                 in
-                                Just
+                                Ok
                                     ( { childPlanId = planId
                                       , summary = summary
                                       , planId = levelPlanId
@@ -1736,7 +1780,7 @@ forkRequestFor planId liveOrigin summary model =
                                     )
 
                 Nothing ->
-                    Nothing
+                    Err "Cannot insert the plan result: the origin session state is unavailable."
 
 
 {-| The ancestor level whose node the fork replaces: root completion →
@@ -1812,48 +1856,6 @@ cascadeAfterRunnerStep dispatch planId ev run2 model =
 
         _ ->
             ( model, Cmd.none )
-
-
-{-| Truncate the plan's origin session at its anchor — the plan's
-CREATION point (right after its plan JSON): a plan's result replaces
-what follows its plan, never appended past later plans. Resolves the
-live session id (resumed sessions differ from the on-disk origin id).
-P39/Phase B: the truncation target is the conversation's HEAD physical
-instance (a fork replaced the creation session). No-op when the origin
-is closed or has no anchor.
--}
-truncateOrigin : String -> Model -> Model
-truncateOrigin planId model =
-    case Dict.get planId model.planMetas of
-        Just meta ->
-            let
-                headSid =
-                    meta.origin.sessionId
-            in
-            case NC.liveSessionForOrigin model.sessions headSid of
-                Just liveSid ->
-                    case Dict.get liveSid model.sessions of
-                        Just s ->
-                            case PC.anchorIndexFor meta.origin.planIndex s.messages of
-                                Just idx ->
-                                    { model
-                                        | sessions =
-                                            Dict.insert liveSid
-                                                { s | messages = PC.truncateMessagesAt idx s.messages }
-                                                model.sessions
-                                    }
-
-                                Nothing ->
-                                    model
-
-                        Nothing ->
-                            model
-
-                Nothing ->
-                    model
-
-        Nothing ->
-            model
 
 
 {-| Append a feedback entry to the plan's meta (in memory + persisted to

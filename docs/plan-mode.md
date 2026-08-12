@@ -516,9 +516,18 @@ wakes it (`resumeDelegatedNode` only acts on `WaitingForPlan`).
   ORIGINAL session (safe after the rebind — its disconnect finds no
   node), send the new `[Plan Result]` to the fork, resume the node. The
   fork session is marked as a replay so its replayed plan messages do
-  not auto-create duplicate windows. Falls back to the in-memory
-  truncation only when no fork point exists (first message / no history
-  id).
+  not auto-create duplicate windows.
+- **No fallback — fork failure is an error (D9)**: the fork is the ONLY
+  truncation mechanism. When it cannot be issued (origin session closed,
+  session state unavailable, or the plan JSON message carries no history
+  id) or the backend fork fails, the cascade ends with a `CascadeError`
+  shown on the plan window's error banner, the window stays open, and
+  NOTHING is truncated or inserted. There is deliberately NO in-memory
+  truncation fallback: a truncation that is not written to session.alaya
+  would resurrect the old history after a restart, putting the new
+  result at the END of the conversation past later plans (the exact bug
+  the creation anchor fixes). The completed run + its feedback remain in
+  run.json / meta.json, so a re-run after fixing the cause works.
 - **v1 edge**: `WaitingForPlan` successors inside a re-run branch are
   left alone (their own sub-plan feedback resumes them; that answer may
   still reflect pre-cascade context).

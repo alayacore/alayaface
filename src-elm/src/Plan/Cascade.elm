@@ -14,7 +14,6 @@ module Plan.Cascade exposing
     , anchorIndexFor
     , findPlanAnchor
     , countUserMessagesAfter
-    , truncateMessagesAt
     , forkHistoryId
     , transitiveSuccessors
     , feedbackSummary
@@ -310,8 +309,10 @@ type alias CascadeLevel =
 {-| Phase of an active re-run cascade:
 - `WaitingPlan` — the root (or a head level's branch) is running; its
   completion event decides gate → propagate or end.
-- `WaitingFork` — a truncating fork is in flight (InstanceReady), or
-  the executor is about to insert in place (InsertInPlace).
+- `WaitingFork` — a truncating fork is in flight (InstanceReady). The
+  fork is the ONLY truncation mechanism (it really rewrites
+  session.alaya on disk); if it cannot be issued or fails, the cascade
+  ends with a `CascadeError` — there is no in-memory fallback.
 - `WaitingNode` — the delegated node was resumed; its answer
   (NodeSucceeded / LevelFailed) decides the branch re-run.
 - `BranchRunning` — the head plan's downstream branch is re-running;
@@ -352,7 +353,6 @@ type Event
     | NodeSucceeded String String
     | LevelFailed String String
     | InstanceReady (Result String String)
-    | InsertInPlace String
 
 
 {-| Effects the machine asks the executor to perform. The executor has
@@ -361,10 +361,14 @@ machine only says WHAT to do, with the ids the machine knows.
 -}
 type Effect
     = ForkInstance String
-    -- planId: truncate-fork that plan's parent conversation (the
-    -- executor falls back to InsertInPlace when there is no fork point)
+    -- planId: truncate-fork that plan's parent conversation (the only
+    -- truncation mechanism; no fallback if it cannot be issued)
     | InsertResult String String String
     -- planId, instanceId, summary: send the [Plan Result] feedback
+    | CascadeError String String
+    -- planId, reason: the truncating fork failed or cannot be issued —
+    -- surface the error, end the cascade, leave the conversation
+    -- untouched (nothing truncated, nothing inserted).
     | ResumeNode String String String
     -- planId, nodeId, conversationId: reset Succeeded → WaitingForPlan
     -- and resume the delegated node
@@ -564,31 +568,11 @@ cascadeStep ev cs =
                                 :: resumeEffects
                             )
 
-                        Err _ ->
+                        Err reason ->
                             -- Fork failed: nothing was truncated, no node
-                            -- was reset — end the cascade.
-                            ( { cs | phase = Done }, [] )
-
-                _ ->
-                    ( cs, [] )
-
-        InsertInPlace instanceId ->
-            case cs.phase of
-                WaitingFork ->
-                    -- No fork point: the executor truncated in memory and
-                    -- inserts into the head instance directly.
-                    let
-                        resumeEffects =
-                            case List.head cs.levels of
-                                Just lvl ->
-                                    [ ResumeNode lvl.planId lvl.nodeId lvl.conversationId ]
-
-                                Nothing ->
-                                    []
-                    in
-                    ( { cs | phase = WaitingNode }
-                    , InsertResult cs.currentPlanId instanceId cs.currentSummary :: resumeEffects
-                    )
+                            -- was reset — surface the error and end the
+                            -- cascade.
+                            ( { cs | phase = Done }, [ CascadeError cs.rootPlanId reason ] )
 
                 _ ->
                     ( cs, [] )
@@ -654,21 +638,13 @@ countUserMessagesAfter maybeIdx messages =
                 |> List.length
 
 
-{-| Truncate a session's messages AT the anchor (inclusive): keep
-everything before it — the plan JSON and all earlier history — drop the
-anchor and everything after.
--}
-truncateMessagesAt : Int -> List T.Message -> List T.Message
-truncateMessagesAt idx messages =
-    List.take idx messages
-
-
 {-| The alayacore content id to fork AT: the message immediately BEFORE
 the plan's anchor — its plan JSON message itself (a fork "up to" that
 content id yields a session whose history is exactly the truncated
 history: everything through the plan JSON, nothing after it). Nothing
-when there is no anchor or the predecessor carries no history id (fall
-back to the in-memory truncation).
+when there is no anchor or the plan message carries no history id —
+the executor then surfaces a cascade error (there is no in-memory
+fallback: a non-durable truncation would resurrect after a restart).
 -}
 forkHistoryId : Int -> List T.Message -> Maybe String
 forkHistoryId planIndex messages =
