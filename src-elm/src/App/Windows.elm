@@ -143,7 +143,6 @@ window. Returns Nothing when no live session was resumed from `origId`.
 chainCtx : Model -> NC.ChainCtx
 chainCtx model =
     { nodeSessions = model.planNodeSessions
-    , resumedFrom = model.planResumedFrom
     , liveSessions = Dict.map (\_ _ -> ()) model.sessions
     -- C2b-7：无血缘——plan 的属主会话就是 origin（稳定 Session.id）。
     , planOrigins =
@@ -389,7 +388,7 @@ originLiveId : Model -> String -> Maybe String
 originLiveId model planId =
     Dict.get planId model.planMetas
         |> Maybe.map (.origin >> .sessionId)
-        |> Maybe.andThen (\origId -> NC.liveSessionForOrigin model.sessions model.planResumedFrom origId)
+        |> Maybe.andThen (NC.liveSessionForOrigin model.sessions)
 
 
 {-| Number of plan windows currently open that belong to the given LIVE

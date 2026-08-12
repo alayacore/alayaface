@@ -309,6 +309,24 @@ Plan 的 Run.nodes[nodeId].session = 节点会话的 VersionRef（引用）
 6. **C2b-6 管理器 + 重启** ✅：普通顶层创建初始化空 refs（sessionRefs 内存 + refs.json 落盘，head=""）；会话管理器只列 Session 根（sessionRefs 成员过滤，工作副本目录不显示）；`ResumeSession` 恢复 `refs.workCopy` 目录（回退 Session 根——后端 live 会话 SessionDir = 磁盘目录，读写同一 session.alaya，refs.workCopy 恒有效）；`DeleteSession` 连工作副本目录一起删 + 清理 sessionRefs/workCopies。提交 `a3354a3`。
 7. **C2b-7 删除血缘** ✅：`Session/Meta.elm` + `SessionMetaTest` 删除；`Model.sessionLineage`/`planMetaNodeMetaQueue` 字段删除；扫描只读 refs.json（不再读/写 session.meta.json）；`resolveEventSessionId` 简化为仅 planResumedFrom（无 registry）；`headInstanceFor`/`resolveConversation`/`headOf`/`forkMetaPath` 全部删除（节点/顶层一律按 origin = Session.id 直接解析）；Cascade closePlans/impactScope/walkLevels 按 origin 匹配；registerForkInstance 节点分支不再写血缘；`planRunningForSession`/`findPlanIdBySession`/`PlanBindSession`/`connectionChainForPlan` 按会话 id 直接绑定；测试改写（418 全绿）。提交 `7a1b955`。
 8. **e2e 重写** ✅（`fork-e2e`/`two-plans-e2e` 重写，restart/plan 兼容）：fork-e2e 断言 C2b 语义——同窗口（窗口 key = Session.id，位置不变、无新条目）、磁盘所有权（根 + refs.workCopy=fork 目录、工作副本无 refs、无 session.meta.json）、重启后管理器只列根 + resume 恢复工作副本、链式 fork 工作副本推进 + 旧目录删除；two-plans 改为磁盘级版本隔离断言（V0：A 未执行/B 完成 vs V1：A 完成）。**实施中发现并修复**：① 重跑 fork 的源会话 id 用窗口 key（Session.id）导致 resume 后后端 `Session not found`——改为 `workCopyId`（feedbackCompletedPlan/forkOrInsertInPlace/InsertInPlace 投递目标同理）；② resume live 被误当 fork 目录写进 refs.workCopy——新增 `sessionResumedLives` 显式跟踪临时 live；③ 旧工作副本目录删除与旧进程优雅关闭（save 写回 SessionDir）竞态重建目录——延迟 2s 经 `DeleteWorkCopyDir` 消息执行；④ 旧工作副本目录 = refs.workCopy 旧值（不再依赖 planResumedFrom 判断）。
+
+---
+
+## 8.2 C3/C4/C5 完成记录（值模型落地的收尾）
+
+### C3 — 递归与级联在值模型下 ✅
+- **C3-1 节点级联 fork 统一为工作副本替换**（提交 `123c33b`）：所有级联 fork（顶层 + 节点）一律走 `forkSessionCreated`——窗口 key = Session.id（= plan origin），workCopies[sid] = forkId；`registerForkInstance` 统一为只关旧工作副本（`DeleteWorkCopyDir` 携带 nested 定位参数）；**删除"级联 fork 交接"**（节点 fork 不再开新窗口/不 dispatch CloseSession）；`planEventFromFrame`/StatusEvent runner 注入按 `sessionIdOfWorkCopy` 路由（节点绑定 = Session.id 在 fork/resume 后仍命中）；删 `forkInheritPos`。
+- **C3-2 节点工作副本持久化 + 重启恢复**（提交 `123c33b`）：节点级联 fork 写 nested `session.refs.json`（workCopy = forkId）；扫描读 nested 节点 refs；`PlanOpenNodeSession`/`ResumeSession` 经 `resumeDirFor`（refs.workCopy，回退原目录）恢复。
+- **C3-3 节点会话完整版本化（跳过）**：节点会话的"世界隔离"已被顶层 V0/V1 版本 + 工作副本覆盖；完整版本树价值低，C4 版本浏览聚焦顶层。
+
+### C4 — UI 与历史（版本浏览）✅（提交 `d496f6d`）
+- `blockCache`（hash → 消息）+ 版本浏览状态；`ObjectGetResult` 解码 Version 或 Block（reqId = hash），查看版本自动补取缺失块。
+- 会话管理器条目加 **Versions (n)** 按钮 → 版本列表（v0/v1/… + head 标记）→ 只读版本视图（消息 + plan 状态行，来自 planViews/runSummaries）。D8：旧版本只读，不做物化。
+
+### C5 — 清理 ✅
+- **C5-1 节点 resume 统一**（待提交）：所有 resume（顶层 + 节点）走 `resumeSessionCreated`（窗口 key = Session.id + 链构建）；删 createSessionWindow 的 resumedModel 分支；**删 `planResumedFrom` 字段**（39 处）+ `resolveEventSessionId`/`findResumedLive`/`onDiskSessionId`/`NC.liveSessionForOrigin` 的 resume 参数全部删除（恒等）。
+- **C5-2 文档归档**：根 `REFACTOR.md`（P39）→ `docs/archive/REFACTOR-p39.md`；`TODO.md` → `docs/archive/TODO-p39.md`。
+- C2b-7 已删血缘；P39 兼容补丁在 C2b/C3/C5 中逐项清除。
 3. **C2b-3 fork 分支修正**：SessionCreated fork 分支用 `meta.origin.sessionId`（Session.id）作窗口 key + workCopies；`registerForkInstance` 只关旧工作副本（裸 closeSession）+ 清 planCascadeFork；删 forkInheritPos；级联完成固化 V₁；**fork 后删旧工作副本目录**。
 4. **C2b-4 帧路由 + 命令映射**：coreId → Session.id；命令 Session.id → coreId。
 5. **C2b-5 resume 归属**：resume 分支 workCopies[Session.id] = liveId（窗口 key 保持 Session.id）；`session.refs.json` 加 workCopy 字段。

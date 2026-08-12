@@ -92,12 +92,11 @@ updateActiveSession model fn =
 {-| Inputs for the P38 impact-scope walk: metas (ancestry), runs (node
 bindings / branch / summaries), sessions (insertion points / user
 message counts). -}
-scopeCtx : Model -> { planMetas : Dict String PM.PlanMeta, runs : Dict String (Maybe PT.RunState), sessions : Dict String T.SessionState, planResumedFrom : Dict String String }
+scopeCtx : Model -> { planMetas : Dict String PM.PlanMeta, runs : Dict String (Maybe PT.RunState), sessions : Dict String T.SessionState }
 scopeCtx model =
     { planMetas = model.planMetas
     , runs = Dict.map (\_ w -> w.run) model.planWindows
     , sessions = model.sessions
-    , planResumedFrom = model.planResumedFrom
     }
 
 
@@ -282,7 +281,6 @@ minimalCloseSession id model =
         , sessionNums = Dict.remove id model.sessionNums
         , windowPositions = Dict.remove id model.windowPositions
         , planNodeSessions = Dict.remove id model.planNodeSessions
-        , planResumedFrom = Dict.remove id model.planResumedFrom
         , planTaskStarted = Set.remove id model.planTaskStarted
         , connectionChain = dropChainSession model.connectionChain id
         , sessionWorkCopies = Dict.remove id model.sessionWorkCopies
@@ -493,24 +491,28 @@ resumeDirFor model sid =
         |> Maybe.withDefault sid
 
 
-{-| C2b：是否为顶层 resume（会话管理器 Resume 顶层会话）。顶层
-resume 的窗口 key = 磁盘目录 id（Session.id），live 会话只是工作副本；
-节点 resume（planResumeOwner 已设）保留旧行为（C3 统一）。
+{-| C3/C5：是否为 resume（会话管理器顶层 resume 或 DAG 节点 resume）。
+resume 统一走工作副本归属（resumeSessionCreated）——窗口 key =
+Session.id（= resume 时传入的目录 id），live 会话只是工作副本；
+节点 resume 的 planNodeSessions 绑定在请求时已插入，链构建在
+resumeSessionCreated 内完成。
 -}
-isTopLevelResume : Model -> Bool
-isTopLevelResume model =
-    model.planResumeFrom /= Nothing && model.planResumeOwner == Nothing
+isResumeActive : Model -> Bool
+isResumeActive model =
+    model.planResumeFrom /= Nothing
 
 
-{-| C2b resume 分支（§8.1）：resume 不创建新身份——后端返回的 live
-会话只是同一 Session 的新工作副本：
-- Session.id = 磁盘目录 id（= resume 时传入的 dir id，即 Session 根）。
+{-| C2b/C5 resume 分支（§8.1）：resume 不创建新身份——后端返回的 live
+会话只是同一 Session 的新工作副本（顶层或节点会话规则相同）：
+- Session.id = 磁盘目录 id（= resume 时传入的 dir id）。
 - sessionWorkCopies[Session.id] = liveId；sessions[Session.id] 被 live
   内容替换（缓冲帧按 workCopies 路由，liveId 的帧落到 Session.id）。
-- 窗口 key = Session.id：窗口已关（管理器 resume 的常态）→ 按常规创建
+- 窗口 key = Session.id：窗口已关（resume 的常态）→ 按常规创建
   窗口条目；未关（防御）→ 复用现有窗口。
-- planReplaySessions 已由 ResumeSession 标记 Session.id；不建
-  planResumedFrom（C2b 消灭 live→orig 映射）。
+- 节点 resume：连接链构建 + 整链 z 提升（planNodeSessions 绑定在
+  请求时已插入）。
+- planReplaySessions 已由 ResumeSession/PlanOpenNodeSession 标记
+  Session.id；不建 planResumedFrom（C2b/C5 消灭 live→orig 映射）。
 -}
 resumeSessionCreated : String -> Model -> ( Model, Cmd Msg )
 resumeSessionCreated liveId model =
@@ -573,13 +575,43 @@ resumeSessionCreated liveId model =
         raised =
             raiseWindow m1 sessionId
 
+        -- C3/C5：节点 resume 的连接链（节点↔plan 段 + 祖先段）——
+        -- sessions 已按 Session.id（= 节点会话 id）key，链直接构建。
+        chain =
+            connectionChainForSession raised sessionId
+
+        ( raisedPositions, raisedNextZ ) =
+            raiseChainWindows raised chain
+
+        positions =
+            if List.isEmpty chain then
+                raised.windowPositions
+
+            else
+                raisedPositions
+
+        zBump =
+            if List.isEmpty chain then
+                0
+
+            else
+                raisedNextZ - raised.nextZIndex
+
+        final =
+            { raised
+                | connectionChain = chain
+                , windowPositions = positions
+                , nextZIndex = raised.nextZIndex + zBump
+            }
+
         cmds =
             Cmd.batch
                 [ Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ sessionId))
                 , Ports.scrollToBottom { sessionId = sessionId }
+                , Ports.setConnectionChain (chainPayload final final.connectionChain)
                 ]
     in
-    ( raised, cmds )
+    ( final, cmds )
 
 
 {-| 新会话窗口的常规创建（普通 New Session / resume / runner 节点会话
@@ -743,111 +775,21 @@ createSessionWindow id model =
 
         -- Raise the fresh session window (D6): end of
         -- sessionOrder + next bounded z (rebase when the z
-        -- counter crosses the threshold). The resume branch
-        -- below re-raises the whole chain when this session
-        -- belongs to a plan node.
+        -- counter crosses the threshold).
+        -- C3/C5：resume（顶层/节点）统一走 resumeSessionCreated（窗口
+        -- key = Session.id），createSessionWindow 不再处理 resume。
         raisedModel =
             raiseWindow baseModel id
-
-        -- A session resumed for a plan node gets a FRESH id from
-        -- resume_session while keeping the ORIGINAL on-disk dir.
-        -- The node stays bound to the original id (the dir name)
-        -- so it can be resumed again after this window closes;
-        -- record the live→orig mapping so node clicks can find
-        -- this live window and CloseSession can attribute it back
-        -- to the plan node. Never consumed by a runner-created
-        -- session.
-        resumedModel =
-            case ( model.planResumeFrom, isRunnerCreate ) of
-                ( Just origId, False ) ->
-                    let
-                        label =
-                            Dict.get origId raisedModel.planNodeSessions
-
-                        -- The resumed session's FULL connection
-                        -- chain: its own node↔session segment plus
-                        -- every ancestor plan↔session segment up
-                        -- to the top-level session. Built with the
-                        -- fresh id already mapped back to the
-                        -- original dir id (and the binding label
-                        -- carried over), so the curve draws from
-                        -- the moment the window appears.
-                        chain =
-                            connectionChainForSession
-                                { raisedModel
-                                    | planResumedFrom = Dict.insert id origId raisedModel.planResumedFrom
-                                    , planNodeSessions =
-                                        case label of
-                                            Just l ->
-                                                Dict.insert id l raisedModel.planNodeSessions
-
-                                            Nothing ->
-                                                raisedModel.planNodeSessions
-                                }
-                                id
-
-                        -- The new session is focused; raise the
-                        -- whole chain like activateSessionModel
-                        -- does (session top, its plan second
-                        -- layer, the plan's owning session below,
-                        -- … up to the top-level session).
-                        ( raisedPositions, raisedNextZ ) =
-                            raiseChainWindows raisedModel chain
-
-                        positions =
-                            if List.isEmpty chain then
-                                -- raiseWindow already raised the
-                                -- session (empty chain = no plan
-                                -- binding to lift).
-                                raisedModel.windowPositions
-
-                            else
-                                raisedPositions
-
-                        zBump =
-                            if List.isEmpty chain then
-                                0
-
-                            else
-                                raisedNextZ - raisedModel.nextZIndex
-                    in
-                    { raisedModel
-                        | planResumeFrom = Nothing
-                        , planResumeOwner = Nothing
-                        , planResumedFrom = Dict.insert id origId raisedModel.planResumedFrom
-                        -- The replay-suppression marker is keyed by
-                        -- the ORIGINAL id at resume-click time, but
-                        -- replayed history frames carry the FRESH
-                        -- id — move it old→new so a plan message
-                        -- inside the replayed history is suppressed
-                        -- (otherwise it auto-creates a duplicate
-                        -- plan window with all tasks Pending).
-                        , planReplaySessions =
-                            Set.insert id (Set.remove origId raisedModel.planReplaySessions)
-                        , connectionChain = chain
-                        , windowPositions = positions
-                        , nextZIndex = raisedModel.nextZIndex + zBump
-                        , planNodeSessions =
-                            case label of
-                                Just l ->
-                                    Dict.insert id l raisedModel.planNodeSessions
-
-                                Nothing ->
-                                    raisedModel.planNodeSessions
-                    }
-
-                _ ->
-                    raisedModel
 
         -- Consume the in-flight marker for user creates (runner
         -- creates are consumed inside PlanBindSession).
         settledModel =
             case model.planCreating of
                 Just (UserCreate _) ->
-                    { resumedModel | planCreating = Nothing }
+                    { raisedModel | planCreating = Nothing }
 
                 _ ->
-                    resumedModel
+                    raisedModel
 
         ( drainedModel, drainCmd ) =
             case model.planCreating of
@@ -925,7 +867,7 @@ update msg model =
             if isCascadeForkActive model then
                 forkSessionCreated id model
 
-            else if isTopLevelResume model then
+            else if isResumeActive model then
                 resumeSessionCreated id model
 
             else
@@ -2945,7 +2887,7 @@ update msg model =
                 -- hand out fresh live ids whose dirs don't exist — the
                 -- origin must be the original dir id).
                 originDiskId =
-                    onDiskSessionId model origin0.sessionId
+                    origin0.sessionId
 
                 origin =
                     { origin0 | sessionId = originDiskId }
@@ -3225,7 +3167,7 @@ update msg model =
                             if scope.rootSessionId /= "" then
                                 let
                                     rootDiskId =
-                                        onDiskSessionId model scope.rootSessionId
+                                        scope.rootSessionId
                                 in
                                 if findPlanIdBySession model rootDiskId == Nothing then
                                     PU.freezeSessionVersion m0 rootDiskId Nothing
@@ -3543,53 +3485,41 @@ update msg model =
 
         PlanOpenNodeSession planId nodeId ->
             -- Node → session binding: click a node to open its session.
-            -- Priority: live conversation session (focus it) → live
-            -- session resumed from the same instance (focus it) →
-            -- resume from disk → detail.
+            -- Priority: live session window (focus it) → resume from
+            -- disk (C3-2: work copy dir) → detail.
             case Dict.get planId model.planWindows of
                 Just win ->
                     case win.run of
                         Just run ->
                             case Dict.get nodeId run.nodes of
                                 Just n ->
-                                    -- P39/Phase B: the node is bound by
-                                    -- CONVERSATION id; for a root session
-                                    -- that IS the instance/dir id, so
-                                    -- resume_session works unchanged.
+                                    -- C3/C5：节点绑定 = 会话 id（窗口按
+                                    -- Session.id key；resume 也保持）。
                                     case n.conversationId of
                                         Just convId ->
                                             if Dict.member convId model.sessions then
                                                 update (ActivateSession convId) model
 
                                             else
-                                                case findResumedLive convId model of
-                                                    Just liveId ->
-                                                        update (ActivateSession liveId) model
-
-                                                    Nothing ->
-                                                        -- dead live-binding
-                                                        -- (e.g. restart):
-                                                        -- resume from disk.
-                                                        -- The node STAYS
-                                                        -- bound to convId
-                                                        -- (the dir name);
-                                                        -- the resumed window
-                                                        -- gets a fresh id
-                                                        -- tracked via
-                                                        -- planResumedFrom.
-                                                        -- C3-2：节点级联 fork 后
-                                                        -- 从工作副本目录恢复
-                                                        -- （refs.workCopy）。
-                                                        ( { model
-                                                            | pendingSwitchOnCreate = True
-                                                            , planResumeOwner = Just planId
-                                                            , planResumeFrom = Just convId
-                                                            , planReplaySessions = Set.insert convId model.planReplaySessions
-                                                            , planNodeSessions =
-                                                                Dict.insert convId (planId ++ "/" ++ nodeId) model.planNodeSessions
-                                                          }
-                                                        , Ports.resumeSession { sessionId = resumeDirFor model convId, workDir = planWorkDir planId model, planId = Just planId, nodeId = Just nodeId, originSessionId = planOriginSessionDir model planId }
-                                                        )
+                                                -- dead live-binding
+                                                -- (e.g. restart):
+                                                -- resume from disk.
+                                                -- The node STAYS
+                                                -- bound to convId
+                                                -- (the dir name);
+                                                -- C3-2：节点级联 fork 后
+                                                -- 从工作副本目录恢复
+                                                -- （refs.workCopy）。
+                                                ( { model
+                                                    | pendingSwitchOnCreate = True
+                                                    , planResumeOwner = Just planId
+                                                    , planResumeFrom = Just convId
+                                                    , planReplaySessions = Set.insert convId model.planReplaySessions
+                                                    , planNodeSessions =
+                                                        Dict.insert convId (planId ++ "/" ++ nodeId) model.planNodeSessions
+                                                  }
+                                                , Ports.resumeSession { sessionId = resumeDirFor model convId, workDir = planWorkDir planId model, planId = Just planId, nodeId = Just nodeId, originSessionId = planOriginSessionDir model planId }
+                                                )
 
                                         Nothing ->
                                             case n.lastSessionId of
@@ -3601,21 +3531,16 @@ update msg model =
                                                         update (ActivateSession sid) model
 
                                                     else
-                                                        case findResumedLive sid model of
-                                                            Just liveId ->
-                                                                update (ActivateSession liveId) model
-
-                                                            Nothing ->
-                                                                ( { model
-                                                                    | pendingSwitchOnCreate = True
-                                                                    , planResumeOwner = Just planId
-                                                                    , planResumeFrom = Just sid
-                                                                    , planReplaySessions = Set.insert sid model.planReplaySessions
-                                                                    , planNodeSessions =
-                                                                        Dict.insert sid (planId ++ "/" ++ nodeId) model.planNodeSessions
-                                                                  }
-                                                                , Ports.resumeSession { sessionId = resumeDirFor model sid, workDir = planWorkDir planId model, planId = Just planId, nodeId = Just nodeId, originSessionId = planOriginSessionDir model planId }
-                                                                )
+                                                        ( { model
+                                                            | pendingSwitchOnCreate = True
+                                                            , planResumeOwner = Just planId
+                                                            , planResumeFrom = Just sid
+                                                            , planReplaySessions = Set.insert sid model.planReplaySessions
+                                                            , planNodeSessions =
+                                                                Dict.insert sid (planId ++ "/" ++ nodeId) model.planNodeSessions
+                                                          }
+                                                        , Ports.resumeSession { sessionId = resumeDirFor model sid, workDir = planWorkDir planId model, planId = Just planId, nodeId = Just nodeId, originSessionId = planOriginSessionDir model planId }
+                                                        )
 
                                                 Nothing ->
                                                     ( updateActivePlanWin model (\w -> { w | selectedNode = Just nodeId, infoOpen = True })
@@ -3644,21 +3569,16 @@ update msg model =
                 update (ActivateSession sid) model
 
             else
-                case findResumedLive sid model of
-                    Just liveId ->
-                        update (ActivateSession liveId) model
-
-                    Nothing ->
-                        ( { model
-                            | pendingSwitchOnCreate = True
-                            , planResumeOwner = Just planId
-                            , planResumeFrom = Just sid
-                            , planReplaySessions = Set.insert sid model.planReplaySessions
-                            , planNodeSessions =
-                                Dict.insert sid (planId ++ "/" ++ nodeId) model.planNodeSessions
-                          }
-                        , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model, planId = Just planId, nodeId = Just nodeId, originSessionId = planOriginSessionDir model planId }
-                        )
+                ( { model
+                    | pendingSwitchOnCreate = True
+                    , planResumeOwner = Just planId
+                    , planResumeFrom = Just sid
+                    , planReplaySessions = Set.insert sid model.planReplaySessions
+                    , planNodeSessions =
+                        Dict.insert sid (planId ++ "/" ++ nodeId) model.planNodeSessions
+                    }
+                , Ports.resumeSession { sessionId = resumeDirFor model sid, workDir = planWorkDir planId model, planId = Just planId, nodeId = Just nodeId, originSessionId = planOriginSessionDir model planId }
+                )
 
         PlanToggleInfo ->
             -- "?" in the plan title bar: open the Plan tab; switch from a

@@ -14,10 +14,6 @@ nodeSessions =
         ]
 
 
-resumed : Dict.Dict String String
-resumed =
-    Dict.fromList [ ( "live-c", "sess-a" ) ]
-
 
 {-| P36 chain contexts. Naming: S = session, P = plan, T = top-level
 (plain) session. A three-level recursion looks like:
@@ -30,7 +26,6 @@ resumed =
 singleCtx : NC.ChainCtx
 singleCtx =
     { nodeSessions = Dict.fromList [ ( "sess-a", "plan-1/t1" ) ]
-    , resumedFrom = Dict.empty
     , liveSessions = Dict.fromList [ ( "sess-top", () ), ( "sess-a", () ) ]
     , planOrigins = Dict.fromList [ ( "plan-1", "sess-top" ) ]
     }
@@ -44,7 +39,6 @@ deepCtx =
             , ( "sess-b", "plan-2/deep/node" )
             , ( "sess-c", "plan-3/t3" )
             ]
-    , resumedFrom = Dict.empty
     , liveSessions =
         Dict.fromList
             [ ( "sess-top", () )
@@ -67,22 +61,22 @@ suite =
         [ describe "nodeLabelFor"
             [ test "direct binding label" <|
                 \_ ->
-                    NC.nodeLabelFor nodeSessions resumed "sess-a"
+                    NC.nodeLabelFor nodeSessions "sess-a"
                         |> Expect.equal (Just "plan-1/t1")
 
-            , test "resumed (fresh id) resolves through planResumedFrom" <|
+            , test "unbound session → Nothing (C5: no resume mapping)" <|
                 \_ ->
-                    NC.nodeLabelFor nodeSessions resumed "live-c"
-                        |> Expect.equal (Just "plan-1/t1")
+                    NC.nodeLabelFor nodeSessions "live-c"
+                        |> Expect.equal Nothing
 
             , test "unknown session → Nothing" <|
                 \_ ->
-                    NC.nodeLabelFor nodeSessions resumed "nope"
+                    NC.nodeLabelFor nodeSessions "nope"
                         |> Expect.equal Nothing
 
-            , test "unknown resumed id → Nothing" <|
+            , test "unknown id → Nothing" <|
                 \_ ->
-                    NC.nodeLabelFor nodeSessions resumed "live-unknown"
+                    NC.nodeLabelFor nodeSessions "live-unknown"
                         |> Expect.equal Nothing
             ]
         , describe "parseNodeConnection"
@@ -102,66 +96,47 @@ suite =
                         |> Expect.equal Nothing
             ]
         , describe "nodeConnectionFor"
-            [ test "builds connection with the live session id" <|
+            [ test "builds connection with the session id" <|
                 \_ ->
-                    NC.nodeConnectionFor nodeSessions resumed "live-c"
+                    NC.nodeConnectionFor nodeSessions "sess-a"
                         |> Expect.equal
-                            (Just { sessionId = "live-c", planId = "plan-1", nodeId = "t1" })
+                            (Just { sessionId = "sess-a", planId = "plan-1", nodeId = "t1" })
 
             , test "node id containing a slash survives the round trip" <|
                 \_ ->
-                    NC.nodeConnectionFor nodeSessions resumed "sess-b"
+                    NC.nodeConnectionFor nodeSessions "sess-b"
                         |> Expect.equal
                             (Just { sessionId = "sess-b", planId = "plan-2", nodeId = "deep/node" })
 
             , test "unbound session → Nothing" <|
                 \_ ->
-                    NC.nodeConnectionFor nodeSessions resumed "plain-chat"
+                    NC.nodeConnectionFor nodeSessions "plain-chat"
                         |> Expect.equal Nothing
 
             , test "unknown session → Nothing" <|
                 \_ ->
-                    NC.nodeConnectionFor nodeSessions resumed "ghost"
+                    NC.nodeConnectionFor nodeSessions "ghost"
                         |> Expect.equal Nothing
             ]
         , describe "liveSessionForOrigin"
-            [ test "origin session open → its own id" <|
+            [ test "open live window → its own id (C5: no resume mapping)" <|
                 \_ ->
                     NC.liveSessionForOrigin
                         (Dict.fromList [ ( "sess-a", () ) ])
-                        resumed
                         "sess-a"
                         |> Expect.equal (Just "sess-a")
 
-            , test "origin session resumed → fresh live id" <|
-                \_ ->
-                    NC.liveSessionForOrigin
-                        (Dict.fromList [ ( "live-c", () ) ])
-                        resumed
-                        "sess-a"
-                        |> Expect.equal (Just "live-c")
-
-            , test "origin closed (neither open nor resumed) → Nothing" <|
+            , test "origin closed → Nothing" <|
                 \_ ->
                     NC.liveSessionForOrigin
                         Dict.empty
-                        resumed
                         "sess-b"
-                        |> Expect.equal Nothing
-
-            , test "resumed mapping exists but fresh session closed → Nothing" <|
-                \_ ->
-                    NC.liveSessionForOrigin
-                        Dict.empty
-                        resumed
-                        "sess-a"
                         |> Expect.equal Nothing
 
             , test "unknown origin → Nothing" <|
                 \_ ->
                     NC.liveSessionForOrigin
                         (Dict.fromList [ ( "sess-a", () ) ])
-                        resumed
                         "ghost"
                         |> Expect.equal Nothing
             ]
@@ -196,17 +171,16 @@ suite =
                             , { kind = "plan", sessionId = "sess-top", planId = "plan-1", nodeId = Nothing }
                             ]
 
-            , test "resumed origin session resolves to its LIVE id" <|
+            , test "node session bound directly (no resume mapping; C5)" <|
                 \_ ->
                     NC.chainForSession
                         { nodeSessions = Dict.fromList [ ( "sess-a", "plan-1/t1" ) ]
-                        , resumedFrom = Dict.fromList [ ( "live-a", "sess-a" ) ]
-                        , liveSessions = Dict.fromList [ ( "sess-top", () ), ( "live-a", () ) ]
+                        , liveSessions = Dict.fromList [ ( "sess-top", () ), ( "sess-a", () ) ]
                         , planOrigins = Dict.fromList [ ( "plan-1", "sess-top" ) ]
                         }
-                        "live-a"
+                        "sess-a"
                         |> Expect.equal
-                            [ { kind = "node", sessionId = "live-a", planId = "plan-1", nodeId = Just "t1" }
+                            [ { kind = "node", sessionId = "sess-a", planId = "plan-1", nodeId = Just "t1" }
                             , { kind = "plan", sessionId = "sess-top", planId = "plan-1", nodeId = Nothing }
                             ]
 
@@ -236,8 +210,7 @@ suite =
                 \_ ->
                     NC.chainForSession
                         { nodeSessions = Dict.fromList [ ( "sess-x", "plan-x/n1" ) ]
-                        , resumedFrom = Dict.empty
-                        , liveSessions = Dict.fromList [ ( "sess-x", () ) ]
+                                            , liveSessions = Dict.fromList [ ( "sess-x", () ) ]
                         , planOrigins = Dict.fromList [ ( "plan-x", "sess-x" ) ]
                         }
                         "sess-x"

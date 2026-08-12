@@ -90,7 +90,6 @@ impactScope :
     { planMetas : Dict String PM.PlanMeta
     , runs : Dict String (Maybe PT.RunState)
     , sessions : Dict String T.SessionState
-    , planResumedFrom : Dict String String
     }
     -> String
     -> ImpactScope
@@ -157,7 +156,6 @@ walkLevels :
     { planMetas : Dict String PM.PlanMeta
     , runs : Dict String (Maybe PT.RunState)
     , sessions : Dict String T.SessionState
-    , planResumedFrom : Dict String String
     }
     -> String
     -> List ImpactLevel
@@ -177,10 +175,9 @@ walkLevels ctx planId acc =
                     originConv
             in
             -- The session where THIS plan's result lives must be open
-            -- (feedback + truncation need the live session). Resolve
-            -- resumes: after a restart the head is shown via a fresh
-            -- live id (planResumedFrom live → head).
-            if NC.liveSessionForOrigin ctx.sessions ctx.planResumedFrom originHead == Nothing then
+            -- （feedback + truncation 需要 live 会话；C2b/C3：窗口按
+            -- Session.id key，直接查）。
+            if NC.liveSessionForOrigin ctx.sessions originHead == Nothing then
                 ( acc, Nothing )
 
             else
@@ -256,13 +253,10 @@ closePlans planMetas truncSessions chainIds =
         planMetas
 
 
-messagesOf : { a | sessions : Dict String T.SessionState, planResumedFrom : Dict String String } -> String -> List T.Message
+messagesOf : { a | sessions : Dict String T.SessionState } -> String -> List T.Message
 messagesOf ctx sid =
-    -- Resolve a resumed live id first: after a restart the conversation
-    -- head is shown via a FRESH id (planResumedFrom live → on-disk id),
-    -- and the messages live under the live id.
-    NC.liveSessionForOrigin ctx.sessions ctx.planResumedFrom sid
-        |> Maybe.andThen (\liveId -> Dict.get liveId ctx.sessions)
+    -- C2b/C3：会话按 Session.id key——直接取。
+    Dict.get sid ctx.sessions
         |> Maybe.map .messages
         |> Maybe.withDefault []
 

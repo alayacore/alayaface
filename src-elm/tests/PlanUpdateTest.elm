@@ -254,28 +254,6 @@ suite =
                         , PU.messageBoundToPlan m "other" 1
                         )
                         ( True, False, False )
-            , test "findResumedLive maps an on-disk id back to a live session" <|
-                \_ ->
-                    let
-                        live =
-                            T.emptySession "live1"
-
-                        m =
-                            { initModelWithSession
-                                | sessions = Dict.insert "live1" live initModelWithSession.sessions
-                                , planResumedFrom = Dict.insert "live1" "s1" Dict.empty
-                            }
-                    in
-                    Expect.equal ( PU.findResumedLive "s1" m ) (Just "live1")
-            , test "findResumedLive skips live ids with no open session" <|
-                \_ ->
-                    let
-                        m =
-                            { initModelWithSession
-                                | planResumedFrom = Dict.insert "ghost" "s1" Dict.empty
-                            }
-                    in
-                    Expect.equal ( PU.findResumedLive "s1" m ) Nothing
             , test "isSessionReady only accepts the session ready frame" <|
                 \_ ->
                     let
@@ -410,38 +388,6 @@ suite =
                             }
                     in
                     Expect.equal (PU.findPlanIdBySession m0 "stranger") Nothing
-            ]
-        , describe "resolveEventSessionId"
-            [ test "resumed live ids resolve through planResumedFrom THEN the registry" <|
-                \_ ->
-                    let
-                        m0 =
-                            { initModelWithSession
-                                | planResumedFrom = Dict.fromList [ ( "live-2", "orig-1" ) ]
-                            }
-                    in
-                    -- C2b-7：无血缘——resume live 只经 planResumedFrom 回到
-                    -- 原目录 id；未知 id 回退自身。
-                    Expect.all
-                        [ \_ -> PU.resolveEventSessionId m0 "live-2" |> Expect.equal "orig-1"
-                        , \_ -> PU.resolveEventSessionId m0 "orig-1" |> Expect.equal "orig-1"
-                        , \_ -> PU.resolveEventSessionId m0 "unknown" |> Expect.equal "unknown"
-                        ]
-                        ()
-            , test "resumed live id without a registry entry resolves to its original dir id" <|
-                \_ ->
-                    let
-                        -- Node sessions are their own conversation roots
-                        -- and are NOT registered (runner-created sessions
-                        -- skip the registry); the resolved id must be the
-                        -- ORIGINAL dir id — the node's binding — not the
-                        -- fresh live id.
-                        m0 =
-                            { initModelWithSession
-                                | planResumedFrom = Dict.fromList [ ( "live-2", "orig-1" ) ]
-                            }
-                    in
-                    PU.resolveEventSessionId m0 "live-2" |> Expect.equal "orig-1"
             ]
         , describe "planMetaForMessage (status-bar binding)"
             [ test "versionPlanStatus: plan status resolves from the session's version view (C)" <|

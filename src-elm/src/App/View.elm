@@ -1362,14 +1362,12 @@ viewMessage model session planIndex msg =
         ]
 
 
-{-| Whether the on-disk session directory is currently open (either its
-own session id is live, or a resumed session was created from it — the
-resume map is newId → originalDirId).
+{-| Whether the session directory is currently open（C2b/C3：窗口按
+Session.id key——查 sessions 即可）。
 -}
 isSessionDirActive : Model -> String -> Bool
 isSessionDirActive model dirId =
     Dict.member dirId model.sessions
-        || (Dict.values model.planResumedFrom |> List.member dirId)
 
 
 pad : Int -> String

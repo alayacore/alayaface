@@ -13,15 +13,13 @@ module App.NodeConnection exposing
 {-| Node ↔ session connection lookup (pure, testable).
 
 A session window "belongs to" a plan node when its id appears in
-`planNodeSessions` (sid → "planId/nodeId" badge label). Resumed sessions
-get a FRESH id (P18) — resolve them through `planResumedFrom`
-(live id → original dir id) first, then look up the label for the
-original id.
+`planNodeSessions` (sid → "planId/nodeId" badge label). C3/C5：窗口 key
+= Session.id（resume/fork 不换身份），直接按 id 查绑定。
 
 The reverse direction (plan window → its owning session) uses the plan's
 meta.json origin: the ORIGINAL session id that auto-created the plan.
-`liveSessionForOrigin` resolves that to the LIVE window id (the original
-if it is open, else the fresh id of a resume of it).
+`liveSessionForOrigin` resolves that to the live window id (sessions are
+keyed by Session.id under C2b, so it is the id itself when open).
 
 Since P36, the app draws a whole CONNECTION CHAIN, not a single curve:
 when a deep node session is focused (or a sub-plan window is active),
@@ -66,14 +64,12 @@ type alias ChainSegment =
 
 {-| The pure inputs the chain builder needs, lifted from the app model:
 - `nodeSessions` — session id → "planId/nodeId" binding label;
-- `resumedFrom` — live (fresh) id → original on-disk dir id;
 - `liveSessions` — ids of sessions with an open window right now;
 - `planOrigins` — plan id → its owning session's ON-DISK id (from
   meta.json origin; the plan lives under that dir id).
 -}
 type alias ChainCtx =
     { nodeSessions : Dict String String
-    , resumedFrom : Dict String String
     , liveSessions : Dict String ()
     , planOrigins : Dict String String
     }
@@ -89,46 +85,24 @@ planSegment planId sid =
     { kind = "plan", sessionId = sid, planId = planId, nodeId = Nothing }
 
 
-{-| Resolve an on-disk (original) session id to the id of the window
-currently showing it: the original id if that session is open, or the
-fresh id of a resume of it (`planResumedFrom` fresh → original, with the
-fresh one still open).
+{-| Resolve a session id to the window currently showing it: C2b/C3 下
+窗口按 Session.id key——会话开着 → Just 自身；否则 Nothing。
 -}
-liveSessionForOrigin : Dict String a -> Dict String String -> String -> Maybe String
-liveSessionForOrigin liveSessions planResumedFrom origId =
+liveSessionForOrigin : Dict String a -> String -> Maybe String
+liveSessionForOrigin liveSessions origId =
     if Dict.member origId liveSessions then
         Just origId
 
     else
-        Dict.foldl
-            (\fresh orig acc ->
-                case acc of
-                    Just _ ->
-                        acc
-
-                    Nothing ->
-                        if orig == origId && Dict.member fresh liveSessions then
-                            Just fresh
-
-                        else
-                            Nothing
-            )
-            Nothing
-            planResumedFrom
+        Nothing
 
 
-{-| The "planId/nodeId" badge label for a session id, resolving resumed
-(fresh-id) sessions back to their original on-disk id first.
+{-| The "planId/nodeId" badge label for a session id（窗口按 Session.id
+key，直接查绑定）。
 -}
-nodeLabelFor : Dict String String -> Dict String String -> String -> Maybe String
-nodeLabelFor planNodeSessions planResumedFrom sid =
-    case Dict.get sid planNodeSessions of
-        Just label ->
-            Just label
-
-        Nothing ->
-            Dict.get sid planResumedFrom
-                |> Maybe.andThen (\origId -> Dict.get origId planNodeSessions)
+nodeLabelFor : Dict String String -> String -> Maybe String
+nodeLabelFor planNodeSessions sid =
+    Dict.get sid planNodeSessions
 
 
 {-| Split a "planId/nodeId" label. Node ids may themselves contain "/",
@@ -154,9 +128,9 @@ node card does this session belong to. Returns Nothing for sessions that
 are not bound to a plan node (plain chats, runner sessions without a
 completed binding, etc).
 -}
-nodeConnectionFor : Dict String String -> Dict String String -> String -> Maybe NodeConnection
-nodeConnectionFor planNodeSessions planResumedFrom sid =
-    nodeLabelFor planNodeSessions planResumedFrom sid
+nodeConnectionFor : Dict String String -> String -> Maybe NodeConnection
+nodeConnectionFor planNodeSessions sid =
+    nodeLabelFor planNodeSessions sid
         |> Maybe.andThen parseNodeConnection
         |> Maybe.map
             (\( planId, nodeId ) ->
@@ -186,7 +160,7 @@ ancestorChain ctx planId visited acc =
                 List.reverse acc
 
             Just originDiskId ->
-                case liveSessionForOrigin ctx.liveSessions ctx.resumedFrom originDiskId of
+                case liveSessionForOrigin ctx.liveSessions originDiskId of
                     Nothing ->
                         List.reverse acc
 
@@ -195,7 +169,7 @@ ancestorChain ctx planId visited acc =
                             acc1 =
                                 planSegment planId liveOrigin :: acc
                         in
-                        case nodeConnectionFor ctx.nodeSessions ctx.resumedFrom liveOrigin of
+                        case nodeConnectionFor ctx.nodeSessions liveOrigin of
                             Nothing ->
                                 List.reverse acc1
 
@@ -220,7 +194,7 @@ window"). [] for plain sessions (not bound to a plan node).
 -}
 chainForSession : ChainCtx -> String -> List ChainSegment
 chainForSession ctx sid =
-    case nodeConnectionFor ctx.nodeSessions ctx.resumedFrom sid of
+    case nodeConnectionFor ctx.nodeSessions sid of
         Nothing ->
             []
 
@@ -241,12 +215,12 @@ chainForPlan ctx planId =
             []
 
         Just originDiskId ->
-            case liveSessionForOrigin ctx.liveSessions ctx.resumedFrom originDiskId of
+            case liveSessionForOrigin ctx.liveSessions originDiskId of
                 Nothing ->
                     []
 
                 Just liveOrigin ->
-                    case nodeConnectionFor ctx.nodeSessions ctx.resumedFrom liveOrigin of
+                    case nodeConnectionFor ctx.nodeSessions liveOrigin of
                         -- Top-level plan: just the plan↔session segment.
                         Nothing ->
                             [ planSegment planId liveOrigin ]

@@ -84,7 +84,6 @@ initModelWithSession =
     , planNodeSessions = Dict.empty
     , planResumeOwner = Nothing
     , planResumeFrom = Nothing
-    , planResumedFrom = Dict.empty
     , connectionChain = []
     , homeDir = ""
     , sessionRefs = Dict.empty

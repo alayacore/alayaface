@@ -7,7 +7,6 @@ module Plan.Update exposing
     , planOriginSessionDir
     , sessionDirForCreate
     , runStatesOf
-    , onDiskSessionId
     , planDirEntryDecoder
     , fsOkDecoder
     , fsReadOkDecoder
@@ -24,10 +23,8 @@ module Plan.Update exposing
     , bumpPlanCount
     , findPlanMessageRaw
     , injectPlanErrorIntoSession
-    , findResumedLive
     , planWinKeyForPath
     , findPlanIdBySession
-    , resolveEventSessionId
     , planMetaForMessage
     , planRunningForSession
     , eventSessionId
@@ -201,14 +198,6 @@ runStatesOf model =
     Dict.map
         (\_ win -> win.run |> Maybe.map .nodes |> Maybe.withDefault Dict.empty)
         model.planWindows
-
-
-{-| The on-disk session id for a LIVE session id: resumes hand out FRESH
-ids whose own dir does not exist — map back through planResumedFrom.
--}
-onDiskSessionId : Model -> String -> String
-onDiskSessionId model sid =
-    Dict.get sid model.planResumedFrom |> Maybe.withDefault sid
 
 
 planDirEntryDecoder : D.Decoder { name : String, isDir : Bool }
@@ -673,29 +662,6 @@ injectPlanErrorIntoSession errs sid model =
             model
 
 
-{-| Accessor for the active plan window.
--}
-findResumedLive : String -> Model -> Maybe String
-findResumedLive origId model =
-    Dict.foldl
-        (\liveId mapped acc ->
-            case acc of
-                Just _ ->
-                    acc
-
-                Nothing ->
-                    if mapped == origId && Dict.member liveId model.sessions then
-                        Just liveId
-
-                    else
-                        Nothing
-        )
-        Nothing
-        model.planResumedFrom
-
-
-{-| The pure inputs the chain builder needs, lifted from the model.
--}
 planWinKeyForPath : String -> String
 planWinKeyForPath path =
     let
@@ -712,30 +678,11 @@ planWinKeyForPath path =
         base
 
 
-{-| Resolve an event-carrying session id to the CONVERSATION id the
-runner matches nodes on: a fresh live id from resume_session maps back
-to its original on-disk dir id (planResumedFrom). Every session-bearing
-event must be resolved through this before reaching the runner — a raw
-live id would silently miss the node binding (e.g. closing a resumed
-node session would leave its node stuck Running). C2b-7：无血缘——
-resume live 经 planResumedFrom 回到 Session.id 即可（节点绑定按会话
-id）。
--}
-resolveEventSessionId : Model -> String -> String
-resolveEventSessionId model sid =
-    Dict.get sid model.planResumedFrom |> Maybe.withDefault sid
-
-
-{-| Find the plan window whose run owns the given session id. A resumed
-session id (fresh UUID) is resolved back to its original on-disk dir id
-via planResumedFrom（C2b-7：无血缘，无 conversation 解析）。
+{-| Find the plan window whose run owns the given session id. C3/C5：
+窗口按 Session.id key，节点绑定 = 会话 id——直接匹配。
 -}
 findPlanIdBySession : Model -> String -> Maybe String
 findPlanIdBySession model sid =
-    let
-        convId =
-            resolveEventSessionId model sid
-    in
     Dict.foldl
         (\pid win acc ->
             case acc of
@@ -745,7 +692,7 @@ findPlanIdBySession model sid =
                 Nothing ->
                     case win.run of
                         Just run ->
-                            if R.nodeBySessionId convId run == Nothing then
+                            if R.nodeBySessionId sid run == Nothing then
                                 Nothing
 
                             else
@@ -1025,7 +972,7 @@ feedbackCompletedPlan planId now model =
                         meta.origin.sessionId
 
                     liveOrigin =
-                        NC.liveSessionForOrigin model.sessions model.planResumedFrom headSid
+                        NC.liveSessionForOrigin model.sessions headSid
                             |> Maybe.map (workCopyId model)
 
                     summary =
@@ -1084,7 +1031,7 @@ feedbackCompletedPlan planId now model =
                             Just liveSid ->
                                 let
                                     originDiskId =
-                                        onDiskSessionId model liveSid
+                                        liveSid
                                 in
                                 if findPlanIdBySession model originDiskId == Nothing then
                                     freezeSessionVersion m1 originDiskId (Just planId)
@@ -1482,7 +1429,7 @@ forkOrInsertInPlace dispatch planId model =
                     meta.origin.sessionId
 
                 liveOrigin =
-                    NC.liveSessionForOrigin model.sessions model.planResumedFrom headSid
+                    NC.liveSessionForOrigin model.sessions headSid
                         |> Maybe.map (workCopyId model)
 
                 summary =
@@ -1850,7 +1797,7 @@ truncateOrigin planId model =
                 headSid =
                     meta.origin.sessionId
             in
-            case NC.liveSessionForOrigin model.sessions model.planResumedFrom headSid of
+            case NC.liveSessionForOrigin model.sessions headSid of
                 Just liveSid ->
                     case Dict.get liveSid model.sessions of
                         Just s ->
@@ -2006,14 +1953,13 @@ subPlansOfPlan planId model =
 
 
 {-| Every LIVE session window bound to a node of this plan: direct
-bindings (`planNodeSessions` sid → "planId/nodeId") plus resumed
-windows (`planResumedFrom` live → orig, orig bound to the plan). Only
-sessions with an open window are returned — a closed binding's backend
-handle is already gone (resume replaced it), so closing it again would
-only produce "Session not found" noise. Node sessions can be open under
-ANY run status — e.g. a node session resumed from disk under a
-Stopped/FailedRun/Completed plan for review — so PlanClose closes them
-regardless of the run state.
+bindings (`planNodeSessions` sid → "planId/nodeId"; 窗口按 Session.id
+key，C3/C5 后无 resume live 窗口）。Only sessions with an open window
+are returned — a closed binding's backend handle is already gone
+(resume replaced it), so closing it again would only produce "Session
+not found" noise. Node sessions can be open under ANY run status — e.g.
+a node session resumed from disk under a Stopped/FailedRun/Completed
+plan for review — so PlanClose closes them regardless of the run state.
 -}
 nodeSessionIdsForPlan : String -> Model -> List String
 nodeSessionIdsForPlan planId model =
@@ -2023,44 +1969,16 @@ nodeSessionIdsForPlan planId model =
 
         live sid =
             Dict.member sid model.sessions
-
-        direct =
-            Dict.foldl
-                (\sid label acc ->
-                    if isNodeOfPlan label && live sid then
-                        sid :: acc
-                    else
-                        acc
-                )
-                []
-                model.planNodeSessions
-
-        viaResume =
-            Dict.foldl
-                (\liveId orig acc ->
-                    case Dict.get orig model.planNodeSessions of
-                        Just label ->
-                            if isNodeOfPlan label && live liveId then
-                                liveId :: acc
-                            else
-                                acc
-
-                        Nothing ->
-                            acc
-                )
-                []
-                model.planResumedFrom
     in
-    List.foldl
-        (\sid acc ->
-            if List.member sid acc then
-                acc
-
-            else
+    Dict.foldl
+        (\sid label acc ->
+            if isNodeOfPlan label && live sid then
                 sid :: acc
+            else
+                acc
         )
-        direct
-        viaResume
+        []
+        model.planNodeSessions
 
 
 -- ─── Ownership-graph close set (P39/D1) ────────────────────────────
@@ -2104,11 +2022,8 @@ collectCloseSetHelp model sessionQueue visitedSessions visitedPlans planQueue =
     case sessionQueue of
         s :: rest ->
             let
-                disk =
-                    Dict.get s model.planResumedFrom |> Maybe.withDefault s
-
                 plans =
-                    PM.plansOwnedBySession model.planMetas disk
+                    PM.plansOwnedBySession model.planMetas s
                         |> List.filter (\p -> not (Set.member p visitedPlans))
 
                 visitedPlans2 =

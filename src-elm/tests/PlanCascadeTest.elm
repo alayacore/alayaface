@@ -131,7 +131,7 @@ runC =
     }
 
 
-ctxFor : Dict String (List T.Message) -> { planMetas : Dict String M.PlanMeta, runs : Dict String (Maybe PT.RunState), sessions : Dict String T.SessionState, planResumedFrom : Dict String String }
+ctxFor : Dict String (List T.Message) -> { planMetas : Dict String M.PlanMeta, runs : Dict String (Maybe PT.RunState), sessions : Dict String T.SessionState }
 ctxFor sessions =
     let
         sessionWith sid msgs =
@@ -151,7 +151,6 @@ ctxFor sessions =
             ]
     , runs = Dict.fromList [ ( "b", Just runB ), ( "c", Just runC ) ]
     , sessions = Dict.map sessionWith sessions
-    , planResumedFrom = Dict.empty
     }
 
 

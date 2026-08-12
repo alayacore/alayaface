@@ -230,10 +230,6 @@ type alias Model =
     -- stays bound to the original id (the dir name) so it can always be
     -- resumed again.
     , planResumeFrom : Maybe String
-    -- Live (fresh) session id → original dir id, for every resume done in
-    -- this app run. Lets a node click find the live resumed session and
-    -- lets CloseSession attribute the window back to its plan node.
-    , planResumedFrom : Dict String String
     -- Active connection CHAIN (P36): when the user focuses a session
     -- bound to a plan node — or activates a plan window — this holds
     -- EVERY segment of the path from that window up through each
