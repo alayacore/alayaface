@@ -198,14 +198,14 @@ Plan 的 Run.nodes[nodeId].session = 节点会话的 VersionRef（引用）
   - `Version.planViews` + 状态栏/窗口按版本解析
   - 重跑 = 版本派生（老版本保留，老会话显示旧状态）
   - **验证**：用户 bug 场景 e2e（老会话 A 保持未执行）
-- **C2b — 会话所有权（窗口 = Session 视图 + 工作副本映射）** 设计完成，待实施（见 §8.1）
-- **C3 — 递归与级联在值模型下**
+- **C2b — 会话所有权（窗口 = Session 视图 + 工作副本映射）** ✅ 已完成（§8.1）
+- **C3 — 递归与级联在值模型下** ✅ 已完成（§8.2）
   - 节点会话/子 plan 引用版本值；级联 = 版本链传播
   - 删除级联 fork 交接（保留状态机语义，改版本载体）
-- **C4 — UI 与历史**
+- **C4 — UI 与历史** ✅ 已完成（§8.2）
   - 版本浏览（会话管理器显示版本/历史/回退）
   - 物化能力（可选，开放项 §6.3）
-- **C5 — 清理**
+- **C5 — 清理** ✅ 已完成（§8.2）
   - 删血缘 registry / headInstanceFor / resolveConversation / fork 收养
   - 删 P39 相关的兼容补丁；REFACTOR.md 归档到 docs/archive/
 
@@ -323,8 +323,8 @@ Plan 的 Run.nodes[nodeId].session = 节点会话的 VersionRef（引用）
 - `blockCache`（hash → 消息）+ 版本浏览状态；`ObjectGetResult` 解码 Version 或 Block（reqId = hash），查看版本自动补取缺失块。
 - 会话管理器条目加 **Versions (n)** 按钮 → 版本列表（v0/v1/… + head 标记）→ 只读版本视图（消息 + plan 状态行，来自 planViews/runSummaries）。D8：旧版本只读，不做物化。
 
-### C5 — 清理 ✅
-- **C5-1 节点 resume 统一**（待提交）：所有 resume（顶层 + 节点）走 `resumeSessionCreated`（窗口 key = Session.id + 链构建）；删 createSessionWindow 的 resumedModel 分支；**删 `planResumedFrom` 字段**（39 处）+ `resolveEventSessionId`/`findResumedLive`/`onDiskSessionId`/`NC.liveSessionForOrigin` 的 resume 参数全部删除（恒等）。
+### C5 — 清理 ✅（提交 `f809469`）
+- **C5-1 节点 resume 统一**：所有 resume（顶层 + 节点）走 `resumeSessionCreated`（窗口 key = Session.id + 链构建）；删 createSessionWindow 的 resumedModel 分支；**删 `planResumedFrom` 字段**（39 处）+ `resolveEventSessionId`/`findResumedLive`/`onDiskSessionId`/`NC.liveSessionForOrigin` 的 resume 参数全部删除（恒等）。
 - **C5-2 文档归档**：根 `REFACTOR.md`（P39）→ `docs/archive/REFACTOR-p39.md`；`TODO.md` → `docs/archive/TODO-p39.md`。
 - C2b-7 已删血缘；P39 兼容补丁在 C2b/C3/C5 中逐项清除。
 3. **C2b-3 fork 分支修正**：SessionCreated fork 分支用 `meta.origin.sessionId`（Session.id）作窗口 key + workCopies；`registerForkInstance` 只关旧工作副本（裸 closeSession）+ 清 planCascadeFork；删 forkInheritPos；级联完成固化 V₁；**fork 后删旧工作副本目录**。
