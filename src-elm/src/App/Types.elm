@@ -45,7 +45,6 @@ import Plan.Meta as PM
 import Plan.Cascade as PC
 import Session.Selector as Sel
 import Session.Types as T
-import Session.Meta as SM
 import App.NodeConnection as NC
 import Arch.Values as AV
 import Arch.Freeze as Freeze
@@ -144,25 +143,9 @@ type alias Model =
     -- chain; matching planReadTarget = an open/load read; neither = a
     -- stale response (ignored).
     , planMetaReadReqId : Maybe String
-    -- P39/Phase B: session.meta.json paths (sessions/<uuid>/session.meta.json)
-    -- collected from the sessions/ listing, read BEFORE the plan metas
-    -- (lineage first — plan origins resolve against it). Each successful
-    -- read registers instanceId → SessionMeta in `sessionLineage`.
+    -- C 架构：session.refs.json 路径（sessions/<uuid>/session.refs.json）
+    -- 收集自 sessions/ 列表，逐个读取登记 Session 根引用。
     , planMetaSessionQueue : List String
-    -- P39/Phase B: nested plan NODE session lineage. Plan node sessions
-    -- live at sessions/<origin>/plans/<planId>/<nodeId>/<uuid>/, so the
-    -- rebuild lists the <planId>/ dirs (planMetaDirQueue, which holds
-    -- ALL directory levels: plans/, <planId>/, <nodeId>/) to discover
-    -- their <uuid>/ session dirs and queue <uuid>/session.meta.json
-    -- here. Without this a forked node session's lineage is lost on
-    -- restart and its frames can no longer route to the node.
-    , planMetaNodeMetaQueue : List String
-    -- P39/Phase B: session lineage registry — physical session instance
-    -- id → its stable conversation id (+ parent instance pointer). Built
-    -- from the session.meta.json scan and on session creation; used to
-    -- resolve frame events / bindings to the CONVERSATION id (stable
-    -- across forks). See Session.Meta.
-    , sessionLineage : Dict String SM.SessionMeta
     -- P28 layout fix: every known session id → its ON-DISK DIRECTORY.
     -- Top-level sessions live at sessions/<id>; plan NODE sessions are
     -- NESTED at sessions/<origin>/plans/<planId>/<nodeId>/<id>. Plans

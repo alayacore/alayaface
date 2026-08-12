@@ -17,7 +17,6 @@ import Plan.Update as PU
 import Plan.Types as PT
 import Plan.Meta as PM
 import Plan.Cascade as PC
-import Session.Meta as SM
 import Arch.Values as AV
 import Session.Types as T
 import TestHelpers exposing (initModelWithSession)
@@ -356,17 +355,16 @@ suite =
                         m0 =
                             { initModelWithSession
                                 | planWindows = Dict.insert "p1" win Dict.empty
-                                , sessionLineage =
-                                    Dict.fromList
-                                        [ ( "conv-1", SM.empty "conv-1" )
-                                        , ( "fork-2", { conversationId = "conv-1", parentInstanceId = Just "conv-1" } )
-                                        ]
                             }
                     in
-                    -- The node is bound to conversation conv-1; the FORK
-                    -- physical instance resolves through the registry to
-                    -- conv-1 and finds the plan.
-                    Expect.equal (PU.findPlanIdBySession m0 "fork-2") (Just "p1")
+                    -- C2b-7：无血缘——节点按会话 id 直接绑定；绑定的
+                    -- id（conv-1）找到 plan；无关 id 不解析。
+                    Expect.all
+                        [ \mm -> Expect.equal (PU.findPlanIdBySession mm "conv-1") (Just "p1")
+                        , \mm -> Expect.equal (PU.findPlanIdBySession mm "fork-2") Nothing
+                        , \mm -> Expect.equal (PU.findPlanIdBySession mm "unknown") Nothing
+                        ]
+                        m0
             , test "a root instance matches directly (identity)" <|
                 \_ ->
                     let
@@ -420,19 +418,13 @@ suite =
                         m0 =
                             { initModelWithSession
                                 | planResumedFrom = Dict.fromList [ ( "live-2", "orig-1" ) ]
-                                , sessionLineage =
-                                    Dict.fromList
-                                        [ ( "orig-1", SM.empty "conv-9" )
-                                        , ( "fork-3", { conversationId = "conv-9", parentInstanceId = Just "orig-1" } )
-                                        ]
                             }
                     in
-                    -- live-2 is a resume of orig-1 → conversation conv-9;
-                    -- fork-3 is a fork instance → conv-9; an unknown id
-                    -- falls back to itself (root identity).
+                    -- C2b-7：无血缘——resume live 只经 planResumedFrom 回到
+                    -- 原目录 id；未知 id 回退自身。
                     Expect.all
-                        [ \_ -> PU.resolveEventSessionId m0 "live-2" |> Expect.equal "conv-9"
-                        , \_ -> PU.resolveEventSessionId m0 "fork-3" |> Expect.equal "conv-9"
+                        [ \_ -> PU.resolveEventSessionId m0 "live-2" |> Expect.equal "orig-1"
+                        , \_ -> PU.resolveEventSessionId m0 "orig-1" |> Expect.equal "orig-1"
                         , \_ -> PU.resolveEventSessionId m0 "unknown" |> Expect.equal "unknown"
                         ]
                         ()
@@ -591,16 +583,14 @@ suite =
                                     Dict.insert "p1"
                                         { planWindowWithPlan | run = Just { baseRun | status = PT.InProgress } }
                                         Dict.empty
-                                , planResumedFrom = Dict.insert "live-fork" "s-fork" Dict.empty
-                                , sessionLineage =
-                                    Dict.fromList
-                                        [ ( "s1", SM.empty "s1" )
-                                        , ( "s-fork", { conversationId = "s1", parentInstanceId = Just "s1" } )
-                                        ]
                             }
                     in
-                    PU.planRunningForSession m "live-fork"
-                        |> Expect.equal True
+                    -- C2b-7：无血缘——按 Session.id 直接匹配。
+                    Expect.all
+                        [ \mm -> PU.planRunningForSession mm "s1" |> Expect.equal True
+                        , \mm -> PU.planRunningForSession mm "other" |> Expect.equal False
+                        ]
+                        m
             , test "Completed/NotStarted/Stopped plan → False (input enabled again)" <|
                 \_ ->
                     let
@@ -733,13 +723,9 @@ suite =
                             PU.cascadeStepIn stubDispatch (PC.InstanceReady (Ok "fork-x")) m0
                     in
                     Expect.all
-                        [ -- lineage registered: fork → conversation s1, parent s1
+                        [ -- C2b-7：节点 fork 不再注册血缘（sessionLineage 已删）。
+                        -- 断言由节点绑定保持 + 节点重置即可。
                         \m ->
-                            Dict.get "fork-x" m.sessionLineage
-                                |> Expect.equal
-                                    (Just { conversationId = "s1", parentInstanceId = Just "s1" })
-                        -- node keeps the CONVERSATION binding and is reset to WaitingForPlan
-                        , \m ->
                             case Dict.get "p0" m.planWindows |> Maybe.andThen .run |> Maybe.andThen (\r -> Dict.get "n1" r.nodes) of
                                 Just n ->
                                     Expect.equal
@@ -800,8 +786,8 @@ suite =
                             PU.cascadeStepIn stubDispatch (PC.InstanceReady (Ok "fork-x")) m0
                     in
                     Expect.all
-                        [ \mm -> Expect.equal (Dict.get "fork-x" mm.sessionLineage) Nothing
-                        , \mm -> Expect.equal mm.planCascadeFork Nothing
+                        [ -- C2b-7：血缘字段已删；顶层 fork 只清标记 + 重放标记。
+                        \mm -> Expect.equal mm.planCascadeFork Nothing
                         , \mm -> Expect.equal (Set.member "s1" mm.planReplaySessions) True
                         ]
                         m1

@@ -35,7 +35,6 @@ import Dict exposing (Dict)
 import Plan.Detect
 import Plan.Types as PT
 import Plan.Meta as PM
-import Session.Meta as SM
 import Session.Types as T
 import App.NodeConnection as NC
 
@@ -91,7 +90,6 @@ impactScope :
     { planMetas : Dict String PM.PlanMeta
     , runs : Dict String (Maybe PT.RunState)
     , sessions : Dict String T.SessionState
-    , sessionLineage : Dict String SM.SessionMeta
     , planResumedFrom : Dict String String
     }
     -> String
@@ -111,13 +109,9 @@ impactScope ctx rootPlanId =
 
         Just rm ->
             let
-                -- P38: the result lives in the parent conversation, which
-                -- may be a fork of the creation origin. P39/Phase B: the
-                -- physical session to operate on is the conversation's
-                -- HEAD instance (the fork registered itself at adoption);
-                -- a pre-lineage root falls back to the conversation id.
+                -- C2b：Session.id 稳定 = plan origin（无血缘/head 解析）。
                 rootSid =
-                    headOf ctx rm.origin.sessionId
+                    rm.origin.sessionId
 
                 -- P39/D8: the truncation anchor is the plan's CREATION
                 -- point — the message right after its plan JSON. A
@@ -155,31 +149,14 @@ impactScope ctx rootPlanId =
             , levels = levels
             , topSessionId = topSid
             , closePlanIds =
-                closePlans
-                    { planMetas = ctx.planMetas, sessionLineage = ctx.sessionLineage }
-                    truncSessions
-                    chainIds
+                closePlans ctx.planMetas truncSessions chainIds
             }
-
-
-{-| The conversation's HEAD physical instance (fallback: the
-conversation id itself when the registry has no entry — pre-lineage
-roots are their own head).
--}
-headOf :
-    { a | sessionLineage : Dict String SM.SessionMeta }
-    -> String
-    -> String
-headOf ctx conversationId =
-    SM.headInstanceFor ctx.sessionLineage conversationId
-        |> Maybe.withDefault conversationId
 
 
 walkLevels :
     { planMetas : Dict String PM.PlanMeta
     , runs : Dict String (Maybe PT.RunState)
     , sessions : Dict String T.SessionState
-    , sessionLineage : Dict String SM.SessionMeta
     , planResumedFrom : Dict String String
     }
     -> String
@@ -192,15 +169,12 @@ walkLevels ctx planId acc =
 
         Just meta ->
             let
-                -- P39/Phase B: the conversation this plan's result lives
-                -- in (stable — the node binding is keyed by it) and the
-                -- HEAD physical instance (where truncation + live checks
-                -- actually operate).
+                -- C2b：Session.id 稳定 = plan origin（无 head/血缘解析）。
                 originConv =
                     meta.origin.sessionId
 
                 originHead =
-                    headOf ctx originConv
+                    originConv
             in
             -- The session where THIS plan's result lives must be open
             -- (feedback + truncation need the live session). Resolve
@@ -234,7 +208,7 @@ walkLevels ctx planId acc =
 
                             parentOrigin =
                                 parentMeta
-                                    |> Maybe.map (\m -> headOf ctx m.origin.sessionId)
+                                    |> Maybe.map (\m -> m.origin.sessionId)
                                     |> Maybe.withDefault ""
 
                             parentName =
@@ -263,30 +237,23 @@ walkLevels ctx planId acc =
                         walkLevels ctx parentId (acc ++ [ level ])
 
 
-closePlans : { planMetas : Dict String PM.PlanMeta, sessionLineage : Dict String SM.SessionMeta } -> List String -> List String -> List String
-closePlans ctx truncSessions chainIds =
-    -- P39/D8: match by CONVERSATION, not physical instance — the
-    -- truncation target is the conversation's HEAD instance (a fork
-    -- replaced the creation instance), while plan metas record the
-    -- creation instance id. A plan whose origin conversation is being
-    -- truncated must close even when its meta predates the fork.
-    let
-        truncConvs =
-            List.map (SM.resolveConversation ctx.sessionLineage) truncSessions
-    in
+closePlans : Dict String PM.PlanMeta -> List String -> List String -> List String
+closePlans planMetas truncSessions chainIds =
+    -- C2b：Session.id 稳定 = plan origin——按 origin 直接匹配（无
+    -- conversation/head 解析）。
     Dict.foldl
         (\pid meta acc ->
             if List.member pid chainIds then
                 acc
 
-            else if List.member (SM.resolveConversation ctx.sessionLineage meta.origin.sessionId) truncConvs then
+            else if List.member meta.origin.sessionId truncSessions then
                 pid :: acc
 
             else
                 acc
         )
         []
-        ctx.planMetas
+        planMetas
 
 
 messagesOf : { a | sessions : Dict String T.SessionState, planResumedFrom : Dict String String } -> String -> List T.Message

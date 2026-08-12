@@ -27,7 +27,6 @@ import App.NodeConnection as NC
 import App.SelectorKit as Kit
 import Plan.Update as PU exposing (..)
 import Session.Types as T
-import Session.Meta as SM
 import Session.Protocol as P
 import Session.Handlers as H
 import Session.Selector as Sel exposing (Page(..))
@@ -93,12 +92,11 @@ updateActiveSession model fn =
 {-| Inputs for the P38 impact-scope walk: metas (ancestry), runs (node
 bindings / branch / summaries), sessions (insertion points / user
 message counts). -}
-scopeCtx : Model -> { planMetas : Dict String PM.PlanMeta, runs : Dict String (Maybe PT.RunState), sessions : Dict String T.SessionState, sessionLineage : Dict String SM.SessionMeta, planResumedFrom : Dict String String }
+scopeCtx : Model -> { planMetas : Dict String PM.PlanMeta, runs : Dict String (Maybe PT.RunState), sessions : Dict String T.SessionState, planResumedFrom : Dict String String }
 scopeCtx model =
     { planMetas = model.planMetas
     , runs = Dict.map (\_ w -> w.run) model.planWindows
     , sessions = model.sessions
-    , sessionLineage = model.sessionLineage
     , planResumedFrom = model.planResumedFrom
     }
 
@@ -271,7 +269,7 @@ minimalCloseSession id model =
                     Task.perform
                         (\t ->
                             PlanRunFrame (Time.posixToMillis t)
-                                (R.SessionDisconnected (PU.resolveEventSessionId model id) "Session window closed")
+                                (R.SessionDisconnected id "Session window closed")
                         )
                         Time.now
 
@@ -714,19 +712,6 @@ createSessionWindow id model =
 
                     else
                         model.planReplaySessions
-                -- P39/Phase B: a genuinely NEW top-level instance
-                -- registers as the ROOT of its conversation
-                -- (instance → conversation = itself). Resumed
-                -- live handles (planResumeFrom) are ephemeral
-                -- windows over an existing instance; runner-
-                -- created node sessions and cascade forks get
-                -- their lineage from the plan machinery instead.
-                , sessionLineage =
-                    if model.planResumeFrom == Nothing && model.planCascadeFork == Nothing && not isRunnerCreate then
-                        Dict.insert id (SM.empty id) model.sessionLineage
-
-                    else
-                        model.sessionLineage
                 -- P28 layout fix: record this session's REAL
                 -- on-disk directory (top-level for plain
                 -- sessions, the nested node-session dir for plan
@@ -875,25 +860,15 @@ createSessionWindow id model =
         -- plain/runner-created session (runner keeps the
         -- existing chain, which is already in the model).
         , Ports.setConnectionChain (chainPayload drainedModel drainedModel.connectionChain)
-        -- P39/Phase B: persist the root lineage meta for a
-        -- genuinely NEW top-level instance (sessions/<id>/
-        -- session.meta.json). Resume / runner / fork instances
-        -- register through their own paths.
-        -- C2b：同时初始化 Session 根引用（session.refs.json，空 head）——
-        -- 有 refs = Session 根（管理器显示 / 重启恢复依据）。
+        -- C2b：初始化 Session 根引用（session.refs.json，空 head）——
+        -- 有 refs = Session 根（管理器显示 / 重启恢复依据）。血缘
+        -- session.meta.json 已删（C2b-7）。
         , if isPlainRootCreate then
-            Cmd.batch
-                [ Ports.fsWriteFileText
-                    { path = sessionsDir model.homeDir ++ "/" ++ id ++ "/session.meta.json"
-                    , content = E.encode 2 (SM.encode (SM.empty id))
-                    , createParents = True
-                    }
-                , Ports.fsWriteFileText
-                    { path = sessionsDir model.homeDir ++ "/" ++ id ++ "/session.refs.json"
-                    , content = AV.refsContent (AV.SessionRefs id "" [] Nothing)
-                    , createParents = True
-                    }
-                ]
+            Ports.fsWriteFileText
+                { path = sessionsDir model.homeDir ++ "/" ++ id ++ "/session.refs.json"
+                , content = AV.refsContent (AV.SessionRefs id "" [] Nothing)
+                , createParents = True
+                }
 
           else
             Cmd.none
@@ -1316,7 +1291,7 @@ update msg model =
                                             Task.perform
                                                 (\t ->
                                                     PlanRunFrame (Time.posixToMillis t)
-                                                        (R.SessionDisconnected (PU.resolveEventSessionId model ev.sessionId) ev.message)
+                                                        (R.SessionDisconnected ev.sessionId ev.message)
                                                 )
                                                 Time.now
 
@@ -2155,14 +2130,11 @@ update msg model =
                                                 [] ->
                                                     -- All directories
                                                     -- listed: start reading
-                                                    -- — top-level lineage
-                                                    -- metas, then nested
-                                                    -- node-session lineage,
-                                                    -- then every plan meta.
+                                                    -- — session refs (C) +
+                                                    -- every plan meta.
                                                     let
                                                         readQueue =
                                                             m.planMetaSessionQueue
-                                                                ++ m.planMetaNodeMetaQueue
                                                                 ++ m.planMetaReadQueue
                                                     in
                                                     case readQueue of
@@ -2177,7 +2149,6 @@ update msg model =
                                                                 , planMetaReading = Just r
                                                                 , planMetaReadReqId = Just reqId
                                                                 , planMetaSessionQueue = []
-                                                                , planMetaNodeMetaQueue = []
                                                                 , planMetaReadQueue = rs
                                                                 , planMetaLoading = False
                                                               }
@@ -2225,17 +2196,14 @@ update msg model =
                                         _ ->
                                             -- A node dir listing: subdirs
                                             -- are node session dirs (<uuid>)
-                                            -- — queue their lineage metas AND
-                                            -- record each session's REAL
+                                            -- — record each session's REAL
                                             -- (nested) directory so plans it
                                             -- creates stay in this subtree
-                                            -- (P28 layout fix).
+                                            -- (P28 layout fix). No lineage
+                                            -- metas (C2b-7: deleted).
                                             listNext
                                                 { model
-                                                    | planMetaNodeMetaQueue =
-                                                        model.planMetaNodeMetaQueue
-                                                            ++ List.map (\n -> dir ++ "/" ++ n ++ "/session.meta.json") dirsIn
-                                                    , sessionDirMap =
+                                                    | sessionDirMap =
                                                         List.foldl
                                                             (\n acc -> Dict.insert n (dir ++ "/" ++ n) acc)
                                                             model.sessionDirMap
@@ -2247,11 +2215,10 @@ update msg model =
                                     -- session's plans/ subdir (missing
                                     -- plans dirs list empty; ".." from
                                     -- the listing is skipped) AND every
-                                    -- session's lineage meta
-                                    -- (sessions/<uuid>/session.meta.json,
-                                    -- P39/Phase B — read BEFORE the plan
-                                    -- metas so plan origins can resolve
-                                    -- against the registry).
+                                    -- session's version refs
+                                    -- (sessions/<uuid>/session.refs.json,
+                                    -- C 架构 — Session 根引用；工作副本
+                                    -- 目录没有 refs，不会登记)。
                                     let
                                         sessionDirs =
                                             parsed
@@ -2262,14 +2229,8 @@ update msg model =
                                             List.map (\n -> sessionsDir model.homeDir ++ "/" ++ n ++ "/plans") sessionDirs
 
                                         sessionMetaQueue =
-                                            List.concatMap
-                                                (\n ->
-                                                    [ sessionsDir model.homeDir ++ "/" ++ n ++ "/session.meta.json"
-                                                    -- C 架构：会话版本引用
-                                                    -- （sessions/<uuid>/session.refs.json）
-                                                    , sessionsDir model.homeDir ++ "/" ++ n ++ "/session.refs.json"
-                                                    ]
-                                                )
+                                            List.map
+                                                (\n -> sessionsDir model.homeDir ++ "/" ++ n ++ "/session.refs.json")
                                                 sessionDirs
                                     in
                                     case planDirs of
@@ -2674,28 +2635,6 @@ update msg model =
 
                                                 else
                                                     ( m2, Cmd.none )
-
-                                            Err _ ->
-                                                ( model, Cmd.none )
-
-                                    else if String.endsWith "/session.meta.json" path then
-                                        -- P39/Phase B: a session lineage
-                                        -- meta (sessions/<uuid>/session.meta.json)
-                                        -- registers instanceId → SessionMeta.
-                                        case D.decodeString SM.decode res.content of
-                                            Ok sm ->
-                                                let
-                                                    instanceId =
-                                                        case List.reverse (String.split "/" path) of
-                                                            _ :: i :: _ ->
-                                                                i
-
-                                                            _ ->
-                                                                path
-                                                in
-                                                ( { model | sessionLineage = Dict.insert instanceId sm model.sessionLineage }
-                                                , Cmd.none
-                                                )
 
                                             Err _ ->
                                                 ( model, Cmd.none )
@@ -3438,11 +3377,9 @@ update msg model =
 
         PlanBindSession ts planId nodeId sid ->
             let
-                -- P39/Phase B: the node is bound by its session's
-                -- CONVERSATION id (stable across forks; a root session
-                -- resolves to itself).
+                -- C2b-7：无血缘——节点按会话 id 直接绑定（稳定身份）。
                 convId =
-                    SM.resolveConversation model.sessionLineage sid
+                    sid
 
                 m0 =
                     { model | planCreating = Nothing }

@@ -14,7 +14,6 @@ import App.Windows as W
 import App.Update as AU
 import App.NodeConnection as NC
 import Session.Types as T
-import Session.Meta as SM
 import TestHelpers exposing (initModelWithSession)
 
 
@@ -455,8 +454,11 @@ suite =
                     Expect.equal
                         ( List.map .kind chain, List.map .planId chain, List.map .sessionId chain )
                         ( [ "plan" ], [ "p1" ], [ "s1" ] )
-            , test "P38/P39: a FORKED parent conversation resolves the plan segment to the fork (lineage head)" <|
+            , test "C2b-7: the plan segment resolves to the plan origin (Session.id stable, no lineage)" <|
                 \_ ->
+                    -- 无血缘：plan 的属主会话 = origin（稳定 Session.id），
+                    -- 即使工作副本已换（fork 目录 fork-1 在 sessions 里），
+                    -- 连接段仍指向 Session.id（s1）。
                     let
                         forkSess =
                             T.emptySession "fork-1"
@@ -468,11 +470,6 @@ suite =
                                     Dict.fromList
                                         [ ( "p1", { origin = { sessionId = "s1", planIndex = 0 }, feedbacks = [], depth = 1, createdAt = 0, name = "p1", lastStatus = "", parentPlanId = Nothing } )
                                         ]
-                                , sessionLineage =
-                                    Dict.fromList
-                                        [ ( "s1", SM.empty "s1" )
-                                        , ( "fork-1", { conversationId = "s1", parentInstanceId = Just "s1" } )
-                                        ]
                             }
 
                         chain =
@@ -480,7 +477,7 @@ suite =
                     in
                     Expect.equal
                         ( List.map .kind chain, List.map .planId chain, List.map .sessionId chain )
-                        ( [ "plan" ], [ "p1" ], [ "fork-1" ] )
+                        ( [ "plan" ], [ "p1" ], [ "s1" ] )
             ]
         , describe "planFocusAboveSession (Ctrl+W close target)"
             [ test "plan window on top → close the plan, not the session below" <|

@@ -7,7 +7,6 @@ import Json.Encode as E
 import Plan.Cascade as C
 import Plan.Meta as M
 import Plan.Types as PT
-import Session.Meta as SM
 import Session.Types as T
 import Test exposing (Test, describe, test)
 
@@ -132,7 +131,7 @@ runC =
     }
 
 
-ctxFor : Dict String (List T.Message) -> { planMetas : Dict String M.PlanMeta, runs : Dict String (Maybe PT.RunState), sessions : Dict String T.SessionState, sessionLineage : Dict String SM.SessionMeta, planResumedFrom : Dict String String }
+ctxFor : Dict String (List T.Message) -> { planMetas : Dict String M.PlanMeta, runs : Dict String (Maybe PT.RunState), sessions : Dict String T.SessionState, planResumedFrom : Dict String String }
 ctxFor sessions =
     let
         sessionWith sid msgs =
@@ -152,7 +151,6 @@ ctxFor sessions =
             ]
     , runs = Dict.fromList [ ( "b", Just runB ), ( "c", Just runC ) ]
     , sessions = Dict.map sessionWith sessions
-    , sessionLineage = Dict.empty
     , planResumedFrom = Dict.empty
     }
 
@@ -376,14 +374,12 @@ tests =
                         , \s -> Expect.equal 0 (List.sum (List.map .truncateUserMessages s.levels))
                         ]
                         scope
-            , test "a RESUMED fork (head) still shows the insertion point (P39-B5 chained restart)" <|
+            , test "a resumed session (work copy) still shows the insertion point (C2b)" <|
                 \_ ->
-                    -- After a restart: the plan's origin conversation is
-                    -- s1, the head instance is the FORK s-fork (registry),
-                    -- and the fork is shown via a fresh live id. The
-                    -- impact scope must resolve head→fork→live and find
-                    -- the old [Plan Result] — otherwise the chained
-                    -- re-run silently skips the cascade (no confirmation).
+                    -- C2b：Session.id = s1（稳定身份，无血缘）；resume 后
+                    -- 窗口按 Session.id 呈现（内容 = 工作副本的截断历史）。
+                    -- impactScope 按 origin 直接定位，找到旧 [Plan Result]
+                    -- → 有插入点（级联确认仍会出现）。
                     let
                         base =
                             ctxFor sessionMap
@@ -394,22 +390,12 @@ tests =
                         liveFork =
                             let
                                 liveBase =
-                                    T.emptySession "live-fork"
+                                    T.emptySession "s1"
                             in
                             { liveBase | messages = s1msgs }
 
                         ctx =
-                            { base
-                                | sessions =
-                                    Dict.insert "live-fork" liveFork
-                                        (Dict.remove "s1" base.sessions)
-                                , planResumedFrom = Dict.fromList [ ( "live-fork", "s-fork" ) ]
-                                , sessionLineage =
-                                    Dict.fromList
-                                        [ ( "s1", SM.empty "s1" )
-                                        , ( "s-fork", { conversationId = "s1", parentInstanceId = Just "s1" } )
-                                        ]
-                            }
+                            { base | sessions = Dict.insert "s1" liveFork base.sessions }
                     in
                     Expect.equal
                         (C.impactScope ctx "a").rootHasInsertion
@@ -481,17 +467,8 @@ tests =
                         base =
                             ctxFor sessionMap
 
-                        ctx =
-                            { base
-                                | sessionLineage =
-                                    Dict.fromList
-                                        [ ( "s1", SM.empty "s1" )
-                                        , ( "s-fork", { conversationId = "s1", parentInstanceId = Just "s1" } )
-                                        ]
-                            }
-
                         scope =
-                            C.impactScope ctx "a"
+                            C.impactScope base "a"
                     in
                     Expect.equal [ "sib" ] scope.closePlanIds
             , test "closed origin session stops the walk (no feedback possible)" <|

@@ -88,7 +88,6 @@ import Set exposing (Set)
 import Task
 import Time
 import Session.Types as T
-import Session.Meta as SM
 import Session.Protocol as P
 import Plan.Types as PT
 import Plan.Runner as R
@@ -559,8 +558,9 @@ instances to the conversation.
 planRunningForSession : Model -> String -> Bool
 planRunningForSession model sid =
     let
+        -- C2b-7：无血缘——Session.id 直接匹配 meta origin。
         convId =
-            resolveEventSessionId model sid
+            sid
     in
     Dict.foldl
         (\pid meta acc ->
@@ -714,29 +714,21 @@ planWinKeyForPath path =
 
 {-| Resolve an event-carrying session id to the CONVERSATION id the
 runner matches nodes on: a fresh live id from resume_session maps back
-to its original on-disk dir id (planResumedFrom), then through the
-session lineage registry (P39/Phase B — a fork instance routes to the
-conversation its node is bound to; for root sessions the conversation
-id IS the instance id, so pre-fork behavior is unchanged). Every
-session-bearing event must be resolved through this before reaching the
-runner — a raw live id would silently miss the node binding (e.g.
-closing a resumed node session would leave its node stuck Running).
+to its original on-disk dir id (planResumedFrom). Every session-bearing
+event must be resolved through this before reaching the runner — a raw
+live id would silently miss the node binding (e.g. closing a resumed
+node session would leave its node stuck Running). C2b-7：无血缘——
+resume live 经 planResumedFrom 回到 Session.id 即可（节点绑定按会话
+id）。
 -}
 resolveEventSessionId : Model -> String -> String
 resolveEventSessionId model sid =
-    let
-        origId =
-            Dict.get sid model.planResumedFrom |> Maybe.withDefault sid
-    in
-    SM.resolveConversation model.sessionLineage origId
+    Dict.get sid model.planResumedFrom |> Maybe.withDefault sid
 
 
 {-| Find the plan window whose run owns the given session id. A resumed
 session id (fresh UUID) is resolved back to its original on-disk dir id
-via planResumedFrom; the id is then resolved through the session
-lineage registry to its CONVERSATION id (P39/Phase B — a fork instance
-routes to the conversation its node is bound to; for root sessions the
-conversation id IS the instance id, so pre-fork behavior is unchanged).
+via planResumedFrom（C2b-7：无血缘，无 conversation 解析）。
 -}
 findPlanIdBySession : Model -> String -> Maybe String
 findPlanIdBySession model sid =
@@ -1026,12 +1018,9 @@ feedbackCompletedPlan planId now model =
         case Dict.get planId model.planMetas of
             Just meta ->
                 let
-                    -- P39/Phase B: the result lives in the conversation's
-                    -- HEAD physical instance (a fork replaced the
-                    -- creation session; the registry resolves it).
+                    -- C2b：结果回到 plan origin（Session.id，稳定）。
                     headSid =
-                        SM.headInstanceFor model.sessionLineage meta.origin.sessionId
-                            |> Maybe.withDefault meta.origin.sessionId
+                        meta.origin.sessionId
 
                     liveOrigin =
                         NC.liveSessionForOrigin model.sessions model.planResumedFrom headSid
@@ -1483,9 +1472,9 @@ forkOrInsertInPlace dispatch planId model =
     case Dict.get planId model.planMetas of
         Just meta ->
             let
+                -- C2b：工作副本 = plan origin（Session.id 稳定）。
                 headSid =
-                    SM.headInstanceFor model.sessionLineage meta.origin.sessionId
-                        |> Maybe.withDefault meta.origin.sessionId
+                    meta.origin.sessionId
 
                 liveOrigin =
                     NC.liveSessionForOrigin model.sessions model.planResumedFrom headSid
@@ -1572,42 +1561,16 @@ registerForkInstance dispatch forkId model =
                 ( m2, Cmd.batch [ closeCmd, closePlanCmd ] )
 
             else
+                -- 节点 fork（C3 前保留旧行为）：关旧实例 + 清 fork 标记 +
+                -- 关子 plan 窗口。血缘写入已删（C2b-7；节点 fork 的
+                -- 身份归并在 C3 值模型下统一）。
                 let
-                    convId =
-                        resolveEventSessionId model target.forkSource
-
-                    -- The lineage parent must be the ON-DISK instance id: a
-                    -- resumed fork source carries its FRESH live id (which
-                    -- has no meta file and no registry entry), while the
-                    -- chain is keyed by on-disk ids. A live id whose resume
-                    -- map points at the real instance resolves back to it.
-                    parentInstanceId =
-                        Dict.get target.forkSource model.planResumedFrom
-                            |> Maybe.withDefault target.forkSource
-
-                    lineageMeta =
-                        { conversationId = convId
-                        , parentInstanceId = Just parentInstanceId
-                        }
-
-                    mLineage =
-                        { model
-                            | sessionLineage = Dict.insert forkId lineageMeta model.sessionLineage
-                        }
-
-                    lineageCmd =
-                        Ports.fsWriteFileText
-                            { path = forkMetaPath model.homeDir target forkId
-                            , content = E.encode 2 (SM.encode lineageMeta)
-                            , createParents = True
-                            }
-
                     ( m1, closeCmd ) =
                         if target.forkSource == "" then
-                            ( mLineage, Cmd.none )
+                            ( model, Cmd.none )
 
                         else
-                            dispatch (CloseSession target.forkSource) mLineage
+                            dispatch (CloseSession target.forkSource) model
 
                     m2 =
                         { m1
@@ -1623,28 +1586,7 @@ registerForkInstance dispatch forkId model =
                     closePlanCmd =
                         Task.perform (\_ -> PlanClose target.childPlanId) Time.now
                 in
-                ( m2, Cmd.batch [ lineageCmd, closeCmd, closePlanCmd ] )
-
-
-{-| The fork's session.meta.json path: a plan-node fork lives nested
-under <originSessionDir>/plans/<planId>/<nodeId>/<forkId>/, a plain fork
-at sessions/<forkId>/ — matching where the backend created the fork.
-originSessionId now carries the origin's REAL directory (P28 fix).
--}
-forkMetaPath : String -> PC.CascadeForkTarget -> String -> String
-forkMetaPath homeDir target forkId =
-    if target.planId == "" then
-        sessionsDir homeDir ++ "/" ++ forkId ++ "/session.meta.json"
-
-    else
-        target.originSessionId
-            ++ "/plans/"
-            ++ target.planId
-            ++ "/"
-            ++ target.nodeId
-            ++ "/"
-            ++ forkId
-            ++ "/session.meta.json"
+                ( m2, Cmd.batch [ closeCmd, closePlanCmd ] )
 
 
 {-| Reset a delegated node Succeeded → WaitingForPlan and restore its
@@ -1878,8 +1820,7 @@ truncateOrigin planId model =
         Just meta ->
             let
                 headSid =
-                    SM.headInstanceFor model.sessionLineage meta.origin.sessionId
-                        |> Maybe.withDefault meta.origin.sessionId
+                    meta.origin.sessionId
             in
             case NC.liveSessionForOrigin model.sessions model.planResumedFrom headSid of
                 Just liveSid ->

@@ -50,7 +50,6 @@ import Dict exposing (Dict)
 import App.Types exposing (..)
 import App.NodeConnection as NC
 import Plan.Meta as PM
-import Session.Meta as SM
 
 
 defaultWinW : Int
@@ -147,15 +146,10 @@ chainCtx model =
     { nodeSessions = model.planNodeSessions
     , resumedFrom = model.planResumedFrom
     , liveSessions = Dict.map (\_ _ -> ()) model.sessions
-    -- P39/Phase B: the plan's owning session is its conversation's HEAD
-    -- physical instance (a fork replaced the creation session; the
-    -- registry resolves it). Pre-lineage roots = the conversation id.
+    -- C2b-7：无血缘——plan 的属主会话就是 origin（稳定 Session.id）。
     , planOrigins =
         Dict.map
-            (\_ meta ->
-                SM.headInstanceFor model.sessionLineage meta.origin.sessionId
-                    |> Maybe.withDefault meta.origin.sessionId
-            )
+            (\_ meta -> meta.origin.sessionId)
             model.planMetas
     }
 
