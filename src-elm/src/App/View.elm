@@ -57,7 +57,10 @@ markdownOptions =
 
 view : Model -> Html Msg
 view model =
-    Html.div [ Attr.class "app" ]
+    -- Click-away close for the global menu: any click that is not
+    -- stopPropagation'd by the menu button/panel bubbles here and
+    -- closes the menu (idempotent when it is already closed).
+    Html.div [ Attr.class "app", Ev.onClick CloseGlobalMenu ]
         [ Html.node "style"
             []
             [ Html.text (".app{--content-width:" ++ String.fromInt (min 864 (max 400 model.appWidth - 40)) ++ "px}") ]
@@ -253,11 +256,15 @@ viewGlobalMenu model =
             model.showGlobalMenu
     in
     Html.div
-        [ Attr.class ("global-menu" ++ (if isOpen then " open" else ""))
-        , Ev.onMouseLeave CloseGlobalMenu
-        ]
+        [ Attr.class ("global-menu" ++ (if isOpen then " open" else "")) ]
         [ Html.div
-            [ Attr.class "global-menu-panel" ]
+            [ Attr.class "global-menu-panel"
+            -- Clicks inside the panel must not bubble to the app root's
+            -- close handler; each menu item closes the menu through its
+            -- own action, and clicking the panel background keeps it
+            -- open. The menu closes only when clicking OUTSIDE it.
+            , Ev.stopPropagationOn "click" (D.succeed ( NoOp, True ))
+            ]
             [ Html.div
                 [ Attr.class "global-menu-item"
                 , Ev.onClick CreateSession
@@ -293,61 +300,16 @@ viewGlobalMenu model =
                 [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "⚙" ]
                 , Html.text "Global config"
                 ]
-            , if List.isEmpty model.planOrder then
-                Html.text ""
-
-              else
-                Html.div [ Attr.class "global-menu-plans" ]
-                    (List.map (viewGlobalMenuPlan model) model.planOrder)
             ]
         , Html.button
             [ Attr.class "global-menu-btn"
-            , Ev.onClick ToggleGlobalMenu
             , Attr.title "Menu"
+            -- stopPropagation so the toggle never bubbles to the app
+            -- root's close handler (which would immediately re-close
+            -- a just-opened menu).
+            , Ev.stopPropagationOn "click" (D.succeed ( ToggleGlobalMenu, True ))
             ]
             [ Html.text "⚙" ]
-        ]
-
-
-{-| One entry per open plan window in the global menu: clicking brings
-that plan window to the front. Shows the plan name and run status.
--}
-viewGlobalMenuPlan : Model -> String -> Html Msg
-viewGlobalMenuPlan model planId =
-    let
-        win =
-            Dict.get planId model.planWindows
-
-        name =
-            win
-                |> Maybe.andThen (.view >> .plan)
-                |> Maybe.map .name
-                |> Maybe.withDefault planId
-
-        runLabel =
-            win
-                |> Maybe.andThen .run
-                |> Maybe.map (.status >> runStatusLabel)
-                |> Maybe.withDefault ""
-
-        isActive =
-            model.planActiveId == Just planId
-    in
-    Html.div
-        [ Attr.class
-            ("global-menu-item global-menu-sub"
-                ++ (if isActive then " global-menu-item-active" else "")
-            )
-        , Ev.onClick (PlanActivate planId)
-        ]
-        [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "🕸" ]
-        , Html.text
-            (if runLabel == "" then
-                name
-
-             else
-                name ++ " — " ++ runLabel
-            )
         ]
 
 
