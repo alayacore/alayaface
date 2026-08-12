@@ -44,10 +44,15 @@
       //   kind "plan" → plan window edge → the session's [Plan: …]
       //                  button when visible, else the session edge.
       // z-index per segment (from Elm's window z values, bounded by the
-      // rebase): node curves at their plan window's z (above the plan,
-      // below the session), plan curves at the top of their two
-      // participants — so no curve is buried and none can ever reach
-      // the modal overlays (z 1000000 lives OUTSIDE the canvas).
+      // rebase): node curves at their plan window's z (the endpoint sits
+      // on a node card INSIDE the plan, so the curve must paint above
+      // it); plan curves at the BOTTOM of their two participants — a
+      // window dragged over the curve covers it (matching the natural
+      // stacking: the line is between windows, not on top of them),
+      // while the curve stays visible in the gap between windows and
+      // its endpoints stay visible on the lower participant. No curve
+      // can ever reach the modal overlays (z 1000000 lives OUTSIDE the
+      // canvas).
       var payload = { segments: [], positions: [], canvasScale: 1 };
       var segSvgs = [];   // {svg, path, seg} — cached per chain index
       var canvasEl = null;
@@ -247,7 +252,9 @@
 
         // Plan → owning session. Anchor the session end on its [Plan:
         // <planId>] button when visible, else the session edge nearest
-        // the plan window.
+        // the plan window. z = the LOWER participant: whichever window
+        // is dragged on top covers the curve (user expectation), while
+        // the line remains visible between the windows.
         var scx = sRect.x + sRect.w / 2;
         var scy = sRect.y + sRect.h / 2;
         var from2 = edgeAnchor(pRect, scx, scy);
@@ -255,7 +262,7 @@
         var to = btn
           ? pointInWindow(sRect, sPanel, btn, scaleNow)
           : edgeAnchor(sRect, pRect.x + pRect.w / 2, pRect.y + pRect.h / 2);
-        return { from: from2, to: to, z: Math.max(pRect.z, sRect.z) };
+        return { from: from2, to: to, z: Math.min(pRect.z, sRect.z) };
       }
 
       function drawConnections() {
