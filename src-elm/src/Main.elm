@@ -112,6 +112,10 @@ init _ =
       , freezeQueue = []
       , sessionWorkCopies = Dict.empty
       , sessionResumedLives = Set.empty
+      , blockCache = Dict.empty
+      , versionListFor = Nothing
+      , versionViewFor = Nothing
+      , versionViewSession = Nothing
       }
     , Cmd.batch
         [ -- Reclaim orphaned sessions from a previous page (refresh):

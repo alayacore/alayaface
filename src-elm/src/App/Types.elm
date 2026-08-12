@@ -262,6 +262,13 @@ type alias Model =
     -- 无磁盘目录）。persistableWorkCopy 用它区分"可持久化工作副本目录"
     -- 与"临时 live"（live 不写 refs.workCopy）。
     , sessionResumedLives : Set String
+    -- C4：消息块缓存（hash → 消息列表，版本浏览只读渲染用）。
+    , blockCache : Dict String (List T.Message)
+    -- C4：版本浏览状态——打开版本列表的 Session.id；正在查看的版本
+    -- hash（+ 其 Session.id，标题用）。
+    , versionListFor : Maybe String
+    , versionViewFor : Maybe String
+    , versionViewSession : Maybe String
     }
 
 
@@ -453,6 +460,11 @@ type Msg
     -- Adopts the fork as the node's session (rebind), rewrites the child
     -- meta origin, closes the original session and continues the chain.
     | PlanCascadeForkResult E.Value
+    -- C4：版本浏览（只读查看历史版本消息；D8 不做物化）。
+    | OpenVersionList String
+    | CloseVersionList
+    | ViewVersion String String
+    | CloseVersionView
       -- Plan runner
     | PlanRunStart
     | PlanRunStartAt Int

@@ -1535,6 +1535,43 @@ body {
 .sel-page-item-btn-deny { background: #dc2626; color: white; }
 .sel-page-item-btn-deny:hover:not(:disabled) { background: rgba(220, 38, 38, 0.15); }
 
+/* C4 version browsing (read-only history snapshots) */
+.version-body {
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.version-msg {
+  display: flex;
+  gap: 10px;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+.version-msg-role {
+  flex-shrink: 0;
+  min-width: 64px;
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  opacity: 0.7;
+  padding-top: 2px;
+}
+.version-msg-content {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.version-plan-line {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border: 1px solid rgba(128, 128, 128, 0.3);
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
 .sel-page-actions {
   display: flex;
   justify-content: center;

@@ -348,6 +348,47 @@ try {
     'V1 world: A completed, got: ' + runStatus(v1.planViews[aKey]));
   console.log('PASS: version isolation on disk — V0 (A unexecuted, B completed) vs V1 (A completed)');
 
+  // ── 10. C4 version browsing UI ────────────────────────────────────
+  // Session Manager → Versions (n) → View v0 → read-only message list.
+  await page.click('.global-menu-btn');
+  await waitFor('.global-menu-panel');
+  assert(await clickByText('.global-menu-item', 'Session Manager'), 'Session Manager menu item (versions)');
+  await page.waitForSelector('.sel-page-item', { timeout: 10000 });
+  const openedVersions = await page.evaluate(() => {
+    const items = [...document.querySelectorAll('.sel-page-item')];
+    for (const it of items) {
+      const btn = [...it.querySelectorAll('button')].find(b => (b.textContent || '').startsWith('Versions ('));
+      if (btn) { btn.click(); return btn.textContent; }
+    }
+    return null;
+  });
+  assert(openedVersions && parseInt(openedVersions.match(/\d+/)[0], 10) >= 2,
+    'Versions button shows the version count, got: ' + openedVersions);
+  await page.waitForFunction(() => {
+    return [...document.querySelectorAll('.sel-page-item-name')].some(e => /^v\d+$/.test((e.textContent || '').trim()));
+  }, { timeout: 10000 });
+  const versionNames = await page.$$eval('.sel-page-item-name', els => els.map(e => e.textContent || '').filter(t => /^v\d+$/.test(t.trim())));
+  assert(versionNames.length >= 2, 'version list shows v0/v1/…, got: ' + JSON.stringify(versionNames));
+  // View the OLDEST version (v0): its messages must show the ORIGINAL
+  // world (A + B + B's result), and the plan lines A=not-started etc.
+  await page.evaluate(() => {
+    const items = [...document.querySelectorAll('.sel-page-item')];
+    const it = items.find(x => (x.querySelector('.sel-page-item-name')?.textContent || '').trim() === 'v0');
+    const btn = it && [...it.querySelectorAll('button')].find(b => b.textContent.trim() === 'View');
+    if (btn) btn.click();
+  });
+  await page.waitForFunction(() => {
+    return document.querySelectorAll('.version-msg').length > 0 ||
+           (document.body.innerText || '').includes('Loading version');
+  }, { timeout: 10000 });
+  await sleep(800);
+  const vBody = await page.$$eval('.version-msg-content', els => els.map(e => e.textContent || ''));
+  assert(vBody.some(t => t.includes('Create a plan Alpha')), 'v0 shows the ORIGINAL world messages, got: ' + JSON.stringify(vBody.slice(0, 3)));
+  const vPlanLines = await page.$$eval('.version-plan-line', els => els.map(e => e.textContent || ''));
+  assert(vPlanLines.some(t => t.includes('e2e-demo-beta') && t.includes('completed')),
+    'v0 plan line shows B completed, got: ' + JSON.stringify(vPlanLines));
+  console.log('PASS: version browsing UI — v0 read-only view shows the old world');
+
   console.log('\nALL PASS ✅');
   console.log('screenshots:');
   for (const f of readdirSync(artifacts)) console.log('  ' + path.join(artifacts, f));

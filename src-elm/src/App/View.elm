@@ -87,6 +87,7 @@ view model =
         , viewContextMenu model
         , viewZoomIndicator model
         , viewSessionManagerOverlay model
+        , viewVersionOverlays model
         , viewPresetManagerOverlay model
         , viewDefaultModelsEditorOverlay model
         , viewMcpEditorOverlay model
@@ -438,6 +439,12 @@ viewSessionManagerOverlay model =
                                     ]
                                     [ Html.text "Resume" ]
                                 , Html.button
+                                    [ Attr.class "sel-page-item-btn"
+                                    , Ev.onClick (OpenVersionList dir.id)
+                                    , Attr.title "Browse this session's versions (read-only history)"
+                                    ]
+                                    [ Html.text ("Versions (" ++ String.fromInt (List.length (Maybe.withDefault [] (Maybe.map .versions (Dict.get dir.id model.sessionRefs)))) ++ ")") ]
+                                , Html.button
                                     [ Attr.class "sel-page-item-btn sel-page-item-btn-deny"
                                     , Ev.onClick (DeleteSession dir.id)
                                     , Attr.title "Delete this session's files on disk"
@@ -450,6 +457,140 @@ viewSessionManagerOverlay model =
             ]
     else
         Html.text ""
+
+
+
+-- ─── C4 version browsing (read-only history) ───────────────────────
+
+{-| C4 版本浏览覆盖层：版本列表（会话管理器入口）或版本详情（只读
+消息 + plan 状态）。D8：旧版本只读，不做物化。
+-}
+viewVersionOverlays : Model -> Html Msg
+viewVersionOverlays model =
+    case model.versionViewFor of
+        Just hash ->
+            viewVersionDetail model hash
+
+        Nothing ->
+            case model.versionListFor of
+                Just sid ->
+                    viewVersionList model sid
+
+                Nothing ->
+                    Html.text ""
+
+
+viewVersionList : Model -> String -> Html Msg
+viewVersionList model sid =
+    let
+        versions =
+            Dict.get sid model.sessionRefs
+                |> Maybe.map .versions
+                |> Maybe.withDefault []
+
+        headHash =
+            Dict.get sid model.sessionRefs |> Maybe.map .head
+    in
+    viewOverlay CloseVersionList
+        [ Html.div [ Attr.class "sel-page" ]
+            [ Html.div [ Attr.class "sel-page-title" ] [ Html.text ("Versions · " ++ String.left 8 sid) ]
+            , Html.div [ Attr.class "sel-page-status" ]
+                [ Html.text "Read-only snapshots of this session's history (head = current world)." ]
+            , Html.div [ Attr.class "sel-page-list" ]
+                (List.indexedMap
+                    (\i h ->
+                        let
+                            isHead =
+                                headHash == Just h
+                        in
+                        Html.div [ Attr.class "sel-page-item" ]
+                            [ Html.div [ Attr.class "sel-page-item-main" ]
+                                [ Html.span [ Attr.class "sel-page-item-name" ] [ Html.text ("v" ++ String.fromInt i) ]
+                                , Html.span [ Attr.class "sel-page-item-sub" ]
+                                    [ Html.text (String.left 12 h ++ (if isHead then " · head" else "")) ]
+                                ]
+                            , Html.button
+                                [ Attr.class "sel-page-item-btn sel-page-item-btn-allow"
+                                , Ev.onClick (ViewVersion sid h)
+                                , Attr.title "View this version's messages (read-only)"
+                                ]
+                                [ Html.text "View" ]
+                            ]
+                    )
+                    versions
+                )
+            ]
+        ]
+
+
+viewVersionDetail : Model -> String -> Html Msg
+viewVersionDetail model hash =
+    let
+        sid =
+            Maybe.withDefault "" model.versionViewSession
+
+        version =
+            Dict.get hash model.versionCache
+
+        msgs =
+            case version of
+                Just v ->
+                    List.concatMap
+                        (\b -> Dict.get b model.blockCache |> Maybe.withDefault [])
+                        v.blocks
+
+                Nothing ->
+                    []
+
+        planLines =
+            case version of
+                Just v ->
+                    Dict.foldl
+                        (\pid maybeRun acc ->
+                            let
+                                status =
+                                    case maybeRun of
+                                        Just runHash ->
+                                            Dict.get runHash model.runSummaries
+                                                |> Maybe.map .status
+                                                |> Maybe.withDefault "?"
+
+                                        Nothing ->
+                                            "not-started"
+                            in
+                            Html.div [ Attr.class "version-plan-line" ]
+                                [ Html.text ("[Plan: " ++ String.left 16 pid ++ "…] " ++ status) ]
+                                :: acc
+                        )
+                        []
+                        v.planViews
+
+                Nothing ->
+                    []
+    in
+    viewOverlay CloseVersionView
+        [ Html.div [ Attr.class "sel-page" ]
+            [ Html.div [ Attr.class "sel-page-title" ]
+                [ Html.text ("Version · " ++ String.left 8 sid ++ " · " ++ String.left 12 hash) ]
+            , Html.div [ Attr.class "sel-page-status" ]
+                [ Html.text "Read-only snapshot — changes here never touch the live session." ]
+            , case version of
+                Just _ ->
+                    Html.div [ Attr.class "version-body" ]
+                        (List.map viewVersionMsg msgs ++ planLines)
+
+                Nothing ->
+                    Html.div [ Attr.class "sel-page-status" ] [ Html.text "Loading version…" ]
+            ]
+        ]
+
+
+viewVersionMsg : T.Message -> Html Msg
+viewVersionMsg m =
+    Html.div [ Attr.class "version-msg" ]
+        [ Html.span [ Attr.class "version-msg-role" ] [ Html.text (T.roleToString m.role) ]
+        , Html.span [ Attr.class "version-msg-content" ] [ Html.text m.content ]
+        ]
 
 
 -- PLAN MODE VIEWS

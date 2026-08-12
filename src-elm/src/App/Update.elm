@@ -2593,12 +2593,35 @@ update msg model =
             case D.decodeValue objectGetResultDecoder raw of
                 Ok r ->
                     if r.ok then
+                        -- C4：reqId = hash；先试 Version，再试 Block（消息
+                        -- 块）——版本浏览按需加载两种对象。
                         case D.decodeString AV.decodeVersion r.content of
                             Ok v ->
-                                ( { model | versionCache = Dict.insert r.reqId v model.versionCache }, Cmd.none )
+                                let
+                                    m1 =
+                                        { model | versionCache = Dict.insert r.reqId v model.versionCache }
+
+                                    -- C4：正在查看该版本 → 自动补取缺失的消息块。
+                                    blockCmd =
+                                        if model.versionViewFor == Just r.reqId then
+                                            let
+                                                missing =
+                                                    List.filter (\b -> not (Dict.member b m1.blockCache)) v.blocks
+                                            in
+                                            Cmd.batch (List.map (\b -> Ports.objectGet { reqId = b, hash = b }) missing)
+
+                                        else
+                                            Cmd.none
+                                in
+                                ( m1, blockCmd )
 
                             Err _ ->
-                                ( model, Cmd.none )
+                                case D.decodeString AV.decodeBlock r.content of
+                                    Ok b ->
+                                        ( { model | blockCache = Dict.insert r.reqId b.messages model.blockCache }, Cmd.none )
+
+                                    Err _ ->
+                                        ( model, Cmd.none )
 
                     else
                         ( model, Cmd.none )
@@ -2800,6 +2823,49 @@ update msg model =
             , focusInput model
             )
 
+        -- C4：版本浏览（只读查看历史版本；D8 不做物化）。
+        OpenVersionList sid ->
+            ( { model | versionListFor = Just sid, showSessionManager = False }, Cmd.none )
+
+        CloseVersionList ->
+            ( { model | versionListFor = Nothing }, Cmd.none )
+
+        ViewVersion sid hash ->
+            let
+                m1 =
+                    { model
+                        | versionListFor = Nothing
+                        , versionViewFor = Just hash
+                        , versionViewSession = Just sid
+                    }
+
+                ( m2, blockGets ) =
+                    case Dict.get hash m1.versionCache of
+                        Just v ->
+                            let
+                                missing =
+                                    List.filter (\b -> not (Dict.member b m1.blockCache)) v.blocks
+                            in
+                            ( m1, Cmd.batch (List.map (\b -> Ports.objectGet { reqId = b, hash = b }) missing) )
+
+                        Nothing ->
+                            -- 版本对象未加载：先取版本，块由
+                            -- ObjectGetResult 版本分支自动补取。
+                            ( m1, Cmd.none )
+            in
+            ( m2
+            , Cmd.batch
+                [ if Dict.member hash model.versionCache then
+                    Cmd.none
+
+                  else
+                    Ports.objectGet { reqId = hash, hash = hash }
+                , blockGets
+                ]
+            )
+
+        CloseVersionView ->
+            ( { model | versionViewFor = Nothing, versionViewSession = Nothing }, Cmd.none )
 
         PlanOpenFromMessage sid planIndex ->
             -- Manual open of a detected-but-suppressed plan message: find

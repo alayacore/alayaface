@@ -94,4 +94,8 @@ initModelWithSession =
     , freezeQueue = []
     , sessionWorkCopies = Dict.empty
     , sessionResumedLives = Set.empty
+    , blockCache = Dict.empty
+    , versionListFor = Nothing
+    , versionViewFor = Nothing
+    , versionViewSession = Nothing
     }
