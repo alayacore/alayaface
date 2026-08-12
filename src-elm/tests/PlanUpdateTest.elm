@@ -185,7 +185,7 @@ suite =
 
                         [] ->
                             Expect.fail "no message injected"
-            , test "messageBoundToPlan matches the on-disk origin id" <|
+            , test "messageBoundToPlan binds by the stable Session.id (plain session)" <|
                 \_ ->
                     let
                         meta =
@@ -203,8 +203,11 @@ suite =
                     in
                     Expect.equal ( PU.messageBoundToPlan m "s1" 0, PU.messageBoundToPlan m "s1" 1, PU.messageBoundToPlan m "other" 0 )
                         ( True, False, False )
-            , test "messageBoundToPlan resolves a resumed live id" <|
+            , test "messageBoundToPlan binds a resumed session by its stable Session.id (C2b)" <|
                 \_ ->
+                    -- resume 后窗口 key 仍是 Session.id（"s1"），工作副本是 live1
+                    -- （sessionWorkCopies[s1] = live1）。绑定按 Session.id 直接匹配
+                    -- meta origin——不再需要 planResumedFrom 解析。
                     let
                         meta =
                             { origin = { sessionId = "s1", planIndex = 2 }
@@ -219,20 +222,17 @@ suite =
                         m =
                             { initModelWithSession
                                 | planMetas = Dict.insert "p1" meta Dict.empty
-                                , planResumedFrom = Dict.insert "live1" "s1" Dict.empty
+                                , sessionWorkCopies = Dict.insert "s1" "live1" Dict.empty
                             }
                     in
-                    Expect.equal ( PU.messageBoundToPlan m "live1" 2 ) True
-            , test "messageBoundToPlan follows a P38 fork through the lineage registry (same rule as the status bar)" <|
+                    Expect.equal ( PU.messageBoundToPlan m "s1" 2 ) True
+            , test "messageBoundToPlan binds a forked session by its stable Session.id (work copy differs)" <|
                 \_ ->
+                    -- 重跑 fork 后窗口 key 仍是 Session.id（plan origin "s1"），
+                    -- 工作副本换为 s-fork（sessionWorkCopies[s1] = s-fork）。
+                    -- 绑定直接命中 meta origin——不再需要血缘 registry；工作副本
+                    -- core id（"s-fork"）本身不再绑定任何 plan。
                     let
-                        -- The plan was created in s1; a re-run cascade
-                        -- forked it to s-fork (truncated history). The
-                        -- replayed plan message in s-fork must NOT
-                        -- auto-create a duplicate — and the status-bar
-                        -- query must bind it to the same plan (one rule,
-                        -- Plan.Meta.planMetaForSessionIndex; the fork id
-                        -- resolves through the lineage registry).
                         meta =
                             { origin = { sessionId = "s1", planIndex = 1 }
                             , feedbacks = []
@@ -246,21 +246,15 @@ suite =
                         m =
                             { initModelWithSession
                                 | planMetas = Dict.insert "p1" meta Dict.empty
-                                , sessions =
-                                    Dict.insert "s-fork" (T.emptySession "s-fork") initModelWithSession.sessions
-                                , sessionLineage =
-                                    Dict.fromList
-                                        [ ( "s1", SM.empty "s1" )
-                                        , ( "s-fork", { conversationId = "s1", parentInstanceId = Just "s1" } )
-                                        ]
+                                , sessionWorkCopies = Dict.insert "s1" "s-fork" Dict.empty
                             }
                     in
                     Expect.equal
-                        ( PU.messageBoundToPlan m "s-fork" 1
-                        , PU.messageBoundToPlan m "s1" 1
+                        ( PU.messageBoundToPlan m "s1" 1
+                        , PU.messageBoundToPlan m "s-fork" 1
                         , PU.messageBoundToPlan m "other" 1
                         )
-                        ( True, True, False )
+                        ( True, False, False )
             , test "findResumedLive maps an on-disk id back to a live session" <|
                 \_ ->
                     let
@@ -489,8 +483,10 @@ suite =
                         , \_ -> Expect.equal (PU.versionPlanStatus m "s1" "unknown") Nothing
                         ]
                         ()
-            , test "versionPlanStatus: a resumed live id resolves to the on-disk session (C)" <|
+            , test "versionPlanStatus reads the version of the stable Session.id (C2b)" <|
                 \_ ->
+                    -- resume 后窗口 key 仍是 Session.id（"s1"）；工作副本 live-s1
+                    -- 只是边界细节。版本查询直接按 Session.id。
                     let
                         v0 =
                             { blocks = []
@@ -500,8 +496,7 @@ suite =
 
                         m =
                             { initModelWithSession
-                                | planResumedFrom = Dict.insert "live-s1" "s1" Dict.empty
-                                , sessionRefs =
+                                | sessionRefs =
                                     Dict.insert "s1"
                                         (AV.SessionRefs "s1" "v0" [ "v0" ])
                                         Dict.empty
@@ -509,19 +504,18 @@ suite =
                                 , runSummaries = Dict.insert "run-a" (AV.RunSummary "r-a" "completed" 1 (Just 2) "## a") Dict.empty
                             }
                     in
-                    Expect.equal (PU.versionPlanStatus m "live-s1" "pA") (Just "completed")
+                    Expect.equal (PU.versionPlanStatus m "s1" "pA") (Just "completed")
             , test "no refs yet → Nothing (falls back to the current global status)" <|
                 \_ ->
                     PU.versionPlanStatus initModelWithSession "s1" "pA"
                         |> Expect.equal Nothing
-            , test "resumed fork window binds through planResumedFrom → lineage registry → conversation origin" <|
+            , test "fork window status bar binds by the stable Session.id (C2b)" <|
                 \_ ->
+                    -- 用户重跑 fork 后查看的窗口 key = Session.id（plan origin
+                    -- "s1"），工作副本是 s-fork（sessionWorkCopies[s1] = s-fork）。
+                    -- 状态栏按 Session.id 直接命中 meta origin——不再需要
+                    -- planResumedFrom → 血缘 registry 的解析链。
                     let
-                        -- The plan was created in s1 and forked to s-fork;
-                        -- the user views the fork through a RESUMED window
-                        -- (fresh live id). The status bar binds: live →
-                        -- s-fork (planResumedFrom) → s1 (lineage registry)
-                        -- → meta origin.
                         meta =
                             { origin = { sessionId = "s1", planIndex = 1 }
                             , feedbacks = []
@@ -535,15 +529,10 @@ suite =
                         m =
                             { initModelWithSession
                                 | planMetas = Dict.insert "p1" meta Dict.empty
-                                , planResumedFrom = Dict.insert "live-fork" "s-fork" Dict.empty
-                                , sessionLineage =
-                                    Dict.fromList
-                                        [ ( "s1", SM.empty "s1" )
-                                        , ( "s-fork", { conversationId = "s1", parentInstanceId = Just "s1" } )
-                                        ]
+                                , sessionWorkCopies = Dict.insert "s1" "s-fork" Dict.empty
                             }
                     in
-                    PU.planMetaForMessage m "live-fork" 1
+                    PU.planMetaForMessage m "s1" 1
                         |> Maybe.map Tuple.first
                         |> Expect.equal (Just "p1")
             , test "no binding → Nothing (status bar renders the Open plan fallback)" <|

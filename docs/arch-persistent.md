@@ -301,8 +301,8 @@ Plan 的 Run.nodes[nodeId].session = 节点会话的 VersionRef（引用）
 
 ### 实施步骤（每步可验证、可提交）
 
-1. **C2b-1 基础设施**：`workCopyId`/`sessionIdOfWorkCopy`（已有，stash）；sessions key 语义文档化；单测（正向/反向映射、无映射回退）。
-2. **C2b-2 绑定简化**：删 `resolveConversation`（planMetaForMessage 直接按 Session.id）——单测（普通/fork/resume 场景绑定）。
+1. **C2b-1 基础设施** ✅：`workCopyId`/`sessionIdOfWorkCopy`（Plan/Update.elm 导出）+ Model.sessionWorkCopies；单测（正向/反向映射、无映射回退、多次 fork 反查）。提交 `cb19499`（三远程）。
+2. **C2b-2 绑定简化** ✅：`messageBoundToPlan`/`planMetaForMessage`/`versionPlanStatus` 删 `resolveConversation` + `planResumedFrom` 解析，直接按 Session.id 匹配——单测（普通/resume/fork 场景绑定：工作副本只经 sessionWorkCopies，绑定不看它）。
 3. **C2b-3 fork 分支修正**：SessionCreated fork 分支用 `meta.origin.sessionId`（Session.id）作窗口 key + workCopies；`registerForkInstance` 只关旧工作副本（裸 closeSession）+ 清 planCascadeFork；删 forkInheritPos；级联完成固化 V₁；**fork 后删旧工作副本目录**。
 4. **C2b-4 帧路由 + 命令映射**：coreId → Session.id；命令 Session.id → coreId。
 5. **C2b-5 resume 归属**：resume 分支 workCopies[Session.id] = liveId（窗口 key 保持 Session.id）；`session.refs.json` 加 workCopy 字段。

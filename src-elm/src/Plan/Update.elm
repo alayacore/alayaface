@@ -520,47 +520,30 @@ may differ across cores/restores, while the order of plan messages is
 stable. Replay guard: a replayed historical message must not create a
 duplicate plan.
 
-The match itself (creation origin OR the P38 fork parent session) lives
-in Plan.Meta.planMetaForSessionIndex — the same rule the status bar
-uses, so a fork session can never "know" a plan for duplicate-suppression
-while showing the generic "Open plan" fallback. P39/Phase B: the fork
-session's physical id is resolved through the lineage registry to its
-CONVERSATION id first (the node binding and meta origin are both
-conversation-keyed), so the fork never needs a rewritten binding.
+The match itself lives in Plan.Meta.planMetaForSessionIndex — the same
+rule the status bar uses. C2b (§8.1, I-F): `sid` is the stable
+Session.id (windows and frames are keyed by it; work copies are a
+boundary detail), so the match is a direct `origin.sessionId == sid` —
+no lineage registry, no resume map. A fork's replayed message and a
+resumed window pass the same Session.id, so they bind to the same plan
+without any resolution step.
 -}
 messageBoundToPlan : Model -> String -> Int -> Bool
 messageBoundToPlan model sid planIndex =
-    let
-        -- meta origin records the session's ON-DISK id; a resumed session
-        -- renders with a fresh live id — resolve before comparing.
-        onDiskId =
-            Dict.get sid model.planResumedFrom |> Maybe.withDefault sid
-
-        convId =
-            SM.resolveConversation model.sessionLineage onDiskId
-    in
-    PM.planMetaForSessionIndex model.planMetas convId planIndex /= Nothing
+    PM.planMetaForSessionIndex model.planMetas sid planIndex /= Nothing
 
 
 {-| The plan whose meta binds (sessionId, planIndex) — the status-bar
 lookup for a plan message (the render-only counterpart of
-`messageBoundToPlan`, sharing the same rule). Resolves a resumed
-session's fresh live id back to its on-disk id, then through the
-lineage registry to its CONVERSATION id (a P38 fork instance resolves
-to the conversation its meta origin is keyed by), before matching.
+`messageBoundToPlan`, sharing the same rule). C2b: `sid` is the stable
+Session.id, matched directly against the meta origin — no lineage
+registry, no resume map (fork/resume windows keep their Session.id).
 Kept here (not in the View) so the binding rule is one source of truth
-and the resume+fork combination is unit-testable.
+and the fork/resume scenarios are unit-testable.
 -}
 planMetaForMessage : Model -> String -> Int -> Maybe ( String, PM.PlanMeta )
 planMetaForMessage model sid planIndex =
-    let
-        onDiskId =
-            Dict.get sid model.planResumedFrom |> Maybe.withDefault sid
-
-        convId =
-            SM.resolveConversation model.sessionLineage onDiskId
-    in
-    PM.planMetaForSessionIndex model.planMetas convId planIndex
+    PM.planMetaForSessionIndex model.planMetas sid planIndex
 
 
 {-| Whether a plan whose origin CONVERSATION is the given session is
@@ -1217,16 +1200,12 @@ sessionIdOfWorkCopy model coreId =
 {-| C 架构：从会话版本（该会话 head 的 planViews）解析 plan 的显示
 状态——同一 plan 在不同版本里状态不同（老会话看到旧状态）。返回
 run status 字符串（PT.runStatusToString 形式）；Nothing = 该会话尚
-无版本记录（回退现有全局状态逻辑）。`sid` 可以是 live id（经
-planResumedFrom 解析到 on-disk id 查 refs）。
+无版本记录（回退现有全局状态逻辑）。C2b：`sid` 是稳定的 Session.id
+（窗口/帧按它路由），直接查 refs——不再经 planResumedFrom。
 -}
 versionPlanStatus : Model -> String -> String -> Maybe String
 versionPlanStatus model sid planId =
-    let
-        onDiskId =
-            Dict.get sid model.planResumedFrom |> Maybe.withDefault sid
-    in
-    case Dict.get onDiskId model.sessionRefs of
+    case Dict.get sid model.sessionRefs of
         Just refs ->
             case Dict.get refs.head model.versionCache of
                 Just version ->
