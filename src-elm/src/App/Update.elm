@@ -608,6 +608,12 @@ createSessionWindow id model =
         isCascadeFork =
             model.planCascadeFork /= Nothing
 
+        -- C2b（§8.1）：普通顶层创建（非 runner / resume / 节点 fork）——
+        -- 初始化 Session 根引用（session.refs.json，空 head）：有 refs =
+        -- Session 根，是会话管理器显示与重启恢复的依据。
+        isPlainRootCreate =
+            model.planResumeFrom == Nothing && model.planCascadeFork == Nothing && not isRunnerCreate
+
         takeFocus =
             not isRunnerCreate
                 && (isCascadeFork || model.pendingSwitchOnCreate || model.activeId == Nothing)
@@ -631,6 +637,13 @@ createSessionWindow id model =
                 , sessionOrder = model.sessionOrder ++ [ id ]
                 , sessionNums = Dict.insert id model.nextSessionNum model.sessionNums
                 , nextSessionNum = model.nextSessionNum + 1
+                -- C2b：普通顶层创建登记空 refs（Session 根；管理器列出依据）
+                , sessionRefs =
+                    if isPlainRootCreate then
+                        Dict.insert id (AV.SessionRefs id "" [] Nothing) model.sessionRefs
+
+                    else
+                        model.sessionRefs
                 -- M3/D4: seed the incremental plan counter from
                 -- the session's final messages (buffered replay
                 -- included). O(n) ONCE at creation; per-frame
@@ -866,12 +879,21 @@ createSessionWindow id model =
         -- genuinely NEW top-level instance (sessions/<id>/
         -- session.meta.json). Resume / runner / fork instances
         -- register through their own paths.
-        , if model.planResumeFrom == Nothing && model.planCascadeFork == Nothing && not isRunnerCreate then
-            Ports.fsWriteFileText
-                { path = sessionsDir model.homeDir ++ "/" ++ id ++ "/session.meta.json"
-                , content = E.encode 2 (SM.encode (SM.empty id))
-                , createParents = True
-                }
+        -- C2b：同时初始化 Session 根引用（session.refs.json，空 head）——
+        -- 有 refs = Session 根（管理器显示 / 重启恢复依据）。
+        , if isPlainRootCreate then
+            Cmd.batch
+                [ Ports.fsWriteFileText
+                    { path = sessionsDir model.homeDir ++ "/" ++ id ++ "/session.meta.json"
+                    , content = E.encode 2 (SM.encode (SM.empty id))
+                    , createParents = True
+                    }
+                , Ports.fsWriteFileText
+                    { path = sessionsDir model.homeDir ++ "/" ++ id ++ "/session.refs.json"
+                    , content = AV.refsContent (AV.SessionRefs id "" [] Nothing)
+                    , createParents = True
+                    }
+                ]
 
           else
             Cmd.none
@@ -3720,13 +3742,25 @@ update msg model =
             -- history don't auto-create windows. planResumeFrom lets
             -- SessionCreated move that marker old→new (the replayed
             -- frames carry the fresh resumed id).
+            -- C2b（§8.1）：恢复当前工作副本目录（refs.workCopy = fork 出的
+            -- 目录 / resume 后仍是它）；workCopy 目录缺失（失效/被删）→
+            -- 回退 Session 根目录（UI 提示由管理器状态行承载）。
+            let
+                resumeDir =
+                    case Dict.get id model.sessionRefs of
+                        Just refs ->
+                            Maybe.withDefault id refs.workCopy
+
+                        Nothing ->
+                            id
+            in
             ( { model
                 | pendingSwitchOnCreate = True
                 , sessionManagerError = Nothing
                 , planResumeFrom = Just id
                 , planReplaySessions = Set.insert id model.planReplaySessions
               }
-            , Ports.resumeSession { sessionId = id, workDir = Nothing, planId = Nothing, nodeId = Nothing, originSessionId = Nothing }
+            , Ports.resumeSession { sessionId = resumeDir, workDir = Nothing, planId = Nothing, nodeId = Nothing, originSessionId = Nothing }
             )
 
         DeleteSession id ->
@@ -3764,11 +3798,35 @@ update msg model =
                         ( m2, Cmd.none )
                         sessions
             in
-            ( { m3 | closeSet = Set.empty, sessionManagerError = Nothing }
+            ( { m3
+                | closeSet = Set.empty
+                , sessionManagerError = Nothing
+                -- C2b：删除 Session 引用与工作副本映射（进程已由
+                -- CloseSession 关闭）。
+                , sessionRefs = Dict.remove id m3.sessionRefs
+                , sessionWorkCopies = Dict.remove id m3.sessionWorkCopies
+              }
             , Cmd.batch
                 [ planCmds
                 , sessionCmds
                 , Ports.deleteSessionDir { sessionId = id, planId = Nothing, nodeId = Nothing, originSessionId = Nothing }
+                -- C2b（§8.1）：工作副本目录（fork 出的）随 Session 一起删，
+                -- 不留孤儿目录。
+                , case Dict.get id m3.sessionRefs of
+                    Just refs ->
+                        case refs.workCopy of
+                            Just wc ->
+                                if wc == id then
+                                    Cmd.none
+
+                                else
+                                    Ports.deleteSessionDir { sessionId = wc, planId = Nothing, nodeId = Nothing, originSessionId = Nothing }
+
+                            Nothing ->
+                                Cmd.none
+
+                    Nothing ->
+                        Cmd.none
                 , Ports.setConnectionChain (chainPayload m3 m3.connectionChain)
                 ]
             )

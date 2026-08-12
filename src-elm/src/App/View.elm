@@ -377,8 +377,12 @@ viewSessionManagerOverlay : Model -> Html Msg
 viewSessionManagerOverlay model =
     if model.showSessionManager then
         let
+            -- C2b（§8.1）：会话管理器只列 Session 根——有 refs 记录的目录
+            -- （普通创建 / 重启扫描都会登记）。工作副本目录
+            -- （sessions/<forkId>/）不是会话身份，不显示。
             dirs =
                 List.filterMap decodeSessionDir model.sessionDirs
+                    |> List.filter (\d -> Dict.member d.id model.sessionRefs)
         in
         viewOverlay CloseSessionManager
             [ Html.div [ Attr.class "sel-page" ]
