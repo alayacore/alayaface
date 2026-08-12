@@ -13,8 +13,9 @@ module App.NodeConnection exposing
 {-| Node ↔ session connection lookup (pure, testable).
 
 A session window "belongs to" a plan node when its id appears in
-`planNodeSessions` (sid → "planId/nodeId" badge label). C3/C5：窗口 key
-= Session.id（resume/fork 不换身份），直接按 id 查绑定。
+`planNodeSessions` (sid → "planId/nodeId" badge label). Under C3/C5 the
+window key IS Session.id (resume/fork keep the identity), so lookups go
+straight by id.
 
 The reverse direction (plan window → its owning session) uses the plan's
 meta.json origin: the ORIGINAL session id that auto-created the plan.
@@ -85,8 +86,9 @@ planSegment planId sid =
     { kind = "plan", sessionId = sid, planId = planId, nodeId = Nothing }
 
 
-{-| Resolve a session id to the window currently showing it: C2b/C3 下
-窗口按 Session.id key——会话开着 → Just 自身；否则 Nothing。
+{-| Resolve a session id to the window currently showing it: under
+C2b/C3 windows are keyed by Session.id — open session → Just itself;
+otherwise Nothing.
 -}
 liveSessionForOrigin : Dict String a -> String -> Maybe String
 liveSessionForOrigin liveSessions origId =
@@ -97,8 +99,8 @@ liveSessionForOrigin liveSessions origId =
         Nothing
 
 
-{-| The "planId/nodeId" badge label for a session id（窗口按 Session.id
-key，直接查绑定）。
+{-| The "planId/nodeId" badge label for a session id (windows are keyed
+by Session.id, so the binding is looked up directly).
 -}
 nodeLabelFor : Dict String String -> String -> Maybe String
 nodeLabelFor planNodeSessions sid =

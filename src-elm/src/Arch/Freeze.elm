@@ -9,16 +9,18 @@ module Arch.Freeze exposing
     , runSummaries
     )
 
-{-| C 架构版本固化状态机（docs/arch-persistent.md §4.2）——纯逻辑：
-把会话工作副本固化为不可变 Version 的异步流程（对象存储 put 的
-进度跟踪）。App/Update 负责把 Ports.objectPut 的结果喂进来。
+{-| C architecture version-freeze state machine (docs/arch-persistent.md
+§4.2) — pure logic: the async flow that freezes a session's work copy
+into an immutable Version (object-store put progress tracking).
+App/Update feeds the Ports.objectPut results back in.
 
-流程：
-  1. begin：切块 + 预分配 reqId（块 0..n-1，run = n..n+m-1）
-  2. initialPuts：需要 put 的对象列表（(reqId, content)）
-  3. onPutResult：按 reqId 收集 hash
-  4. buildVersion：全部就绪 → 组装 Version（planViews 完整：runs 里
-     每个 plan → 其 run hash；unexecuted 里每个 plan → Nothing）
+Flow:
+  1. begin: chunk messages + pre-allocate reqIds (blocks 0..n-1, runs n..n+m-1)
+  2. initialPuts: the objects to put, as (reqId, content)
+  3. onPutResult: collect hashes by reqId
+  4. buildVersion: once all are ready, assemble the Version (planViews
+     complete: every plan in `runs` → its run hash; every plan in
+     `unexecuted` → Nothing)
 -}
 
 import Dict exposing (Dict)
@@ -30,25 +32,26 @@ type alias FreezeState =
     { sessionId : String
     , blocks : List AV.Block
     , blockHashes : Dict Int String
-    -- 本次固化的 plan 状态：(planId, RunSummary)，reqId = n + idx
+    -- plan states frozen in this run: (planId, RunSummary), reqId = n + idx
     , runs : List ( String, AV.RunSummary )
     , runHashes : Dict Int String
-    -- 该版本下未执行的 plan（视图里 Nothing）
+    -- plans not executed under this version (Nothing in the view)
     , unexecuted : List String
     , parent : Maybe String
-    -- C2b：该会话当前工作副本的**可持久化目录 id**（写入 refs.workCopy；
-    -- 见 Plan.Update.persistableWorkCopy——fork 目录 / resume 保留旧值 /
-    -- 根 = Nothing）
+    -- C2b: this session's current work copy's **persistable directory
+    -- id** (written to refs.workCopy; see Plan.Update.persistableWorkCopy
+    -- — fork directory / resume keeps the old value / root = Nothing)
     , workCopy : Maybe String
-    -- 组装好的版本对象（buildVersion 成功后暂存，version put 完成时
-    -- 用它填充 versionCache）
+    -- the assembled version object (stashed after buildVersion succeeds,
+    -- used to fill versionCache when the version put completes)
     , built : Maybe AV.Version
     , versionHash : Maybe String
     }
 
 
-{-| 开始一次固化。`runs` = 本次要记录为"已执行"的 plan 状态（顺序
-固定，reqId 从块数开始）；`unexecuted` = 该版本下从未执行的 plan。
+{-| Begin a freeze. `runs` = the plan states to record as "executed"
+this time (order fixed, reqIds start at the block count); `unexecuted` =
+plans never executed under this version.
 -}
 begin : String -> List T.Message -> List ( String, AV.RunSummary ) -> List String -> Maybe String -> Maybe String -> FreezeState
 begin sessionId messages runs unexecuted parent workCopy =
@@ -65,7 +68,7 @@ begin sessionId messages runs unexecuted parent workCopy =
     }
 
 
-{-| 初始需要 put 的对象（块 0..n-1，run = n..n+m-1）。
+{-| The initial objects to put (blocks 0..n-1, runs n..n+m-1).
 -}
 initialPuts : FreezeState -> List ( Int, String )
 initialPuts st =
@@ -84,7 +87,8 @@ initialPuts st =
     blockPuts ++ runPuts
 
 
-{-| 处理一个 object_put 结果（reqId 匹配），返回推进后的状态。
+{-| Handle one object_put result (matched by reqId), returning the
+advanced state.
 -}
 onPutResult : Int -> Maybe String -> FreezeState -> FreezeState
 onPutResult reqId hash st =
@@ -113,15 +117,15 @@ onPutResult reqId hash st =
                 st
 
 
-{-| 版本对象的 reqId（= 块数 + run 数）：块和 run 全部 put 完成后，
-调用方用它 put 组装好的 Version。
+{-| The version object's reqId (= block count + run count): once all
+blocks and runs are put, the caller uses it to put the assembled Version.
 -}
 versionReq : FreezeState -> Int
 versionReq st =
     List.length st.blocks + List.length st.runs
 
 
-{-| 所有块和 run 就绪 → 组装 Version；否则 Nothing。
+{-| All blocks and runs ready → assemble the Version; otherwise Nothing.
 -}
 buildVersion : FreezeState -> Maybe AV.Version
 buildVersion st =
@@ -163,15 +167,17 @@ buildVersion st =
         Nothing
 
 
-{-| 版本已固化（versionHash 已写）——固化流程完成。
+{-| The version has been frozen (versionHash written) — the freeze flow
+is complete.
 -}
 isComplete : FreezeState -> Bool
 isComplete st =
     st.versionHash /= Nothing
 
 
-{-| 本次固化产生的 run 摘要映射（run hash → RunSummary）——固化完成
-时调用方把它并入内存 runSummaries 缓存（状态栏按版本解析需要）。
+{-| The run summary map produced by this freeze (run hash → RunSummary) —
+when the freeze completes, the caller merges it into the in-memory
+runSummaries cache (the status bar resolves by version).
 -}
 runSummaries : FreezeState -> Dict String AV.RunSummary
 runSummaries st =

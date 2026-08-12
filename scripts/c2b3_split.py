@@ -40,9 +40,10 @@ def dedent8(ln):
 
 dedented = [dedent8(ln) for ln in body]
 
-helpers = '''{-| C2b：进行中的级联 fork 是否为顶层（plain）fork。顶层重跑 fork 走
-工作副本替换（forkSessionCreated）；节点 fork 保留旧行为（新窗口 +
-血缘，C3 统一）。
+helpers = '''{-| C2b: is the in-flight cascade fork a top-level (plain) fork?
+Top-level re-run forks go through work-copy replacement
+(forkSessionCreated); node forks keep the old behavior (new window +
+lineage, unified in C3).
 -}
 isPlainCascadeFork : Model -> Bool
 isPlainCascadeFork model =
@@ -54,15 +55,19 @@ isPlainCascadeFork model =
             False
 
 
-{-| C2b fork 分支（§8.1）：顶层重跑 fork 接管同一 Session：
-- 窗口 key 保持 Session.id（= plan origin `meta.origin.sessionId`，
-  不是 forkSource——那是旧工作副本，可能有 resume 差异）。
-- sessionWorkCopies[Session.id] = forkId（新工作副本）；缓冲帧按此
-  路由重放进 sessions[Session.id]（覆盖旧内容）。
-- planReplaySessions 标记 Session.id（重放历史不自动建 plan）。
-- 不建 sessionOrder / sessionNums / windowPositions 条目（窗口没换，
-  位置天然保留——无需 forkInheritPos）；不写血缘。
-- 旧工作副本进程/目录由 RegisterFork（registerForkInstance）关闭。
+{-| C2b fork branch (§8.1): a top-level re-run fork takes over the same
+Session:
+- The window key stays Session.id (= plan origin `meta.origin.sessionId`,
+  NOT forkSource — that is the old work copy, which may have resume differences).
+- sessionWorkCopies[Session.id] = forkId (new work copy); buffered
+  frames route by it back into sessions[Session.id] (overwriting old content).
+- planReplaySessions marks Session.id (replaying history does not
+  auto-create plans).
+- No sessionOrder / sessionNums / windowPositions entries (the window
+  did not change, so position is naturally preserved — no forkInheritPos);
+  no lineage written.
+- The old work-copy process/directory is closed by RegisterFork
+  (registerForkInstance).
 -}
 forkSessionCreated : String -> Model -> ( Model, Cmd Msg )
 forkSessionCreated forkId model =
@@ -77,7 +82,7 @@ forkSessionCreated forkId model =
                 Nothing ->
                     forkId
 
-        -- 先建映射再重放缓冲：core id（forkId）→ Session.id。
+        -- Build the mapping first, then replay the buffer: core id (forkId) → Session.id.
         newWorkCopies =
             Dict.insert sessionId forkId model.sessionWorkCopies
 
@@ -118,17 +123,20 @@ forkSessionCreated forkId model =
     ( m0, cmds )
 
 
-{-| 新会话窗口的常规创建（普通 New Session / resume / runner 节点会话
-/ 节点级联 fork）。C2b 后只负责这些路径——顶层 fork 走 forkSessionCreated。
+{-| Usual creation of a new session window (plain New Session / resume /
+runner node session / node cascade fork). After C2b this only handles
+those paths — top-level forks go through forkSessionCreated.
 -}
 createSessionWindow : String -> Model -> ( Model, Cmd Msg )
 createSessionWindow id model ='''
 
 # New SessionCreated case: short if-else (branch list stays contiguous)
 new_case = """        SessionCreated id ->
-            -- C2b（§8.1）：顶层级联 fork 不创建新窗口——fork 出的会话只是
-            -- 同一 Session 的新工作副本（窗口 key = Session.id 不动）。
-            -- 节点 fork / 普通创建走 createSessionWindow（原逻辑）。
+            -- C2b (§8.1): a top-level cascade fork does not create a new
+            -- window — the forked session is just a new work copy of the
+            -- same Session (window key = Session.id, unchanged).
+            -- Node forks / plain creates go through createSessionWindow
+            -- (original logic).
             if isPlainCascadeFork model then
                 forkSessionCreated id model
 

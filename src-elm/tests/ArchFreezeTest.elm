@@ -58,7 +58,7 @@ tests =
                             Nothing
                             Nothing
 
-                    -- 块（reqId 0）+ run（reqId 1）就绪
+                    -- block (reqId 0) + run (reqId 1) ready
                     st1 =
                         F.onPutResult 0 (Just "block-hash") st0
 

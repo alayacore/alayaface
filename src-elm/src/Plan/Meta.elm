@@ -275,8 +275,8 @@ depthForOrigin metas runStates originSid =
             1
 
 
-{-| 最后一条 feedback 的文本（C 架构：窗口关闭后固化 run 摘要时的
-summary 来源）。
+{-| Text of the last feedback (C architecture: this is the summary
+source when a run summary is frozen after the window closes).
 -}
 lastFeedbackText : PlanMeta -> String
 lastFeedbackText meta =

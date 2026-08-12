@@ -43,8 +43,8 @@ import Arch.Values as AV
 import Arch.Freeze as Freeze
 
 
-{-| 启动版本固化队列中下一个待固化项（串行：一次一个，reqId 只匹配
-活动项）。队列空 → 清空 freezeActive。
+{-| Start the next item in the freeze queue (serial: one at a time, reqId
+only matches the active item). Empty queue → clear freezeActive.
 -}
 startNextFreeze : Model -> ( Model, Cmd Msg )
 startNextFreeze model =
@@ -112,7 +112,7 @@ cascadeForkResultDecoder =
         (D.field "error" D.string)
 
 
-{-| C 架构：object_put 结果（{ reqId, ok, hash, error }）。
+{-| C architecture: object_put result ({ reqId, ok, hash, error }).
 -}
 objectPutResultDecoder : D.Decoder { reqId : String, ok : Bool, hash : String, error : String }
 objectPutResultDecoder =
@@ -124,7 +124,7 @@ objectPutResultDecoder =
         (D.field "error" D.string)
 
 
-{-| C 架构：object_get 结果（{ reqId, ok, content, error }）。
+{-| C architecture: object_get result ({ reqId, ok, content, error }).
 -}
 objectGetResultDecoder : D.Decoder { reqId : String, ok : Bool, content : String, error : String }
 objectGetResultDecoder =
@@ -284,7 +284,7 @@ minimalCloseSession id model =
         , planTaskStarted = Set.remove id model.planTaskStarted
         , connectionChain = dropChainSession model.connectionChain id
         , sessionWorkCopies = Dict.remove id model.sessionWorkCopies
-        -- C2b：关闭时清掉该会话工作副本的临时 resume 标记（live 已死）。
+        -- C2b: on close, drop the session's temporary resume-live marker (the live is dead).
         , sessionResumedLives =
             Set.remove (PU.workCopyId model id) (Set.remove id model.sessionResumedLives)
         , activeId =
@@ -295,8 +295,8 @@ minimalCloseSession id model =
                 model.activeId
       }
     , Cmd.batch
-        [ -- C2b（I-E）：关工作副本进程（core id）；前端条目按 Session.id
-          -- 已在上面的 sessions/… 更新中移除。
+        [ -- C2b (I-E): close the work-copy process (core id); the frontend
+          -- entry by Session.id was already removed in the sessions/… update above.
           Ports.closeSession { sessionId = PU.workCopyId model id }
         , runnerFailCmd
         , Ports.setConnectionChain (chainPayload model model.connectionChain)
@@ -391,10 +391,11 @@ minimalPlanClose planId model =
     )
 
 
-{-| C2b（I-G）：该 core id 是否为它所属 Session 的**当前**工作副本。
-旧工作副本（被 fork 替换后）的迟到帧/断开事件若按 Session.id 路由会
-污染新条目——用"当前工作副本"守卫直接忽略。普通会话（无映射）恒为
-True。节点会话（无映射）同样恒为 True（C3 前行为不变）。
+{-| C2b (I-G): is this core id the **current** work copy of its Session?
+Late frames/disconnects from an OLD work copy (replaced by a fork) would
+pollute the new entry if routed by Session.id — the "current work copy"
+guard drops them. Plain sessions (no mapping) are always True. Node
+sessions (no mapping) are likewise always True (behavior unchanged pre-C3).
 -}
 isCurrentWorkCopy : Model -> String -> Bool
 isCurrentWorkCopy model coreId =
@@ -405,26 +406,30 @@ isCurrentWorkCopy model coreId =
     PU.workCopyId model sid == coreId
 
 
-{-| C2b/C3：进行中的级联 fork（顶层或节点）一律走工作副本替换
-（forkSessionCreated）——窗口 key = Session.id（plan origin）稳定，
-fork 出的会话只是工作副本。节点 fork 不再创建新窗口/新身份
-（C3-1：删除"级联 fork 交接"）。
+{-| C2b/C3: an in-flight cascade fork (top-level or node) always goes
+through work-copy replacement (forkSessionCreated) — the window key
+Session.id (plan origin) is stable, and the forked session is just a
+work copy. Node forks no longer create a new window/new identity
+(C3-1: "cascade fork handoff" removed).
 -}
 isCascadeForkActive : Model -> Bool
 isCascadeForkActive model =
     model.planCascadeFork /= Nothing
 
 
-{-| C2b/C3 fork 分支（§8.1）：级联 fork 接管同一 Session（顶层会话或
-节点会话，规则相同）：
-- 窗口 key 保持 Session.id（= plan origin `meta.origin.sessionId`，
-  不是 forkSource——那是旧工作副本，可能有 resume 差异）。
-- sessionWorkCopies[Session.id] = forkId（新工作副本）；缓冲帧按此
-  路由重放进 sessions[Session.id]（覆盖旧内容）。
-- planReplaySessions 标记 Session.id（重放历史不自动建 plan）。
-- 不建 sessionOrder / sessionNums / windowPositions 条目（窗口没换，
-  位置天然保留——无需 forkInheritPos）；不写血缘。
-- 旧工作副本进程/目录由 RegisterFork（registerForkInstance）关闭。
+{-| C2b/C3 fork branch (§8.1): a cascade fork takes over the same
+Session (top-level or node session, same rules):
+- The window key stays Session.id (= plan origin `meta.origin.sessionId`,
+  NOT forkSource — that is the old work copy, which may have resume differences).
+- sessionWorkCopies[Session.id] = forkId (new work copy); buffered frames
+  are routed by it back into sessions[Session.id] (overwriting old content).
+- planReplaySessions marks Session.id (replaying history does not
+  auto-create plans).
+- No sessionOrder / sessionNums / windowPositions entries are created
+  (the window did not change, so position is naturally preserved — no
+  forkInheritPos needed); no lineage is written.
+- The old work-copy process/directory is closed by RegisterFork
+  (registerForkInstance).
 -}
 forkSessionCreated : String -> Model -> ( Model, Cmd Msg )
 forkSessionCreated forkId model =
@@ -439,7 +444,7 @@ forkSessionCreated forkId model =
                 Nothing ->
                     forkId
 
-        -- 先建映射再重放缓冲：core id（forkId）→ Session.id。
+        -- Build the mapping first, then replay the buffer: core id (forkId) → Session.id.
         newWorkCopies =
             Dict.insert sessionId forkId model.sessionWorkCopies
 
@@ -480,9 +485,10 @@ forkSessionCreated forkId model =
     ( m0, cmds )
 
 
-{-| C2b/C3：会话恢复的磁盘目录——当前工作副本目录（refs.workCopy，
-fork/resume 后 = fork 目录；无记录 = 自身 = 根/原目录）。顶层与节点
-会话通用（ResumeSession / PlanOpenNodeSession 共用）。
+{-| C2b/C3: the on-disk directory a session resumes from — its current
+work-copy directory (refs.workCopy; after fork/resume = the fork
+directory; no record = itself = root/original directory). Shared by
+top-level and node sessions (ResumeSession / PlanOpenNodeSession).
 -}
 resumeDirFor : Model -> String -> String
 resumeDirFor model sid =
@@ -491,28 +497,32 @@ resumeDirFor model sid =
         |> Maybe.withDefault sid
 
 
-{-| C3/C5：是否为 resume（会话管理器顶层 resume 或 DAG 节点 resume）。
-resume 统一走工作副本归属（resumeSessionCreated）——窗口 key =
-Session.id（= resume 时传入的目录 id），live 会话只是工作副本；
-节点 resume 的 planNodeSessions 绑定在请求时已插入，链构建在
-resumeSessionCreated 内完成。
+{-| C3/C5: is this a resume (top-level resume from the session manager
+or a DAG node resume)? Resumes uniformly go through work-copy ownership
+(resumeSessionCreated) — the window key = Session.id (= the directory id
+passed to resume), and the live session is just a work copy; a node
+resume's planNodeSessions binding was inserted at request time, and the
+chain is built inside resumeSessionCreated.
 -}
 isResumeActive : Model -> Bool
 isResumeActive model =
     model.planResumeFrom /= Nothing
 
 
-{-| C2b/C5 resume 分支（§8.1）：resume 不创建新身份——后端返回的 live
-会话只是同一 Session 的新工作副本（顶层或节点会话规则相同）：
-- Session.id = 磁盘目录 id（= resume 时传入的 dir id）。
-- sessionWorkCopies[Session.id] = liveId；sessions[Session.id] 被 live
-  内容替换（缓冲帧按 workCopies 路由，liveId 的帧落到 Session.id）。
-- 窗口 key = Session.id：窗口已关（resume 的常态）→ 按常规创建
-  窗口条目；未关（防御）→ 复用现有窗口。
-- 节点 resume：连接链构建 + 整链 z 提升（planNodeSessions 绑定在
-  请求时已插入）。
-- planReplaySessions 已由 ResumeSession/PlanOpenNodeSession 标记
-  Session.id；不建 planResumedFrom（C2b/C5 消灭 live→orig 映射）。
+{-| C2b/C5 resume branch (§8.1): a resume does not create a new
+identity — the live session returned by the backend is just a new work
+copy of the same Session (top-level or node session, same rules):
+- Session.id = on-disk directory id (= the dir id passed to resume).
+- sessionWorkCopies[Session.id] = liveId; sessions[Session.id] is
+  replaced with the live content (buffered frames route via workCopies,
+  so liveId frames land on Session.id).
+- Window key = Session.id: window closed (the usual resume case) →
+  create window entries as usual; still open (defensive) → reuse it.
+- Node resume: connection chain built + whole-chain z raise
+  (planNodeSessions binding was inserted at request time).
+- planReplaySessions is already marked by ResumeSession/
+  PlanOpenNodeSession with Session.id; no planResumedFrom is created
+  (C2b/C5 eliminate the live→orig map).
 -}
 resumeSessionCreated : String -> Model -> ( Model, Cmd Msg )
 resumeSessionCreated liveId model =
@@ -554,12 +564,13 @@ resumeSessionCreated liveId model =
                 , planResumeOwner = Nothing
                 , activeId = Just sessionId
                 , pendingSwitchOnCreate = False
-                -- C2b：记录临时 resume live（无磁盘目录；persistableWorkCopy
-                -- 靠它不把 live 写进 refs.workCopy）。
+                -- C2b: record the temporary resume live (no on-disk
+                -- directory; persistableWorkCopy relies on it to not
+                -- write the live into refs.workCopy).
                 , sessionResumedLives = Set.insert liveId model.sessionResumedLives
             }
 
-        -- 窗口已关（常态）：创建窗口条目（key = Session.id）。
+        -- Window closed (the usual case): create window entries (key = Session.id).
         m1 =
             if Dict.member sessionId model.windowPositions then
                 base
@@ -575,8 +586,9 @@ resumeSessionCreated liveId model =
         raised =
             raiseWindow m1 sessionId
 
-        -- C3/C5：节点 resume 的连接链（节点↔plan 段 + 祖先段）——
-        -- sessions 已按 Session.id（= 节点会话 id）key，链直接构建。
+        -- C3/C5: the node resume's connection chain (node↔plan segment +
+        -- ancestor segments) — sessions are already keyed by Session.id
+        -- (= node session id), so the chain builds directly.
         chain =
             connectionChainForSession raised sessionId
 
@@ -614,8 +626,9 @@ resumeSessionCreated liveId model =
     ( final, cmds )
 
 
-{-| 新会话窗口的常规创建（普通 New Session / resume / runner 节点会话
-/ 节点级联 fork）。C2b 后只负责这些路径——顶层 fork 走 forkSessionCreated。
+{-| Usual creation of a new session window (plain New Session / resume /
+runner node session / node cascade fork). After C2b this only handles
+those paths — top-level forks go through forkSessionCreated.
 -}
 createSessionWindow : String -> Model -> ( Model, Cmd Msg )
 createSessionWindow id model =
@@ -653,9 +666,10 @@ createSessionWindow id model =
         isCascadeFork =
             model.planCascadeFork /= Nothing
 
-        -- C2b（§8.1）：普通顶层创建（非 runner / resume / 节点 fork）——
-        -- 初始化 Session 根引用（session.refs.json，空 head）：有 refs =
-        -- Session 根，是会话管理器显示与重启恢复的依据。
+        -- C2b (§8.1): a plain top-level creation (not runner / resume /
+        -- node fork) — initialize the Session root refs (session.refs.json,
+        -- empty head): having refs marks a Session root, which is what
+        -- the session manager lists and restart recovery relies on.
         isPlainRootCreate =
             model.planResumeFrom == Nothing && model.planCascadeFork == Nothing && not isRunnerCreate
 
@@ -682,7 +696,8 @@ createSessionWindow id model =
                 , sessionOrder = model.sessionOrder ++ [ id ]
                 , sessionNums = Dict.insert id model.nextSessionNum model.sessionNums
                 , nextSessionNum = model.nextSessionNum + 1
-                -- C2b：普通顶层创建登记空 refs（Session 根；管理器列出依据）
+                -- C2b: a plain top-level creation registers empty refs
+                -- (Session root; the manager's listing basis)
                 , sessionRefs =
                     if isPlainRootCreate then
                         Dict.insert id (AV.SessionRefs id "" [] Nothing) model.sessionRefs
@@ -705,8 +720,9 @@ createSessionWindow id model =
                         model.windowPositions
                     else
                         let
-                            -- C3：级联 fork 已全部走工作副本替换（窗口 key
-                            -- 不动）——无 forkInheritPos。Runner-created /
+                            -- C3: cascade forks all go through work-copy
+                            -- replacement (window key unchanged) — no
+                            -- forkInheritPos. Runner-created /
                             -- resumed node session opens beside its plan
                             -- window (stacking with an offset); plain
                             -- creates center on the viewport.
@@ -776,8 +792,9 @@ createSessionWindow id model =
         -- Raise the fresh session window (D6): end of
         -- sessionOrder + next bounded z (rebase when the z
         -- counter crosses the threshold).
-        -- C3/C5：resume（顶层/节点）统一走 resumeSessionCreated（窗口
-        -- key = Session.id），createSessionWindow 不再处理 resume。
+        -- C3/C5: resumes (top-level/node) uniformly go through
+        -- resumeSessionCreated (window key = Session.id);
+        -- createSessionWindow no longer handles resume.
         raisedModel =
             raiseWindow baseModel id
 
@@ -809,9 +826,10 @@ createSessionWindow id model =
         -- plain/runner-created session (runner keeps the
         -- existing chain, which is already in the model).
         , Ports.setConnectionChain (chainPayload drainedModel drainedModel.connectionChain)
-        -- C2b：初始化 Session 根引用（session.refs.json，空 head）——
-        -- 有 refs = Session 根（管理器显示 / 重启恢复依据）。血缘
-        -- session.meta.json 已删（C2b-7）。
+        -- C2b: initialize the Session root refs (session.refs.json,
+        -- empty head) — having refs marks a Session root (the manager
+        -- listing / restart-recovery basis). The lineage
+        -- session.meta.json was removed (C2b-7).
         , if isPlainRootCreate then
             Ports.fsWriteFileText
                 { path = sessionsDir model.homeDir ++ "/" ++ id ++ "/session.refs.json"
@@ -859,11 +877,12 @@ update msg model =
                     )
 
         SessionCreated id ->
-            -- C2b/C3（§8.1）：级联 fork（顶层或节点）不创建新窗口——
-            -- fork 出的会话只是同一 Session 的新工作副本（窗口 key =
-            -- Session.id = plan origin，不动）。顶层 resume 同理。
-            -- 节点 fork 也走这里（C3-1：删除"级联 fork 交接"）；
-            -- 节点 resume / 普通创建走 createSessionWindow。
+            -- C2b/C3 (§8.1): a cascade fork (top-level or node) does
+            -- not create a new window — the forked session is just a new
+            -- work copy of the same Session (window key = Session.id =
+            -- plan origin, unchanged). Top-level resumes likewise.
+            -- Node forks also go here (C3-1: "cascade fork handoff" removed);
+            -- node resumes / plain creates go through createSessionWindow.
             if isCascadeForkActive model then
                 forkSessionCreated id model
 
@@ -959,14 +978,15 @@ update msg model =
         DeltaEvent raw ->
             case D.decodeValue P.deltaEventDecoder raw of
                 Ok ev ->
-                    -- C2b（I-G）：只处理当前工作副本的帧——旧工作副本（被
-                    -- fork 替换后）的迟到帧/断开事件会污染新条目，忽略。
+                    -- C2b (I-G): only handle frames from the CURRENT work
+                    -- copy — late frames/disconnects from an old work copy
+                    -- (replaced by a fork) would pollute the new entry.
                     if not (isCurrentWorkCopy model ev.sessionId) then
                         ( model, Cmd.none )
 
                     else
-                        -- C2b（I-D）：帧的 core id → Session.id（工作副本帧；
-                        -- 普通会话 = 恒等）。
+                        -- C2b (I-D): frame core id → Session.id (work-copy
+                        -- frame; plain session = identity).
                         let
                             sid =
                                 PU.sessionIdOfWorkCopy model ev.sessionId
@@ -990,8 +1010,9 @@ update msg model =
                                     newSession =
                                         H.handleDeltaEvent session ev
     
-                                    -- scrollToBottom 是前端 DOM 滚动：元素按窗口
-                                    -- key（Session.id）命名，传 sid 而非 coreId。
+                                    -- scrollToBottom is frontend DOM scrolling:
+                                    -- elements are named by window key
+                                    -- (Session.id), so pass sid, not coreId.
                                     cmds =
                                         if session.atBottom then
                                             Ports.scrollToBottom { sessionId = sid }
@@ -1005,8 +1026,9 @@ update msg model =
                                 , cmds
                                 )
     
-                            -- 缓冲仍按 core id 记录（SessionCreated 建立
-                            -- workCopies 后以路由重放）。
+                            -- Buffering is still keyed by core id (replayed
+                            -- with routing once SessionCreated sets up
+                            -- workCopies).
                             Nothing ->
                                 bufferPendingEvent model ev.sessionId raw
     
@@ -1016,7 +1038,7 @@ update msg model =
         FrameEvent raw ->
             case D.decodeValue P.frameEventDecoder raw of
                 Ok ev ->
-                    -- C2b（I-G）：只处理当前工作副本的帧。
+                    -- C2b (I-G): only handle frames from the current work copy.
                     if not (isCurrentWorkCopy model ev.sessionId) then
                         ( model, Cmd.none )
 
@@ -1058,8 +1080,9 @@ update msg model =
                                     mcpJustCompleted =
                                         session.mcpStatus /= Nothing && newSession.mcpStatus == Nothing
     
-                                    -- scrollToBottom 是前端 DOM 滚动：元素按窗口
-                                    -- key（Session.id）命名，传 sid。
+                                    -- scrollToBottom is frontend DOM scrolling:
+                                    -- elements are named by window key
+                                    -- (Session.id), so pass sid.
                                     cmds =
                                         Cmd.batch
                                             (List.filterMap identity
@@ -1211,22 +1234,25 @@ update msg model =
         StatusEvent raw ->
             case D.decodeValue P.statusEventDecoder raw of
                 Ok ev ->
-                    -- C2b（I-G）：只处理当前工作副本的状态事件（旧工作副本
-                    -- 被关闭时的 connected:false 不应污染新条目）。
+                    -- C2b (I-G): only handle status events from the CURRENT
+                    -- work copy (a connected:false from an old work copy
+                    -- being closed must not pollute the new entry).
                     if not (isCurrentWorkCopy model ev.sessionId) then
                         ( model, Cmd.none )
 
                     else
                         let
-                            -- C2b（I-D）：core id → Session.id（sessions 更新按
-                            -- Session.id；runner 注入/缓冲仍按 core id）。
+                            -- C2b (I-D): core id → Session.id (sessions update
+                            -- by Session.id; runner injection/buffering still
+                            -- by core id).
                             sid =
                                 PU.sessionIdOfWorkCopy model ev.sessionId
 
                             -- Runner injection: a node-owned session that
                             -- disconnects before task completion is a failure.
-                            -- C3：按 Session.id 路由（节点绑定 = Session.id；
-                            -- fork/resume 后帧来自工作副本 core id）。
+                            -- C3: route by Session.id (node binding =
+                            -- Session.id; after fork/resume frames come from
+                            -- the work-copy core id).
                             statusRunnerCmd =
                                 if not ev.connected then
                                     case findPlanIdBySession model sid of
@@ -1297,13 +1323,15 @@ update msg model =
         RpcError raw ->
             case D.decodeValue rpcErrorDecoder raw of
                 Ok err ->
-                    -- C2b（I-G）：发给旧工作副本的 RPC 错误已过时，忽略。
+                    -- C2b (I-G): RPC errors sent to an OLD work copy are
+                    -- stale — ignore.
                     if not (isCurrentWorkCopy model err.sessionId) then
                         ( model, Cmd.none )
 
                     else
-                        -- C2b：RPC 错误带的 sessionId 是我们发给后端的 core id
-                        -- （workCopyId）——反查到 Session.id 再更新会话条目。
+                        -- C2b: the sessionId on an RPC error is the core id
+                        -- we sent the backend (workCopyId) — reverse-look up
+                        -- Session.id, then update the session entry.
                         let
                             sid =
                                 PU.sessionIdOfWorkCopy model err.sessionId
@@ -2146,7 +2174,7 @@ update msg model =
                                             -- creates stay in this subtree
                                             -- (P28 layout fix) AND queue
                                             -- their session.refs.json (C3-2:
-                                            -- 节点级联 fork 的工作副本记录)。
+                                            -- node cascade fork's work-copy record).
                                             listNext
                                                 { model
                                                     | planMetaNodeRefsQueue =
@@ -2165,9 +2193,10 @@ update msg model =
                                     -- plans dirs list empty; ".." from
                                     -- the listing is skipped) AND every
                                     -- session's version refs
-                                    -- (sessions/<uuid>/session.refs.json,
-                                    -- C 架构 — Session 根引用；工作副本
-                                    -- 目录没有 refs，不会登记)。
+                                    -- (sessions/<uuid>/session.refs.json —
+                                    -- C architecture: Session ROOT refs;
+                                    -- work-copy directories have no refs
+                                    -- and are never registered).
                                     let
                                         sessionDirs =
                                             parsed
@@ -2434,11 +2463,12 @@ update msg model =
                 Err _ ->
                     ( model, Cmd.none )
 
-        -- C 架构：object_put 结果（版本固化进度推进）。
+        -- C architecture: object_put result (freeze progress).
         ObjectPutResult raw ->            case D.decodeValue objectPutResultDecoder raw of
                 Ok r ->
                     if not r.ok then
-                        -- 对象写入失败：中止当前固化，启动队列下一个。
+                        -- Object write failed: abort the current freeze,
+                        -- start the next queue item.
                         startNextFreeze { model | freezeActive = Nothing, freezeQueue = [] }
 
                     else
@@ -2452,8 +2482,9 @@ update msg model =
                                         Freeze.onPutResult (String.toInt r.reqId |> Maybe.withDefault -1) (Just r.hash) st
                                 in
                                 if Freeze.isComplete st2 then
-                                    -- 版本对象已写：更新会话引用 + 写 refs 文件，
-                                    -- 然后启动队列中下一个固化。
+                                    -- Version object written: update the session
+                                    -- refs + write the refs file, then start the
+                                    -- next freeze in the queue.
                                     let
                                         versionHash =
                                             Maybe.withDefault "" st2.versionHash
@@ -2466,8 +2497,9 @@ update msg model =
                                             { refs0
                                                 | head = versionHash
                                                 , versions = refs0.versions ++ [ versionHash ]
-                                                -- C2b：本次固化时的工作副本目录
-                                                -- （fork 后 = forkId；resume 保留旧值）
+                                                -- C2b: the work-copy directory at
+                                                -- freeze time (after fork = forkId;
+                                                -- resume keeps the old value)
                                                 , workCopy = st2.workCopy
                                             }
 
@@ -2508,7 +2540,8 @@ update msg model =
                                 else
                                     case Freeze.buildVersion st2 of
                                         Just version ->
-                                            -- 块/run 全部就绪 → 固化版本对象本身。
+                                            -- All blocks/runs ready → freeze the
+                                            -- version object itself.
                                             let
                                                 content =
                                                     AV.versionContent version
@@ -2524,26 +2557,29 @@ update msg model =
                                             )
 
                                         Nothing ->
-                                            -- 还有块/run 未就绪：继续等。
+                                            -- Some blocks/runs not ready yet: keep waiting.
                                             ( { model | freezeActive = Just st2 }, Cmd.none )
 
                 Err _ ->
                     ( model, Cmd.none )
 
-        -- C 架构：object_get 结果（把版本内容载入缓存，状态栏按版本解析）。
+        -- C architecture: object_get result (loads version content into
+        -- the cache; the status bar resolves by version).
         ObjectGetResult raw ->
             case D.decodeValue objectGetResultDecoder raw of
                 Ok r ->
                     if r.ok then
-                        -- C4：reqId = hash；先试 Version，再试 Block（消息
-                        -- 块）——版本浏览按需加载两种对象。
+                        -- C4: reqId = hash; try Version first, then Block
+                        -- (message chunk) — version browsing loads both
+                        -- object kinds on demand.
                         case D.decodeString AV.decodeVersion r.content of
                             Ok v ->
                                 let
                                     m1 =
                                         { model | versionCache = Dict.insert r.reqId v model.versionCache }
 
-                                    -- C4：正在查看该版本 → 自动补取缺失的消息块。
+                                    -- C4: viewing this version → auto-fetch the
+                                    -- missing message blocks.
                                     blockCmd =
                                         if model.versionViewFor == Just r.reqId then
                                             let
@@ -2592,10 +2628,11 @@ update msg model =
                             ( m1, extraCmd ) =
                                 if res.ok then
                                     if String.endsWith "/session.refs.json" path then
-                                        -- C 架构：会话版本引用
-                                        -- （sessions/<uuid>/session.refs.json）
-                                        -- 载入 sessionRefs，并触发 head 版本
-                                        -- 内容加载（状态栏按版本解析）。
+                                        -- C architecture: session version refs
+                                        -- (sessions/<uuid>/session.refs.json) —
+                                        -- load into sessionRefs and trigger the
+                                        -- head version content load (the status
+                                        -- bar resolves by version).
                                         case D.decodeString AV.decodeSessionRefs res.content of
                                             Ok refs ->
                                                 let
@@ -2765,7 +2802,8 @@ update msg model =
             , focusInput model
             )
 
-        -- C4：版本浏览（只读查看历史版本；D8 不做物化）。
+        -- C4: version browsing (read-only view of historical versions;
+        -- D8 does not materialize).
         OpenVersionList sid ->
             ( { model | versionListFor = Just sid, showSessionManager = False }, Cmd.none )
 
@@ -2791,8 +2829,9 @@ update msg model =
                             ( m1, Cmd.batch (List.map (\b -> Ports.objectGet { reqId = b, hash = b }) missing) )
 
                         Nothing ->
-                            -- 版本对象未加载：先取版本，块由
-                            -- ObjectGetResult 版本分支自动补取。
+                            -- Version object not loaded yet: fetch it first;
+                            -- the ObjectGetResult version branch auto-fetches
+                            -- the missing blocks.
                             ( m1, Cmd.none )
             in
             ( m2
@@ -3159,10 +3198,12 @@ update msg model =
                                     Set.union model.planSuppressFeedback (Set.fromList scope.closePlanIds)
                             }
 
-                        -- C 架构：确认时固化"重跑前的世界"——被重跑会话
-                        -- 的 V0（plan 保持重跑前的旧状态/未执行）。之后
-                        -- 完成时固化的新版本属于 fork 出的工作副本，老
-                        -- 会话（resume）将看到 V0（老状态隔离）。
+                        -- C architecture: on confirm, freeze "the world
+                        -- before the re-run" — the re-run session's V0
+                        -- (the plan keeps its pre-rerun old state/unexecuted).
+                        -- The version frozen on completion later belongs to
+                        -- the forked work copy, so the old session (resume)
+                        -- sees V0 (old-state isolation).
                         ( mFreeze, freezeCmd ) =
                             if scope.rootSessionId /= "" then
                                 let
@@ -3246,8 +3287,9 @@ update msg model =
                         -- real fork id, so a user-created session racing
                         -- the fork can never be mistaken for it.
                         let
-                            -- C2b：顶层重跑 fork 的确认信息（target 在
-                            -- RegisterFork 里被清掉，先取出来用于 V₁ 固化）。
+                            -- C2b: the top-level re-run fork's confirm info
+                            -- (target is cleared inside RegisterFork; take it
+                            -- out first for the V₁ freeze).
                             forkTarget =
                                 model.planCascadeFork
 
@@ -3257,10 +3299,12 @@ update msg model =
                             ( mAdopt, cAdopt ) =
                                 PU.cascadeStepIn update (PC.InstanceReady (Ok r.sessionId)) mReg
 
-                            -- C2b（§8.1）：顶层重跑 fork 接管后固化 V₁——
-                            -- 消息 = sessions[Session.id]（已是 fork 内容），
-                            -- A 已执行 → head = V₁（parent = 确认时固化的
-                            -- V₀）。老会话 resume 后仍看 V₀（隔离保持）。
+                            -- C2b (§8.1): after a top-level re-run fork takes
+                            -- over, freeze V₁ — messages =
+                            -- sessions[Session.id] (already fork content),
+                            -- A executed → head = V₁ (parent = the V₀ frozen
+                            -- on confirm). An old session resumed later still
+                            -- sees V₀ (isolation preserved).
                             ( mFinal, cFinal ) =
                                 case forkTarget of
                                     Just t ->
@@ -3392,7 +3436,8 @@ update msg model =
 
         PlanBindSession ts planId nodeId sid ->
             let
-                -- C2b-7：无血缘——节点按会话 id 直接绑定（稳定身份）。
+                -- C2b-7: no lineage — nodes bind directly by session id
+                -- (stable identity).
                 convId =
                     sid
 
@@ -3493,8 +3538,8 @@ update msg model =
                         Just run ->
                             case Dict.get nodeId run.nodes of
                                 Just n ->
-                                    -- C3/C5：节点绑定 = 会话 id（窗口按
-                                    -- Session.id key；resume 也保持）。
+                                    -- C3/C5: node binding = session id (windows
+                                    -- keyed by Session.id; resume keeps it).
                                     case n.conversationId of
                                         Just convId ->
                                             if Dict.member convId model.sessions then
@@ -3507,9 +3552,10 @@ update msg model =
                                                 -- The node STAYS
                                                 -- bound to convId
                                                 -- (the dir name);
-                                                -- C3-2：节点级联 fork 后
-                                                -- 从工作副本目录恢复
-                                                -- （refs.workCopy）。
+                                                -- C3-2: restore from the
+                                                -- work-copy directory after
+                                                -- a node cascade fork
+                                                -- (refs.workCopy).
                                                 ( { model
                                                     | pendingSwitchOnCreate = True
                                                     , planResumeOwner = Just planId
@@ -3675,9 +3721,11 @@ update msg model =
             -- history don't auto-create windows. planResumeFrom lets
             -- SessionCreated move that marker old→new (the replayed
             -- frames carry the fresh resumed id).
-            -- C2b（§8.1）：恢复当前工作副本目录（refs.workCopy = fork 出的
-            -- 目录 / resume 后仍是它）；workCopy 目录缺失（失效/被删）→
-            -- 回退 Session 根目录（UI 提示由管理器状态行承载）。
+            -- C2b (§8.1): resume from the current work-copy directory
+            -- (refs.workCopy = the fork directory / still it after a
+            -- resume); if the work-copy directory is missing (stale/
+            -- deleted) → fall back to the Session root directory (the
+            -- UI hint lives in the manager status row).
             let
                 resumeDir =
                     resumeDirFor model id
@@ -3729,8 +3777,8 @@ update msg model =
             ( { m3
                 | closeSet = Set.empty
                 , sessionManagerError = Nothing
-                -- C2b：删除 Session 引用与工作副本映射（进程已由
-                -- CloseSession 关闭）。
+                -- C2b: drop the Session refs and work-copy mapping (the
+                -- process was already closed by CloseSession).
                 , sessionRefs = Dict.remove id m3.sessionRefs
                 , sessionWorkCopies = Dict.remove id m3.sessionWorkCopies
               }
@@ -3738,8 +3786,8 @@ update msg model =
                 [ planCmds
                 , sessionCmds
                 , Ports.deleteSessionDir { sessionId = id, planId = Nothing, nodeId = Nothing, originSessionId = Nothing }
-                -- C2b（§8.1）：工作副本目录（fork 出的）随 Session 一起删，
-                -- 不留孤儿目录。
+                -- C2b (§8.1): delete the work-copy directory (forked) along
+                -- with the Session — no orphan directories left.
                 , case Dict.get id m3.sessionRefs of
                     Just refs ->
                         case refs.workCopy of
@@ -3760,9 +3808,11 @@ update msg model =
             )
 
         DeleteWorkCopyDir dir planId nodeId originSessionId ->
-            -- C2b/C3：延迟删除旧工作副本目录（fork 接管后旧进程优雅关闭
-            -- 完成才执行，避免 save 写回竞态重建目录）。nested 节点工作
-            -- 副本由 planId/nodeId/originSessionId 定位（顶层为空）。
+            -- C2b/C3: delete the old work-copy directory lazily (only
+            -- after the old process's graceful close completes, to avoid
+            -- a save writing back and racing the directory recreation).
+            -- Nested node work copies are located by
+            -- planId/nodeId/originSessionId (top-level is empty).
             ( model
             , Ports.deleteSessionDir
                 { sessionId = dir
@@ -5052,9 +5102,9 @@ updateAfterConfirm model sid =
 
 
 -- | Apply a buffered frame/delta/status event to the sessions dict.
--- C2b（§8.1, I-D）：`sidFor` 把帧里的 core id 路由到 Session.id（fork /
--- resume 的工作副本帧；普通会话 = 恒等）。SessionCreated 建立
--- workCopies 后用它重放缓冲帧。
+-- C2b (§8.1, I-D): `sidFor` routes a frame's core id to Session.id
+-- (work-copy frames from fork/resume; plain session = identity). After
+-- SessionCreated sets up workCopies it is used to replay buffered frames.
 applyPendingEvent : (String -> String) -> E.Value -> Dict String T.SessionState -> Dict String T.SessionState
 applyPendingEvent sidFor raw sessions =
     -- Try FrameEvent first (most common for initial messages)

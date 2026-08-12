@@ -108,7 +108,7 @@ impactScope ctx rootPlanId =
 
         Just rm ->
             let
-                -- C2b：Session.id 稳定 = plan origin（无血缘/head 解析）。
+                -- C2b: Session.id is stable = plan origin (no lineage/head resolution).
                 rootSid =
                     rm.origin.sessionId
 
@@ -167,7 +167,7 @@ walkLevels ctx planId acc =
 
         Just meta ->
             let
-                -- C2b：Session.id 稳定 = plan origin（无 head/血缘解析）。
+                -- C2b: Session.id is stable = plan origin (no head/lineage resolution).
                 originConv =
                     meta.origin.sessionId
 
@@ -175,8 +175,8 @@ walkLevels ctx planId acc =
                     originConv
             in
             -- The session where THIS plan's result lives must be open
-            -- （feedback + truncation 需要 live 会话；C2b/C3：窗口按
-            -- Session.id key，直接查）。
+            -- (feedback + truncation need a live session; under C2b/C3
+            -- windows are keyed by Session.id, so look it up directly).
             if NC.liveSessionForOrigin ctx.sessions originHead == Nothing then
                 ( acc, Nothing )
 
@@ -236,8 +236,8 @@ walkLevels ctx planId acc =
 
 closePlans : Dict String PM.PlanMeta -> List String -> List String -> List String
 closePlans planMetas truncSessions chainIds =
-    -- C2b：Session.id 稳定 = plan origin——按 origin 直接匹配（无
-    -- conversation/head 解析）。
+    -- C2b: Session.id is stable = plan origin — match directly by origin
+    -- (no conversation/head resolution).
     Dict.foldl
         (\pid meta acc ->
             if List.member pid chainIds then
@@ -255,7 +255,7 @@ closePlans planMetas truncSessions chainIds =
 
 messagesOf : { a | sessions : Dict String T.SessionState } -> String -> List T.Message
 messagesOf ctx sid =
-    -- C2b/C3：会话按 Session.id key——直接取。
+    -- C2b/C3: sessions are keyed by Session.id — fetch directly.
     Dict.get sid ctx.sessions
         |> Maybe.map .messages
         |> Maybe.withDefault []

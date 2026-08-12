@@ -144,7 +144,7 @@ chainCtx : Model -> NC.ChainCtx
 chainCtx model =
     { nodeSessions = model.planNodeSessions
     , liveSessions = Dict.map (\_ _ -> ()) model.sessions
-    -- C2b-7：无血缘——plan 的属主会话就是 origin（稳定 Session.id）。
+    -- C2b-7: no lineage — a plan's owning session IS its origin (stable Session.id).
     , planOrigins =
         Dict.map
             (\_ meta -> meta.origin.sessionId)

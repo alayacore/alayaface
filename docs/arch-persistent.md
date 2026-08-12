@@ -1,360 +1,366 @@
-# C 架构：不可变值模型（Persistent Structure）——会话 / plan / run 的持久化语义重构
+# C Architecture: Immutable Value Model (Persistent Structure) — persistence semantics for sessions / plans / runs
 
-> **定位**：这是 P39 血缘架构的**替代方案**（用户 2026-08 决策：放弃临时 fix，直接做正确架构）。
-> 目标心智模型：函数式语言持久化数据结构——**天然递归、天然共享、天然隔离**。
-> 本文档是设计蓝本，实施前先与用户逐条确认"已确认决策"（§9）。
-
----
-
-## 0. 一句话
-
-把"会话 / plan / run"从**可变物理实体 + 共享身份**（现状：一个 plan 目录 + 血缘 registry +
-一个全局 run 状态）改为**不可变值 + 结构共享**（更新产生新值，旧值保留，未变部分共享，
-plan 状态是追加式不可变 run 日志 + 会话版本内的视图指针）。
+> **Positioning**: this is the **replacement** for the P39 lineage architecture
+> (user decision 2026-08: drop the temporary fix and do the correct
+> architecture). Target mental model: functional-language persistent data
+> structures — **naturally recursive, naturally shared, naturally isolated**.
+> This document is the design blueprint; confirm each "confirmed decision"
+> (§9) with the user item by item before implementing.
 
 ---
 
-## 1. 现状的不可救根因（为什么必须重做，而不是再打补丁）
+## 0. In one sentence
 
-| # | 根因 | 症状（用户可感知） |
+Turn "session / plan / run" from **mutable physical entities + shared identity**
+(current state: one plan directory + a lineage registry + one global run
+state) into **immutable values + structural sharing** (updates produce new
+values, old values are kept, unchanged parts are shared, plan state is an
+append-only immutable run log + a view pointer inside the session version).
+
+---
+
+## 1. Why the current state is unfixable (why redo it instead of patching)
+
+| # | Root cause | Symptom (user-visible) |
 |---|---|---|
-| R1 | **plan 状态是 plan 级全局可变对象**：`meta.json.last_status` / `run.json` 唯一一份，被所有绑定它的会话共享；`persistRunStatus` 写它 | 老会话里未执行的 plan A，重跑后状态栏变成"已执行"；点开 plan 窗口看到的是别的会话的 run |
-| R2 | **fork = 物理身份复制 + 血缘共享**：新目录 + `session.meta.json { conversation_id, parent_instance_id }`，绑定按 conversation 解析 | 顶层会话之间共享身份；链接跨会话指向；需要 head/血缘表，重启重建，处处补丁 |
-| R3 | **部分拷贝**：重跑 fork 只重放截断历史（`truncateHistory` 到 plan JSON） | 不是"拷贝整个会话"，无法表达"老会话是重跑前世界" |
+| R1 | **Plan state is a plan-level global mutable object**: a single `meta.json.last_status` / `run.json`, shared by every session bound to it; `persistRunStatus` writes it | In an old session, plan A (unexecuted) shows "executed" in the status bar after a re-run; opening the plan window shows another session's run |
+| R2 | **Fork = physical identity copy + lineage sharing**: new directory + `session.meta.json { conversation_id, parent_instance_id }`, bindings resolved by conversation | Top-level sessions share identity; links point across sessions; needs head/lineage tables, rebuilt on restart, patched everywhere |
+| R3 | **Partial copy**: a re-run fork only replays the truncated history (`truncateHistory` to the plan JSON) | Not a "copy of the whole session" — cannot express "the old session is the pre-rerun world" |
 
-三个根因同源：**用"可变共享"实现共享，用"身份复制"实现隔离**。
-正确做法恰好相反：**用"不可变值"实现隔离，用"结构共享"实现共享**。
+The three root causes share one origin: **"mutable sharing" for sharing and
+"identity copy" for isolation**. The correct approach is exactly the reverse:
+**"immutable values" for isolation and "structural sharing" for sharing**.
 
 ---
 
-## 2. 核心抽象（函数式映射）
+## 2. Core abstractions (functional mapping)
 
-| 想要的性质 | 实现机制 | 含义 |
+| Desired property | Mechanism | Meaning |
 |---|---|---|
-| 天然隔离 | **不可变性**：任何"更新"产生**新值**，旧值原封不动 | 老会话永远看到自己的版本；plan 完成/重跑不影响历史版本 |
-| 天然共享 | **结构共享**：新值引用未变部分（消息前缀、plan 定义、run 对象），零拷贝 | 不膨胀；plan 只有一份定义，runs 是追加日志 |
-| 天然递归 | **结构递归**：plan → 节点会话（引用会话值）→ 子 plan（引用），类型定义自身递归 | 子 plan/节点会话是值引用，不是拷贝展开 |
-| 链接本地 | **引用即结构内指针**：链接 = (会话值内的 plan 消息 → plan 值)，状态 = 该会话版本的视图指针 | 链接永远指向"自己下面"（自己版本看到的 run） |
+| Natural isolation | **Immutability**: any "update" produces a **new value**, the old value stays untouched | An old session always sees its own version; plan completion/re-run never affects historical versions |
+| Natural sharing | **Structural sharing**: the new value references the unchanged parts (message prefix, plan definition, run objects), zero copy | No bloat; the plan has one definition, runs are an append log |
+| Natural recursion | **Structural recursion**: plan → node session (references a session value) → child plan (reference), the type definition recurses on itself | Child plans / node sessions are value references, not copied expansions |
+| Local links | **Reference = in-structure pointer**: a link = (plan message inside the session value → plan value), state = the view pointer of that session version | A link always points "below itself" (the run its own version sees) |
 
 ---
 
-## 3. 数据模型（概念层，Elm/Go/Rust 通用）
+## 3. Data model (conceptual layer, common to Elm/Go/Rust)
 
-### 3.1 不可变对象（内容寻址，引用 = 对象 hash）
+### 3.1 Immutable objects (content-addressed, reference = object hash)
 
 ```
-PlanDef   — plan 静态定义（不可变）：planId / name / tasks DAG / meta
-Run       — 一次运行的快照（不可变）：runId / status / nodes / startedAt / finishedAt / summary
-Version   — 会话的一个版本（不可变）：
-            { messages : Seq MsgRef        -- 持久化消息序列（前缀共享）
-            , planViews : Map PlanKey RunRef  -- 本版本看到的每个 plan 的 run
-                                               --（Nothing = 该版本下未执行）
-            , parent : Maybe VersionRef    -- 派生来源（版本树边）
+PlanDef   — plan static definition (immutable): planId / name / tasks DAG / meta
+Run       — snapshot of one run (immutable): runId / status / nodes / startedAt / finishedAt / summary
+Version   — one version of a session (immutable):
+            { messages : Seq MsgRef        -- persisted message sequence (prefix-shared)
+            , planViews : Map PlanKey RunRef  -- the run each plan sees in this version
+                                               -- (Nothing = not executed under this version)
+            , parent : Maybe VersionRef    -- derivation source (version-tree edge)
             }
 ```
 
-### 3.2 引用层（可变，轻量）
+### 3.2 Reference layer (mutable, lightweight)
 
 ```
-Plan    = { def : PlanDefRef, runs : Vec RunRef }        -- runs 追加（不可变对象列表）
-Session = { id : String                                  -- 稳定身份（= 创建 id，永不改变）
-          , head : VersionRef                            -- 当前版本
-          , versions : Vec VersionRef                    -- 版本历史/树
+Plan    = { def : PlanDefRef, runs : Vec RunRef }        -- runs append (list of immutable objects)
+Session = { id : String                                  -- stable identity (= creation id, never changes)
+          , head : VersionRef                            -- current version
+          , versions : Vec VersionRef                    -- version history/tree
           }
 ```
 
-### 3.3 关键不变式
+### 3.3 Key invariants
 
-- **I1**：`PlanDef`/`Run`/`Version` 一经创建不可变（内容寻址，写后不更）
-- **I2**：`plan.runs` 只追加；`Run` 之间无修改关系（重跑 = 新 Run，旧 Run 保留）
-- **I3**：会话的"状态"完全由 `head` 版本决定；旧版本是历史（只读）
-- **I4**：plan 的"显示状态" = `Version.planViews[plan]`（**不是** plan 的全局字段）——同一 plan 在不同版本里状态不同，天然隔离
-- **I5**：`Session.id` 稳定，**没有** conversation/instance 之分（身份层消灭血缘）
+- **I1**: `PlanDef`/`Run`/`Version` are immutable once created (content-addressed, never mutated after write)
+- **I2**: `plan.runs` only appends; `Run`s never modify each other (re-run = new Run, old Run kept)
+- **I3**: a session's "state" is entirely determined by its `head` version; old versions are history (read-only)
+- **I4**: a plan's "displayed state" = `Version.planViews[plan]` (**not** a plan-global field) — the same plan has different states across versions, naturally isolated
+- **I5**: `Session.id` is stable, with **no** conversation/instance split (the identity layer eliminates lineage)
 
 ---
 
-## 4. 更新语义（每种操作 = 一次不可变更新）
+## 4. Update semantics (each operation = one immutable update)
 
-### 4.1 plan 运行（工作区 → 固化）
+### 4.1 Plan runs (workspace → freeze)
 
-- 运行中是**工作区**（可变，UI 交互：节点状态、输出流）
-- 完成/停止/失败时**固化**一个不可变 `Run` 快照 → `plan.runs` 追加
-- 固化点：完成、失败、停止、重跑起点（旧 run 不删）
+- While running it is a **workspace** (mutable, UI-interactive: node states, output streams)
+- On completion/stop/failure, freeze an immutable `Run` snapshot → append to `plan.runs`
+- Freeze points: completion, failure, stop, re-run start (old runs are never deleted)
 
-### 4.2 plan 完成回写（核心：结果插回 parent）
+### 4.2 Plan completion write-back (core: result inserted back into parent)
 
 ```
-旧版本 V₀：messages = P ++ [PlanMsg A] ++ R      （P=前缀, R=plan 后内容）
-新版本 V₁：messages = P ++ [PlanMsg A] ++ [Feedback A]   （前缀 P 结构共享）
+Old version V₀: messages = P ++ [PlanMsg A] ++ R      (P=prefix, R=content after plan)
+New version V₁: messages = P ++ [PlanMsg A] ++ [Feedback A]   (prefix P structurally shared)
            planViews = V₀.planViews ⊕ { A → newRun }
            parent    = V₀
 head := V₁
 ```
 
-- 前缀 P 与 V₀ **共享**（一个不可变消息块，不拷贝）
-- R（被替换部分）只存在于 V₀ → 旧版本天然保留被截断内容（撤销/历史免费）
-- **不需要 fork、不需要新会话目录**：同一 `Session` 的 head 从 V₀ 切到 V₁
+- Prefix P is **shared** with V₀ (one immutable message block, no copy)
+- R (the replaced part) exists only in V₀ → the old version naturally keeps the truncated content (undo/history for free)
+- **No fork, no new session directory needed**: the same `Session`'s head switches from V₀ to V₁
 
-### 4.3 重跑 plan A（分支语义，老会话保持）
+### 4.3 Re-run plan A (branch semantics, old session preserved)
 
-用户从某版本重跑 A → 派生**新分支**：
-
-```
-V₁  = 从当前 head V₀ 派生：messages = 锚点前缀 ++ [新结果]，planViews ⊕ { A → newRun }
-head := V₁    （当前会话的 head 更新）
-V₀  保留      （= "老会话"：A 未执行，状态栏 NotStarted）
-```
-
-- **与现状的关键差异**：重跑**就是**把当前会话的 head 更新为新版本；老版本 V₀ 是同一个 `Session` 的历史（会话管理器可查看/回退）
-- 若用户希望"重跑后另开新窗口、老窗口不动"：`Session` 分身 = **另一个 head 指针指向 V₀**（零拷贝，两个引用），而不是复制数据——窗口只是"查看某版本的视图"
-
-### 4.4 递归（子 plan / 节点会话）
+The user re-runs A from some version → derive a **new branch**:
 
 ```
-Plan 的 Run.nodes[nodeId].session = 节点会话的 VersionRef（引用）
-节点会话里创建子 plan → 子 plan 是值引用（PlanRef）
-子 plan 完成 → 父 plan 节点 run 固化新快照 → 父会话版本更新（递归同一机制）
+V₁  = derived from current head V₀: messages = anchor prefix ++ [new result], planViews ⊕ { A → newRun }
+head := V₁    (the current session's head updates)
+V₀  kept      (= the "old session": A unexecuted, status bar NotStarted)
 ```
 
-- 递归在**值层面**，不在物理目录层面——没有"递归拷贝"问题（这是用户否定的拷贝方案的根本缺陷）
+- **Key difference from the current state**: a re-run **is** updating the current session's head to a new version; the old version V₀ is history of the **same** `Session` (viewable/revertible from the session manager)
+- If the user wants "after a re-run, open a new window and leave the old window untouched": a `Session` twin = **another head pointer to V₀** (zero copy, two references), not a data copy — a window is just "a view of some version"
 
-### 4.5 级联重跑
+### 4.4 Recursion (child plans / node sessions)
 
-- 级联 = 沿版本树向上传播的**一连串版本更新**（父 plan 节点重答 → 新 Run → 父会话新版本 → 祖父…）
-- 语义与 P39 状态机一致，但载体从"fork 交接"变成"版本派生"——无物理交接、无顺序假设
+```
+Plan's Run.nodes[nodeId].session = the node session's VersionRef (reference)
+A child plan created in a node session → the child plan is a value reference (PlanRef)
+Child plan completes → the parent plan node's run freezes a new snapshot → the parent session version updates (same recursive mechanism)
+```
 
-### 4.6 撤销 / 历史
+- Recursion is at the **value level**, not the physical-directory level — no "recursive copy" problem (the fundamental flaw of the copy approach the user rejected)
 
-- `Session.versions` 就是版本树：任何版本可查看（只读）；恢复 = 把 head 切回旧版本（指针操作，零数据操作）
-- 若需"基于旧版本继续编辑"（checkout 语义）→ 物化能力（§6.3，开放项）
+### 4.5 Cascade re-run
+
+- A cascade = **a chain of version updates** propagating up the version tree (parent plan node re-answers → new Run → parent session new version → grandparent…)
+- Semantics match the P39 state machine, but the carrier changes from "fork handoff" to "version derivation" — no physical handoff, no ordering assumptions
+
+### 4.6 Undo / history
+
+- `Session.versions` IS the version tree: any version can be viewed (read-only); restore = point head back at an old version (pointer operation, zero data operation)
+- "Continue editing based on an old version" (checkout semantics) → materialization capability (§6.3, open item)
 
 ---
 
-## 5. UI 模型
+## 5. UI model
 
-| 组件 | 现状 | C |
+| Component | Current state | C |
 |---|---|---|
-| 会话窗口 | 绑定物理实例（血缘解析 head） | 绑定 `(Session.id, versionRef)`；当前 head 可编辑，旧版本只读视图 |
-| 状态栏（plan） | `planMetaForMessage → planId → 全局 run 状态` | `Version.planViews[plan]` → run 状态（**版本隔离，核心修复点**） |
-| plan 链接 | (conversation, planIndex) → planId | (session 值内 plan 消息) → PlanDef ref；打开窗口显示该版本看到的 run |
-| plan 窗口 | 全局唯一窗口（按 planId） | 窗口 = (plan, versionRef) 视图；可显示全部 runs 历史 + 高亮当前版本指针 |
-| 重跑结果 | fork 出新窗口 + 血缘 | 当前会话 head 更新（或分身视图）；无窗口跳变 |
-| 会话管理器 | 列物理实例 | 列 `Session`（稳定 id）+ 版本数/当前版本标记 |
+| Session window | bound to a physical instance (lineage head resolution) | bound to `(Session.id, versionRef)`; current head editable, old versions read-only views |
+| Status bar (plan) | `planMetaForMessage → planId → global run state` | `Version.planViews[plan]` → run state (**version-isolated — the core fix**) |
+| Plan link | (conversation, planIndex) → planId | (plan message inside the session value) → PlanDef ref; opening the window shows the run that version saw |
+| Plan window | one global window (by planId) | window = (plan, versionRef) view; can show the full run history + highlight the current version pointer |
+| Re-run result | fork opens a new window + lineage | current session head updates (or twin view); no window jump |
+| Session manager | lists physical instances | lists `Session`s (stable id) + version count / current-version mark |
 
 ---
 
-## 6. 存储与后端边界
+## 6. Storage and backend boundary
 
-### 6.1 对象存储（内容寻址，git 式 loose objects）
+### 6.1 Object store (content-addressed, git-style loose objects)
 
 ```
-~/.alayaface/objects/<sha>/          # hash → 不可变对象（version / run / plandef / msgblock）
-~/.alayaface/sessions/<id>/          # 会话目录（保留给 alayacore 的工作副本）
-    session.alaya                    # alayacore 持有 = 当前 head 的工作副本
-    session.refs.json                # 前端：id / head 指针 / versions 列表（引用 objects/）
-    plans/<planId>/                  # plan 目录
-        plan.json                    # PlanDef（不可变，写完不动）
-        runs/run-<runId>.json        # Run 快照（不可变，追加）
-        index.json                   # runs 列表 + meta（引用）
+~/.alayaface/objects/<sha>/          # hash → immutable object (version / run / plandef / msgblock)
+~/.alayaface/sessions/<id>/          # session directory (kept as alayacore's work copy)
+    session.alaya                    # held by alayacore = the current head's work copy
+    session.refs.json                # frontend: id / head pointer / versions list (references objects/)
+    plans/<planId>/                  # plan directory
+        plan.json                    # PlanDef (immutable, never touched after write)
+        runs/run-<runId>.json        # Run snapshot (immutable, append-only)
+        index.json                   # runs list + meta (reference)
 ```
 
-- hash = 内容哈希（sha256），由**后端**计算（Go/Rust 对称，见 C2）
-- 前端只持有引用（hash），对象读写走 fs RPC（`object_put` / `object_get`，后端实现，双后端对称）
+- hash = content hash (sha256), computed by the **backend** (Go/Rust symmetric, see C2)
+- The frontend only holds references (hashes); object reads/writes go through fs RPC (`object_put` / `object_get`, implemented by both backends symmetrically)
 
-### 6.2 与 alayacore 的边界（NEVER modify AlayaCore）
+### 6.2 Boundary with alayacore (NEVER modify AlayaCore)
 
-- `session.alaya` 仍是 alayacore 的**工作副本**（当前 head 的可变物化）
-- 版本边界（plan 完成/重跑/手动存档）：前端把当前工作副本的**消息内容**固化进不可变 `Version`（对象存储）——前端已有完整消息列表（内存），只需在后端落盘
-- 查看旧版本：**渲染对象存储里的快照**（只读），不触碰 alayacore
-- 继续在当前 head 编辑：alayacore 工作副本照常（消息更新沿用现有 sendPrompt/截断通道，但**截断**改为：物化新版本后，alayacore 侧仍需要真的删消息 → 保留 fork 命令作为"工作副本物化通道"（D2 现状），但**身份层不再需要血缘**——fork 出的文件只是 head 版本的工作副本，不是新身份）
+- `session.alaya` stays alayacore's **work copy** (the current head's mutable materialization)
+- Version boundary (plan completion / re-run / manual archive): the frontend freezes the current work copy's **message content** into an immutable `Version` (object store) — the frontend already has the full message list (in memory), it only needs the backend to persist it
+- Viewing an old version: **render the object-store snapshot** (read-only), never touch alayacore
+- Continue editing on the current head: the alayacore work copy works as usual (message updates reuse the existing sendPrompt/truncate channel; but **truncation** changes to: after materializing a new version, the alayacore side still needs the messages actually deleted → keep the fork command as the "work-copy materialization channel" (current state, D2), but the **identity layer no longer needs lineage** — the forked files are just a work copy of the head version, not a new identity)
 
-### 6.3 物化（开放项）
+### 6.3 Materialization (open item)
 
-"基于旧版本继续编辑"（checkout）需要把旧版本的不可变消息**物化成 session.alaya**：
-- 我们的后端可以生成 alayacore 格式（fakecore 已证明格式可读写；真实格式需验证）
-- 方案：后端 `materialize_session { versionRef → sessionFile }` 命令（Go/Rust 对称）
-- **C 第一版可不做**（旧版本只读即可满足隔离/共享/递归目标）；物化作为 C4 独立组件
-
----
-
-## 7. 迁移（现有数据）
-
-1. 现有每个会话：把当前 session.alaya + 各 plan 的 meta/run **固化为首个 Version**（planViews 取当时状态）→ `session.refs.json` 初始化
-2. 现有血缘（session.meta.json）：**废弃**（不再读写；旧文件可留作存档）
-3. fork/head/resolveConversation/lineage 相关代码：**删除**
-4. 迁移后所有更新走新模型（版本派生）
-5. 验证：现有 e2e（plan/restart/fork/two-plans）改写为版本语义断言
+"Continue editing based on an old version" (checkout) requires materializing the old version's immutable messages into session.alaya:
+- Our backend can generate the alayacore format (fakecore has proven the format is readable/writable; the real format needs verification)
+- Plan: backend `materialize_session { versionRef → sessionFile }` command (Go/Rust symmetric)
+- **C first release can skip it** (read-only old versions already satisfy the isolation/sharing/recursion goals); materialization becomes an independent C4 component
 
 ---
 
-## 8. 实施阶段（每阶段可独立验证、可提交）
+## 7. Migration (existing data)
 
-> 阶段间顺序依赖；每阶段跑全套验证（elm-test / go / cargo / parity / e2e）。
-
-- **C1 — 值类型 + 对象存储** ✅ 已完成
-  - `PlanDef`/`Run`/`Version` 类型（Elm）+ 后端 `object_put/get`（Go/Rust 对称 + 测试）
-  - `session.refs.json` 编解码；版本固化（plan 完成时把工作副本固化为 Version）
-- **C2 — 版本化 plan 状态（本 bug 的核心修复）** ✅ 已完成（C2a）
-  - `Version.planViews` + 状态栏/窗口按版本解析
-  - 重跑 = 版本派生（老版本保留，老会话显示旧状态）
-  - **验证**：用户 bug 场景 e2e（老会话 A 保持未执行）
-- **C2b — 会话所有权（窗口 = Session 视图 + 工作副本映射）** ✅ 已完成（§8.1）
-- **C3 — 递归与级联在值模型下** ✅ 已完成（§8.2）
-  - 节点会话/子 plan 引用版本值；级联 = 版本链传播
-  - 删除级联 fork 交接（保留状态机语义，改版本载体）
-- **C4 — UI 与历史** ✅ 已完成（§8.2）
-  - 版本浏览（会话管理器显示版本/历史/回退）
-  - 物化能力（可选，开放项 §6.3）
-- **C5 — 清理** ✅ 已完成（§8.2）
-  - 删血缘 registry / headInstanceFor / resolveConversation / fork 收养
-  - 删 P39 相关的兼容补丁；REFACTOR.md 归档到 docs/archive/
+1. For each existing session: freeze the current session.alaya + every plan's meta/run into a **first Version** (planViews taking the state at that time) → initialize `session.refs.json`
+2. Existing lineage (session.meta.json): **deprecated** (no longer read/written; old files may be kept as archives)
+3. fork/head/resolveConversation/lineage-related code: **deleted**
+4. After migration, all updates go through the new model (version derivation)
+5. Verify: existing e2e (plan/restart/fork/two-plans) rewritten as version-semantics assertions
 
 ---
 
-## 8.1 C2b 设计：会话所有权（已想透，2026-08 用户确认"先想好再动手"）
+## 8. Implementation phases (each independently verifiable and committable)
 
-### 目标（D3/D9 落地）
+> Phases depend on each other in order; run the full verification suite per phase (elm-test / go / cargo / parity / e2e).
 
-1. **窗口 = Session 视图**：窗口 key 永远 = `Session.id`（= plan 创建时的会话 id，稳定）。fork/resume 只换**工作副本**，不换窗口身份。
-2. **工作副本映射**：`sessionWorkCopies : Dict SessionId CoreId`（Session.id → 当前 alayacore 会话 id）。
-3. **删血缘**：不再有 conversation/instance 之分；`resolveConversation`/`headInstanceFor`/`sessionLineage` 全部删除。
+- **C1 — value types + object store** ✅ done
+  - `PlanDef`/`Run`/`Version` types (Elm) + backend `object_put/get` (Go/Rust symmetric + tests)
+  - `session.refs.json` codec; version freeze (on plan completion, freeze the work copy into a Version)
+- **C2 — versioned plan state (the core fix for this bug)** ✅ done (C2a)
+  - `Version.planViews` + status bar/window resolution by version
+  - Re-run = version derivation (old version kept, old session shows old state)
+  - **Verify**: user bug-scenario e2e (old session A stays unexecuted)
+- **C2b — session ownership (window = Session view + work-copy mapping)** ✅ done (§8.1)
+- **C3 — recursion and cascade under the value model** ✅ done (§8.2)
+  - node sessions / child plans reference version values; cascade = version-chain propagation
+  - cascade fork handoff removed (state-machine semantics kept, carrier changed to versions)
+- **C4 — UI and history** ✅ done (§8.2)
+  - version browsing (session manager shows versions/history/revert)
+  - materialization capability (optional, open item §6.3)
+- **C5 — cleanup** ✅ done (§8.2)
+  - delete lineage registry / headInstanceFor / resolveConversation / fork adoption
+  - delete P39-era compatibility patches; REFACTOR.md archived to docs/archive/
 
-### 核心不变式
+---
 
-- **I-A**：`Session.id` = 该会话第一个 alayacore 会话 id（root）。**永不改变**。
-- **I-B**：窗口（sessionOrder / sessionNums / windowPositions / activeId / sessions Dict 的 key）= **Session.id**（**最终架构，方案 A**：UI 状态按 UI 身份组织，不因"改动面"妥协——工作副本只是边界细节）。
-- **I-C**：`sessionWorkCopies[Session.id]` = 当前工作副本 coreId。无 fork/resume 时 = Session.id 自身（**映射可以缺省**：查无 → 自身）。
-- **I-D**：帧路由：coreId → Session.id（反查 workCopies；无 → 自身）→ `sessions[Session.id]` 更新。
-- **I-E**：命令（sendPrompt / cancel / setModel / closeSession / scroll）：`Session.id` → `workCopyId`（正向查 workCopies；无 → 自身）→ coreId。
-- **I-F**：绑定（`planMetaForMessage` / `messageBoundToPlan`）：**直接按 Session.id 匹配 planMetas origin**（删 resolveConversation 步骤）——plan origin 永远 = Session.id。
-- **I-G**：`sessions` 里**永远不会**出现"多个 coreId 属于同一 Session"——每个 Session 恰好一个条目（工作副本切换时条目内容被替换/帧接管，旧 coreId 的条目被移除）。
-- **I-H**（robust）：**工作副本生命周期显式**——创建（fork/resume）→ 关闭（fork 换新时删旧目录；Session 关闭时随所有权图）；失效（进程死/目录丢）→ 检测并回退。
+## 8.1 C2b design: session ownership (thought through; user confirmed "think first, then act" 2026-08)
 
-### 各路径设计
+### Goals (D3/D9 landing)
 
-**1. 普通创建（New Session / 节点会话）**
-- `SessionCreated(coreId)`：Session.id = coreId（首个工作副本 = 自身，workCopies 不设或设 coreId→coreId）；sessions[coreId] = 初始；窗口 key = coreId。**现状不变**。
-- 创建时初始化 `session.refs.json`（空版本，head=""）→ **有 refs = Session 根**（管理器显示依据；重启恢复依据）。
+1. **Window = Session view**: the window key is ALWAYS `Session.id` (= the session id at plan creation, stable). Fork/resume only swap the **work copy**, never the window identity.
+2. **Work-copy mapping**: `sessionWorkCopies : Dict SessionId CoreId` (Session.id → current alayacore session id).
+3. **Delete lineage**: no more conversation/instance split; `resolveConversation`/`headInstanceFor`/`sessionLineage` all removed.
 
-**2. 重跑 fork（核心）**
-- 确认时固化 V₀（C2a 已有）。
-- `PlanCascadeForkResult` → 嵌套 `SessionCreated(S')`：**fork 分支**：
-  - `sessionId = plan origin（meta.origin.sessionId = Session.id）`——**不是 `target.forkSource`（那是 live 工作副本，可能有 resume 差异）** ← 这是 C2b 探索失败的具体 bug（用 forkSource 当 Session.id，resume 后错位 → 绑定失败 "Open plan"）。
-  - `sessionWorkCopies[Session.id] = S'`（新工作副本）。
-  - **sessions[Session.id] = S' 的初始内容**（sessionsAfterBuffer，含 buffer 的 fork 重放帧；空则空）。
-  - 窗口 key 保持 Session.id（sessionOrder/sessionNums/windowPositions 不动；**删 forkInheritPos**——窗口没换 key，位置天然保留）。
-  - `planReplaySessions` 标记 **Session.id**（重放帧路由到 Session.id 后一致）。
-  - 不写血缘（删 session.meta.json 写入）。
-- `RegisterFork` effect（`registerForkInstance`）改造：
-  - **只关旧工作副本进程**：`Ports.closeSession { sessionId = workCopyId(Session.id) 的旧值 }`（裸端口，不清前端 sessions 条目——旧 coreId 条目保留到被新帧覆盖？**或**：关进程后旧 coreId 条目由 CloseSession 事件清理——**设计**：fork 分支已把 sessions[Session.id] 覆盖为 S' 内容，旧 coreId 条目（sessions[旧coreId]？——**方案 A 下 sessions key = Session.id，旧条目就是 sessions[Session.id]**——**已被覆盖**——**所以旧 coreId（= 原 Session.id 或原 workCopy）**——**关进程即可，无前端清理**）✓。
-  - 清 `planCascadeFork`；关子 plan 窗口（确认时已排队）。
-- 级联完成固化（C2a 跳过，C2b 补上）：`freezeSessionVersion Session.id（消息 = sessions[workCopyId(Session.id)]）`——固化 V₁（A 已执行）→ head = V₁。老 V₀ 保留。
+### Core invariants
 
-**3. resume（会话管理器 / 节点）**
-- `ResumeSession(Session.id)` → `resume_session`（后端从磁盘文件恢复，**从 Session 根目录的 session.alaya？还是工作副本目录？**——见"重启"）。
-- `SessionCreated(liveId)` resume 分支：
-  - `sessionWorkCopies[Session.id] = liveId`（新工作副本）。
-  - sessions[Session.id] = liveId 的初始内容（buffer）。
-  - 窗口 key = Session.id（现状 resume 分支已把窗口 key 保持 origId？——**确认**：现状 resume 分支 `Dict.insert id` 是 liveId 作为新条目——**C2b 改为**：窗口 key = Session.id（origId），不新建条目）。
-  - `planReplaySessions` 标记 Session.id。
-- **节点会话 resume**（PlanOpenNodeSession）：节点会话不是顶层 Session——**C3 处理**（C2b 聚焦顶层）。
+- **I-A**: `Session.id` = the session's first alayacore session id (root). **Never changes.**
+- **I-B**: windows (sessionOrder / sessionNums / windowPositions / activeId / sessions Dict keys) = **Session.id** (**final architecture, plan A**: UI state organized by UI identity, not compromised by "change surface" — the work copy is just a boundary detail).
+- **I-C**: `sessionWorkCopies[Session.id]` = the current work-copy coreId. Without fork/resume = Session.id itself (**the mapping may be absent**: lookup miss → itself).
+- **I-D**: frame routing: coreId → Session.id (reverse-lookup workCopies; miss → itself) → update `sessions[Session.id]`.
+- **I-E**: commands (sendPrompt / cancel / setModel / closeSession / scroll): `Session.id` → `workCopyId` (forward lookup in workCopies; miss → itself) → coreId.
+- **I-F**: bindings (`planMetaForMessage` / `messageBoundToPlan`): **match planMetas origin directly by Session.id** (resolveConversation step removed) — plan origin is ALWAYS Session.id.
+- **I-G**: `sessions` **never** contains "multiple coreIds belonging to one Session" — each Session has exactly one entry (the entry content is replaced/frame-taken-over on work-copy switch; the old coreId's entry is removed).
+- **I-H** (robust): **explicit work-copy lifecycle** — creation (fork/resume) → close (delete the old directory when a fork replaces it; closed with the ownership graph when the Session closes); failure (process dead/directory lost) → detected and reverted.
 
-**4. 帧路由**（Delta/Frame/Status/RpcError）
-- `sid = sessionIdOfWorkCopy model ev.sessionId`（反查 workCopies；无 → 自身）→ `Dict.get sid model.sessions` → 更新 sessions[sid]、planMessageCounts[sid]、planReplaySessions 按 sid。
+### Per-path design
 
-**5. 命令**（SendPrompt / CancelTask / SetModel / ConfirmTool / McpCancel / scrollToBottom / Dom.focus）
-- 所有 `Ports.sendPrompt { sessionId = ... }` 等：`sessionId = workCopyId model Session.id`（正向查 workCopies）。
-- `CloseSession(Session.id)`：关**工作副本**进程（`workCopyId`）+ 前端清理（sessions 移除 Session.id、窗口、workCopies 移除、plan 所有权图关闭）。
+**1. Plain creation (New Session / node session)**
+- `SessionCreated(coreId)`: Session.id = coreId (first work copy = itself; workCopies unset or set coreId→coreId); sessions[coreId] = initial; window key = coreId. **Unchanged from the current state.**
+- At creation, initialize `session.refs.json` (empty version, head="") → **having refs = Session root** (the manager's listing basis; the restart-recovery basis).
 
-**6. 绑定**（planMetaForMessage / messageBoundToPlan / findPlanIdBySession）
-- 删 `resolveConversation` 步骤：`convId = sid`（Session.id）→ planMetas[(Session.id, planIndex)]。
-- **节点会话**的绑定（findPlanIdBySession）：C2b 先保留现状逻辑（节点会话的 lastSessionId/conversationId 匹配），C3 统一。
+**2. Re-run fork (core)**
+- On confirm, freeze V₀ (C2a already does this).
+- `PlanCascadeForkResult` → nested `SessionCreated(S')`: **fork branch**:
+  - `sessionId = plan origin (meta.origin.sessionId = Session.id)` — **NOT `target.forkSource` (that is the live work copy, which may have resume differences)** ← this is the concrete bug C2b exploration hit (using forkSource as Session.id misaligns after resume → binding fails "Open plan").
+  - `sessionWorkCopies[Session.id] = S'` (new work copy).
+  - **sessions[Session.id] = S'`s initial content** (sessionsAfterBuffer, including the buffer's fork-replayed frames; empty if none).
+  - Window key stays Session.id (sessionOrder/sessionNums/windowPositions untouched; **forkInheritPos deleted** — the window did not change keys, so position is naturally preserved).
+  - `planReplaySessions` marks **Session.id** (replayed frames route to Session.id consistently).
+  - No lineage written (session.meta.json write removed).
+- `RegisterFork` effect (`registerForkInstance`) rework:
+  - **Only close the old work-copy process**: `Ports.closeSession { sessionId = the old value of workCopyId(Session.id) }` (bare port, no frontend session entry cleanup — the old coreId entry is kept until overwritten by new frames? **or**: after closing the process, the old coreId entry is cleaned up by the CloseSession event — **design**: the fork branch already overwrote sessions[Session.id] with S' content; the old coreId entry (sessions[old coreId]? — **under plan A sessions keys = Session.id, the old entry IS sessions[Session.id]** — **already overwritten** — **so the old coreId (= original Session.id or original workCopy)** — **just close the process, no frontend cleanup**) ✓.
+  - Clear `planCascadeFork`; close child plan windows (already queued at confirm time).
+- Cascade-completion freeze (skipped in C2a, added in C2b): `freezeSessionVersion Session.id (messages = sessions[workCopyId(Session.id)])` — freeze V₁ (A executed) → head = V₁. Old V₀ kept.
 
-**7. 会话管理器**
-- 列磁盘目录：**有 `session.refs.json` = Session 根**（显示）；无 refs = 工作副本/未初始化（不显示）。
-- Resume：`ResumeSession(Session.id)` → 恢复工作副本（见"重启"）。
+**3. Resume (session manager / node)**
+- `ResumeSession(Session.id)` → `resume_session` (backend restores from the disk file; **from the Session root's session.alaya? or the work-copy directory?** — see "restart").
+- `SessionCreated(liveId)` resume branch:
+  - `sessionWorkCopies[Session.id] = liveId` (new work copy).
+  - sessions[Session.id] = liveId's initial content (buffer).
+  - Window key = Session.id (the current resume branch keeps the window key as origId? — **confirm**: the current resume branch does `Dict.insert id` with liveId as a new entry — **C2b changes it to**: window key = Session.id (origId), no new entry).
+  - `planReplaySessions` marks Session.id.
+- **Node session resume** (PlanOpenNodeSession): node sessions are not top-level Sessions — **handled in C3** (C2b focuses on top-level).
 
-**8. 重启恢复**
-- 扫描：读各目录 `session.refs.json` → Session 根 + head 版本（C2a 已有）。**同时读 workCopy 记录**。
-- **工作副本记录**：fork/resume 时把当前工作副本目录 id 写进 `session.refs.json`（新字段 `"workCopy": "<coreId>"`）→ 重启后：resume Session 时**恢复 workCopy 目录的 session.alaya**（它是 head 的物化）→ `workCopies[Session.id] = resume liveId`。
-- **旧版本只读**（D8）：用户回退/查看旧版本 = 渲染对象存储快照（C4）。
+**4. Frame routing** (Delta/Frame/Status/RpcError)
+- `sid = sessionIdOfWorkCopy model ev.sessionId` (reverse-lookup workCopies; miss → itself) → `Dict.get sid model.sessions` → update sessions[sid], planMessageCounts[sid], planReplaySessions by sid.
 
-**9. 关闭/删除**
-- `CloseSession(Session.id)`：关工作副本进程（workCopyId）+ 清 Session 条目 + 所有权图（plan/节点/子 plan）。
-- `DeleteSession(Session.id)`：删 Session 根目录 + 工作副本目录（对象存储对象可留作 GC——开放项）。
+**5. Commands** (SendPrompt / CancelTask / SetModel / ConfirmTool / McpCancel / scrollToBottom / Dom.focus)
+- All `Ports.sendPrompt { sessionId = ... }` etc.: `sessionId = workCopyId model Session.id` (forward lookup in workCopies).
+- `CloseSession(Session.id)`: close the **work copy** process (`workCopyId`) + frontend cleanup (remove Session.id from sessions, windows, workCopies; close the plan ownership graph).
 
-### 探索发现（已定位的坑）
+**6. Bindings** (planMetaForMessage / messageBoundToPlan / findPlanIdBySession)
+- Remove the `resolveConversation` step: `convId = sid` (Session.id) → planMetas[(Session.id, planIndex)].
+- **Node session** bindings (findPlanIdBySession): C2b keeps the current logic first (node session's lastSessionId/conversationId matching); C3 unifies.
 
-- **坑 1（已修）**：C2b 初版把 `target.forkSource`（live 工作副本）当 Session.id——会话被 resume 后 live ≠ 创建 id → 窗口 key 错位 → `planMetaForMessage` 按错误 key 匹配 → 状态栏 "Open plan"。**修正**：Session.id = plan origin（`meta.origin.sessionId`），forkSource 只是工作副本。
-- **坑 2（待查）**：fork-e2e 流程中 S 疑似被 resume（产生额外 live id）——来源未定位（可能 `openPlanFile` 的 run 恢复路径）。C2b 正确实现（窗口 = Session.id）后**不影响正确性**（resume live 只是工作副本），但需单测锁定。
+**7. Session manager**
+- Lists disk directories: **having `session.refs.json` = Session root** (shown); no refs = work copy / uninitialized (not shown).
+- Resume: `ResumeSession(Session.id)` → restore the work copy (see "restart").
 
-### Robust 设计（失败路径显式处理）
+**8. Restart recovery**
+- Scan: read each directory's `session.refs.json` → Session root + head version (C2a already). **Also read the workCopy record.**
+- **Work-copy record**: on fork/resume, write the current work-copy directory id into `session.refs.json` (new field `"workCopy": "<coreId>"`) → after restart: resume Session **restores the work-copy directory's session.alaya** (it is the head's materialization) → `workCopies[Session.id] = resume liveId`.
+- **Old versions read-only** (D8): user revert/view of old versions = rendering object-store snapshots (C4).
 
-| 场景 | 处理 |
+**9. Close / delete**
+- `CloseSession(Session.id)`: close the work-copy process (workCopyId) + clear the Session entry + ownership graph (plans/nodes/child plans).
+- `DeleteSession(Session.id)`: delete the Session root directory + the work-copy directory (object-store objects can remain for GC — open item).
+
+### Exploration findings (located pitfalls)
+
+- **Pit 1 (fixed)**: the C2b first version treated `target.forkSource` (the live work copy) as Session.id — after the session is resumed, live ≠ creation id → window key misaligned → `planMetaForMessage` matched by the wrong key → status bar "Open plan". **Fix**: Session.id = plan origin (`meta.origin.sessionId`); forkSource is only the work copy.
+- **Pit 2 (to check)**: in the fork-e2e flow, S may be resumed (producing an extra live id) — source not located (possibly the run-restore path of `openPlanFile`). Once C2b is correctly implemented (window = Session.id) it **does not affect correctness** (the resume live is just a work copy), but needs unit tests to lock down.
+
+### Robust design (failure paths handled explicitly)
+
+| Scenario | Handling |
 |---|---|
-| **工作副本进程死 / 目录丢** | 后端 close/进程死亡事件 → 若该 coreId 是某 Session 的工作副本（workCopies 值）→ 标记 `workCopyLost`（UI 提示"工作副本已失效，可恢复"）；Session 条目保留（refs/版本还在）；恢复 = resume（重建工作副本） |
-| **孤儿工作副本目录** | fork 成功后，删除**上一个工作副本目录**（除 Session 根外）：`delete_session_dir`（后端已有）→ 磁盘始终只有 Session 根（身份+refs）+ 当前工作副本；删除失败仅留档（GC 兜底） |
-| **workCopy 记录失效**（refs.workCopy 指向的目录被删） | resume 时先试 workCopy 目录；不存在 → 回退 Session 根目录（可能旧内容，UI 提示"恢复的是旧工作副本"）；再失败 → 报错（用户可删会话重建） |
-| **fork 幂等** | 每个 fork 恰好一次 SessionCreated（PlanCascadeForkResult 驱动，后端不广播——已确认）；单测锁死"一次创建、窗口 key 恰好一次赋值" |
-| **refs 写失败** | 版本固化失败 → 状态栏回退（C2a 已有）；不阻塞运行 |
-| **resume 竞态** | resume 的 liveId 在 workCopies 建立前来的帧 → bufferPendingEvent（按 coreId）；SessionCreated(resume 分支) 建立 workCopies 后 flush → sessions[Session.id] |
+| **Work-copy process dies / directory lost** | backend close/process-death event → if that coreId is a Session's work copy (a workCopies value) → mark `workCopyLost` (UI hint "work copy invalidated, can be restored"); the Session entry stays (refs/versions still there); restore = resume (rebuild the work copy) |
+| **Orphan work-copy directory** | after a successful fork, delete the **previous work-copy directory** (except the Session root): `delete_session_dir` (already in the backend) → disk always has only the Session root (identity + refs) + the current work copy; a failed delete is only archived (GC as backstop) |
+| **Stale workCopy record** (the directory refs.workCopy points to was deleted) | on resume, try the workCopy directory first; if missing → fall back to the Session root directory (possibly old content; UI hint "restoring the old work copy"); if that fails → error (user can delete the session and recreate) |
+| **Fork idempotency** | each fork produces exactly one SessionCreated (driven by PlanCascadeForkResult, backend does not broadcast — confirmed); unit tests lock "one creation, window key assigned exactly once" |
+| **refs write failure** | version-freeze failure → status-bar fallback (C2a already); does not block running |
+| **Resume race** | a resume liveId's frames arriving before workCopies is set up → bufferPendingEvent (by coreId); after SessionCreated (resume branch) sets up workCopies, flush → sessions[Session.id] |
 
-### 实施步骤（每步可验证、可提交）
+### Implementation steps (each verifiable and committable)
 
-1. **C2b-1 基础设施** ✅：`workCopyId`/`sessionIdOfWorkCopy`（Plan/Update.elm 导出）+ Model.sessionWorkCopies；单测（正向/反向映射、无映射回退、多次 fork 反查）。提交 `cb19499`（三远程）。
-2. **C2b-2 绑定简化** ✅：`messageBoundToPlan`/`planMetaForMessage`/`versionPlanStatus` 删 `resolveConversation` + `planResumedFrom` 解析，直接按 Session.id 匹配——单测（普通/resume/fork 场景绑定：工作副本只经 sessionWorkCopies，绑定不看它）。提交 `84f6da5`。
-3. **C2b-4 帧路由 + 命令映射** ✅（先于 C2b-3 实施——空映射恒等，独立可提交）：Delta/Frame/Status/RpcError 经 `sessionIdOfWorkCopy` 路由（scrollToBottom 用 Session.id——DOM 窗口 key）；SendPrompt/CancelTask/SetModel/ConfirmTool/MCP*/modelSync/closeSession 经 `workCopyId`；`applyPendingEvent` 带 sid 路由参数；`sessionIdOfWorkCopyDict` 提取。提交 `f7ace5b`。
-4. **C2b-3 fork 分支修正** ✅（依赖 C2b-4 路由，故在其后实施）：SessionCreated 按 `isPlainCascadeFork` 分流——顶层 fork 走 `forkSessionCreated`（窗口 key 保持 Session.id = plan origin；workCopies[Session.id] = forkId；sessions[Session.id] 覆盖为 fork 内容；planReplaySessions 标 Session.id；不建窗口条目/不写血缘）；`registerForkInstance` 顶层分支只关旧工作副本（= Session 根 → 仅 closeSession；更早 fork → deleteSessionDir 关+删）+ 清 planCascadeFork + 关子 plan 窗口；级联完成固化 V₁（PlanCascadeForkResult 接管时 freezeSessionVersion Session.id，parent = V₀）；事件守卫 `isCurrentWorkCopy`（旧工作副本迟到帧/断开不污染新条目）。`forkInheritPos` 保留给节点 fork（C3 删）。原 SessionCreated 主体提取为 `createSessionWindow`（逐行一致，纯缩进）。提交 `ed1ce70`。
-5. **C2b-5 resume 归属** ✅：`SessionCreated` 按 `isTopLevelResume`（planResumeFrom 有值且 planResumeOwner 空）分流——`resumeSessionCreated`（窗口 key = Session.id = 磁盘目录 id；workCopies[Session.id] = liveId；sessions 按路由重放；窗口已关则按常规创建条目）；`AV.SessionRefs` 加 `workCopy : Maybe String` 字段（encode/decode 宽松 + 单测）；固化时经 `persistableWorkCopy` 写入 refs.workCopy（fork 目录 = forkId / resume live = 保留旧值 / 根 = Nothing），FreezeState 携带 workCopy 贯穿到 refs 写入。提交 `a2b93f4`。
-6. **C2b-6 管理器 + 重启** ✅：普通顶层创建初始化空 refs（sessionRefs 内存 + refs.json 落盘，head=""）；会话管理器只列 Session 根（sessionRefs 成员过滤，工作副本目录不显示）；`ResumeSession` 恢复 `refs.workCopy` 目录（回退 Session 根——后端 live 会话 SessionDir = 磁盘目录，读写同一 session.alaya，refs.workCopy 恒有效）；`DeleteSession` 连工作副本目录一起删 + 清理 sessionRefs/workCopies。提交 `a3354a3`。
-7. **C2b-7 删除血缘** ✅：`Session/Meta.elm` + `SessionMetaTest` 删除；`Model.sessionLineage`/`planMetaNodeMetaQueue` 字段删除；扫描只读 refs.json（不再读/写 session.meta.json）；`resolveEventSessionId` 简化为仅 planResumedFrom（无 registry）；`headInstanceFor`/`resolveConversation`/`headOf`/`forkMetaPath` 全部删除（节点/顶层一律按 origin = Session.id 直接解析）；Cascade closePlans/impactScope/walkLevels 按 origin 匹配；registerForkInstance 节点分支不再写血缘；`planRunningForSession`/`findPlanIdBySession`/`PlanBindSession`/`connectionChainForPlan` 按会话 id 直接绑定；测试改写（418 全绿）。提交 `7a1b955`。
-8. **e2e 重写** ✅（`fork-e2e`/`two-plans-e2e` 重写，restart/plan 兼容）：fork-e2e 断言 C2b 语义——同窗口（窗口 key = Session.id，位置不变、无新条目）、磁盘所有权（根 + refs.workCopy=fork 目录、工作副本无 refs、无 session.meta.json）、重启后管理器只列根 + resume 恢复工作副本、链式 fork 工作副本推进 + 旧目录删除；two-plans 改为磁盘级版本隔离断言（V0：A 未执行/B 完成 vs V1：A 完成）。**实施中发现并修复**：① 重跑 fork 的源会话 id 用窗口 key（Session.id）导致 resume 后后端 `Session not found`——改为 `workCopyId`（feedbackCompletedPlan/forkOrInsertInPlace/InsertInPlace 投递目标同理）；② resume live 被误当 fork 目录写进 refs.workCopy——新增 `sessionResumedLives` 显式跟踪临时 live；③ 旧工作副本目录删除与旧进程优雅关闭（save 写回 SessionDir）竞态重建目录——延迟 2s 经 `DeleteWorkCopyDir` 消息执行；④ 旧工作副本目录 = refs.workCopy 旧值（不再依赖 planResumedFrom 判断）。
+1. **C2b-1 infrastructure** ✅: `workCopyId`/`sessionIdOfWorkCopy` (exported from Plan/Update.elm) + Model.sessionWorkCopies; unit tests (forward/reverse mapping, missing-mapping fallback, multi-fork reverse lookup). Commit `cb19499` (three remotes).
+2. **C2b-2 binding simplification** ✅: `messageBoundToPlan`/`planMetaForMessage`/`versionPlanStatus` drop `resolveConversation` + `planResumedFrom` resolution, matching directly by Session.id — unit tests (plain/resume/fork binding scenarios: the work copy only goes through sessionWorkCopies, bindings never look at it). Commit `84f6da5`.
+3. **C2b-4 frame routing + command mapping** ✅ (implemented before C2b-3 — empty mapping is identity, independently committable): Delta/Frame/Status/RpcError route via `sessionIdOfWorkCopy` (scrollToBottom uses Session.id — the DOM window key); SendPrompt/CancelTask/SetModel/ConfirmTool/MCP*/modelSync/closeSession go via `workCopyId`; `applyPendingEvent` takes a sid routing parameter; `sessionIdOfWorkCopyDict` extracted. Commit `f7ace5b`.
+4. **C2b-3 fork branch fix** ✅ (depends on C2b-4 routing, hence implemented after it): SessionCreated dispatches by `isPlainCascadeFork` — top-level forks go through `forkSessionCreated` (window key stays Session.id = plan origin; workCopies[Session.id] = forkId; sessions[Session.id] overwritten with the fork content; planReplaySessions marks Session.id; no window entries / no lineage); `registerForkInstance`'s top-level branch only closes the old work copy (= Session root → closeSession only; earlier fork → deleteSessionDir close+delete) + clears planCascadeFork + closes child plan windows; cascade-completion freezes V₁ (on PlanCascadeForkResult takeover, freezeSessionVersion Session.id, parent = V₀); event guard `isCurrentWorkCopy` (late frames/disconnects from the old work copy don't pollute the new entry). `forkInheritPos` kept for node forks (deleted in C3). The original SessionCreated body is extracted into `createSessionWindow` (line-for-line identical, pure reindent). Commit `ed1ce70`.
+5. **C2b-5 resume ownership** ✅: `SessionCreated` dispatches by `isTopLevelResume` (planResumeFrom set and planResumeOwner empty) — `resumeSessionCreated` (window key = Session.id = the on-disk directory id; workCopies[Session.id] = liveId; sessions replayed by routing; if the window is closed, create entries as usual); `AV.SessionRefs` gains `workCopy : Maybe String` (lenient encode/decode + unit tests); the freeze writes refs.workCopy via `persistableWorkCopy` (fork directory = forkId / resume live = keep the old value / root = Nothing), FreezeState carries workCopy through to the refs write. Commit `a2b93f4`.
+6. **C2b-6 manager + restart** ✅: plain top-level creation initializes empty refs (sessionRefs in memory + refs.json on disk, head=""); the session manager only lists Session roots (filtered by sessionRefs membership; work-copy directories not shown); `ResumeSession` restores the `refs.workCopy` directory (fallback to the Session root — the backend live session's SessionDir = the on-disk directory, reading/writing the same session.alaya, so refs.workCopy is always valid); `DeleteSession` deletes the work-copy directory too + clears sessionRefs/workCopies. Commit `a3354a3`.
+7. **C2b-7 delete lineage** ✅: `Session/Meta.elm` + `SessionMetaTest` deleted; `Model.sessionLineage`/`planMetaNodeMetaQueue` fields removed; the scan only reads refs.json (no longer reads/writes session.meta.json); `resolveEventSessionId` simplified to planResumedFrom only (no registry); `headInstanceFor`/`resolveConversation`/`headOf`/`forkMetaPath` all deleted (nodes/top-level resolve directly by origin = Session.id); Cascade closePlans/impactScope/walkLevels match by origin; registerForkInstance's node branch no longer writes lineage; `planRunningForSession`/`findPlanIdBySession`/`PlanBindSession`/`connectionChainForPlan` bind directly by session id; tests rewritten (418 green). Commit `7a1b955`.
+8. **e2e rewrite** ✅ (`fork-e2e`/`two-plans-e2e` rewritten; restart/plan compatible): fork-e2e asserts C2b semantics — same window (window key = Session.id, position unchanged, no new entries), disk ownership (root + refs.workCopy = fork directory, work copy has no refs, no session.meta.json), after restart the manager lists only roots + resume restores the work copy, chained forks advance the work copy + old directories deleted; two-plans becomes a disk-level version-isolation assertion (V0: A unexecuted/B completed vs V1: A completed). **Found and fixed during implementation**: ① the re-run fork's source session id used the window key (Session.id), causing backend `Session not found` after resume — changed to `workCopyId` (same for feedbackCompletedPlan/forkOrInsertInPlace/InsertInPlace delivery targets); ② a resume live was mistakenly written into refs.workCopy as a fork directory — added `sessionResumedLives` to explicitly track temporary lives; ③ deleting the old work-copy directory raced the old process's graceful close (save writing back to SessionDir) recreating the directory — deferred 2s via the `DeleteWorkCopyDir` message; ④ the old work-copy directory = refs.workCopy's old value (no longer decided by planResumedFrom).
 
 ---
 
-## 8.2 C3/C4/C5 完成记录（值模型落地的收尾）
+## 8.2 C3/C4/C5 completion record (wrapping up the value-model landing)
 
-### C3 — 递归与级联在值模型下 ✅
-- **C3-1 节点级联 fork 统一为工作副本替换**（提交 `123c33b`）：所有级联 fork（顶层 + 节点）一律走 `forkSessionCreated`——窗口 key = Session.id（= plan origin），workCopies[sid] = forkId；`registerForkInstance` 统一为只关旧工作副本（`DeleteWorkCopyDir` 携带 nested 定位参数）；**删除"级联 fork 交接"**（节点 fork 不再开新窗口/不 dispatch CloseSession）；`planEventFromFrame`/StatusEvent runner 注入按 `sessionIdOfWorkCopy` 路由（节点绑定 = Session.id 在 fork/resume 后仍命中）；删 `forkInheritPos`。
-- **C3-2 节点工作副本持久化 + 重启恢复**（提交 `123c33b`）：节点级联 fork 写 nested `session.refs.json`（workCopy = forkId）；扫描读 nested 节点 refs；`PlanOpenNodeSession`/`ResumeSession` 经 `resumeDirFor`（refs.workCopy，回退原目录）恢复。
-- **C3-3 节点会话完整版本化（跳过）**：节点会话的"世界隔离"已被顶层 V0/V1 版本 + 工作副本覆盖；完整版本树价值低，C4 版本浏览聚焦顶层。
+### C3 — recursion and cascade under the value model ✅
+- **C3-1 node cascade forks unified as work-copy replacement** (commit `123c33b`): every cascade fork (top-level + node) goes through `forkSessionCreated` — window key = Session.id (= plan origin), workCopies[sid] = forkId; `registerForkInstance` unified to only closing the old work copy (`DeleteWorkCopyDir` carries the nested locating params); **"cascade fork handoff" deleted** (node forks no longer open a new window / no CloseSession dispatch); `planEventFromFrame`/StatusEvent runner injection route via `sessionIdOfWorkCopy` (node bindings = Session.id still hit after fork/resume); `forkInheritPos` deleted.
+- **C3-2 node work-copy persistence + restart recovery** (commit `123c33b`): node cascade forks write a nested `session.refs.json` (workCopy = forkId); the scan reads nested node refs; `PlanOpenNodeSession`/`ResumeSession` restore via `resumeDirFor` (refs.workCopy, fallback to the original directory).
+- **C3-3 full versioning of node sessions (skipped)**: a node session's "world isolation" is already covered by the top-level V0/V1 versions + the work copy; a full version tree is low value, and C4 version browsing focuses on top-level.
 
-### C4 — UI 与历史（版本浏览）✅（提交 `d496f6d`）
-- `blockCache`（hash → 消息）+ 版本浏览状态；`ObjectGetResult` 解码 Version 或 Block（reqId = hash），查看版本自动补取缺失块。
-- 会话管理器条目加 **Versions (n)** 按钮 → 版本列表（v0/v1/… + head 标记）→ 只读版本视图（消息 + plan 状态行，来自 planViews/runSummaries）。D8：旧版本只读，不做物化。
+### C4 — UI and history (version browsing) ✅ (commit `d496f6d`)
+- `blockCache` (hash → messages) + version-browsing state; `ObjectGetResult` decodes a Version or Block (reqId = hash); viewing a version auto-fetches the missing blocks.
+- The session manager entry gains a **Versions (n)** button → version list (v0/v1/… + head mark) → read-only version view (messages + plan status rows, from planViews/runSummaries). D8: old versions read-only, no materialization.
 
-### C5 — 清理 ✅（提交 `f809469`）
-- **C5-1 节点 resume 统一**：所有 resume（顶层 + 节点）走 `resumeSessionCreated`（窗口 key = Session.id + 链构建）；删 createSessionWindow 的 resumedModel 分支；**删 `planResumedFrom` 字段**（39 处）+ `resolveEventSessionId`/`findResumedLive`/`onDiskSessionId`/`NC.liveSessionForOrigin` 的 resume 参数全部删除（恒等）。
-- **C5-2 文档归档**：根 `REFACTOR.md`（P39）→ `docs/archive/REFACTOR-p39.md`；`TODO.md` → `docs/archive/TODO-p39.md`。
-- C2b-7 已删血缘；P39 兼容补丁在 C2b/C3/C5 中逐项清除。
-3. **C2b-3 fork 分支修正**：SessionCreated fork 分支用 `meta.origin.sessionId`（Session.id）作窗口 key + workCopies；`registerForkInstance` 只关旧工作副本（裸 closeSession）+ 清 planCascadeFork；删 forkInheritPos；级联完成固化 V₁；**fork 后删旧工作副本目录**。
-4. **C2b-4 帧路由 + 命令映射**：coreId → Session.id；命令 Session.id → coreId。
-5. **C2b-5 resume 归属**：resume 分支 workCopies[Session.id] = liveId（窗口 key 保持 Session.id）；`session.refs.json` 加 workCopy 字段。
-6. **C2b-6 管理器 + 重启**：管理器按 refs 过滤；重启恢复 workCopy（含回退）。
-7. **C2b-7 删除血缘**：sessionLineage / headInstanceFor / resolveConversation / SM.decode / session.meta.json 读写全删。
-8. **e2e 重写**：fork-e2e 断言（无新会话条目、窗口 key 稳定、绑定正常、v2 显示）；two-plans（老会话隔离保持）；restart（workCopy 恢复）。
+### C5 — cleanup ✅ (commit `f809469`)
+- **C5-1 node resume unified**: every resume (top-level + node) goes through `resumeSessionCreated` (window key = Session.id + chain building); the createSessionWindow resumedModel branch removed; the **`planResumedFrom` field deleted** (39 sites) + `resolveEventSessionId`/`findResumedLive`/`onDiskSessionId`/`NC.liveSessionForOrigin`'s resume parameters all removed (identity).
+- **C5-2 docs archived**: root `REFACTOR.md` (P39) → `docs/archive/REFACTOR-p39.md`; `TODO.md` → `docs/archive/TODO-p39.md`.
+- C2b-7 already deleted lineage; the P39 compatibility patches were removed item by item across C2b/C3/C5.
+3. **C2b-3 fork branch fix**: SessionCreated's fork branch uses `meta.origin.sessionId` (Session.id) as the window key + workCopies; `registerForkInstance` only closes the old work copy (bare closeSession) + clears planCascadeFork; forkInheritPos deleted; cascade completion freezes V₁; **delete the old work-copy directory after the fork**.
+4. **C2b-4 frame routing + command mapping**: coreId → Session.id; commands Session.id → coreId.
+5. **C2b-5 resume ownership**: resume branch workCopies[Session.id] = liveId (window key stays Session.id); `session.refs.json` gains the workCopy field.
+6. **C2b-6 manager + restart**: manager filters by refs; restart restores the workCopy (with fallback).
+7. **C2b-7 delete lineage**: sessionLineage / headInstanceFor / resolveConversation / SM.decode / session.meta.json reads+writes all deleted.
+8. **e2e rewrite**: fork-e2e assertions (no new session entries, stable window key, bindings work, v2 display); two-plans (old-session isolation kept); restart (workCopy restored).
 
+---
 
+## 9. Confirmed decisions (to be approved item by item by the user; do not change after approval)
 
-## 9. 已确认决策（待用户逐条批准，批准后不要改）
-
-| # | 决策 | 状态 |
+| # | Decision | Status |
 |---|---|---|
-| D1 | **身份稳定**：`Session.id` 稳定（= 创建 id），消灭 conversation/instance 之分与血缘 registry | ✅ 已确认 |
-| D2 | **版本即历史**：plan 完成/重跑 = 当前会话 head 更新为新版本；旧版本保留在 `Session.versions`（会话管理器可查看/回退） | ✅ 已确认 |
-| D3 | **重跑 = 分支派生 + 同会话另一视图**：从当前 head 派生新版本（结构共享）；"新窗口"= **同一个 Session 的另一个 head 视图**（零拷贝），不创建物理新会话 | ✅ 已确认 |
-| D4 | **plan 状态 = 版本内视图**：`Version.planViews[plan]`，同一 plan 在不同版本状态不同（老会话天然显示旧状态） | ✅ 已确认 |
-| D5 | **run 不可变追加**：`plan.runs` 只追加；重跑不删旧 run | ✅ 已确认 |
-| D6 | **对象存储**：内容寻址（后端 hash），objects/ + refs.json | ✅ 已确认 |
-| D7 | **alayacore 边界**：工作副本仍是 alayacore 会话；截断仍走 fork 命令物化工作副本，但**无身份语义**（新文件只是 head 的工作副本，不注册血缘） | ✅ 已确认 |
-| D8 | **旧版本只读**：C 第一版不做物化（checkout）；旧版本只读查看 | ✅ 已确认 |
-| D9 | **删除**：血缘 registry / headInstanceFor / resolveConversation / fork 收养 / planCascadeFork / replay 标记 / P39 兼容补丁 | ✅ 已确认 |
+| D1 | **Stable identity**: `Session.id` is stable (= creation id), eliminating the conversation/instance split and the lineage registry | ✅ confirmed |
+| D2 | **Version = history**: plan completion/re-run = the current session's head updates to a new version; old versions stay in `Session.versions` (viewable/revertible from the session manager) | ✅ confirmed |
+| D3 | **Re-run = branch derivation + another view of the same session**: derive a new version from the current head (structural sharing); "new window" = **another head view of the SAME Session** (zero copy), no physical new session | ✅ confirmed |
+| D4 | **Plan state = in-version view**: `Version.planViews[plan]`; the same plan has different states across versions (an old session naturally shows the old state) | ✅ confirmed |
+| D5 | **Run immutable append**: `plan.runs` only appends; re-runs never delete old runs | ✅ confirmed |
+| D6 | **Object store**: content-addressed (backend hash), objects/ + refs.json | ✅ confirmed |
+| D7 | **alayacore boundary**: the work copy stays an alayacore session; truncation still materializes the work copy through the fork command, but with **no identity semantics** (the new files are just a work copy of the head, no lineage registration) | ✅ confirmed |
+| D8 | **Old versions read-only**: C first release does no materialization (checkout); old versions are view-only | ✅ confirmed |
+| D9 | **Delete**: lineage registry / headInstanceFor / resolveConversation / fork adoption / planCascadeFork / replay markers / P39 compatibility patches | ✅ confirmed |
 
 ---
 
-## 10. 开放问题（需用户拍板或后续调研）
+## 10. Open questions (need user decision or later research)
 
-1. **窗口模型**：重跑后"老窗口"与"新窗口"如何呈现——同一 Session 的两个 head 视图？还是重跑就在原窗口更新（老版本仅从会话管理器访问）？（影响 D3 的 UX 细节）
-2. **版本粒度**：plan 完成才固化版本，还是运行中每个关键点也固化（更大历史/撤销能力，更多存储）？
-3. **对象存储压缩**：git 式 pack/GC（长期）；第一版 loose objects 即可
-4. **物化格式验证**：真实 alayacore session.alaya 格式是否能由后端生成（C4 前置调研，用真实 binary 验证）
+1. **Window model**: after a re-run, how do the "old window" and "new window" present — two head views of the same Session? Or does the re-run update in place in the original window (old versions reachable only from the session manager)? (Affects the D3 UX detail)
+2. **Version granularity**: freeze versions only on plan completion, or also at key points while running (more history/undo capability, more storage)?
+3. **Object-store compaction**: git-style pack/GC (long term); loose objects are fine for the first release
+4. **Materialization format verification**: can the backend generate the real alayacore session.alaya format (pre-C4 research, verify with a real binary)

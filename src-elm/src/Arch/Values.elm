@@ -22,13 +22,16 @@ module Arch.Values exposing
     , decodeMessage
     )
 
-{-| C 架构不可变值类型（docs/arch-persistent.md §3）——内容寻址对象
-（引用 = 内容 hash）的 Elm 表示 + 编解码 + 纯算法。
+{-| C architecture immutable value types (docs/arch-persistent.md §3) —
+the Elm representation of content-addressed objects (reference = content
+hash) plus codecs and pure algorithms.
 
-核心不变式：
-  I1  Block / RunSummary / Version 一经创建不可变（写后不更）
-  I2  plan 的"显示状态" = 会话版本里的 planViews（不是 plan 全局字段）
-  I3  消息按固定块切分，块内容 hash 相同 = 结构共享（零拷贝）
+Core invariants:
+  I1  Block / RunSummary / Version are immutable once created (never mutated)
+  I2  a plan's "displayed state" = planViews inside the session version
+      (not a plan-global field)
+  I3  messages are chunked at fixed sizes; equal chunk content hashes =
+      structural sharing (zero copy)
 -}
 
 import Dict exposing (Dict)
@@ -41,14 +44,16 @@ type alias Hash =
     String
 
 
-{-| 消息块：不可变消息序列片段（对象存储的最小单元）。
+{-| Message block: an immutable slice of a message sequence (the
+smallest unit of the object store).
 -}
 type alias Block =
     { messages : List T.Message }
 
 
-{-| plan 的一次运行快照（不可变）：状态栏 / plan 概览所需的最小信息。
-完整的节点细节留在 run.json 工作区；版本化只固化这个摘要。
+{-| Immutable snapshot of one plan run: the minimal info needed by the
+status bar / plan overview. Full node detail stays in the run.json
+workspace; versioning only freezes this summary.
 -}
 type alias RunSummary =
     { runId : String
@@ -59,8 +64,9 @@ type alias RunSummary =
     }
 
 
-{-| 会话版本（不可变）：消息块引用序列（前缀共享）+ 每个 plan 在本版本
-看到的 run。`planViews`：planId → run hash；Nothing = 该版本下从未执行。
+{-| Session version (immutable): a message block reference sequence
+(prefix-shared) + the run each plan saw in this version. `planViews`:
+planId → run hash; Nothing = never executed under this version.
 -}
 type alias Version =
     { blocks : List Hash
@@ -69,10 +75,11 @@ type alias Version =
     }
 
 
-{-| 会话的引用层（可变，轻量）：id 稳定（= 创建 id）；head = 当前版本；
-versions = 版本历史；workCopy = 当前工作副本目录 id（C2b：fork/resume
-后 = 新 alayacore 会话目录；Nothing = 根目录自身就是工作副本）。
-**没有 conversation/instance 之分。**
+{-| Session refs layer (mutable, lightweight): id is stable (= creation
+id); head = current version; versions = version history; workCopy =
+current work-copy directory id (C2b: after fork/resume = the new
+alayacore session directory; Nothing = the root directory itself is the
+work copy). **There is no conversation/instance split.**
 -}
 type alias SessionRefs =
     { id : String
@@ -82,16 +89,17 @@ type alias SessionRefs =
     }
 
 
-{-| 消息块大小（条）。块 = 内容寻址共享的最小粒度：plan 之前不变的
-消息块在新旧版本里 hash 相同 → 自动共享（零拷贝）。
+{-| Message block size (in messages). A block is the smallest unit of
+content-addressed sharing: message blocks unchanged since before a plan
+hash identically in old and new versions → shared automatically (zero copy).
 -}
 blockSize : Int
 blockSize =
     50
 
 
-{-| 把消息列表切成固定大小的块（纯函数；调用方负责把每块 object_put
-拿到 hash 再组装 Version）。
+{-| Split a message list into fixed-size blocks (pure function; the
+caller object_puts each block, gets its hash, then assembles the Version).
 -}
 chunkMessages : List T.Message -> List Block
 chunkMessages msgs =
@@ -107,9 +115,9 @@ chunkMessages msgs =
     step [] msgs
 
 
--- ─── 编码 ───────────────────────────────────────────────────────────
+-- ─── Encoding ───────────────────────────────────────────────────────
 
-{-| object_put 的 content 字符串（对象存储键 = 内容的 hash）。
+{-| The object_put content string (object-store key = content hash).
 -}
 blockContent : Block -> String
 blockContent b =
@@ -224,7 +232,7 @@ encodeMaybeRun v =
     maybeString v
 
 
--- ─── 解码 ───────────────────────────────────────────────────────────
+-- ─── Decoding ───────────────────────────────────────────────────────
 
 decodeBlock : D.Decoder Block
 decodeBlock =
@@ -256,7 +264,7 @@ decodeSessionRefs =
         (D.field "id" D.string)
         (D.field "head" D.string)
         (D.field "versions" (D.list D.string))
-        -- Lenient：C2b 前无 workCopy 字段（= 根目录即工作副本）。
+        -- Lenient: pre-C2b files have no workCopy field (= root dir is the work copy).
         (D.oneOf [ D.field "workCopy" D.string |> D.map Just, D.succeed Nothing ])
 
 

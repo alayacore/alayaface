@@ -124,7 +124,8 @@ tests =
                         |> Expect.equal (Ok s)
             , test "session refs without a workCopy field decode as Nothing (lenient, pre-C2b)" <|
                 \_ ->
-                    -- 旧文件无 workCopy 字段：根目录即工作副本。
+                    -- Old files have no workCopy field: the root directory
+                    -- IS the work copy.
                     D.decodeString V.decodeSessionRefs
                         """{"id":"s1","head":"v2","versions":["v0"]}"""
                         |> Expect.equal (Ok (V.SessionRefs "s1" "v2" [ "v0" ] Nothing))

@@ -14,6 +14,14 @@
 
 5. **Reuse checked variables.** If a DOM lookup is validated non-null at the top of a function, reuse that variable later instead of querying the DOM again. A second lookup can fail unexpectedly (element removed, race condition).
 
+## Language
+
+- **All documents (docs/, README, design notes, archive) are written in English.**
+- **No Chinese in code** — comments, identifiers, log strings, and UI text must
+  be English. The only allowed exception is **test fixtures that verify Chinese
+  text renders/round-trips correctly** (Chinese display effect tests).
+- User-facing UI copy is English; keep translations in sync across the codebase.
+
 ## Architecture (current)
 
 Three parts share ONE Elm client:

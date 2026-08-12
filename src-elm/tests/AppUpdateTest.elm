@@ -37,9 +37,10 @@ tests =
                         m
             , test "a session with several forks maps its own core id back to itself" <|
                 \_ ->
-                    -- 多次 fork：workCopies[s1] = s3（最新工作副本）。
-                    -- s1 自身的帧（coreId = s1）→ s1；s3 的帧 → s1；
-                    -- 中间工作副本 s2 不再被引用（已被删除）。
+                    -- Multiple forks: workCopies[s1] = s3 (latest work copy).
+                    -- s1's own frames (coreId = s1) → s1; s3's frames → s1;
+                    -- the intermediate work copy s2 is no longer referenced
+                    -- (it was deleted).
                     let
                         m =
                             { initModelWithSession | sessionWorkCopies = Dict.fromList [ ( "s1", "s3" ) ] }

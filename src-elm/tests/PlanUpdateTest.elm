@@ -204,9 +204,11 @@ suite =
                         ( True, False, False )
             , test "messageBoundToPlan binds a resumed session by its stable Session.id (C2b)" <|
                 \_ ->
-                    -- resume 后窗口 key 仍是 Session.id（"s1"），工作副本是 live1
-                    -- （sessionWorkCopies[s1] = live1）。绑定按 Session.id 直接匹配
-                    -- meta origin——不再需要 planResumedFrom 解析。
+                    -- After a resume the window key is still Session.id
+                    -- ("s1"), and the work copy is live1
+                    -- (sessionWorkCopies[s1] = live1). The binding matches
+                    -- meta origin directly by Session.id — no more
+                    -- planResumedFrom resolution.
                     let
                         meta =
                             { origin = { sessionId = "s1", planIndex = 2 }
@@ -227,10 +229,11 @@ suite =
                     Expect.equal ( PU.messageBoundToPlan m "s1" 2 ) True
             , test "messageBoundToPlan binds a forked session by its stable Session.id (work copy differs)" <|
                 \_ ->
-                    -- 重跑 fork 后窗口 key 仍是 Session.id（plan origin "s1"），
-                    -- 工作副本换为 s-fork（sessionWorkCopies[s1] = s-fork）。
-                    -- 绑定直接命中 meta origin——不再需要血缘 registry；工作副本
-                    -- core id（"s-fork"）本身不再绑定任何 plan。
+                    -- After a re-run fork the window key is still
+                    -- Session.id (plan origin "s1"), and the work copy is
+                    -- s-fork (sessionWorkCopies[s1] = s-fork). The binding
+                    -- hits meta origin directly — no lineage registry; the
+                    -- work-copy core id ("s-fork") itself binds no plan.
                     let
                         meta =
                             { origin = { sessionId = "s1", planIndex = 1 }
@@ -335,8 +338,9 @@ suite =
                                 | planWindows = Dict.insert "p1" win Dict.empty
                             }
                     in
-                    -- C2b-7：无血缘——节点按会话 id 直接绑定；绑定的
-                    -- id（conv-1）找到 plan；无关 id 不解析。
+                    -- C2b-7: no lineage — nodes bind directly by session
+                    -- id; the bound id (conv-1) finds the plan; unrelated
+                    -- ids do not resolve.
                     Expect.all
                         [ \mm -> Expect.equal (PU.findPlanIdBySession mm "conv-1") (Just "p1")
                         , \mm -> Expect.equal (PU.findPlanIdBySession mm "fork-2") Nothing
@@ -423,8 +427,9 @@ suite =
                         ()
             , test "versionPlanStatus reads the version of the stable Session.id (C2b)" <|
                 \_ ->
-                    -- resume 后窗口 key 仍是 Session.id（"s1"）；工作副本 live-s1
-                    -- 只是边界细节。版本查询直接按 Session.id。
+                    -- After a resume the window key is still Session.id
+                    -- ("s1"); the work copy live-s1 is just an edge detail.
+                    -- Version lookup goes straight by Session.id.
                     let
                         v0 =
                             { blocks = []
@@ -449,10 +454,11 @@ suite =
                         |> Expect.equal Nothing
             , test "fork window status bar binds by the stable Session.id (C2b)" <|
                 \_ ->
-                    -- 用户重跑 fork 后查看的窗口 key = Session.id（plan origin
-                    -- "s1"），工作副本是 s-fork（sessionWorkCopies[s1] = s-fork）。
-                    -- 状态栏按 Session.id 直接命中 meta origin——不再需要
-                    -- planResumedFrom → 血缘 registry 的解析链。
+                    -- After a user re-run fork, the window being viewed has
+                    -- key = Session.id (plan origin "s1"), and the work copy
+                    -- is s-fork (sessionWorkCopies[s1] = s-fork). The status
+                    -- bar hits meta origin directly by Session.id — no more
+                    -- planResumedFrom → lineage-registry resolution chain.
                     let
                         meta =
                             { origin = { sessionId = "s1", planIndex = 1 }
@@ -531,7 +537,7 @@ suite =
                                         Dict.empty
                             }
                     in
-                    -- C2b-7：无血缘——按 Session.id 直接匹配。
+                    -- C2b-7: no lineage — match directly by Session.id.
                     Expect.all
                         [ \mm -> PU.planRunningForSession mm "s1" |> Expect.equal True
                         , \mm -> PU.planRunningForSession mm "other" |> Expect.equal False
@@ -669,8 +675,9 @@ suite =
                             PU.cascadeStepIn stubDispatch (PC.InstanceReady (Ok "fork-x")) m0
                     in
                     Expect.all
-                        [ -- C2b-7：节点 fork 不再注册血缘（sessionLineage 已删）。
-                        -- 断言由节点绑定保持 + 节点重置即可。
+                        [ -- C2b-7: node forks no longer register lineage
+                          -- (sessionLineage removed). Assert via the node
+                          -- binding staying + the node reset.
                         \m ->
                             case Dict.get "p0" m.planWindows |> Maybe.andThen .run |> Maybe.andThen (\r -> Dict.get "n1" r.nodes) of
                                 Just n ->
@@ -691,7 +698,7 @@ suite =
                                 Nothing ->
                                     Expect.fail "cascade missing"
                         -- fork consumed; fork session marked as replay
-                        -- （C3：统一按 Session.id 标记，非 forkId）
+                        -- (C3: uniformly marked by Session.id, not forkId)
                         , \m ->
                             Expect.equal ( m.planCascadeFork, Set.member "s1" m.planReplaySessions )
                                 ( Nothing, True )
@@ -699,11 +706,14 @@ suite =
                         m1
             , test "a plain (top-level) fork registers NO lineage; replay mark on the Session.id (C2b)" <|
                 \_ ->
-                    -- C2b（§8.1）：顶层重跑 fork 不写血缘——Session.id 稳定，
-                    -- fork 会话只是同一 Session 的工作副本（映射由
-                    -- forkSessionCreated 写入 sessionWorkCopies）。这里断言
-                    -- registerForkInstance 部分：lineage 不增长、fork 标记
-                    -- 清空、重放抑制标记在 Session.id 上。
+                    -- C2b (§8.1): a top-level re-run fork writes NO
+                    -- lineage — Session.id is stable, and the fork session
+                    -- is just a work copy of the same Session (the mapping
+                    -- is written to sessionWorkCopies by
+                    -- forkSessionCreated). This asserts the
+                    -- registerForkInstance part: lineage does not grow, the
+                    -- fork marker is cleared, and the replay-suppression
+                    -- mark is on the Session.id.
                     let
                         target =
                             { childPlanId = "p1"
@@ -733,7 +743,8 @@ suite =
                             PU.cascadeStepIn stubDispatch (PC.InstanceReady (Ok "fork-x")) m0
                     in
                     Expect.all
-                        [ -- C2b-7：血缘字段已删；顶层 fork 只清标记 + 重放标记。
+                        [ -- C2b-7: lineage fields removed; a top-level fork
+                          -- only clears the markers + replay mark.
                         \mm -> Expect.equal mm.planCascadeFork Nothing
                         , \mm -> Expect.equal (Set.member "s1" mm.planReplaySessions) True
                         ]

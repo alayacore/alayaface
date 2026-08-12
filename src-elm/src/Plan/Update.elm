@@ -547,7 +547,7 @@ instances to the conversation.
 planRunningForSession : Model -> String -> Bool
 planRunningForSession model sid =
     let
-        -- C2b-7：无血缘——Session.id 直接匹配 meta origin。
+        -- C2b-7: no lineage — Session.id matches meta origin directly.
         convId =
             sid
     in
@@ -678,8 +678,9 @@ planWinKeyForPath path =
         base
 
 
-{-| Find the plan window whose run owns the given session id. C3/C5：
-窗口按 Session.id key，节点绑定 = 会话 id——直接匹配。
+{-| Find the plan window whose run owns the given session id. Under
+C3/C5 windows are keyed by Session.id and node bindings = session id —
+match directly.
 -}
 findPlanIdBySession : Model -> String -> Maybe String
 findPlanIdBySession model sid =
@@ -965,9 +966,10 @@ feedbackCompletedPlan planId now model =
         case Dict.get planId model.planMetas of
             Just meta ->
                 let
-                    -- C2b：结果回到 plan origin（Session.id，稳定）；后端
-                    -- 投递目标是当前工作副本的 live core id（workCopyId——
-                    -- resume 后 live ≠ Session.id）。
+                    -- C2b: the result returns to the plan origin
+                    -- (Session.id, stable); the backend delivery target
+                    -- is the current work copy's live core id
+                    -- (workCopyId — after resume live ≠ Session.id).
                     headSid =
                         meta.origin.sessionId
 
@@ -1020,12 +1022,16 @@ feedbackCompletedPlan planId now model =
                     ( m1, metaCmd ) =
                         appendMetaFeedback planId fb model
 
-                    -- C 架构：plan 完成 → 把**当前工作副本会话**（结果
-                    -- 插入的那个）固化为不可变版本（planViews[planId] =
-                    -- 新 run；其他 plan 按当前状态固化）。重跑路径下
-                    -- 工作副本是 fork 出的新会话（其版本 = 重跑后世界），
-                    -- 而重跑前的会话在确认时已固化（V0，plan 保持旧状态）。
-                    -- 只对顶层会话固化（节点会话的版本化在 C3）。
+                    -- C architecture: plan completes → freeze the **current
+                    -- work-copy session** (the one the result was inserted
+                    -- into) as an immutable version (planViews[planId] =
+                    -- the new run; other plans freeze per their current
+                    -- state). On the re-run path the work copy is the
+                    -- forked new session (its version = the post-rerun
+                    -- world), while the pre-rerun session was frozen at
+                    -- confirm time (V0, plan keeps the old state).
+                    -- Only top-level sessions freeze here (node sessions
+                    -- version in C3).
                     ( m2, freezeCmd ) =
                         case liveOrigin of
                             Just liveSid ->
@@ -1048,12 +1054,14 @@ feedbackCompletedPlan planId now model =
                 ( model, Cmd.none )
 
 
--- ─── C 架构：版本固化（docs/arch-persistent.md §4.2）──────────────
+-- ─── C architecture: version freeze (docs/arch-persistent.md §4.2) ──
 
-{-| 把 plan 的当前运行状态固化为不可变 RunSummary（版本化状态的最小
-信息：状态栏 / plan 概览）。优先 live window 的 run；窗口关闭（plan
-完成自动关）时回退到内存缓存 planRunStatuses / meta.lastStatus——已
-执行的 plan 在窗口关闭后仍必须记录为已执行（否则固化时被当成未执行）。
+{-| Freeze a plan's current run state into an immutable RunSummary (the
+minimal versioned state: status bar / plan overview). Prefers the live
+window's run; when the window is closed (auto-close on completion) it
+falls back to the in-memory planRunStatuses / meta.lastStatus — an
+executed plan must still record as executed after its window closes
+(otherwise the freeze treats it as unexecuted).
 -}
 runSummaryForPlan : Model -> String -> Maybe AV.RunSummary
 runSummaryForPlan model planId =
@@ -1076,8 +1084,9 @@ runSummaryForPlan model planId =
             persistedRunSummary model planId
 
 
-{-| 窗口关闭后的 run 摘要回退：从内存缓存 planRunStatuses（最新）或
-meta.lastStatus（持久化快照）构建；summary 取 meta 最后一条 feedback。
+{-| Run-summary fallback after the window closes: built from the
+in-memory planRunStatuses (latest) or meta.lastStatus (persisted
+snapshot); summary takes the meta's last feedback text.
 -}
 persistedRunSummary : Model -> String -> Maybe AV.RunSummary
 persistedRunSummary model planId =
@@ -1111,18 +1120,20 @@ persistedRunSummary model planId =
             Nothing
 
 
-{-| C2b（§8.1）：Session.id → 当前工作副本（alayacore 会话 id）。
-无映射（root 会话的工作副本 = 自身）→ 返回自身。UI 命令
-（sendPrompt / cancel / close 等）用它发到正确的 alayacore 会话。
+{-| C2b (§8.1): Session.id → current work copy (alayacore session id).
+No mapping (a root session's work copy = itself) → returns itself. UI
+commands (sendPrompt / cancel / close, etc.) use it to reach the right
+alayacore session.
 -}
 workCopyId : Model -> String -> String
 workCopyId model sessionId =
     Dict.get sessionId model.sessionWorkCopies |> Maybe.withDefault sessionId
 
 
-{-| Dict-level reverse lookup（alayacore 工作副本 id → Session.id）：
-`sessionIdOfWorkCopy` 的 Model 包装即调它；pending 事件重放（只有
-sessions dict、没有 Model）也复用它。无映射 → 自身（root）。
+{-| Dict-level reverse lookup (alayacore work-copy id → Session.id):
+the Model wrapper of `sessionIdOfWorkCopy` calls it; pending-event
+replay (sessions dict only, no Model) also reuses it. No mapping →
+itself (root).
 -}
 sessionIdOfWorkCopyDict : Dict String String -> String -> String
 sessionIdOfWorkCopyDict workCopies coreId =
@@ -1138,13 +1149,13 @@ sessionIdOfWorkCopyDict workCopies coreId =
         workCopies
 
 
-{-| C2b（§8.1）：会话当前工作副本的**可持久化目录 id**（写入
-refs.workCopy，重启恢复用）：
-- 无映射 → Nothing（根目录即工作副本）。
-- 映射到 fork 出的会话（有真实目录 sessions/<forkId>/）→ forkId。
-- 映射到 resume 的 live 会话（临时 UUID，无目录，记录在
-  sessionResumedLives）→ 保留现有 refs.workCopy（resume 不改变磁盘
-  工作副本）。
+{-| C2b (§8.1): the session's current work copy's **persistable
+directory id** (written to refs.workCopy, for restart recovery):
+- no mapping → Nothing (the root directory IS the work copy).
+- mapping to a forked session (real directory sessions/<forkId>/) → forkId.
+- mapping to a resumed live session (temporary UUID, no directory,
+  recorded in sessionResumedLives) → keep the existing refs.workCopy
+  (a resume does not change the on-disk work copy).
 -}
 persistableWorkCopy : Model -> String -> Maybe String
 persistableWorkCopy model sessionId =
@@ -1161,20 +1172,22 @@ persistableWorkCopy model sessionId =
                 Just coreId
 
 
-{-| C2b（§8.1）：alayacore 工作副本 id → Session.id（稳定身份）。
-反查 sessionWorkCopies；无映射 → 自身（root）。入站帧用它路由到
-会话条目。
+{-| C2b (§8.1): alayacore work-copy id → Session.id (stable identity).
+Reverse-looks-up sessionWorkCopies; no mapping → itself (root). Inbound
+frames use it to route to the session entry.
 -}
 sessionIdOfWorkCopy : Model -> String -> String
 sessionIdOfWorkCopy model coreId =
     sessionIdOfWorkCopyDict model.sessionWorkCopies coreId
 
 
-{-| C 架构：从会话版本（该会话 head 的 planViews）解析 plan 的显示
-状态——同一 plan 在不同版本里状态不同（老会话看到旧状态）。返回
-run status 字符串（PT.runStatusToString 形式）；Nothing = 该会话尚
-无版本记录（回退现有全局状态逻辑）。C2b：`sid` 是稳定的 Session.id
-（窗口/帧按它路由），直接查 refs——不再经 planResumedFrom。
+{-| C architecture: resolve a plan's displayed state from the session
+version (the session head's planViews) — the same plan can have
+different states across versions (an old session sees the old state).
+Returns a run status string (PT.runStatusToString form); Nothing = the
+session has no version record yet (fall back to the existing global
+state logic). C2b: `sid` is the stable Session.id (windows/frames route
+by it), so look up refs directly — no longer via planResumedFrom.
 -}
 versionPlanStatus : Model -> String -> String -> Maybe String
 versionPlanStatus model sid planId =
@@ -1206,9 +1219,10 @@ versionPlanStatus model sid planId =
             Nothing
 
 
-{-| 固化指定会话的当前版本：消息切块 + 该会话所有 plan 的状态
-（有 run → RunSummary；未执行 → Nothing）→ 新 Version（parent = 旧
-head）→ 激活固化（或入队）。
+{-| Freeze the given session's current version: chunk messages + the
+state of every plan in that session (has a run → RunSummary; unexecuted
+→ Nothing) → new Version (parent = old head) → activate the freeze (or
+enqueue it).
 -}
 freezeSessionVersion : Model -> String -> Maybe String -> ( Model, Cmd Msg )
 freezeSessionVersion model sessionId runPlanId =
@@ -1218,7 +1232,8 @@ freezeSessionVersion model sessionId runPlanId =
                 |> Maybe.map .messages
                 |> Maybe.withDefault []
 
-        -- 该会话拥有的 plan（C：id 稳定，直接按 meta origin 匹配）
+        -- plans owned by this session (C: id stable, matched directly
+        -- by meta origin)
         ownedPids =
             Dict.foldl
                 (\pid meta acc ->
@@ -1231,7 +1246,8 @@ freezeSessionVersion model sessionId runPlanId =
                 []
                 model.planMetas
 
-        -- 本次完成的 plan 强制记录为已执行（即使窗口已关）
+        -- force-record the plan completed this time as executed (even
+        -- if its window is closed)
         otherPids =
             List.filter
                 (\pid -> Just pid /= runPlanId)
@@ -1268,8 +1284,9 @@ freezeSessionVersion model sessionId runPlanId =
     in
     case model.freezeActive of
         Just _ ->
-            -- 串行固化：已有固化在进行，本固化入队（reqId 只在活动项
-            -- 上有意义，覆盖会导致结果错配）。
+            -- Serial freeze: a freeze is already in progress, so this
+            -- one is enqueued (reqId only means something on the active
+            -- item; overwriting would mismatch results).
             ( { model | freezeQueue = model.freezeQueue ++ [ st ] }, Cmd.none )
 
         Nothing ->
@@ -1340,10 +1357,13 @@ cascadeOnPlanCompleted dispatch planId now model =
                 ( m2, c2 ) =
                     cascadeStepIn dispatch (PC.PlanCompleted planId summary) m1
             in
-            -- C 架构：cascade（重跑）路径**不在这里固化**——本事件先于
-            -- fork（结果插入新工作副本），此时固化会捕获"重跑前世界"
-            -- 并覆盖确认时固化的 V0。重跑后的版本固化在 C2b（工作副本
-            -- 归属重构后，fork 会话 = 同一 Session 的 head）完成。
+            -- C architecture: the cascade (re-run) path does **not**
+            -- freeze here — this event precedes the fork (the result is
+            -- inserted into the new work copy), so freezing now would
+            -- capture the "pre-rerun world" and overwrite the V0 frozen
+            -- at confirm time. The post-rerun version is frozen in C2b
+            -- (after work-copy ownership refactor, the fork session =
+            -- the same Session's head).
             ( m2, Cmd.batch [ metaCmd, c2 ] )
 
 
@@ -1423,8 +1443,9 @@ forkOrInsertInPlace dispatch planId model =
     case Dict.get planId model.planMetas of
         Just meta ->
             let
-                -- C2b：plan origin = Session.id（稳定）；fork 的后端源会话
-                -- = 当前工作副本的 live core id（resume 后 live ≠ Session.id）。
+                -- C2b: plan origin = Session.id (stable); the fork's
+                -- backend source session = the current work copy's live
+                -- core id (after resume live ≠ Session.id).
                 headSid =
                     meta.origin.sessionId
 
@@ -1446,8 +1467,9 @@ forkOrInsertInPlace dispatch planId model =
                         mTrunc =
                             truncateOrigin planId model
 
-                        -- C2b：无 fork 点的首次完成——结果插回当前工作副本
-                        -- 的 live core id（resume 后 ≠ Session.id）。
+                        -- C2b: first completion without a fork point —
+                        -- the result is inserted back into the current
+                        -- work copy's live core id (after resume ≠ Session.id).
                         ( m1, c1 ) =
                             cascadeStepIn dispatch (PC.InsertInPlace (workCopyId model headSid)) mTrunc
                     in
@@ -1457,13 +1479,16 @@ forkOrInsertInPlace dispatch planId model =
             ( model, Cmd.none )
 
 
-{-| RegisterFork effect（C2b/C3）：fork 出的会话只是同一 Session（顶层
-或节点）的新工作副本——窗口 key / sessions / workCopies 已由
-forkSessionCreated 接管。这里只：关旧工作副本进程（forkSource = 旧
-工作副本 live core id）；若旧工作副本目录（refs.workCopy 旧值）不是
-Session 根/原目录则延迟删除；清 planCascadeFork；关子 plan 窗口；清
-旧 live 的临时 resume 标记。不 dispatch CloseSession（前端条目已被
-fork 分支覆盖，无前端清理）。
+{-| RegisterFork effect (C2b/C3): the forked session is just a new
+work copy of the same Session (top-level or node) — window key /
+sessions / workCopies are already taken over by forkSessionCreated.
+Here we only: close the old work-copy process (forkSource = the old
+work copy's live core id); lazily delete the old work-copy directory
+(refs.workCopy's old value) if it is not the Session root/original
+directory; clear planCascadeFork; close child plan windows; clear the
+old live's temporary resume marker. No CloseSession dispatch (the
+frontend entry was already overwritten by the fork branch — no
+frontend cleanup needed).
 -}
 registerForkInstance : Dispatch -> String -> Model -> ( Model, Cmd Msg )
 registerForkInstance dispatch forkId model =
@@ -1478,10 +1503,12 @@ registerForkInstance dispatch forkId model =
                         |> Maybe.map (.origin >> .sessionId)
                         |> Maybe.withDefault target.forkSource
 
-                -- 旧工作副本的磁盘目录 = refs.workCopy 旧值（前一个 fork
-                -- 目录；从未 fork → Nothing → Session 根/原目录，不删）。
-                -- resume 的 live 是临时 UUID 无目录，其 SessionDir 就是
-                -- refs.workCopy 指向的目录——同样适用。
+                -- The old work copy's on-disk directory = refs.workCopy's
+                -- old value (a previous fork directory; never forked →
+                -- Nothing → Session root/original directory, not deleted).
+                -- A resumed live is a temporary UUID without a directory;
+                -- its SessionDir is the directory refs.workCopy points to
+                -- — the same rule applies.
                 oldDir =
                     Dict.get sessionId model.sessionRefs
                         |> Maybe.andThen .workCopy
@@ -1492,35 +1519,40 @@ registerForkInstance dispatch forkId model =
                         ( model, Cmd.none )
 
                     else
-                        -- 关旧工作副本进程（后端按 live core id）。
+                        -- Close the old work-copy process (backend by live core id).
                         ( model, Ports.closeSession { sessionId = target.forkSource } )
 
                 ( m2, deleteOldCmd ) =
                     if oldDir == "" || oldDir == sessionId then
-                        -- Session 根/原目录持有身份 + refs，不能删。
+                        -- The Session root/original directory holds the
+                        -- identity + refs; it cannot be deleted.
                         ( m1, Cmd.none )
 
                     else
-                        -- 旧工作副本目录（更早的 fork）随接管删除——磁盘
-                        -- 始终只有 Session 根 + 当前工作副本。延迟执行：
-                        -- 旧进程的优雅关闭（save 写回 SessionDir）与
-                        -- RemoveAll 竞态会重建目录。节点工作副本的 nested
-                        -- 定位参数随 target 传。
+                        -- The old work-copy directory (an earlier fork) is
+                        -- deleted with the takeover — disk always has only
+                        -- the Session root + the current work copy. Deferred:
+                        -- the old process's graceful close (save writing
+                        -- back to SessionDir) racing RemoveAll would
+                        -- recreate the directory. Node work copies' nested
+                        -- locating params are passed along with target.
                         ( m1
                         , Task.perform
                             (\_ -> DeleteWorkCopyDir oldDir target.planId target.nodeId target.originSessionId)
                             (Process.sleep 2000)
                         )
 
-                -- C3-2：节点级联 fork 持久化工作副本记录——节点会话的
-                -- nested session.refs.json 写 workCopy = forkId（重启后
-                -- DAG 恢复从工作副本目录恢复）。顶层 fork 的 workCopy 由
-                -- V₁ 固化写入（persistableWorkCopy）。
+                -- C3-2: persist the node cascade fork's work-copy record —
+                -- the node session's nested session.refs.json writes
+                -- workCopy = forkId (after restart, DAG recovery restores
+                -- from the work-copy directory). A top-level fork's workCopy
+                -- is written by the V₁ freeze (persistableWorkCopy).
                 m3 =
                     { m2
                         | planCascadeFork = Nothing
                         , planReplaySessions = Set.insert sessionId m2.planReplaySessions
-                        -- 旧工作副本 live 已关，清临时标记。
+                        -- The old work copy's live is closed; clear the
+                        -- temporary marker.
                         , sessionResumedLives = Set.remove target.forkSource m2.sessionResumedLives
                         , sessionRefs =
                             if target.planId == "" then
@@ -1628,8 +1660,9 @@ forkRequestFor planId liveOrigin summary model =
             Nothing
 
         Just liveSid ->
-            -- C2b：后端源会话 = liveSid（工作副本 live core id）；前端
-            -- 会话状态按 Session.id 索引（反查）。
+            -- C2b: the backend source session = liveSid (the work copy's
+            -- live core id); frontend session state is indexed by
+            -- Session.id (reverse lookup).
             case Dict.get (sessionIdOfWorkCopy model liveSid) model.sessions of
                 Just s ->
                     -- P39/D8: the fork point is the plan's CREATION
@@ -1953,8 +1986,9 @@ subPlansOfPlan planId model =
 
 
 {-| Every LIVE session window bound to a node of this plan: direct
-bindings (`planNodeSessions` sid → "planId/nodeId"; 窗口按 Session.id
-key，C3/C5 后无 resume live 窗口）。Only sessions with an open window
+bindings (`planNodeSessions` sid → "planId/nodeId"; windows keyed by
+Session.id — after C3/C5 there are no resume-live windows). Only
+sessions with an open window
 are returned — a closed binding's backend handle is already gone
 (resume replaced it), so closing it again would only produce "Session
 not found" noise. Node sessions can be open under ANY run status — e.g.
@@ -2335,8 +2369,9 @@ planEventFromFrame model ev =
         ( model, Nothing )
 
     else
-        -- C3：帧的 core id → Session.id（工作副本路由——节点 fork /
-        -- resume 后帧来自 fork/live core id，节点绑定按 Session.id）。
+        -- C3: frame core id → Session.id (work-copy routing — after a
+        -- node fork/resume frames come from the fork/live core id, and
+        -- node bindings are by Session.id).
         let
             sid =
                 sessionIdOfWorkCopy model ev.sessionId
@@ -2346,7 +2381,7 @@ planEventFromFrame model ev =
                 ( model, Nothing )
 
             Just _ ->
-                -- C2b-7：节点按会话 id（= Session.id）直接绑定。
+                -- C2b-7: nodes bind directly by session id (= Session.id).
                 let
                     convId =
                         sid

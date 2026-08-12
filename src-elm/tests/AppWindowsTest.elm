@@ -405,9 +405,10 @@ suite =
                         ( [ "plan" ], [ "p1" ], [ "s1" ] )
             , test "C2b-7: the plan segment resolves to the plan origin (Session.id stable, no lineage)" <|
                 \_ ->
-                    -- 无血缘：plan 的属主会话 = origin（稳定 Session.id），
-                    -- 即使工作副本已换（fork 目录 fork-1 在 sessions 里），
-                    -- 连接段仍指向 Session.id（s1）。
+                    -- No lineage: a plan's owning session = its origin
+                    -- (stable Session.id), even when the work copy changed
+                    -- (the fork directory fork-1 is in sessions) — the
+                    -- connection segment still points at Session.id (s1).
                     let
                         forkSess =
                             T.emptySession "fork-1"

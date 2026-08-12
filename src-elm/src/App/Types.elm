@@ -143,12 +143,14 @@ type alias Model =
     -- chain; matching planReadTarget = an open/load read; neither = a
     -- stale response (ignored).
     , planMetaReadReqId : Maybe String
-    -- C 架构：session.refs.json 路径（sessions/<uuid>/session.refs.json）
-    -- 收集自 sessions/ 列表，逐个读取登记 Session 根引用。
+    -- C architecture: session.refs.json paths (sessions/<uuid>/session.refs.json),
+    -- collected from the sessions/ listing, read one at a time to
+    -- register each session's root refs.
     , planMetaSessionQueue : List String
-    -- C3-2：嵌套节点会话的 session.refs.json 路径（sessions/<origin>/
-    -- plans/<planId>/<nodeId>/<uuid>/session.refs.json）——节点级联 fork
-    -- 后记录 workCopy，重启时 DAG 恢复从工作副本目录恢复。
+    -- C3-2: nested node-session session.refs.json paths (sessions/<origin>/
+    -- plans/<planId>/<nodeId>/<uuid>/session.refs.json) — after a node
+    -- cascade fork records a workCopy, restart DAG recovery restores
+    -- from the work-copy directory.
     , planMetaNodeRefsQueue : List String
     -- P28 layout fix: every known session id → its ON-DISK DIRECTORY.
     -- Top-level sessions live at sessions/<id>; plan NODE sessions are
@@ -240,28 +242,32 @@ type alias Model =
     -- tracks which segments are connected.
     , connectionChain : List NC.ChainSegment
     , homeDir : String
-    -- C 架构（docs/arch-persistent.md）：不可变版本
-    -- 会话版本引用（会话 id → refs：head + versions），run 摘要缓存
-    -- （hash → RunSummary），版本解码缓存（hash → Version），以及
-    -- 版本固化队列（串行：一次一个固化，reqId 0..n 只匹配活动项）。
+    -- C architecture (docs/arch-persistent.md): immutable versions —
+    -- per-session version refs (session id → refs: head + versions), run
+    -- summary cache (hash → RunSummary), version decode cache (hash →
+    -- Version), and the freeze queue (serial: one freeze at a time,
+    -- reqId 0..n only matches the active item).
     , sessionRefs : Dict String AV.SessionRefs
     , runSummaries : Dict String AV.RunSummary
     , versionCache : Dict String AV.Version
     , freezeActive : Maybe Freeze.FreezeState
     , freezeQueue : List Freeze.FreezeState
-    -- C2b（§8.1）：Session 的稳定身份与其当前工作副本（alayacore
-    -- 会话）的映射：Session.id → 工作副本 coreId。无 fork/resume 时
-    -- 缺省 = 自身（查无 → 自身）。窗口/管理器始终以 Session.id 为
-    -- 身份；命令经正向查（workCopyId）、帧经反查（sessionIdOfWorkCopy）。
+    -- C2b (§8.1): maps a Session's stable identity to its current work
+    -- copy (alayacore session): Session.id → work-copy coreId. Without
+    -- fork/resume the default is itself (missing → itself). Windows and
+    -- the manager always use Session.id as identity; commands look up
+    -- forward (workCopyId), frames look up backward (sessionIdOfWorkCopy).
     , sessionWorkCopies : Dict String String
-    -- C2b：临时 resume live core id 集合（resume_session 返回的新 UUID，
-    -- 无磁盘目录）。persistableWorkCopy 用它区分"可持久化工作副本目录"
-    -- 与"临时 live"（live 不写 refs.workCopy）。
+    -- C2b: set of temporary resume live core ids (new UUIDs returned by
+    -- resume_session, no on-disk directory). persistableWorkCopy uses it
+    -- to distinguish "persistable work-copy directories" from "temporary
+    -- live" (live does not write refs.workCopy).
     , sessionResumedLives : Set String
-    -- C4：消息块缓存（hash → 消息列表，版本浏览只读渲染用）。
+    -- C4: message block cache (hash → message list, read-only rendering
+    -- for version browsing).
     , blockCache : Dict String (List T.Message)
-    -- C4：版本浏览状态——打开版本列表的 Session.id；正在查看的版本
-    -- hash（+ 其 Session.id，标题用）。
+    -- C4: version-browsing state — the Session.id with an open version
+    -- list; the version hash being viewed (+ its Session.id, for the title).
     , versionListFor : Maybe String
     , versionViewFor : Maybe String
     , versionViewSession : Maybe String
@@ -281,7 +287,8 @@ type Msg
     | FrameEvent E.Value
     | StatusEvent E.Value
     | RpcError E.Value
-      -- C 架构：对象存储结果（reqId 匹配的 object_put / object_get）
+      -- C architecture: object-store results (object_put / object_get
+      -- matched by reqId)
     | ObjectPutResult E.Value
     | ObjectGetResult E.Value
       -- User actions
@@ -323,9 +330,10 @@ type Msg
     | SessionActionResult E.Value
     | ResumeSession String
     | DeleteSession String
-    -- C3：删除旧工作副本目录（延迟到旧进程优雅关闭后，避免 save 写回
-    -- 竞态重建目录）。planId/nodeId/originSessionId 定位 nested 节点
-    -- 工作副本（顶层为 ""）。
+    -- C3: delete the old work-copy directory (deferred until the old
+    -- process has gracefully closed, to avoid a save writing back and
+    -- racing the directory recreation). planId/nodeId/originSessionId
+    -- locate the nested node work copy (top-level uses "").
     | DeleteWorkCopyDir String String String String
       -- Window
     | WindowMaximized Bool
@@ -456,7 +464,8 @@ type Msg
     -- Adopts the fork as the node's session (rebind), rewrites the child
     -- meta origin, closes the original session and continues the chain.
     | PlanCascadeForkResult E.Value
-    -- C4：版本浏览（只读查看历史版本消息；D8 不做物化）。
+    -- C4: version browsing (read-only view of historical version
+    -- messages; D8 does not materialize).
     | OpenVersionList String
     | CloseVersionList
     | ViewVersion String String

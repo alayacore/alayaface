@@ -624,9 +624,11 @@ completion still works).
 
 ## P36 — Connection chain: a deep node session shows its WHOLE ancestor path
 
-User: **"连接session窗口和plan窗口的贝塞尔曲线，显示规则需要改进。当一个很深的
-子节点被选中的时候，整条路径都需要显示出来。期待的行为是通过连线直接能找到最顶上
-的session窗口"** — the curves connecting session and plan windows need better
+User: **"The bezier curves connecting session windows and plan windows need
+better display rules. When a deep child node is selected, the whole path must
+be shown; the expected behavior is that through the connecting lines you can
+directly find the topmost session window"** — the curves connecting session and
+plan windows need better
 display rules: when a deep child node is selected, the WHOLE path must be
 shown; through the lines you can directly find the topmost session window.
 
@@ -698,7 +700,8 @@ session is focused).
 
 ## P37 — Session-window overlay scrollbar scrolls away with the content
 
-User: **"session 窗口的滚动条无法显示了"** — the session window's scrollbar
+User: **"The session window's scrollbar can no longer be displayed"** — the
+session window's scrollbar
 can no longer be displayed. Reproduced headlessly (panel fully on screen,
 messages scrolled to bottom): the `.overlay-scrollbar` track was appended
 INSIDE the scrolling `.messages` element, and an absolute-positioned child

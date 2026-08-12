@@ -378,9 +378,10 @@ viewSessionManagerOverlay : Model -> Html Msg
 viewSessionManagerOverlay model =
     if model.showSessionManager then
         let
-            -- C2b（§8.1）：会话管理器只列 Session 根——有 refs 记录的目录
-            -- （普通创建 / 重启扫描都会登记）。工作副本目录
-            -- （sessions/<forkId>/）不是会话身份，不显示。
+            -- C2b (§8.1): the session manager only lists Session ROOTS —
+            -- directories with a refs record (registered by plain creation
+            -- and by the restart scan). Work-copy directories
+            -- (sessions/<forkId>/) are not session identities and are not shown.
             dirs =
                 List.filterMap decodeSessionDir model.sessionDirs
                     |> List.filter (\d -> Dict.member d.id model.sessionRefs)
@@ -462,8 +463,9 @@ viewSessionManagerOverlay model =
 
 -- ─── C4 version browsing (read-only history) ───────────────────────
 
-{-| C4 版本浏览覆盖层：版本列表（会话管理器入口）或版本详情（只读
-消息 + plan 状态）。D8：旧版本只读，不做物化。
+{-| C4 version-browsing overlay: the version list (session-manager
+entry point) or a version detail (read-only messages + plan status).
+D8: old versions are read-only, no materialization.
 -}
 viewVersionOverlays : Model -> Html Msg
 viewVersionOverlays model =
@@ -1180,9 +1182,9 @@ viewPlanCascadeOverlay model =
                     , Html.div [ Attr.class "cascade-scope" ]
                         [ viewCascadeChain scope ]
                     , Html.div [ Attr.class "cascade-warning" ]
-                        [ Html.text ("重跑将截断父会话旧结果及其后续（含你的 " ++ String.fromInt totalUser ++ " 条消息）") ]
+                        [ Html.text ("Re-running will truncate the parent session's old results and everything after them (including your " ++ String.fromInt totalUser ++ " message(s))") ]
                     , Html.div [ Attr.class "cascade-warning-sub" ]
-                        [ Html.text "截断后新结果插入该会话，级联继续向上传播；祖先节点会重新回答并重跑其下游分支。" ]
+                        [ Html.text "New results are inserted into this session and the cascade propagates upward; ancestor nodes will re-answer and re-run their downstream branches." ]
                     , if List.isEmpty scope.closePlanIds then
                         Html.text ""
 
@@ -1362,8 +1364,8 @@ viewMessage model session planIndex msg =
         ]
 
 
-{-| Whether the session directory is currently open（C2b/C3：窗口按
-Session.id key——查 sessions 即可）。
+{-| Whether the session directory is currently open (under C2b/C3
+windows are keyed by Session.id — checking sessions is enough).
 -}
 isSessionDirActive : Model -> String -> Bool
 isSessionDirActive model dirId =
@@ -1491,8 +1493,10 @@ planMetaForMessage =
 
 planStatusFor : Model -> String -> String -> Maybe PM.PlanMeta -> ( String, String, Bool )
 planStatusFor model sid planId meta =
-    -- C 架构：会话版本视图优先——同一 plan 在不同会话版本里状态不同
-    --（老会话看到旧状态；这是"老会话 A 显示已执行"bug 的修复）。
+    -- C architecture: the session-version view takes priority — the same
+    -- plan can have different states across session versions (an old
+    -- session sees the old state; this is the fix for the "old session A
+    -- shows executed" bug).
     case PU.versionPlanStatus model sid planId of
         Just statusStr ->
             case PT.runStatusFromString statusStr of

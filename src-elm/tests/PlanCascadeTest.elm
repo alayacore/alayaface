@@ -375,10 +375,12 @@ tests =
                         scope
             , test "a resumed session (work copy) still shows the insertion point (C2b)" <|
                 \_ ->
-                    -- C2b：Session.id = s1（稳定身份，无血缘）；resume 后
-                    -- 窗口按 Session.id 呈现（内容 = 工作副本的截断历史）。
-                    -- impactScope 按 origin 直接定位，找到旧 [Plan Result]
-                    -- → 有插入点（级联确认仍会出现）。
+                    -- C2b: Session.id = s1 (stable identity, no lineage);
+                    -- after a resume the window renders by Session.id
+                    -- (content = the work copy's truncated history).
+                    -- impactScope locates by origin directly, finds the old
+                    -- [Plan Result] → an insertion point exists (the cascade
+                    -- confirm still appears).
                     let
                         base =
                             ctxFor sessionMap
