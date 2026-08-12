@@ -61,6 +61,7 @@ module Plan.Update exposing
     , versionPlanStatus
     , workCopyId
     , sessionIdOfWorkCopy
+    , sessionIdOfWorkCopyDict
     )
 
 {-| Plan Mode update logic (M2): auto-create / feedback / restart
@@ -1179,12 +1180,12 @@ workCopyId model sessionId =
     Dict.get sessionId model.sessionWorkCopies |> Maybe.withDefault sessionId
 
 
-{-| C2b（§8.1）：alayacore 工作副本 id → Session.id（稳定身份）。
-反查 sessionWorkCopies；无映射 → 自身（root）。入站帧用它路由到
-会话条目。
+{-| Dict-level reverse lookup（alayacore 工作副本 id → Session.id）：
+`sessionIdOfWorkCopy` 的 Model 包装即调它；pending 事件重放（只有
+sessions dict、没有 Model）也复用它。无映射 → 自身（root）。
 -}
-sessionIdOfWorkCopy : Model -> String -> String
-sessionIdOfWorkCopy model coreId =
+sessionIdOfWorkCopyDict : Dict String String -> String -> String
+sessionIdOfWorkCopyDict workCopies coreId =
     Dict.foldl
         (\sid core acc ->
             if core == coreId then
@@ -1194,7 +1195,16 @@ sessionIdOfWorkCopy model coreId =
                 acc
         )
         coreId
-        model.sessionWorkCopies
+        workCopies
+
+
+{-| C2b（§8.1）：alayacore 工作副本 id → Session.id（稳定身份）。
+反查 sessionWorkCopies；无映射 → 自身（root）。入站帧用它路由到
+会话条目。
+-}
+sessionIdOfWorkCopy : Model -> String -> String
+sessionIdOfWorkCopy model coreId =
+    sessionIdOfWorkCopyDict model.sessionWorkCopies coreId
 
 
 {-| C 架构：从会话版本（该会话 head 的 planViews）解析 plan 的显示

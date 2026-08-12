@@ -295,7 +295,9 @@ minimalCloseSession id model =
                 model.activeId
       }
     , Cmd.batch
-        [ Ports.closeSession { sessionId = id }
+        [ -- C2b（I-E）：关工作副本进程（core id）；前端条目按 Session.id
+          -- 已在上面的 sessions/… 更新中移除。
+          Ports.closeSession { sessionId = PU.workCopyId model id }
         , runnerFailCmd
         , Ports.setConnectionChain (chainPayload model model.connectionChain)
         ]
@@ -428,7 +430,7 @@ update msg model =
                     Dict.get id model.pendingEvents |> Maybe.withDefault []
 
                 sessionsAfterBuffer =
-                    List.foldl applyPendingEvent newSessions buffered
+                    List.foldl (applyPendingEvent (\core -> core)) newSessions buffered
 
                 -- Only auto-switch on initial creation (activeId was Nothing)
                 -- If user is already viewing a session, don't steal focus.
@@ -815,7 +817,13 @@ update msg model =
         DeltaEvent raw ->
             case D.decodeValue P.deltaEventDecoder raw of
                 Ok ev ->
-                    case Dict.get ev.sessionId model.sessions of
+                    -- C2b（I-D）：帧的 core id → Session.id（工作副本帧；
+                    -- 普通会话 = 恒等）。
+                    let
+                        sid =
+                            PU.sessionIdOfWorkCopy model ev.sessionId
+                    in
+                    case Dict.get sid model.sessions of
                         Just session ->
                             let
                                 -- M3/D4: incremental plan count — the delta
@@ -834,19 +842,23 @@ update msg model =
                                 newSession =
                                     H.handleDeltaEvent session ev
 
+                                -- scrollToBottom 是前端 DOM 滚动：元素按窗口
+                                -- key（Session.id）命名，传 sid 而非 coreId。
                                 cmds =
                                     if session.atBottom then
-                                        Ports.scrollToBottom { sessionId = ev.sessionId }
+                                        Ports.scrollToBottom { sessionId = sid }
                                     else
                                         Cmd.none
                             in
                             ( { model
-                                | sessions = Dict.insert ev.sessionId newSession model.sessions
-                                , planMessageCounts = bumpPlanCount model.planMessageCounts ev.sessionId becamePlan
+                                | sessions = Dict.insert sid newSession model.sessions
+                                , planMessageCounts = bumpPlanCount model.planMessageCounts sid becamePlan
                               }
                             , cmds
                             )
 
+                        -- 缓冲仍按 core id 记录（SessionCreated 建立
+                        -- workCopies 后以路由重放）。
                         Nothing ->
                             bufferPendingEvent model ev.sessionId raw
 
@@ -856,7 +868,12 @@ update msg model =
         FrameEvent raw ->
             case D.decodeValue P.frameEventDecoder raw of
                 Ok ev ->
-                    case Dict.get ev.sessionId model.sessions of
+                    -- C2b（I-D）：core id → Session.id。
+                    let
+                        sid =
+                            PU.sessionIdOfWorkCopy model ev.sessionId
+                    in
+                    case Dict.get sid model.sessions of
                         Just session ->
                             let
                                 -- M3/D4: incremental plan count — the
@@ -888,11 +905,13 @@ update msg model =
                                 mcpJustCompleted =
                                     session.mcpStatus /= Nothing && newSession.mcpStatus == Nothing
 
+                                -- scrollToBottom 是前端 DOM 滚动：元素按窗口
+                                -- key（Session.id）命名，传 sid。
                                 cmds =
                                     Cmd.batch
                                         (List.filterMap identity
                                             [ if msgCountChanged && session.atBottom then
-                                                Just (Ports.scrollToBottom { sessionId = ev.sessionId })
+                                                Just (Ports.scrollToBottom { sessionId = sid })
 
                                               else
                                                 Nothing
@@ -902,8 +921,8 @@ update msg model =
 
                                 updatedModel =
                                     { model
-                                        | sessions = Dict.insert ev.sessionId { newSession | prevMsgCount = List.length newSession.messages } model.sessions
-                                        , planMessageCounts = bumpPlanCount model.planMessageCounts ev.sessionId becamePlan
+                                        | sessions = Dict.insert sid { newSession | prevMsgCount = List.length newSession.messages } model.sessions
+                                        , planMessageCounts = bumpPlanCount model.planMessageCounts sid becamePlan
                                         -- Replay suppression: the marker is
                                         -- removed by the core's explicit
                                         -- readiness signal — SM
@@ -916,7 +935,7 @@ update msg model =
                                         -- are not supported.
                                         , planReplaySessions =
                                             if isSessionReady ev then
-                                                Set.remove ev.sessionId model.planReplaySessions
+                                                Set.remove sid model.planReplaySessions
 
                                             else
                                                 model.planReplaySessions
@@ -938,12 +957,12 @@ update msg model =
                                             Just m ->
                                                 let
                                                     planIdx =
-                                                        planCountOf updatedModel.planMessageCounts ev.sessionId
+                                                        planCountOf updatedModel.planMessageCounts sid
                                                 in
                                                 if m.role == T.Assistant
-                                                    && not (Set.member ev.sessionId updatedModel.planReplaySessions)
-                                                    && not (Dict.member ( ev.sessionId, planIdx ) updatedModel.pendingPlanOffers)
-                                                    && not (messageBoundToPlan updatedModel ev.sessionId planIdx) then
+                                                    && not (Set.member sid updatedModel.planReplaySessions)
+                                                    && not (Dict.member ( sid, planIdx ) updatedModel.pendingPlanOffers)
+                                                    && not (messageBoundToPlan updatedModel sid planIdx) then
                                                     case Plan.Detect.extractPlanJson m.content of
                                                         Just offerRaw ->
                                                             if Plan.Detect.hasPlanTypeMarker offerRaw then
@@ -951,7 +970,7 @@ update msg model =
                                                                 -- replays (resumed sessions) are suppressed via
                                                                 -- planReplaySessions — their plan messages show the manual
                                                                 -- "Open plan" button instead.
-                                                                Task.perform (\_ -> PlanCreateOffer ev.sessionId planIdx) Time.now
+                                                                Task.perform (\_ -> PlanCreateOffer sid planIdx) Time.now
 
                                                             else
                                                                 Cmd.none
@@ -974,16 +993,16 @@ update msg model =
                                             Just m ->
                                                 let
                                                     planIdx =
-                                                        planCountOf updatedModel.planMessageCounts ev.sessionId
+                                                        planCountOf updatedModel.planMessageCounts sid
                                                 in
                                                 if m.role == T.Assistant
-                                                    && not (Set.member ev.sessionId updatedModel.planReplaySessions)
-                                                    && not (Dict.member ( ev.sessionId, planIdx ) updatedModel.pendingPlanOffers)
-                                                    && not (messageBoundToPlan updatedModel ev.sessionId planIdx) then
+                                                    && not (Set.member sid updatedModel.planReplaySessions)
+                                                    && not (Dict.member ( sid, planIdx ) updatedModel.pendingPlanOffers)
+                                                    && not (messageBoundToPlan updatedModel sid planIdx) then
                                                     case Plan.Detect.extractPlanJson m.content of
                                                         Just offerRaw ->
                                                             if Plan.Detect.hasPlanTypeMarker offerRaw then
-                                                                { updatedModel | pendingPlanOffers = Dict.insert ( ev.sessionId, planIdx ) offerRaw updatedModel.pendingPlanOffers }
+                                                                { updatedModel | pendingPlanOffers = Dict.insert ( sid, planIdx ) offerRaw updatedModel.pendingPlanOffers }
 
                                                             else
                                                                 updatedModel
@@ -1022,7 +1041,7 @@ update msg model =
                             case decodeSyncOutcome raw of
                                 Just ( isError, message ) ->
                                     if newSession.modelSelector.page == ModelSelSyncing then
-                                        update (ForSession ev.sessionId (ModelSelectorSyncResult isError message)) updatedModel3
+                                        update (ForSession sid (ModelSelectorSyncResult isError message)) updatedModel3
 
                                     else
                                         ( updatedModel3, Cmd.batch [ cmds, runnerFrameCmd, autoOfferCmd ] )
@@ -1040,6 +1059,11 @@ update msg model =
             case D.decodeValue P.statusEventDecoder raw of
                 Ok ev ->
                     let
+                        -- C2b（I-D）：core id → Session.id（sessions 更新按
+                        -- Session.id；runner 注入/缓冲仍按 core id）。
+                        sid =
+                            PU.sessionIdOfWorkCopy model ev.sessionId
+
                         -- Runner injection: a node-owned session that
                         -- disconnects before task completion is a failure.
                         statusRunnerCmd =
@@ -1068,7 +1092,7 @@ update msg model =
                             else
                                 Cmd.none
                     in
-                    case Dict.get ev.sessionId model.sessions of
+                    case Dict.get sid model.sessions of
                         Just session ->
                             let
                                 updated =
@@ -1086,7 +1110,7 @@ update msg model =
                                 -- never arrive — fail the sync instead of
                                 -- leaving the overlay stuck.
                                 ( { model
-                                    | sessions = Dict.insert ev.sessionId
+                                    | sessions = Dict.insert sid
                                         { updated
                                             | modelSelector = Sel.syncFailed "Session disconnected during sync" updated.modelSelector
                                         }
@@ -1097,7 +1121,7 @@ update msg model =
 
                             else
                                 ( { model
-                                    | sessions = Dict.insert ev.sessionId updated model.sessions
+                                    | sessions = Dict.insert sid updated model.sessions
                                   }
                                 , statusRunnerCmd
                                 )
@@ -1121,7 +1145,13 @@ update msg model =
         RpcError raw ->
             case D.decodeValue rpcErrorDecoder raw of
                 Ok err ->
-                    case Dict.get err.sessionId model.sessions of
+                    -- C2b：RPC 错误带的 sessionId 是我们发给后端的 core id
+                    -- （workCopyId）——反查到 Session.id 再更新会话条目。
+                    let
+                        sid =
+                            PU.sessionIdOfWorkCopy model err.sessionId
+                    in
+                    case Dict.get sid model.sessions of
                         Just s ->
                             -- An MCP auth failure (start/fill rejected, e.g.
                             -- the session died) must release the running-auth
@@ -1138,7 +1168,7 @@ update msg model =
                             in
                             ( { model
                                 | sessions =
-                                    Dict.insert err.sessionId
+                                    Dict.insert sid
                                         { s1
                                             | sendPending = False
                                             , statusMsg = err.kind ++ " failed: " ++ err.message
@@ -1188,7 +1218,7 @@ update msg model =
                                 model.sessions
                           }
                         , Ports.sendPrompt
-                            { sessionId = s.id
+                            { sessionId = PU.workCopyId model s.id
                             , text = text
                             , media = mediaItems
                             }
@@ -1201,7 +1231,7 @@ update msg model =
             case model.activeId of
                 Just id ->
                     ( model
-                    , Ports.cancelTask { sessionId = id }
+                    , Ports.cancelTask { sessionId = PU.workCopyId model id }
                     )
 
                 Nothing ->
@@ -1210,7 +1240,7 @@ update msg model =
         SetModel modelId ->
             case model.activeId of
                 Just id ->
-                    ( model, Ports.setModel { sessionId = id, modelId = modelId } )
+                    ( model, Ports.setModel { sessionId = PU.workCopyId model id, modelId = modelId } )
 
                 Nothing ->
                     ( model, Cmd.none )
@@ -1219,7 +1249,7 @@ update msg model =
             case Dict.get sid model.sessions of
                 Just _ ->
                     ( updateAfterConfirm model sid
-                    , Ports.confirmTool { sessionId = sid, id = id, allowed = allowed }
+                    , Ports.confirmTool { sessionId = PU.workCopyId model sid, id = id, allowed = allowed }
                     )
 
                 Nothing ->
@@ -1232,7 +1262,7 @@ update msg model =
                         Just auth ->
                             ( { model | sessions = Dict.insert sid { s | mcpAuthRunning = Just server } model.sessions }
                             , Ports.startMcpAuthFlow
-                                { sessionId = sid
+                                { sessionId = PU.workCopyId model sid
                                 , serverName = server
                                 , authUrl = auth.url
                                 }
@@ -1261,7 +1291,7 @@ update msg model =
                             model.sessions
                       }
                     , Cmd.batch
-                        [ Ports.sendMcpDecline { sessionId = sid, server = server }
+                        [ Ports.sendMcpDecline { sessionId = PU.workCopyId model sid, server = server }
                         , focusInput model
                         ]
                     )
@@ -1283,7 +1313,7 @@ update msg model =
                         model.sessions
                       }
                     , Cmd.batch
-                        [ Ports.sendMcpCancel { sessionId = sid }
+                        [ Ports.sendMcpCancel { sessionId = PU.workCopyId model sid }
                         , focusInput model
                         ]
                     )
@@ -1304,7 +1334,7 @@ update msg model =
                             model.sessions
                       }
                     , Cmd.batch
-                        [ Ports.sendMcpCancel { sessionId = sid }
+                        [ Ports.sendMcpCancel { sessionId = PU.workCopyId model sid }
                         , focusInput model
                         ]
                     )
@@ -4439,7 +4469,7 @@ update msg model =
                         { sess | mcpAuthRunning = Just server }
                       )
                     , Ports.fillMcpAuthUrl
-                        { sessionId = s.id
+                        { sessionId = PU.workCopyId model s.id
                         , serverName = server
                         , authUrl = url
                         }
@@ -4775,14 +4805,22 @@ updateAfterConfirm model sid =
             model
 
 
-applyPendingEvent : E.Value -> Dict String T.SessionState -> Dict String T.SessionState
-applyPendingEvent raw sessions =
+-- | Apply a buffered frame/delta/status event to the sessions dict.
+-- C2b（§8.1, I-D）：`sidFor` 把帧里的 core id 路由到 Session.id（fork /
+-- resume 的工作副本帧；普通会话 = 恒等）。SessionCreated 建立
+-- workCopies 后用它重放缓冲帧。
+applyPendingEvent : (String -> String) -> E.Value -> Dict String T.SessionState -> Dict String T.SessionState
+applyPendingEvent sidFor raw sessions =
     -- Try FrameEvent first (most common for initial messages)
     case D.decodeValue P.frameEventDecoder raw of
         Ok ev ->
-            case Dict.get ev.sessionId sessions of
+            let
+                sid =
+                    sidFor ev.sessionId
+            in
+            case Dict.get sid sessions of
                 Just session ->
-                    Dict.insert ev.sessionId (H.handleFrameEvent session ev) sessions
+                    Dict.insert sid (H.handleFrameEvent session ev) sessions
 
                 Nothing ->
                     sessions
@@ -4791,9 +4829,13 @@ applyPendingEvent raw sessions =
             -- Try DeltaEvent
             case D.decodeValue P.deltaEventDecoder raw of
                 Ok ev ->
-                    case Dict.get ev.sessionId sessions of
+                    let
+                        sid =
+                            sidFor ev.sessionId
+                    in
+                    case Dict.get sid sessions of
                         Just session ->
-                            Dict.insert ev.sessionId (H.handleDeltaEvent session ev) sessions
+                            Dict.insert sid (H.handleDeltaEvent session ev) sessions
 
                         Nothing ->
                             sessions
@@ -4802,9 +4844,13 @@ applyPendingEvent raw sessions =
                     -- Try StatusEvent
                     case D.decodeValue P.statusEventDecoder raw of
                         Ok ev ->
-                            case Dict.get ev.sessionId sessions of
+                            let
+                                sid =
+                                    sidFor ev.sessionId
+                            in
+                            case Dict.get sid sessions of
                                 Just session ->
-                                    Dict.insert ev.sessionId
+                                    Dict.insert sid
                                         { session
                                             | connected = ev.connected
                                             , statusMsg = ev.message
@@ -5377,7 +5423,7 @@ sessionModelKit =
                         else
                             ( updateActiveSession model (\sess -> { sess | showModelSelector = False, modelSelector = Sel.close sess.modelSelector })
                             , Cmd.batch
-                                [ Ports.setModel { sessionId = s.id, modelId = m.id }
+                                [ Ports.setModel { sessionId = PU.workCopyId model s.id, modelId = m.id }
                                 , focusInput model
                                 ]
                             )
@@ -5391,7 +5437,7 @@ sessionModelKit =
         case getActiveSession model of
             Just s ->
                 Ports.modelSync
-                    { sessionId = s.id
+                    { sessionId = PU.workCopyId model s.id
                     , config = encodeModels s.modelSelector.working
                     }
 
