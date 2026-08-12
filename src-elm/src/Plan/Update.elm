@@ -1490,12 +1490,14 @@ forkOrInsertInPlace dispatch planId model =
             ( model, Cmd.none )
 
 
-{-| RegisterFork effect: the fork is a new PHYSICAL instance of the same
-conversation — register its lineage (memory + session.meta.json), close
-the original head instance (safe — the machine already reset the node,
-so its disconnect finds no Running node), mark the fork as replay and
-close the (deferred-D11) child plan window. The InsertResult / ResumeNode
-effects are issued separately by the machine.
+{-| RegisterFork effect. TWO paths:
+- **顶层 fork（plain，C2b §8.1）**：fork 出的会话只是同一 Session 的新
+  工作副本（窗口 key 保持 Session.id，SessionCreated fork 分支已接管
+  sessions/workCopies）。这里只：关旧工作副本进程（forkSource = 旧
+  工作副本 core id）；若旧工作副本不是 Session 根则连目录一起删（磁盘
+  始终只有 Session 根 + 当前工作副本）；清 planCascadeFork；关子 plan
+  窗口。不写血缘、不动前端 sessions（旧条目已被覆盖）。
+- **节点 fork**：保留 P39/Phase B 血缘注册（C3 统一）。
 -}
 registerForkInstance : Dispatch -> String -> Model -> ( Model, Cmd Msg )
 registerForkInstance dispatch forkId model =
@@ -1504,58 +1506,101 @@ registerForkInstance dispatch forkId model =
             ( model, Cmd.none )
 
         Just target ->
-            let
-                convId =
-                    resolveEventSessionId model target.forkSource
+            if target.planId == "" then
+                -- C2b：顶层重跑 fork——旧工作副本只关进程/删目录，不
+                -- dispatch CloseSession（那会移除前端 Session 条目，
+                -- 而条目已被 fork 分支替换，无前端清理可做）。
+                let
+                    sessionId =
+                        Dict.get target.childPlanId model.planMetas
+                            |> Maybe.map (.origin >> .sessionId)
+                            |> Maybe.withDefault target.forkSource
 
-                -- The lineage parent must be the ON-DISK instance id: a
-                -- resumed fork source carries its FRESH live id (which
-                -- has no meta file and no registry entry), while the
-                -- chain is keyed by on-disk ids. A live id whose resume
-                -- map points at the real instance resolves back to it.
-                parentInstanceId =
-                    Dict.get target.forkSource model.planResumedFrom
-                        |> Maybe.withDefault target.forkSource
+                    ( m1, closeCmd ) =
+                        if target.forkSource == "" then
+                            ( model, Cmd.none )
 
-                lineageMeta =
-                    { conversationId = convId
-                    , parentInstanceId = Just parentInstanceId
-                    }
+                        else if target.forkSource == sessionId then
+                            -- 旧工作副本 = Session 根：只关进程（根目录
+                            -- 持有身份 + refs，不能删）。
+                            ( model, Ports.closeSession { sessionId = target.forkSource } )
 
-                mLineage =
-                    { model
-                        | sessionLineage = Dict.insert forkId lineageMeta model.sessionLineage
-                    }
+                        else
+                            -- 旧工作副本是更早的 fork：关进程 + 删目录
+                            -- （delete_session_dir 后端同时 close + remove）。
+                            ( model
+                            , Ports.deleteSessionDir
+                                { sessionId = target.forkSource
+                                , planId = Nothing
+                                , nodeId = Nothing
+                                , originSessionId = Nothing
+                                }
+                            )
 
-                lineageCmd =
-                    Ports.fsWriteFileText
-                        { path = forkMetaPath model.homeDir target forkId
-                        , content = E.encode 2 (SM.encode lineageMeta)
-                        , createParents = True
+                    m2 =
+                        { m1
+                            | planCascadeFork = Nothing
+                            , planReplaySessions = Set.insert sessionId m1.planReplaySessions
                         }
 
-                ( m1, closeCmd ) =
-                    if target.forkSource == "" then
-                        ( mLineage, Cmd.none )
+                    closePlanCmd =
+                        Task.perform (\_ -> PlanClose target.childPlanId) Time.now
+                in
+                ( m2, Cmd.batch [ closeCmd, closePlanCmd ] )
 
-                    else
-                        dispatch (CloseSession target.forkSource) mLineage
+            else
+                let
+                    convId =
+                        resolveEventSessionId model target.forkSource
 
-                m2 =
-                    { m1
-                        | planCascadeFork = Nothing
-                        -- The fork replays its (truncated) history: mark
-                        -- it so plan messages inside are not auto-created.
-                        , planReplaySessions = Set.insert forkId m1.planReplaySessions
-                    }
+                    -- The lineage parent must be the ON-DISK instance id: a
+                    -- resumed fork source carries its FRESH live id (which
+                    -- has no meta file and no registry entry), while the
+                    -- chain is keyed by on-disk ids. A live id whose resume
+                    -- map points at the real instance resolves back to it.
+                    parentInstanceId =
+                        Dict.get target.forkSource model.planResumedFrom
+                            |> Maybe.withDefault target.forkSource
 
-                -- The deferred D11 close: the child plan window stays
-                -- open during the fork wait; close it now that the fork
-                -- took over.
-                closePlanCmd =
-                    Task.perform (\_ -> PlanClose target.childPlanId) Time.now
-            in
-            ( m2, Cmd.batch [ lineageCmd, closeCmd, closePlanCmd ] )
+                    lineageMeta =
+                        { conversationId = convId
+                        , parentInstanceId = Just parentInstanceId
+                        }
+
+                    mLineage =
+                        { model
+                            | sessionLineage = Dict.insert forkId lineageMeta model.sessionLineage
+                        }
+
+                    lineageCmd =
+                        Ports.fsWriteFileText
+                            { path = forkMetaPath model.homeDir target forkId
+                            , content = E.encode 2 (SM.encode lineageMeta)
+                            , createParents = True
+                            }
+
+                    ( m1, closeCmd ) =
+                        if target.forkSource == "" then
+                            ( mLineage, Cmd.none )
+
+                        else
+                            dispatch (CloseSession target.forkSource) mLineage
+
+                    m2 =
+                        { m1
+                            | planCascadeFork = Nothing
+                            -- The fork replays its (truncated) history: mark
+                            -- it so plan messages inside are not auto-created.
+                            , planReplaySessions = Set.insert forkId m1.planReplaySessions
+                        }
+
+                    -- The deferred D11 close: the child plan window stays
+                    -- open during the fork wait; close it now that the fork
+                    -- took over.
+                    closePlanCmd =
+                        Task.perform (\_ -> PlanClose target.childPlanId) Time.now
+                in
+                ( m2, Cmd.batch [ lineageCmd, closeCmd, closePlanCmd ] )
 
 
 {-| The fork's session.meta.json path: a plan-node fork lives nested

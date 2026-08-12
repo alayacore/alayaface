@@ -764,19 +764,20 @@ suite =
                                 ( Nothing, True )
                         ]
                         m1
-            , test "a RESUMED fork source resolves the lineage parent to the ON-DISK instance (chained fork, P39-B5)" <|
+            , test "a plain (top-level) fork registers NO lineage; replay mark on the Session.id (C2b)" <|
                 \_ ->
-                    -- Second chained fork: the source (s1) is shown via a
-                    -- resumed live id. The fork's lineage parent must be
-                    -- s1 (on-disk), NOT the fresh live id — otherwise the
-                    -- chain S → S' → S'' breaks (the live id has no meta).
+                    -- C2b（§8.1）：顶层重跑 fork 不写血缘——Session.id 稳定，
+                    -- fork 会话只是同一 Session 的工作副本（映射由
+                    -- forkSessionCreated 写入 sessionWorkCopies）。这里断言
+                    -- registerForkInstance 部分：lineage 不增长、fork 标记
+                    -- 清空、重放抑制标记在 Session.id 上。
                     let
                         target =
                             { childPlanId = "p1"
                             , summary = "new"
                             , planId = ""
                             , nodeId = ""
-                            , forkSource = "live-s1"
+                            , forkSource = "s1"
                             , originSessionId = ""
                             }
 
@@ -793,15 +794,17 @@ suite =
                             { initModelWithSession
                                 | planCascade = Just cascade
                                 , planCascadeFork = Just target
-                                , planResumedFrom = Dict.fromList [ ( "live-s1", "s1" ) ]
                             }
 
                         ( m1, _ ) =
                             PU.cascadeStepIn stubDispatch (PC.InstanceReady (Ok "fork-x")) m0
                     in
-                    Expect.equal
-                        (Dict.get "fork-x" m1.sessionLineage)
-                        (Just { conversationId = "s1", parentInstanceId = Just "s1" })
+                    Expect.all
+                        [ \mm -> Expect.equal (Dict.get "fork-x" mm.sessionLineage) Nothing
+                        , \mm -> Expect.equal mm.planCascadeFork Nothing
+                        , \mm -> Expect.equal (Set.member "s1" mm.planReplaySessions) True
+                        ]
+                        m1
             ]
         , describe "handlePlanReadTarget"
             [ test "open/import parses the plan and chains a run restore" <|

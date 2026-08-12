@@ -302,7 +302,9 @@ Plan 的 Run.nodes[nodeId].session = 节点会话的 VersionRef（引用）
 ### 实施步骤（每步可验证、可提交）
 
 1. **C2b-1 基础设施** ✅：`workCopyId`/`sessionIdOfWorkCopy`（Plan/Update.elm 导出）+ Model.sessionWorkCopies；单测（正向/反向映射、无映射回退、多次 fork 反查）。提交 `cb19499`（三远程）。
-2. **C2b-2 绑定简化** ✅：`messageBoundToPlan`/`planMetaForMessage`/`versionPlanStatus` 删 `resolveConversation` + `planResumedFrom` 解析，直接按 Session.id 匹配——单测（普通/resume/fork 场景绑定：工作副本只经 sessionWorkCopies，绑定不看它）。
+2. **C2b-2 绑定简化** ✅：`messageBoundToPlan`/`planMetaForMessage`/`versionPlanStatus` 删 `resolveConversation` + `planResumedFrom` 解析，直接按 Session.id 匹配——单测（普通/resume/fork 场景绑定：工作副本只经 sessionWorkCopies，绑定不看它）。提交 `84f6da5`。
+3. **C2b-4 帧路由 + 命令映射** ✅（先于 C2b-3 实施——空映射恒等，独立可提交）：Delta/Frame/Status/RpcError 经 `sessionIdOfWorkCopy` 路由（scrollToBottom 用 Session.id——DOM 窗口 key）；SendPrompt/CancelTask/SetModel/ConfirmTool/MCP*/modelSync/closeSession 经 `workCopyId`；`applyPendingEvent` 带 sid 路由参数；`sessionIdOfWorkCopyDict` 提取。提交 `f7ace5b`。
+4. **C2b-3 fork 分支修正** ✅（依赖 C2b-4 路由，故在其后实施）：SessionCreated 按 `isPlainCascadeFork` 分流——顶层 fork 走 `forkSessionCreated`（窗口 key 保持 Session.id = plan origin；workCopies[Session.id] = forkId；sessions[Session.id] 覆盖为 fork 内容；planReplaySessions 标 Session.id；不建窗口条目/不写血缘）；`registerForkInstance` 顶层分支只关旧工作副本（= Session 根 → 仅 closeSession；更早 fork → deleteSessionDir 关+删）+ 清 planCascadeFork + 关子 plan 窗口；级联完成固化 V₁（PlanCascadeForkResult 接管时 freezeSessionVersion Session.id，parent = V₀）；事件守卫 `isCurrentWorkCopy`（旧工作副本迟到帧/断开不污染新条目）。`forkInheritPos` 保留给节点 fork（C3 删）。原 SessionCreated 主体提取为 `createSessionWindow`（逐行一致，纯缩进）。
 3. **C2b-3 fork 分支修正**：SessionCreated fork 分支用 `meta.origin.sessionId`（Session.id）作窗口 key + workCopies；`registerForkInstance` 只关旧工作副本（裸 closeSession）+ 清 planCascadeFork；删 forkInheritPos；级联完成固化 V₁；**fork 后删旧工作副本目录**。
 4. **C2b-4 帧路由 + 命令映射**：coreId → Session.id；命令 Session.id → coreId。
 5. **C2b-5 resume 归属**：resume 分支 workCopies[Session.id] = liveId（窗口 key 保持 Session.id）；`session.refs.json` 加 workCopy 字段。

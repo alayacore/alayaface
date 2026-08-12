@@ -391,6 +391,415 @@ minimalPlanClose planId model =
     )
 
 
+{-| C2b（I-G）：该 core id 是否为它所属 Session 的**当前**工作副本。
+旧工作副本（被 fork 替换后）的迟到帧/断开事件若按 Session.id 路由会
+污染新条目——用"当前工作副本"守卫直接忽略。普通会话（无映射）恒为
+True。节点会话（无映射）同样恒为 True（C3 前行为不变）。
+-}
+isCurrentWorkCopy : Model -> String -> Bool
+isCurrentWorkCopy model coreId =
+    let
+        sid =
+            PU.sessionIdOfWorkCopy model coreId
+    in
+    PU.workCopyId model sid == coreId
+
+
+{-| C2b：进行中的级联 fork 是否为顶层（plain）fork。顶层重跑 fork 走
+工作副本替换（forkSessionCreated）；节点 fork 保留旧行为（新窗口 +
+血缘，C3 统一）。
+-}
+isPlainCascadeFork : Model -> Bool
+isPlainCascadeFork model =
+    case model.planCascadeFork of
+        Just target ->
+            target.planId == ""
+
+        Nothing ->
+            False
+
+
+{-| C2b fork 分支（§8.1）：顶层重跑 fork 接管同一 Session：
+- 窗口 key 保持 Session.id（= plan origin `meta.origin.sessionId`，
+  不是 forkSource——那是旧工作副本，可能有 resume 差异）。
+- sessionWorkCopies[Session.id] = forkId（新工作副本）；缓冲帧按此
+  路由重放进 sessions[Session.id]（覆盖旧内容）。
+- planReplaySessions 标记 Session.id（重放历史不自动建 plan）。
+- 不建 sessionOrder / sessionNums / windowPositions 条目（窗口没换，
+  位置天然保留——无需 forkInheritPos）；不写血缘。
+- 旧工作副本进程/目录由 RegisterFork（registerForkInstance）关闭。
+-}
+forkSessionCreated : String -> Model -> ( Model, Cmd Msg )
+forkSessionCreated forkId model =
+    let
+        sessionId =
+            case model.planCascadeFork of
+                Just target ->
+                    Dict.get target.childPlanId model.planMetas
+                        |> Maybe.map (.origin >> .sessionId)
+                        |> Maybe.withDefault forkId
+
+                Nothing ->
+                    forkId
+
+        -- 先建映射再重放缓冲：core id（forkId）→ Session.id。
+        newWorkCopies =
+            Dict.insert sessionId forkId model.sessionWorkCopies
+
+        newSessions =
+            Dict.insert sessionId (T.emptySession sessionId) model.sessions
+
+        buffered =
+            Dict.get forkId model.pendingEvents |> Maybe.withDefault []
+
+        sessionsAfterBuffer =
+            List.foldl
+                (applyPendingEvent (PU.sessionIdOfWorkCopyDict newWorkCopies))
+                newSessions
+                buffered
+
+        m0 =
+            { model
+                | sessionWorkCopies = newWorkCopies
+                , sessions = sessionsAfterBuffer
+                , activeId = Just sessionId
+                , planMessageCounts =
+                    case Dict.get sessionId sessionsAfterBuffer of
+                        Just s ->
+                            Dict.insert sessionId (planIndexForMessage s.messages) model.planMessageCounts
+
+                        Nothing ->
+                            model.planMessageCounts
+                , planReplaySessions = Set.insert sessionId model.planReplaySessions
+                , pendingEvents = Dict.remove forkId model.pendingEvents
+            }
+
+        cmds =
+            Cmd.batch
+                [ Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ sessionId))
+                , Ports.scrollToBottom { sessionId = sessionId }
+                ]
+    in
+    ( m0, cmds )
+
+
+{-| 新会话窗口的常规创建（普通 New Session / resume / runner 节点会话
+/ 节点级联 fork）。C2b 后只负责这些路径——顶层 fork 走 forkSessionCreated。
+-}
+createSessionWindow : String -> Model -> ( Model, Cmd Msg )
+createSessionWindow id model =
+    let
+        newSession =
+            T.emptySession id
+
+        newSessions =
+            Dict.insert id newSession model.sessions
+
+        -- Replay any buffered events that arrived before this session was registered
+        buffered =
+            Dict.get id model.pendingEvents |> Maybe.withDefault []
+
+        sessionsAfterBuffer =
+            List.foldl (applyPendingEvent (\core -> core)) newSessions buffered
+
+        -- Only auto-switch on initial creation (activeId was Nothing)
+        -- If user is already viewing a session, don't steal focus.
+        -- Runner-created node sessions never steal focus: the user
+        -- is watching the plan DAG and opens node sessions by
+        -- clicking the DAG.
+        isRunnerCreate =
+            case model.planCreating of
+                Just (RunnerCreate _ _) ->
+                    True
+
+                _ ->
+                    False
+
+        -- P38: a cascade FORK replaces the parent conversation —
+        -- it must take focus so the user follows the continuation
+        -- (otherwise the fork streams deltas "behind" while the
+        -- closed plan's spot stays empty).
+        isCascadeFork =
+            model.planCascadeFork /= Nothing
+
+        takeFocus =
+            not isRunnerCreate
+                && (isCascadeFork || model.pendingSwitchOnCreate || model.activeId == Nothing)
+
+        newActiveId =
+            if takeFocus then
+                Just id
+            else
+                model.activeId
+
+        cmds =
+            if takeFocus then
+                Cmd.batch [ Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ id)), Ports.scrollToBottom { sessionId = id } ]
+            else
+                Cmd.none
+
+        baseModel0 =
+            { model
+                | sessions = sessionsAfterBuffer
+                , activeId = newActiveId
+                , sessionOrder = model.sessionOrder ++ [ id ]
+                , sessionNums = Dict.insert id model.nextSessionNum model.sessionNums
+                , nextSessionNum = model.nextSessionNum + 1
+                -- M3/D4: seed the incremental plan counter from
+                -- the session's final messages (buffered replay
+                -- included). O(n) ONCE at creation; per-frame
+                -- bumps after that are O(1).
+                , planMessageCounts =
+                    case Dict.get id sessionsAfterBuffer of
+                        Just s ->
+                            Dict.insert id (planIndexForMessage s.messages) model.planMessageCounts
+
+                        Nothing ->
+                            model.planMessageCounts
+                , windowPositions =
+                    if Dict.member id model.windowPositions then
+                        model.windowPositions
+                    else
+                        let
+                            -- Rule 0 (P39/D8): a cascade-fork
+                            -- replacement session opens at the SAME
+                            -- spot as the window it replaces (the
+                            -- old window is closed right after).
+                            -- Rule 2: a runner-created / resumed
+                            -- node session opens beside its plan
+                            -- window (stacking with an offset);
+                            -- plain creates center on the viewport.
+                            pos =
+                                case forkInheritPos model of
+                                    Just fp ->
+                                        fp
+
+                                    Nothing ->
+                                        case pendingNodePlanId model of
+                                            Just planId ->
+                                                nodeSessionPositionBesidePlan model planId
+
+                                            Nothing ->
+                                                centeredSessionPos model
+                        in
+                        Dict.insert id pos model.windowPositions
+                -- The z bump is applied by raiseWindow below
+                -- (D6: bounded nextZIndex + order-list focus).
+                -- Only consume pendingSwitchOnCreate when this
+                -- session actually consumed it (non-runner). A
+                -- runner session arriving in between must not
+                -- steal a user/resume focus request.
+                , pendingSwitchOnCreate =
+                    if isRunnerCreate then
+                        model.pendingSwitchOnCreate
+
+                    else
+                        False
+                -- A (user/resume) session taking focus yields any
+                -- previous curves (mirrors ActivateSession: a
+                -- fresh session is not part of the old chain);
+                -- runner sessions don't take focus, so the chain
+                -- stays while the plan runs.
+                , connectionChain =
+                    if isRunnerCreate then
+                        model.connectionChain
+
+                    else
+                        []
+                -- P38: a cascade FORK replays its (truncated)
+                -- history — plan messages inside it must not
+                -- auto-create duplicate windows.
+                , planReplaySessions =
+                    if model.planCascadeFork /= Nothing then
+                        Set.insert id model.planReplaySessions
+
+                    else
+                        model.planReplaySessions
+                -- P39/Phase B: a genuinely NEW top-level instance
+                -- registers as the ROOT of its conversation
+                -- (instance → conversation = itself). Resumed
+                -- live handles (planResumeFrom) are ephemeral
+                -- windows over an existing instance; runner-
+                -- created node sessions and cascade forks get
+                -- their lineage from the plan machinery instead.
+                , sessionLineage =
+                    if model.planResumeFrom == Nothing && model.planCascadeFork == Nothing && not isRunnerCreate then
+                        Dict.insert id (SM.empty id) model.sessionLineage
+
+                    else
+                        model.sessionLineage
+                -- P28 layout fix: record this session's REAL
+                -- on-disk directory (top-level for plain
+                -- sessions, the nested node-session dir for plan
+                -- children) so plans created by it live in the
+                -- right subtree.
+                , sessionDirMap =
+                    Dict.insert id
+                        (sessionDirForCreate model id)
+                        model.sessionDirMap
+                , pendingEvents = Dict.remove id model.pendingEvents
+            }
+
+        -- Pan the canvas so the fresh window is visible (its
+        -- source window may be far off-screen).
+        baseModel =
+            case Dict.get id baseModel0.windowPositions of
+                Just p ->
+                    bringIntoView baseModel0 p
+
+                Nothing ->
+                    baseModel0
+
+        -- Raise the fresh session window (D6): end of
+        -- sessionOrder + next bounded z (rebase when the z
+        -- counter crosses the threshold). The resume branch
+        -- below re-raises the whole chain when this session
+        -- belongs to a plan node.
+        raisedModel =
+            raiseWindow baseModel id
+
+        -- A session resumed for a plan node gets a FRESH id from
+        -- resume_session while keeping the ORIGINAL on-disk dir.
+        -- The node stays bound to the original id (the dir name)
+        -- so it can be resumed again after this window closes;
+        -- record the live→orig mapping so node clicks can find
+        -- this live window and CloseSession can attribute it back
+        -- to the plan node. Never consumed by a runner-created
+        -- session.
+        resumedModel =
+            case ( model.planResumeFrom, isRunnerCreate ) of
+                ( Just origId, False ) ->
+                    let
+                        label =
+                            Dict.get origId raisedModel.planNodeSessions
+
+                        -- The resumed session's FULL connection
+                        -- chain: its own node↔session segment plus
+                        -- every ancestor plan↔session segment up
+                        -- to the top-level session. Built with the
+                        -- fresh id already mapped back to the
+                        -- original dir id (and the binding label
+                        -- carried over), so the curve draws from
+                        -- the moment the window appears.
+                        chain =
+                            connectionChainForSession
+                                { raisedModel
+                                    | planResumedFrom = Dict.insert id origId raisedModel.planResumedFrom
+                                    , planNodeSessions =
+                                        case label of
+                                            Just l ->
+                                                Dict.insert id l raisedModel.planNodeSessions
+
+                                            Nothing ->
+                                                raisedModel.planNodeSessions
+                                }
+                                id
+
+                        -- The new session is focused; raise the
+                        -- whole chain like activateSessionModel
+                        -- does (session top, its plan second
+                        -- layer, the plan's owning session below,
+                        -- … up to the top-level session).
+                        ( raisedPositions, raisedNextZ ) =
+                            raiseChainWindows raisedModel chain
+
+                        positions =
+                            if List.isEmpty chain then
+                                -- raiseWindow already raised the
+                                -- session (empty chain = no plan
+                                -- binding to lift).
+                                raisedModel.windowPositions
+
+                            else
+                                raisedPositions
+
+                        zBump =
+                            if List.isEmpty chain then
+                                0
+
+                            else
+                                raisedNextZ - raisedModel.nextZIndex
+                    in
+                    { raisedModel
+                        | planResumeFrom = Nothing
+                        , planResumeOwner = Nothing
+                        , planResumedFrom = Dict.insert id origId raisedModel.planResumedFrom
+                        -- The replay-suppression marker is keyed by
+                        -- the ORIGINAL id at resume-click time, but
+                        -- replayed history frames carry the FRESH
+                        -- id — move it old→new so a plan message
+                        -- inside the replayed history is suppressed
+                        -- (otherwise it auto-creates a duplicate
+                        -- plan window with all tasks Pending).
+                        , planReplaySessions =
+                            Set.insert id (Set.remove origId raisedModel.planReplaySessions)
+                        , connectionChain = chain
+                        , windowPositions = positions
+                        , nextZIndex = raisedModel.nextZIndex + zBump
+                        , planNodeSessions =
+                            case label of
+                                Just l ->
+                                    Dict.insert id l raisedModel.planNodeSessions
+
+                                Nothing ->
+                                    raisedModel.planNodeSessions
+                    }
+
+                _ ->
+                    raisedModel
+
+        -- Consume the in-flight marker for user creates (runner
+        -- creates are consumed inside PlanBindSession).
+        settledModel =
+            case model.planCreating of
+                Just (UserCreate _) ->
+                    { resumedModel | planCreating = Nothing }
+
+                _ ->
+                    resumedModel
+
+        ( drainedModel, drainCmd ) =
+            case model.planCreating of
+                -- user create finished: start the next queued create
+                Just (UserCreate _) ->
+                    startNextCreateIn settledModel
+
+                _ ->
+                    ( settledModel, Cmd.none )
+    in
+    ( drainedModel
+    , Cmd.batch
+        [ cmds
+        , drainCmd
+        -- Draw whatever chain the new session state implies: the
+        -- resumed session's full ancestor path, or [] for a
+        -- plain/runner-created session (runner keeps the
+        -- existing chain, which is already in the model).
+        , Ports.setConnectionChain (chainPayload drainedModel drainedModel.connectionChain)
+        -- P39/Phase B: persist the root lineage meta for a
+        -- genuinely NEW top-level instance (sessions/<id>/
+        -- session.meta.json). Resume / runner / fork instances
+        -- register through their own paths.
+        , if model.planResumeFrom == Nothing && model.planCascadeFork == Nothing && not isRunnerCreate then
+            Ports.fsWriteFileText
+                { path = sessionsDir model.homeDir ++ "/" ++ id ++ "/session.meta.json"
+                , content = E.encode 2 (SM.encode (SM.empty id))
+                , createParents = True
+                }
+
+          else
+            Cmd.none
+        , case model.planCreating of
+            -- A runner-created session: bind it to its node
+            -- (PlanBindSession also starts the next queued create).
+            Just (RunnerCreate planId nodeId) ->
+                Task.perform (\t -> PlanBindSession (Time.posixToMillis t) planId nodeId id) Time.now
+
+            _ ->
+                Cmd.none
+        ]
+    )
+
 {-| Fixed plan mode (D2, R2): the planner hint injected via `--system`
 into EVERY session (user sessions and plan node sessions alike). No role
 lock — the model keeps its tools and may execute directly. For complex
@@ -418,318 +827,14 @@ update msg model =
                     )
 
         SessionCreated id ->
-            let
-                newSession =
-                    T.emptySession id
+            -- C2b（§8.1）：顶层级联 fork 不创建新窗口——fork 出的会话只是
+            -- 同一 Session 的新工作副本（窗口 key = Session.id 不动）。
+            -- 节点 fork / 普通创建走 createSessionWindow（原逻辑）。
+            if isPlainCascadeFork model then
+                forkSessionCreated id model
 
-                newSessions =
-                    Dict.insert id newSession model.sessions
-
-                -- Replay any buffered events that arrived before this session was registered
-                buffered =
-                    Dict.get id model.pendingEvents |> Maybe.withDefault []
-
-                sessionsAfterBuffer =
-                    List.foldl (applyPendingEvent (\core -> core)) newSessions buffered
-
-                -- Only auto-switch on initial creation (activeId was Nothing)
-                -- If user is already viewing a session, don't steal focus.
-                -- Runner-created node sessions never steal focus: the user
-                -- is watching the plan DAG and opens node sessions by
-                -- clicking the DAG.
-                isRunnerCreate =
-                    case model.planCreating of
-                        Just (RunnerCreate _ _) ->
-                            True
-
-                        _ ->
-                            False
-
-                -- P38: a cascade FORK replaces the parent conversation —
-                -- it must take focus so the user follows the continuation
-                -- (otherwise the fork streams deltas "behind" while the
-                -- closed plan's spot stays empty).
-                isCascadeFork =
-                    model.planCascadeFork /= Nothing
-
-                takeFocus =
-                    not isRunnerCreate
-                        && (isCascadeFork || model.pendingSwitchOnCreate || model.activeId == Nothing)
-
-                newActiveId =
-                    if takeFocus then
-                        Just id
-                    else
-                        model.activeId
-
-                cmds =
-                    if takeFocus then
-                        Cmd.batch [ Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ id)), Ports.scrollToBottom { sessionId = id } ]
-                    else
-                        Cmd.none
-
-                baseModel0 =
-                    { model
-                        | sessions = sessionsAfterBuffer
-                        , activeId = newActiveId
-                        , sessionOrder = model.sessionOrder ++ [ id ]
-                        , sessionNums = Dict.insert id model.nextSessionNum model.sessionNums
-                        , nextSessionNum = model.nextSessionNum + 1
-                        -- M3/D4: seed the incremental plan counter from
-                        -- the session's final messages (buffered replay
-                        -- included). O(n) ONCE at creation; per-frame
-                        -- bumps after that are O(1).
-                        , planMessageCounts =
-                            case Dict.get id sessionsAfterBuffer of
-                                Just s ->
-                                    Dict.insert id (planIndexForMessage s.messages) model.planMessageCounts
-
-                                Nothing ->
-                                    model.planMessageCounts
-                        , windowPositions =
-                            if Dict.member id model.windowPositions then
-                                model.windowPositions
-                            else
-                                let
-                                    -- Rule 0 (P39/D8): a cascade-fork
-                                    -- replacement session opens at the SAME
-                                    -- spot as the window it replaces (the
-                                    -- old window is closed right after).
-                                    -- Rule 2: a runner-created / resumed
-                                    -- node session opens beside its plan
-                                    -- window (stacking with an offset);
-                                    -- plain creates center on the viewport.
-                                    pos =
-                                        case forkInheritPos model of
-                                            Just fp ->
-                                                fp
-
-                                            Nothing ->
-                                                case pendingNodePlanId model of
-                                                    Just planId ->
-                                                        nodeSessionPositionBesidePlan model planId
-
-                                                    Nothing ->
-                                                        centeredSessionPos model
-                                in
-                                Dict.insert id pos model.windowPositions
-                        -- The z bump is applied by raiseWindow below
-                        -- (D6: bounded nextZIndex + order-list focus).
-                        -- Only consume pendingSwitchOnCreate when this
-                        -- session actually consumed it (non-runner). A
-                        -- runner session arriving in between must not
-                        -- steal a user/resume focus request.
-                        , pendingSwitchOnCreate =
-                            if isRunnerCreate then
-                                model.pendingSwitchOnCreate
-
-                            else
-                                False
-                        -- A (user/resume) session taking focus yields any
-                        -- previous curves (mirrors ActivateSession: a
-                        -- fresh session is not part of the old chain);
-                        -- runner sessions don't take focus, so the chain
-                        -- stays while the plan runs.
-                        , connectionChain =
-                            if isRunnerCreate then
-                                model.connectionChain
-
-                            else
-                                []
-                        -- P38: a cascade FORK replays its (truncated)
-                        -- history — plan messages inside it must not
-                        -- auto-create duplicate windows.
-                        , planReplaySessions =
-                            if model.planCascadeFork /= Nothing then
-                                Set.insert id model.planReplaySessions
-
-                            else
-                                model.planReplaySessions
-                        -- P39/Phase B: a genuinely NEW top-level instance
-                        -- registers as the ROOT of its conversation
-                        -- (instance → conversation = itself). Resumed
-                        -- live handles (planResumeFrom) are ephemeral
-                        -- windows over an existing instance; runner-
-                        -- created node sessions and cascade forks get
-                        -- their lineage from the plan machinery instead.
-                        , sessionLineage =
-                            if model.planResumeFrom == Nothing && model.planCascadeFork == Nothing && not isRunnerCreate then
-                                Dict.insert id (SM.empty id) model.sessionLineage
-
-                            else
-                                model.sessionLineage
-                        -- P28 layout fix: record this session's REAL
-                        -- on-disk directory (top-level for plain
-                        -- sessions, the nested node-session dir for plan
-                        -- children) so plans created by it live in the
-                        -- right subtree.
-                        , sessionDirMap =
-                            Dict.insert id
-                                (sessionDirForCreate model id)
-                                model.sessionDirMap
-                        , pendingEvents = Dict.remove id model.pendingEvents
-                    }
-
-                -- Pan the canvas so the fresh window is visible (its
-                -- source window may be far off-screen).
-                baseModel =
-                    case Dict.get id baseModel0.windowPositions of
-                        Just p ->
-                            bringIntoView baseModel0 p
-
-                        Nothing ->
-                            baseModel0
-
-                -- Raise the fresh session window (D6): end of
-                -- sessionOrder + next bounded z (rebase when the z
-                -- counter crosses the threshold). The resume branch
-                -- below re-raises the whole chain when this session
-                -- belongs to a plan node.
-                raisedModel =
-                    raiseWindow baseModel id
-
-                -- A session resumed for a plan node gets a FRESH id from
-                -- resume_session while keeping the ORIGINAL on-disk dir.
-                -- The node stays bound to the original id (the dir name)
-                -- so it can be resumed again after this window closes;
-                -- record the live→orig mapping so node clicks can find
-                -- this live window and CloseSession can attribute it back
-                -- to the plan node. Never consumed by a runner-created
-                -- session.
-                resumedModel =
-                    case ( model.planResumeFrom, isRunnerCreate ) of
-                        ( Just origId, False ) ->
-                            let
-                                label =
-                                    Dict.get origId raisedModel.planNodeSessions
-
-                                -- The resumed session's FULL connection
-                                -- chain: its own node↔session segment plus
-                                -- every ancestor plan↔session segment up
-                                -- to the top-level session. Built with the
-                                -- fresh id already mapped back to the
-                                -- original dir id (and the binding label
-                                -- carried over), so the curve draws from
-                                -- the moment the window appears.
-                                chain =
-                                    connectionChainForSession
-                                        { raisedModel
-                                            | planResumedFrom = Dict.insert id origId raisedModel.planResumedFrom
-                                            , planNodeSessions =
-                                                case label of
-                                                    Just l ->
-                                                        Dict.insert id l raisedModel.planNodeSessions
-
-                                                    Nothing ->
-                                                        raisedModel.planNodeSessions
-                                        }
-                                        id
-
-                                -- The new session is focused; raise the
-                                -- whole chain like activateSessionModel
-                                -- does (session top, its plan second
-                                -- layer, the plan's owning session below,
-                                -- … up to the top-level session).
-                                ( raisedPositions, raisedNextZ ) =
-                                    raiseChainWindows raisedModel chain
-
-                                positions =
-                                    if List.isEmpty chain then
-                                        -- raiseWindow already raised the
-                                        -- session (empty chain = no plan
-                                        -- binding to lift).
-                                        raisedModel.windowPositions
-
-                                    else
-                                        raisedPositions
-
-                                zBump =
-                                    if List.isEmpty chain then
-                                        0
-
-                                    else
-                                        raisedNextZ - raisedModel.nextZIndex
-                            in
-                            { raisedModel
-                                | planResumeFrom = Nothing
-                                , planResumeOwner = Nothing
-                                , planResumedFrom = Dict.insert id origId raisedModel.planResumedFrom
-                                -- The replay-suppression marker is keyed by
-                                -- the ORIGINAL id at resume-click time, but
-                                -- replayed history frames carry the FRESH
-                                -- id — move it old→new so a plan message
-                                -- inside the replayed history is suppressed
-                                -- (otherwise it auto-creates a duplicate
-                                -- plan window with all tasks Pending).
-                                , planReplaySessions =
-                                    Set.insert id (Set.remove origId raisedModel.planReplaySessions)
-                                , connectionChain = chain
-                                , windowPositions = positions
-                                , nextZIndex = raisedModel.nextZIndex + zBump
-                                , planNodeSessions =
-                                    case label of
-                                        Just l ->
-                                            Dict.insert id l raisedModel.planNodeSessions
-
-                                        Nothing ->
-                                            raisedModel.planNodeSessions
-                            }
-
-                        _ ->
-                            raisedModel
-
-                -- Consume the in-flight marker for user creates (runner
-                -- creates are consumed inside PlanBindSession).
-                settledModel =
-                    case model.planCreating of
-                        Just (UserCreate _) ->
-                            { resumedModel | planCreating = Nothing }
-
-                        _ ->
-                            resumedModel
-
-                ( drainedModel, drainCmd ) =
-                    case model.planCreating of
-                        -- user create finished: start the next queued create
-                        Just (UserCreate _) ->
-                            startNextCreateIn settledModel
-
-                        _ ->
-                            ( settledModel, Cmd.none )
-            in
-            ( drainedModel
-            , Cmd.batch
-                [ cmds
-                , drainCmd
-                -- Draw whatever chain the new session state implies: the
-                -- resumed session's full ancestor path, or [] for a
-                -- plain/runner-created session (runner keeps the
-                -- existing chain, which is already in the model).
-                , Ports.setConnectionChain (chainPayload drainedModel drainedModel.connectionChain)
-                -- P39/Phase B: persist the root lineage meta for a
-                -- genuinely NEW top-level instance (sessions/<id>/
-                -- session.meta.json). Resume / runner / fork instances
-                -- register through their own paths.
-                , if model.planResumeFrom == Nothing && model.planCascadeFork == Nothing && not isRunnerCreate then
-                    Ports.fsWriteFileText
-                        { path = sessionsDir model.homeDir ++ "/" ++ id ++ "/session.meta.json"
-                        , content = E.encode 2 (SM.encode (SM.empty id))
-                        , createParents = True
-                        }
-
-                  else
-                    Cmd.none
-                , case model.planCreating of
-                    -- A runner-created session: bind it to its node
-                    -- (PlanBindSession also starts the next queued create).
-                    Just (RunnerCreate planId nodeId) ->
-                        Task.perform (\t -> PlanBindSession (Time.posixToMillis t) planId nodeId id) Time.now
-
-                    _ ->
-                        Cmd.none
-                ]
-            )
-
+            else
+                createSessionWindow id model
         SessionCreateError text ->
             -- create_session failed. Without this the in-flight marker
             -- (planCreating) would stay set forever: every later create
@@ -817,322 +922,339 @@ update msg model =
         DeltaEvent raw ->
             case D.decodeValue P.deltaEventDecoder raw of
                 Ok ev ->
-                    -- C2b（I-D）：帧的 core id → Session.id（工作副本帧；
-                    -- 普通会话 = 恒等）。
-                    let
-                        sid =
-                            PU.sessionIdOfWorkCopy model ev.sessionId
-                    in
-                    case Dict.get sid model.sessions of
-                        Just session ->
-                            let
-                                -- M3/D4: incremental plan count — the delta
-                                -- accumulator for this tag:historyId before
-                                -- and after; crossing the ```json fence
-                                -- bumps the counter exactly once per plan
-                                -- message (replaces the per-frame O(n)
-                                -- planIndexForMessage scan).
-                                prevContent =
-                                    Dict.get (ev.tag ++ ":" ++ ev.historyId) session.historyContents
-                                        |> Maybe.withDefault ""
+                    -- C2b（I-G）：只处理当前工作副本的帧——旧工作副本（被
+                    -- fork 替换后）的迟到帧/断开事件会污染新条目，忽略。
+                    if not (isCurrentWorkCopy model ev.sessionId) then
+                        ( model, Cmd.none )
 
-                                becamePlan =
-                                    becamePlanMessage prevContent (prevContent ++ ev.content)
-
-                                newSession =
-                                    H.handleDeltaEvent session ev
-
-                                -- scrollToBottom 是前端 DOM 滚动：元素按窗口
-                                -- key（Session.id）命名，传 sid 而非 coreId。
-                                cmds =
-                                    if session.atBottom then
-                                        Ports.scrollToBottom { sessionId = sid }
-                                    else
-                                        Cmd.none
-                            in
-                            ( { model
-                                | sessions = Dict.insert sid newSession model.sessions
-                                , planMessageCounts = bumpPlanCount model.planMessageCounts sid becamePlan
-                              }
-                            , cmds
-                            )
-
-                        -- 缓冲仍按 core id 记录（SessionCreated 建立
-                        -- workCopies 后以路由重放）。
-                        Nothing ->
-                            bufferPendingEvent model ev.sessionId raw
-
+                    else
+                        -- C2b（I-D）：帧的 core id → Session.id（工作副本帧；
+                        -- 普通会话 = 恒等）。
+                        let
+                            sid =
+                                PU.sessionIdOfWorkCopy model ev.sessionId
+                        in
+                            case Dict.get sid model.sessions of
+                            Just session ->
+                                let
+                                    -- M3/D4: incremental plan count — the delta
+                                    -- accumulator for this tag:historyId before
+                                    -- and after; crossing the ```json fence
+                                    -- bumps the counter exactly once per plan
+                                    -- message (replaces the per-frame O(n)
+                                    -- planIndexForMessage scan).
+                                    prevContent =
+                                        Dict.get (ev.tag ++ ":" ++ ev.historyId) session.historyContents
+                                            |> Maybe.withDefault ""
+    
+                                    becamePlan =
+                                        becamePlanMessage prevContent (prevContent ++ ev.content)
+    
+                                    newSession =
+                                        H.handleDeltaEvent session ev
+    
+                                    -- scrollToBottom 是前端 DOM 滚动：元素按窗口
+                                    -- key（Session.id）命名，传 sid 而非 coreId。
+                                    cmds =
+                                        if session.atBottom then
+                                            Ports.scrollToBottom { sessionId = sid }
+                                        else
+                                            Cmd.none
+                                in
+                                ( { model
+                                    | sessions = Dict.insert sid newSession model.sessions
+                                    , planMessageCounts = bumpPlanCount model.planMessageCounts sid becamePlan
+                                  }
+                                , cmds
+                                )
+    
+                            -- 缓冲仍按 core id 记录（SessionCreated 建立
+                            -- workCopies 后以路由重放）。
+                            Nothing ->
+                                bufferPendingEvent model ev.sessionId raw
+    
                 Err _ ->
                     ( model, Cmd.none )
 
         FrameEvent raw ->
             case D.decodeValue P.frameEventDecoder raw of
                 Ok ev ->
-                    -- C2b（I-D）：core id → Session.id。
-                    let
-                        sid =
-                            PU.sessionIdOfWorkCopy model ev.sessionId
-                    in
-                    case Dict.get sid model.sessions of
-                        Just session ->
-                            let
-                                -- M3/D4: incremental plan count — the
-                                -- accumulated content for this
-                                -- tag:historyId BEFORE the frame; if the
-                                -- frame's content crosses the fence for
-                                -- the first time, bump the counter.
-                                -- AT with empty content (delta-mode
-                                -- terminator) or already-plan accumulated
-                                -- content never double-counts.
-                                prevAccum =
-                                    case ev.historyId of
-                                        Just hid ->
-                                            Dict.get (ev.tag ++ ":" ++ hid) session.historyContents
-                                                |> Maybe.withDefault ""
+                    -- C2b（I-G）：只处理当前工作副本的帧。
+                    if not (isCurrentWorkCopy model ev.sessionId) then
+                        ( model, Cmd.none )
 
-                                        Nothing ->
-                                            ""
-
-                                becamePlan =
-                                    becamePlanMessage prevAccum (Maybe.withDefault "" ev.content)
-
-                                newSession =
-                                    H.handleFrameEvent session ev
-
-                                msgCountChanged =
-                                    List.length newSession.messages /= session.prevMsgCount
-
-                                mcpJustCompleted =
-                                    session.mcpStatus /= Nothing && newSession.mcpStatus == Nothing
-
-                                -- scrollToBottom 是前端 DOM 滚动：元素按窗口
-                                -- key（Session.id）命名，传 sid。
-                                cmds =
-                                    Cmd.batch
-                                        (List.filterMap identity
-                                            [ if msgCountChanged && session.atBottom then
-                                                Just (Ports.scrollToBottom { sessionId = sid })
-
-                                              else
-                                                Nothing
-                                            , Nothing
-                                            ]
-                                        )
-
-                                updatedModel =
-                                    { model
-                                        | sessions = Dict.insert sid { newSession | prevMsgCount = List.length newSession.messages } model.sessions
-                                        , planMessageCounts = bumpPlanCount model.planMessageCounts sid becamePlan
-                                        -- Replay suppression: the marker is
-                                        -- removed by the core's explicit
-                                        -- readiness signal — SM
-                                        -- {"type":"session","data":
-                                        -- {"state":"ready"}} arrives AFTER
-                                        -- all replayed history content
-                                        -- (alayacore v0.62.4+, verified
-                                        -- against the binary). No fallback:
-                                        -- older cores without the ready SM
-                                        -- are not supported.
-                                        , planReplaySessions =
-                                            if isSessionReady ev then
-                                                Set.remove sid model.planReplaySessions
-
-                                            else
-                                                model.planReplaySessions
-                                    }
-
-                                -- Plan Mode (R2): when an assistant message
-                                -- completes with a fenced ```json block
-                                -- carrying the alayaface-plan marker, AUTO-
-                                -- CREATE the plan (no button). The offer
-                                -- entry is still recorded keyed by message
-                                -- id so replay cannot create duplicates;
-                                -- PlanCreateOffer consumes it.
-                                -- NOTE: in delta mode the AT frame itself is
-                                -- an empty terminator, so detect on the
-                                -- final message content, not ev.content.
-                                autoOfferCmd =
-                                    if ev.tag == "AT" then
-                                        case List.head (List.reverse newSession.messages) of
-                                            Just m ->
-                                                let
-                                                    planIdx =
-                                                        planCountOf updatedModel.planMessageCounts sid
-                                                in
-                                                if m.role == T.Assistant
-                                                    && not (Set.member sid updatedModel.planReplaySessions)
-                                                    && not (Dict.member ( sid, planIdx ) updatedModel.pendingPlanOffers)
-                                                    && not (messageBoundToPlan updatedModel sid planIdx) then
-                                                    case Plan.Detect.extractPlanJson m.content of
-                                                        Just offerRaw ->
-                                                            if Plan.Detect.hasPlanTypeMarker offerRaw then
-                                                                -- Live plan message: create + auto-open immediately. History
-                                                                -- replays (resumed sessions) are suppressed via
-                                                                -- planReplaySessions — their plan messages show the manual
-                                                                -- "Open plan" button instead.
-                                                                Task.perform (\_ -> PlanCreateOffer sid planIdx) Time.now
-
-                                                            else
-                                                                Cmd.none
-
-                                                        Nothing ->
-                                                            Cmd.none
-
+                    else
+                        -- C2b（I-D）：core id → Session.id。
+                        let
+                            sid =
+                                PU.sessionIdOfWorkCopy model ev.sessionId
+                        in
+                            case Dict.get sid model.sessions of
+                            Just session ->
+                                let
+                                    -- M3/D4: incremental plan count — the
+                                    -- accumulated content for this
+                                    -- tag:historyId BEFORE the frame; if the
+                                    -- frame's content crosses the fence for
+                                    -- the first time, bump the counter.
+                                    -- AT with empty content (delta-mode
+                                    -- terminator) or already-plan accumulated
+                                    -- content never double-counts.
+                                    prevAccum =
+                                        case ev.historyId of
+                                            Just hid ->
+                                                Dict.get (ev.tag ++ ":" ++ hid) session.historyContents
+                                                    |> Maybe.withDefault ""
+    
+                                            Nothing ->
+                                                ""
+    
+                                    becamePlan =
+                                        becamePlanMessage prevAccum (Maybe.withDefault "" ev.content)
+    
+                                    newSession =
+                                        H.handleFrameEvent session ev
+    
+                                    msgCountChanged =
+                                        List.length newSession.messages /= session.prevMsgCount
+    
+                                    mcpJustCompleted =
+                                        session.mcpStatus /= Nothing && newSession.mcpStatus == Nothing
+    
+                                    -- scrollToBottom 是前端 DOM 滚动：元素按窗口
+                                    -- key（Session.id）命名，传 sid。
+                                    cmds =
+                                        Cmd.batch
+                                            (List.filterMap identity
+                                                [ if msgCountChanged && session.atBottom then
+                                                    Just (Ports.scrollToBottom { sessionId = sid })
+    
+                                                  else
+                                                    Nothing
+                                                , Nothing
+                                                ]
+                                            )
+    
+                                    updatedModel =
+                                        { model
+                                            | sessions = Dict.insert sid { newSession | prevMsgCount = List.length newSession.messages } model.sessions
+                                            , planMessageCounts = bumpPlanCount model.planMessageCounts sid becamePlan
+                                            -- Replay suppression: the marker is
+                                            -- removed by the core's explicit
+                                            -- readiness signal — SM
+                                            -- {"type":"session","data":
+                                            -- {"state":"ready"}} arrives AFTER
+                                            -- all replayed history content
+                                            -- (alayacore v0.62.4+, verified
+                                            -- against the binary). No fallback:
+                                            -- older cores without the ready SM
+                                            -- are not supported.
+                                            , planReplaySessions =
+                                                if isSessionReady ev then
+                                                    Set.remove sid model.planReplaySessions
+    
                                                 else
+                                                    model.planReplaySessions
+                                        }
+    
+                                    -- Plan Mode (R2): when an assistant message
+                                    -- completes with a fenced ```json block
+                                    -- carrying the alayaface-plan marker, AUTO-
+                                    -- CREATE the plan (no button). The offer
+                                    -- entry is still recorded keyed by message
+                                    -- id so replay cannot create duplicates;
+                                    -- PlanCreateOffer consumes it.
+                                    -- NOTE: in delta mode the AT frame itself is
+                                    -- an empty terminator, so detect on the
+                                    -- final message content, not ev.content.
+                                    autoOfferCmd =
+                                        if ev.tag == "AT" then
+                                            case List.head (List.reverse newSession.messages) of
+                                                Just m ->
+                                                    let
+                                                        planIdx =
+                                                            planCountOf updatedModel.planMessageCounts sid
+                                                    in
+                                                    if m.role == T.Assistant
+                                                        && not (Set.member sid updatedModel.planReplaySessions)
+                                                        && not (Dict.member ( sid, planIdx ) updatedModel.pendingPlanOffers)
+                                                        && not (messageBoundToPlan updatedModel sid planIdx) then
+                                                        case Plan.Detect.extractPlanJson m.content of
+                                                            Just offerRaw ->
+                                                                if Plan.Detect.hasPlanTypeMarker offerRaw then
+                                                                    -- Live plan message: create + auto-open immediately. History
+                                                                    -- replays (resumed sessions) are suppressed via
+                                                                    -- planReplaySessions — their plan messages show the manual
+                                                                    -- "Open plan" button instead.
+                                                                    Task.perform (\_ -> PlanCreateOffer sid planIdx) Time.now
+    
+                                                                else
+                                                                    Cmd.none
+    
+                                                            Nothing ->
+                                                                Cmd.none
+    
+                                                    else
+                                                        Cmd.none
+    
+                                                Nothing ->
                                                     Cmd.none
-
+    
+                                        else
+                                            Cmd.none
+    
+                                    updatedModel2 =
+                                        if ev.tag == "AT" then
+                                            case List.head (List.reverse newSession.messages) of
+                                                Just m ->
+                                                    let
+                                                        planIdx =
+                                                            planCountOf updatedModel.planMessageCounts sid
+                                                    in
+                                                    if m.role == T.Assistant
+                                                        && not (Set.member sid updatedModel.planReplaySessions)
+                                                        && not (Dict.member ( sid, planIdx ) updatedModel.pendingPlanOffers)
+                                                        && not (messageBoundToPlan updatedModel sid planIdx) then
+                                                        case Plan.Detect.extractPlanJson m.content of
+                                                            Just offerRaw ->
+                                                                if Plan.Detect.hasPlanTypeMarker offerRaw then
+                                                                    { updatedModel | pendingPlanOffers = Dict.insert ( sid, planIdx ) offerRaw updatedModel.pendingPlanOffers }
+    
+                                                                else
+                                                                    updatedModel
+    
+                                                            Nothing ->
+                                                                updatedModel
+    
+                                                    else
+                                                        updatedModel
+    
+                                                Nothing ->
+                                                    updatedModel
+    
+                                        else
+                                            updatedModel
+    
+                                    -- Runner injection: task done / SM error for
+                                    -- a node-owned session feeds the state machine.
+                                    -- planEventFromFrame also tracks task-start
+                                    -- (in_progress:true) so the alayacore boot
+                                    -- task frame is not mistaken for a real
+                                    -- task completion (R5 fix).
+                                    ( updatedModel3, runnerEv ) =
+                                        planEventFromFrame updatedModel2 ev
+    
+                                    runnerFrameCmd =
+                                        case runnerEv of
+                                            Just runnerEvent ->
+                                                Task.perform (\t -> PlanRunFrame (Time.posixToMillis t) runnerEvent) Time.now
+    
                                             Nothing ->
                                                 Cmd.none
-
-                                    else
-                                        Cmd.none
-
-                                updatedModel2 =
-                                    if ev.tag == "AT" then
-                                        case List.head (List.reverse newSession.messages) of
-                                            Just m ->
-                                                let
-                                                    planIdx =
-                                                        planCountOf updatedModel.planMessageCounts sid
-                                                in
-                                                if m.role == T.Assistant
-                                                    && not (Set.member sid updatedModel.planReplaySessions)
-                                                    && not (Dict.member ( sid, planIdx ) updatedModel.pendingPlanOffers)
-                                                    && not (messageBoundToPlan updatedModel sid planIdx) then
-                                                    case Plan.Detect.extractPlanJson m.content of
-                                                        Just offerRaw ->
-                                                            if Plan.Detect.hasPlanTypeMarker offerRaw then
-                                                                { updatedModel | pendingPlanOffers = Dict.insert ( sid, planIdx ) offerRaw updatedModel.pendingPlanOffers }
-
-                                                            else
-                                                                updatedModel
-
-                                                        Nothing ->
-                                                            updatedModel
-
-                                                else
-                                                    updatedModel
-
-                                            Nothing ->
-                                                updatedModel
-
-                                    else
-                                        updatedModel
-
-                                -- Runner injection: task done / SM error for
-                                -- a node-owned session feeds the state machine.
-                                -- planEventFromFrame also tracks task-start
-                                -- (in_progress:true) so the alayacore boot
-                                -- task frame is not mistaken for a real
-                                -- task completion (R5 fix).
-                                ( updatedModel3, runnerEv ) =
-                                    planEventFromFrame updatedModel2 ev
-
-                                runnerFrameCmd =
-                                    case runnerEv of
-                                        Just runnerEvent ->
-                                            Task.perform (\t -> PlanRunFrame (Time.posixToMillis t) runnerEvent) Time.now
-
-                                        Nothing ->
-                                            Cmd.none
-                            in
-                            -- model_sync completes asynchronously via CO:
-                            -- success closes the overlay, failure keeps it open
-                            case decodeSyncOutcome raw of
-                                Just ( isError, message ) ->
-                                    if newSession.modelSelector.page == ModelSelSyncing then
-                                        update (ForSession sid (ModelSelectorSyncResult isError message)) updatedModel3
-
-                                    else
+                                in
+                                -- model_sync completes asynchronously via CO:
+                                -- success closes the overlay, failure keeps it open
+                                case decodeSyncOutcome raw of
+                                    Just ( isError, message ) ->
+                                        if newSession.modelSelector.page == ModelSelSyncing then
+                                            update (ForSession sid (ModelSelectorSyncResult isError message)) updatedModel3
+    
+                                        else
+                                            ( updatedModel3, Cmd.batch [ cmds, runnerFrameCmd, autoOfferCmd ] )
+    
+                                    Nothing ->
                                         ( updatedModel3, Cmd.batch [ cmds, runnerFrameCmd, autoOfferCmd ] )
-
-                                Nothing ->
-                                    ( updatedModel3, Cmd.batch [ cmds, runnerFrameCmd, autoOfferCmd ] )
-
-                        Nothing ->
-                            bufferPendingEvent model ev.sessionId raw
-
+    
+                            Nothing ->
+                                bufferPendingEvent model ev.sessionId raw
+    
                 Err _ ->
                     ( model, Cmd.none )
 
         StatusEvent raw ->
             case D.decodeValue P.statusEventDecoder raw of
                 Ok ev ->
-                    let
-                        -- C2b（I-D）：core id → Session.id（sessions 更新按
-                        -- Session.id；runner 注入/缓冲仍按 core id）。
-                        sid =
-                            PU.sessionIdOfWorkCopy model ev.sessionId
+                    -- C2b（I-G）：只处理当前工作副本的状态事件（旧工作副本
+                    -- 被关闭时的 connected:false 不应污染新条目）。
+                    if not (isCurrentWorkCopy model ev.sessionId) then
+                        ( model, Cmd.none )
 
-                        -- Runner injection: a node-owned session that
-                        -- disconnects before task completion is a failure.
-                        statusRunnerCmd =
-                            if not ev.connected then
-                                case findPlanIdBySession model ev.sessionId of
-                                    Just _ ->
-                                        -- P39/Phase B: route by CONVERSATION
-                                        -- id (root sessions: identity). Must
-                                        -- resolve through planResumedFrom too:
-                                        -- a resumed node session disconnects
-                                        -- under its fresh live id, and the
-                                        -- node binds the original
-                                        -- conversation id — a raw resolve
-                                        -- would drop the failure and leave
-                                        -- the node Running forever.
-                                        Task.perform
-                                            (\t ->
-                                                PlanRunFrame (Time.posixToMillis t)
-                                                    (R.SessionDisconnected (PU.resolveEventSessionId model ev.sessionId) ev.message)
-                                            )
-                                            Time.now
+                    else
+                        let
+                            -- C2b（I-D）：core id → Session.id（sessions 更新按
+                            -- Session.id；runner 注入/缓冲仍按 core id）。
+                            sid =
+                                PU.sessionIdOfWorkCopy model ev.sessionId
 
-                                    Nothing ->
-                                        Cmd.none
+                            -- Runner injection: a node-owned session that
+                            -- disconnects before task completion is a failure.
+                            statusRunnerCmd =
+                                if not ev.connected then
+                                    case findPlanIdBySession model ev.sessionId of
+                                        Just _ ->
+                                            -- P39/Phase B: route by CONVERSATION
+                                            -- id (root sessions: identity). Must
+                                            -- resolve through planResumedFrom too:
+                                            -- a resumed node session disconnects
+                                            -- under its fresh live id, and the
+                                            -- node binds the original
+                                            -- conversation id — a raw resolve
+                                            -- would drop the failure and leave
+                                            -- the node Running forever.
+                                            Task.perform
+                                                (\t ->
+                                                    PlanRunFrame (Time.posixToMillis t)
+                                                        (R.SessionDisconnected (PU.resolveEventSessionId model ev.sessionId) ev.message)
+                                                )
+                                                Time.now
 
-                            else
-                                Cmd.none
-                    in
-                    case Dict.get sid model.sessions of
-                        Just session ->
-                            let
-                                updated =
-                                    { session
-                                        | connected = ev.connected
-                                        , statusMsg = ev.message
-                                        -- A disconnect means any in-flight
-                                        -- prompt can never be echoed back —
-                                        -- clear the stuck "Sending…" state.
-                                        , sendPending = if ev.connected then session.sendPending else False
-                                    }
-                            in
-                            if not ev.connected && session.modelSelector.page == ModelSelSyncing then
-                                -- A disconnect means the model_sync CO will
-                                -- never arrive — fail the sync instead of
-                                -- leaving the overlay stuck.
-                                ( { model
-                                    | sessions = Dict.insert sid
-                                        { updated
-                                            | modelSelector = Sel.syncFailed "Session disconnected during sync" updated.modelSelector
+                                        Nothing ->
+                                            Cmd.none
+
+                                else
+                                    Cmd.none
+                        in
+                            case Dict.get sid model.sessions of
+                            Just session ->
+                                let
+                                    updated =
+                                        { session
+                                            | connected = ev.connected
+                                            , statusMsg = ev.message
+                                            -- A disconnect means any in-flight
+                                            -- prompt can never be echoed back —
+                                            -- clear the stuck "Sending…" state.
+                                            , sendPending = if ev.connected then session.sendPending else False
                                         }
-                                        model.sessions
-                                  }
-                                , statusRunnerCmd
-                                )
-
-                            else
-                                ( { model
-                                    | sessions = Dict.insert sid updated model.sessions
-                                  }
-                                , statusRunnerCmd
-                                )
-
-                        Nothing ->
-                            let
-                                ( model1, cmds1 ) =
-                                    bufferPendingEvent model ev.sessionId raw
-                            in
-                            ( model1, Cmd.batch [ cmds1, statusRunnerCmd ] )
-
+                                in
+                                if not ev.connected && session.modelSelector.page == ModelSelSyncing then
+                                    -- A disconnect means the model_sync CO will
+                                    -- never arrive — fail the sync instead of
+                                    -- leaving the overlay stuck.
+                                    ( { model
+                                        | sessions = Dict.insert sid
+                                            { updated
+                                                | modelSelector = Sel.syncFailed "Session disconnected during sync" updated.modelSelector
+                                            }
+                                            model.sessions
+                                      }
+                                    , statusRunnerCmd
+                                    )
+    
+                                else
+                                    ( { model
+                                        | sessions = Dict.insert sid updated model.sessions
+                                      }
+                                    , statusRunnerCmd
+                                    )
+    
+                            Nothing ->
+                                let
+                                    ( model1, cmds1 ) =
+                                        bufferPendingEvent model ev.sessionId raw
+                                in
+                                ( model1, Cmd.batch [ cmds1, statusRunnerCmd ] )
+    
                 Err _ ->
                     ( model, Cmd.none )
 
@@ -1145,42 +1267,47 @@ update msg model =
         RpcError raw ->
             case D.decodeValue rpcErrorDecoder raw of
                 Ok err ->
-                    -- C2b：RPC 错误带的 sessionId 是我们发给后端的 core id
-                    -- （workCopyId）——反查到 Session.id 再更新会话条目。
-                    let
-                        sid =
-                            PU.sessionIdOfWorkCopy model err.sessionId
-                    in
-                    case Dict.get sid model.sessions of
-                        Just s ->
-                            -- An MCP auth failure (start/fill rejected, e.g.
-                            -- the session died) must release the running-auth
-                            -- marker — otherwise mcpAuthRunning stays set
-                            -- forever (only an SM status clears it, and a
-                            -- dead session never sends one).
-                            let
-                                s1 =
-                                    if err.kind == "mcp_auth" then
-                                        { s | mcpAuthRunning = Nothing }
+                    -- C2b（I-G）：发给旧工作副本的 RPC 错误已过时，忽略。
+                    if not (isCurrentWorkCopy model err.sessionId) then
+                        ( model, Cmd.none )
 
-                                    else
-                                        s
-                            in
-                            ( { model
-                                | sessions =
-                                    Dict.insert sid
-                                        { s1
-                                            | sendPending = False
-                                            , statusMsg = err.kind ++ " failed: " ++ err.message
-                                        }
-                                        model.sessions
-                              }
-                            , Cmd.none
-                            )
-
-                        Nothing ->
-                            ( model, Cmd.none )
-
+                    else
+                        -- C2b：RPC 错误带的 sessionId 是我们发给后端的 core id
+                        -- （workCopyId）——反查到 Session.id 再更新会话条目。
+                        let
+                            sid =
+                                PU.sessionIdOfWorkCopy model err.sessionId
+                        in
+                            case Dict.get sid model.sessions of
+                            Just s ->
+                                -- An MCP auth failure (start/fill rejected, e.g.
+                                -- the session died) must release the running-auth
+                                -- marker — otherwise mcpAuthRunning stays set
+                                -- forever (only an SM status clears it, and a
+                                -- dead session never sends one).
+                                let
+                                    s1 =
+                                        if err.kind == "mcp_auth" then
+                                            { s | mcpAuthRunning = Nothing }
+    
+                                        else
+                                            s
+                                in
+                                ( { model
+                                    | sessions =
+                                        Dict.insert sid
+                                            { s1
+                                                | sendPending = False
+                                                , statusMsg = err.kind ++ " failed: " ++ err.message
+                                            }
+                                            model.sessions
+                                  }
+                                , Cmd.none
+                                )
+    
+                            Nothing ->
+                                ( model, Cmd.none )
+    
                 Err _ ->
                     ( model, Cmd.none )
 
@@ -3050,13 +3177,40 @@ update msg model =
                         -- real fork id, so a user-created session racing
                         -- the fork can never be mistaken for it.
                         let
+                            -- C2b：顶层重跑 fork 的确认信息（target 在
+                            -- RegisterFork 里被清掉，先取出来用于 V₁ 固化）。
+                            forkTarget =
+                                model.planCascadeFork
+
                             ( mReg, cReg ) =
                                 update (SessionCreated r.sessionId) model
 
                             ( mAdopt, cAdopt ) =
                                 PU.cascadeStepIn update (PC.InstanceReady (Ok r.sessionId)) mReg
+
+                            -- C2b（§8.1）：顶层重跑 fork 接管后固化 V₁——
+                            -- 消息 = sessions[Session.id]（已是 fork 内容），
+                            -- A 已执行 → head = V₁（parent = 确认时固化的
+                            -- V₀）。老会话 resume 后仍看 V₀（隔离保持）。
+                            ( mFinal, cFinal ) =
+                                case forkTarget of
+                                    Just t ->
+                                        if t.planId == "" then
+                                            let
+                                                sessionId =
+                                                    Dict.get t.childPlanId model.planMetas
+                                                        |> Maybe.map (.origin >> .sessionId)
+                                                        |> Maybe.withDefault t.forkSource
+                                            in
+                                            PU.freezeSessionVersion mAdopt sessionId (Just t.childPlanId)
+
+                                        else
+                                            ( mAdopt, Cmd.none )
+
+                                    Nothing ->
+                                        ( mAdopt, Cmd.none )
                         in
-                        ( mAdopt, Cmd.batch [ cReg, cAdopt ] )
+                        ( mFinal, Cmd.batch [ cReg, cAdopt, cFinal ] )
 
                     else
                         ( { model
