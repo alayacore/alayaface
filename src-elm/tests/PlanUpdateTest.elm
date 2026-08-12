@@ -745,8 +745,9 @@ suite =
                                 Nothing ->
                                     Expect.fail "cascade missing"
                         -- fork consumed; fork session marked as replay
+                        -- （C3：统一按 Session.id 标记，非 forkId）
                         , \m ->
-                            Expect.equal ( m.planCascadeFork, Set.member "fork-x" m.planReplaySessions )
+                            Expect.equal ( m.planCascadeFork, Set.member "s1" m.planReplaySessions )
                                 ( Nothing, True )
                         ]
                         m1

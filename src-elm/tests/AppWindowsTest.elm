@@ -118,57 +118,6 @@ suite =
                     in
                     -- cascade count = 2 open plans for s1 → y = 200+640+24+2*36
                     Expect.equal ( pos.x, pos.y ) ( 100, 200 + 640 + 24 + 2 * 36 )
-            , test "forkInheritPos: the replacement fork session opens at the replaced window's spot" <|
-                \_ ->
-                    let
-                        target =
-                            { childPlanId = "p1"
-                            , summary = "s"
-                            , planId = ""
-                            , nodeId = ""
-                            , forkSource = "s1"
-                            , originSessionId = ""
-                            }
-
-                        m0 =
-                            { initModelWithSession
-                                | planCascadeFork = Just target
-                                , windowPositions =
-                                    Dict.insert "s1" { x = 120, y = 80, w = 560, h = 640, z = 3 } Dict.empty
-                                , nextZIndex = 9
-                            }
-                    in
-                    case W.forkInheritPos m0 of
-                        Just p ->
-                            Expect.all
-                                [ \q -> Expect.equal q.x 120
-                                , \q -> Expect.equal q.y 80
-                                , \q -> Expect.equal q.w 560
-                                , \q -> Expect.equal q.h 640
-                                , \q -> Expect.equal q.z 9
-                                ]
-                                p
-
-                        Nothing ->
-                            Expect.fail "forkInheritPos must find the source window"
-            , test "forkInheritPos: no fork in flight → Nothing (plain placement rules)" <|
-                \_ ->
-                    W.forkInheritPos initModelWithSession
-                        |> Expect.equal Nothing
-            , test "forkInheritPos: source window already gone → Nothing (fall back to centered)" <|
-                \_ ->
-                    let
-                        target =
-                            { childPlanId = "p1"
-                            , summary = "s"
-                            , planId = ""
-                            , nodeId = ""
-                            , forkSource = "gone"
-                            , originSessionId = ""
-                            }
-                    in
-                    W.forkInheritPos { initModelWithSession | planCascadeFork = Just target }
-                        |> Expect.equal Nothing
             ]
         , describe "plan window accessors"
             [ test "getPlanWin / setPlanWin / updateActivePlanWin" <|

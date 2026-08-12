@@ -146,6 +146,10 @@ type alias Model =
     -- C 架构：session.refs.json 路径（sessions/<uuid>/session.refs.json）
     -- 收集自 sessions/ 列表，逐个读取登记 Session 根引用。
     , planMetaSessionQueue : List String
+    -- C3-2：嵌套节点会话的 session.refs.json 路径（sessions/<origin>/
+    -- plans/<planId>/<nodeId>/<uuid>/session.refs.json）——节点级联 fork
+    -- 后记录 workCopy，重启时 DAG 恢复从工作副本目录恢复。
+    , planMetaNodeRefsQueue : List String
     -- P28 layout fix: every known session id → its ON-DISK DIRECTORY.
     -- Top-level sessions live at sessions/<id>; plan NODE sessions are
     -- NESTED at sessions/<origin>/plans/<planId>/<nodeId>/<id>. Plans
@@ -316,9 +320,10 @@ type Msg
     | SessionActionResult E.Value
     | ResumeSession String
     | DeleteSession String
-    -- C2b：删除工作副本目录（延迟到旧进程优雅关闭后，避免 save 写回
-    -- 竞态重建目录）。
-    | DeleteWorkCopyDir String
+    -- C3：删除旧工作副本目录（延迟到旧进程优雅关闭后，避免 save 写回
+    -- 竞态重建目录）。planId/nodeId/originSessionId 定位 nested 节点
+    -- 工作副本（顶层为 ""）。
+    | DeleteWorkCopyDir String String String String
       -- Window
     | WindowMaximized Bool
     | GotContainerSize (Result Dom.Error Dom.Element)

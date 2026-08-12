@@ -1510,14 +1510,13 @@ forkOrInsertInPlace dispatch planId model =
             ( model, Cmd.none )
 
 
-{-| RegisterFork effect. TWO paths:
-- **顶层 fork（plain，C2b §8.1）**：fork 出的会话只是同一 Session 的新
-  工作副本（窗口 key 保持 Session.id，SessionCreated fork 分支已接管
-  sessions/workCopies）。这里只：关旧工作副本进程（forkSource = 旧
-  工作副本 core id）；若旧工作副本不是 Session 根则连目录一起删（磁盘
-  始终只有 Session 根 + 当前工作副本）；清 planCascadeFork；关子 plan
-  窗口。不写血缘、不动前端 sessions（旧条目已被覆盖）。
-- **节点 fork**：保留 P39/Phase B 血缘注册（C3 统一）。
+{-| RegisterFork effect（C2b/C3）：fork 出的会话只是同一 Session（顶层
+或节点）的新工作副本——窗口 key / sessions / workCopies 已由
+forkSessionCreated 接管。这里只：关旧工作副本进程（forkSource = 旧
+工作副本 live core id）；若旧工作副本目录（refs.workCopy 旧值）不是
+Session 根/原目录则延迟删除；清 planCascadeFork；关子 plan 窗口；清
+旧 live 的临时 resume 标记。不 dispatch CloseSession（前端条目已被
+fork 分支覆盖，无前端清理）。
 -}
 registerForkInstance : Dispatch -> String -> Model -> ( Model, Cmd Msg )
 registerForkInstance dispatch forkId model =
@@ -1526,89 +1525,94 @@ registerForkInstance dispatch forkId model =
             ( model, Cmd.none )
 
         Just target ->
-            if target.planId == "" then
-                -- C2b：顶层重跑 fork——旧工作副本只关进程/删目录，不
-                -- dispatch CloseSession（那会移除前端 Session 条目，
-                -- 而条目已被 fork 分支替换，无前端清理可做）。
-                let
-                    sessionId =
-                        Dict.get target.childPlanId model.planMetas
-                            |> Maybe.map (.origin >> .sessionId)
-                            |> Maybe.withDefault target.forkSource
+            let
+                sessionId =
+                    Dict.get target.childPlanId model.planMetas
+                        |> Maybe.map (.origin >> .sessionId)
+                        |> Maybe.withDefault target.forkSource
 
-                    -- 旧工作副本的磁盘目录 = refs.workCopy 旧值（前一个 fork
-                    -- 目录；从未 fork → Nothing → Session 根，不删）。resume
-                    -- 的 live 是临时 UUID 无目录，其 SessionDir 就是
-                    -- refs.workCopy 指向的目录——同样适用。
-                    oldDir =
-                        Dict.get sessionId model.sessionRefs
-                            |> Maybe.andThen .workCopy
-                            |> Maybe.withDefault sessionId
+                -- 旧工作副本的磁盘目录 = refs.workCopy 旧值（前一个 fork
+                -- 目录；从未 fork → Nothing → Session 根/原目录，不删）。
+                -- resume 的 live 是临时 UUID 无目录，其 SessionDir 就是
+                -- refs.workCopy 指向的目录——同样适用。
+                oldDir =
+                    Dict.get sessionId model.sessionRefs
+                        |> Maybe.andThen .workCopy
+                        |> Maybe.withDefault sessionId
 
-                    ( m1, closeOldCmd ) =
-                        if target.forkSource == "" then
-                            ( model, Cmd.none )
+                ( m1, closeOldCmd ) =
+                    if target.forkSource == "" then
+                        ( model, Cmd.none )
 
-                        else
-                            -- 关旧工作副本进程（后端按 live core id）。
-                            ( model, Ports.closeSession { sessionId = target.forkSource } )
+                    else
+                        -- 关旧工作副本进程（后端按 live core id）。
+                        ( model, Ports.closeSession { sessionId = target.forkSource } )
 
-                    ( m2, deleteOldCmd ) =
-                        if oldDir == "" || oldDir == sessionId then
-                            -- Session 根持有身份 + refs，不能删。
-                            ( m1, Cmd.none )
+                ( m2, deleteOldCmd ) =
+                    if oldDir == "" || oldDir == sessionId then
+                        -- Session 根/原目录持有身份 + refs，不能删。
+                        ( m1, Cmd.none )
 
-                        else
-                            -- 旧工作副本目录（更早的 fork）随接管删除——磁盘
-                            -- 始终只有 Session 根 + 当前工作副本。延迟执行：
-                            -- 旧进程的优雅关闭（save 写回 SessionDir）与
-                            -- RemoveAll 竞态会重建目录。
-                            ( m1
-                            , Task.perform
-                                (\_ -> DeleteWorkCopyDir oldDir)
-                                (Process.sleep 2000)
-                            )
+                    else
+                        -- 旧工作副本目录（更早的 fork）随接管删除——磁盘
+                        -- 始终只有 Session 根 + 当前工作副本。延迟执行：
+                        -- 旧进程的优雅关闭（save 写回 SessionDir）与
+                        -- RemoveAll 竞态会重建目录。节点工作副本的 nested
+                        -- 定位参数随 target 传。
+                        ( m1
+                        , Task.perform
+                            (\_ -> DeleteWorkCopyDir oldDir target.planId target.nodeId target.originSessionId)
+                            (Process.sleep 2000)
+                        )
 
-                    m3 =
-                        { m2
-                            | planCascadeFork = Nothing
-                            , planReplaySessions = Set.insert sessionId m2.planReplaySessions
-                            -- 旧工作副本 live 已关，清临时标记。
-                            , sessionResumedLives = Set.remove target.forkSource m2.sessionResumedLives
-                        }
+                -- C3-2：节点级联 fork 持久化工作副本记录——节点会话的
+                -- nested session.refs.json 写 workCopy = forkId（重启后
+                -- DAG 恢复从工作副本目录恢复）。顶层 fork 的 workCopy 由
+                -- V₁ 固化写入（persistableWorkCopy）。
+                m3 =
+                    { m2
+                        | planCascadeFork = Nothing
+                        , planReplaySessions = Set.insert sessionId m2.planReplaySessions
+                        -- 旧工作副本 live 已关，清临时标记。
+                        , sessionResumedLives = Set.remove target.forkSource m2.sessionResumedLives
+                        , sessionRefs =
+                            if target.planId == "" then
+                                m2.sessionRefs
 
-                    closePlanCmd =
-                        Task.perform (\_ -> PlanClose target.childPlanId) Time.now
-                in
-                ( m3, Cmd.batch [ closeOldCmd, deleteOldCmd, closePlanCmd ] )
+                            else
+                                let
+                                    refs0 =
+                                        Dict.get sessionId m2.sessionRefs
+                                            |> Maybe.withDefault (AV.SessionRefs sessionId "" [] Nothing)
+                                in
+                                Dict.insert sessionId { refs0 | workCopy = Just forkId } m2.sessionRefs
+                    }
 
-            else
-                -- 节点 fork（C3 前保留旧行为）：关旧实例 + 清 fork 标记 +
-                -- 关子 plan 窗口。血缘写入已删（C2b-7；节点 fork 的
-                -- 身份归并在 C3 值模型下统一）。
-                let
-                    ( m1, closeCmd ) =
-                        if target.forkSource == "" then
-                            ( model, Cmd.none )
+                nodeRefsCmd =
+                    if target.planId == "" then
+                        Cmd.none
 
-                        else
-                            dispatch (CloseSession target.forkSource) model
+                    else
+                        Ports.fsWriteFileText
+                            { path = target.originSessionId
+                                ++ "/plans/"
+                                ++ target.planId
+                                ++ "/"
+                                ++ target.nodeId
+                                ++ "/"
+                                ++ sessionId
+                                ++ "/session.refs.json"
+                            , content = AV.refsContent (AV.SessionRefs sessionId "" [] (Just forkId))
+                            , createParents = True
+                            }
 
-                    m2 =
-                        { m1
-                            | planCascadeFork = Nothing
-                            -- The fork replays its (truncated) history: mark
-                            -- it so plan messages inside are not auto-created.
-                            , planReplaySessions = Set.insert forkId m1.planReplaySessions
-                        }
-
-                    -- The deferred D11 close: the child plan window stays
-                    -- open during the fork wait; close it now that the fork
-                    -- took over.
-                    closePlanCmd =
-                        Task.perform (\_ -> PlanClose target.childPlanId) Time.now
-                in
-                ( m2, Cmd.batch [ closeCmd, closePlanCmd ] )
+                -- The deferred D11 close: the child plan window stays
+                -- open during the fork wait; close it now that the fork
+                -- took over.
+                closePlanCmd =
+                    Task.perform (\_ -> PlanClose target.childPlanId) Time.now
+            in
+            ( m3, Cmd.batch [ closeOldCmd, deleteOldCmd, nodeRefsCmd, closePlanCmd ] )
 
 
 {-| Reset a delegated node Succeeded → WaitingForPlan and restore its
@@ -2416,24 +2420,21 @@ planEventFromFrame model ev =
         ( model, Nothing )
 
     else
-        case findPlanIdBySession model ev.sessionId of
+        -- C3：帧的 core id → Session.id（工作副本路由——节点 fork /
+        -- resume 后帧来自 fork/live core id，节点绑定按 Session.id）。
+        let
+            sid =
+                sessionIdOfWorkCopy model ev.sessionId
+        in
+        case findPlanIdBySession model sid of
             Nothing ->
                 ( model, Nothing )
 
             Just _ ->
-                -- P39/Phase B: frames carry the PHYSICAL instance id;
-                -- the runner matches nodes by CONVERSATION id, so
-                -- resolve through the lineage registry first (root
-                -- sessions: identity). The resolution MUST go through
-                -- planResumedFrom like findPlanIdBySession does: a
-                -- RESUMED node session streams frames under its fresh
-                -- live id, and the node binding is the original
-                -- conversation id — resolving the raw id alone would
-                -- produce a TaskDone/SessionError the runner cannot
-                -- match (node stuck Running forever).
+                -- C2b-7：节点按会话 id（= Session.id）直接绑定。
                 let
                     convId =
-                        resolveEventSessionId model ev.sessionId
+                        sid
                 in
                 case ev.json of
                     Just json ->
@@ -2453,12 +2454,12 @@ planEventFromFrame model ev =
                                                     |> Maybe.withDefault False
 
                                             ( started, maybeDone ) =
-                                                Plan.Frames.taskEvent model.planTaskStarted ev.sessionId inProgress taskError
+                                                Plan.Frames.taskEvent model.planTaskStarted sid inProgress taskError
                                         in
                                         case maybeDone of
-                                            Just ( sid, err ) ->
+                                            Just ( taskSid, err ) ->
                                                 ( { model | planTaskStarted = started }
-                                                , Just (R.TaskDone convId err (lastAssistantOutput model ev.sessionId) (lastAssistantIsPlan model ev.sessionId))
+                                                , Just (R.TaskDone convId err (lastAssistantOutput model sid) (lastAssistantIsPlan model sid))
                                                 )
 
                                             Nothing ->

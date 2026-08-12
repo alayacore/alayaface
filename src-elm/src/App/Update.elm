@@ -407,21 +407,18 @@ isCurrentWorkCopy model coreId =
     PU.workCopyId model sid == coreId
 
 
-{-| C2b：进行中的级联 fork 是否为顶层（plain）fork。顶层重跑 fork 走
-工作副本替换（forkSessionCreated）；节点 fork 保留旧行为（新窗口 +
-血缘，C3 统一）。
+{-| C2b/C3：进行中的级联 fork（顶层或节点）一律走工作副本替换
+（forkSessionCreated）——窗口 key = Session.id（plan origin）稳定，
+fork 出的会话只是工作副本。节点 fork 不再创建新窗口/新身份
+（C3-1：删除"级联 fork 交接"）。
 -}
-isPlainCascadeFork : Model -> Bool
-isPlainCascadeFork model =
-    case model.planCascadeFork of
-        Just target ->
-            target.planId == ""
-
-        Nothing ->
-            False
+isCascadeForkActive : Model -> Bool
+isCascadeForkActive model =
+    model.planCascadeFork /= Nothing
 
 
-{-| C2b fork 分支（§8.1）：顶层重跑 fork 接管同一 Session：
+{-| C2b/C3 fork 分支（§8.1）：级联 fork 接管同一 Session（顶层会话或
+节点会话，规则相同）：
 - 窗口 key 保持 Session.id（= plan origin `meta.origin.sessionId`，
   不是 forkSource——那是旧工作副本，可能有 resume 差异）。
 - sessionWorkCopies[Session.id] = forkId（新工作副本）；缓冲帧按此
@@ -483,6 +480,17 @@ forkSessionCreated forkId model =
                 ]
     in
     ( m0, cmds )
+
+
+{-| C2b/C3：会话恢复的磁盘目录——当前工作副本目录（refs.workCopy，
+fork/resume 后 = fork 目录；无记录 = 自身 = 根/原目录）。顶层与节点
+会话通用（ResumeSession / PlanOpenNodeSession 共用）。
+-}
+resumeDirFor : Model -> String -> String
+resumeDirFor model sid =
+    Dict.get sid model.sessionRefs
+        |> Maybe.andThen .workCopy
+        |> Maybe.withDefault sid
 
 
 {-| C2b：是否为顶层 resume（会话管理器 Resume 顶层会话）。顶层
@@ -665,26 +673,18 @@ createSessionWindow id model =
                         model.windowPositions
                     else
                         let
-                            -- Rule 0 (P39/D8): a cascade-fork
-                            -- replacement session opens at the SAME
-                            -- spot as the window it replaces (the
-                            -- old window is closed right after).
-                            -- Rule 2: a runner-created / resumed
-                            -- node session opens beside its plan
-                            -- window (stacking with an offset);
-                            -- plain creates center on the viewport.
+                            -- C3：级联 fork 已全部走工作副本替换（窗口 key
+                            -- 不动）——无 forkInheritPos。Runner-created /
+                            -- resumed node session opens beside its plan
+                            -- window (stacking with an offset); plain
+                            -- creates center on the viewport.
                             pos =
-                                case forkInheritPos model of
-                                    Just fp ->
-                                        fp
+                                case pendingNodePlanId model of
+                                    Just planId ->
+                                        nodeSessionPositionBesidePlan model planId
 
                                     Nothing ->
-                                        case pendingNodePlanId model of
-                                            Just planId ->
-                                                nodeSessionPositionBesidePlan model planId
-
-                                            Nothing ->
-                                                centeredSessionPos model
+                                        centeredSessionPos model
                         in
                         Dict.insert id pos model.windowPositions
                 -- The z bump is applied by raiseWindow below
@@ -917,11 +917,12 @@ update msg model =
                     )
 
         SessionCreated id ->
-            -- C2b（§8.1）：顶层级联 fork 不创建新窗口——fork 出的会话只是
-            -- 同一 Session 的新工作副本（窗口 key = Session.id 不动）。
-            -- 顶层 resume 同理（窗口 key = 磁盘目录 id）。
-            -- 节点 fork / 节点 resume / 普通创建走 createSessionWindow（原逻辑）。
-            if isPlainCascadeFork model then
+            -- C2b/C3（§8.1）：级联 fork（顶层或节点）不创建新窗口——
+            -- fork 出的会话只是同一 Session 的新工作副本（窗口 key =
+            -- Session.id = plan origin，不动）。顶层 resume 同理。
+            -- 节点 fork 也走这里（C3-1：删除"级联 fork 交接"）；
+            -- 节点 resume / 普通创建走 createSessionWindow。
+            if isCascadeForkActive model then
                 forkSessionCreated id model
 
             else if isTopLevelResume model then
@@ -1282,23 +1283,16 @@ update msg model =
 
                             -- Runner injection: a node-owned session that
                             -- disconnects before task completion is a failure.
+                            -- C3：按 Session.id 路由（节点绑定 = Session.id；
+                            -- fork/resume 后帧来自工作副本 core id）。
                             statusRunnerCmd =
                                 if not ev.connected then
-                                    case findPlanIdBySession model ev.sessionId of
+                                    case findPlanIdBySession model sid of
                                         Just _ ->
-                                            -- P39/Phase B: route by CONVERSATION
-                                            -- id (root sessions: identity). Must
-                                            -- resolve through planResumedFrom too:
-                                            -- a resumed node session disconnects
-                                            -- under its fresh live id, and the
-                                            -- node binds the original
-                                            -- conversation id — a raw resolve
-                                            -- would drop the failure and leave
-                                            -- the node Running forever.
                                             Task.perform
                                                 (\t ->
                                                     PlanRunFrame (Time.posixToMillis t)
-                                                        (R.SessionDisconnected ev.sessionId ev.message)
+                                                        (R.SessionDisconnected sid ev.message)
                                                 )
                                                 Time.now
 
@@ -2142,6 +2136,7 @@ update msg model =
                                                     let
                                                         readQueue =
                                                             m.planMetaSessionQueue
+                                                                ++ m.planMetaNodeRefsQueue
                                                                 ++ m.planMetaReadQueue
                                                     in
                                                     case readQueue of
@@ -2156,6 +2151,7 @@ update msg model =
                                                                 , planMetaReading = Just r
                                                                 , planMetaReadReqId = Just reqId
                                                                 , planMetaSessionQueue = []
+                                                                , planMetaNodeRefsQueue = []
                                                                 , planMetaReadQueue = rs
                                                                 , planMetaLoading = False
                                                               }
@@ -2206,11 +2202,15 @@ update msg model =
                                             -- — record each session's REAL
                                             -- (nested) directory so plans it
                                             -- creates stay in this subtree
-                                            -- (P28 layout fix). No lineage
-                                            -- metas (C2b-7: deleted).
+                                            -- (P28 layout fix) AND queue
+                                            -- their session.refs.json (C3-2:
+                                            -- 节点级联 fork 的工作副本记录)。
                                             listNext
                                                 { model
-                                                    | sessionDirMap =
+                                                    | planMetaNodeRefsQueue =
+                                                        model.planMetaNodeRefsQueue
+                                                            ++ List.map (\n -> dir ++ "/" ++ n ++ "/session.refs.json") dirsIn
+                                                    , sessionDirMap =
                                                         List.foldl
                                                             (\n acc -> Dict.insert n (dir ++ "/" ++ n) acc)
                                                             model.sessionDirMap
@@ -3511,6 +3511,9 @@ update msg model =
                                                         -- gets a fresh id
                                                         -- tracked via
                                                         -- planResumedFrom.
+                                                        -- C3-2：节点级联 fork 后
+                                                        -- 从工作副本目录恢复
+                                                        -- （refs.workCopy）。
                                                         ( { model
                                                             | pendingSwitchOnCreate = True
                                                             , planResumeOwner = Just planId
@@ -3519,7 +3522,7 @@ update msg model =
                                                             , planNodeSessions =
                                                                 Dict.insert convId (planId ++ "/" ++ nodeId) model.planNodeSessions
                                                           }
-                                                        , Ports.resumeSession { sessionId = convId, workDir = planWorkDir planId model, planId = Just planId, nodeId = Just nodeId, originSessionId = planOriginSessionDir model planId }
+                                                        , Ports.resumeSession { sessionId = resumeDirFor model convId, workDir = planWorkDir planId model, planId = Just planId, nodeId = Just nodeId, originSessionId = planOriginSessionDir model planId }
                                                         )
 
                                         Nothing ->
@@ -3545,7 +3548,7 @@ update msg model =
                                                                     , planNodeSessions =
                                                                         Dict.insert sid (planId ++ "/" ++ nodeId) model.planNodeSessions
                                                                   }
-                                                                , Ports.resumeSession { sessionId = sid, workDir = planWorkDir planId model, planId = Just planId, nodeId = Just nodeId, originSessionId = planOriginSessionDir model planId }
+                                                                , Ports.resumeSession { sessionId = resumeDirFor model sid, workDir = planWorkDir planId model, planId = Just planId, nodeId = Just nodeId, originSessionId = planOriginSessionDir model planId }
                                                                 )
 
                                                 Nothing ->
@@ -3691,12 +3694,7 @@ update msg model =
             -- 回退 Session 根目录（UI 提示由管理器状态行承载）。
             let
                 resumeDir =
-                    case Dict.get id model.sessionRefs of
-                        Just refs ->
-                            Maybe.withDefault id refs.workCopy
-
-                        Nothing ->
-                            id
+                    resumeDirFor model id
             in
             ( { model
                 | pendingSwitchOnCreate = True
@@ -3775,11 +3773,17 @@ update msg model =
                 ]
             )
 
-        DeleteWorkCopyDir dir ->
-            -- C2b：延迟删除旧工作副本目录（fork 接管后旧进程优雅关闭
-            -- 完成才执行，避免 save 写回竞态重建目录）。
+        DeleteWorkCopyDir dir planId nodeId originSessionId ->
+            -- C2b/C3：延迟删除旧工作副本目录（fork 接管后旧进程优雅关闭
+            -- 完成才执行，避免 save 写回竞态重建目录）。nested 节点工作
+            -- 副本由 planId/nodeId/originSessionId 定位（顶层为空）。
             ( model
-            , Ports.deleteSessionDir { sessionId = dir, planId = Nothing, nodeId = Nothing, originSessionId = Nothing }
+            , Ports.deleteSessionDir
+                { sessionId = dir
+                , planId = if planId == "" then Nothing else Just planId
+                , nodeId = if nodeId == "" then Nothing else Just nodeId
+                , originSessionId = if originSessionId == "" then Nothing else Just originSessionId
+                }
             )
 
         -- Window
