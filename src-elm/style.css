@@ -636,6 +636,10 @@ body {
 .msg-preview {
   flex: 1;
   min-width: 0;
+  /* At least one line, even when the text is empty: keeps the collapsed
+     header height (and baseline alignment) stable while streaming
+     deltas toggle the preview between empty and non-empty. */
+  min-height: 1.5em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -687,6 +691,100 @@ body {
 .message-tool .msg-body {
   color: #aaa;
 }
+
+/* ─── Tool call per-tool views (Session/ToolView.elm) ──────────────── */
+
+.tool-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tool-input {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.tool-input-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #888;
+}
+
+.tool-tag {
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.tool-path,
+.tool-pattern {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  color: #bbb;
+  text-transform: none;
+  letter-spacing: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Diff: red = removed lines, green = added lines. No syntax highlighting. */
+.tool-diff {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.76rem;
+  line-height: 1.5;
+  padding: 4px 0;
+  overflow-x: auto;
+}
+
+.tool-diff-line {
+  display: block;
+  white-space: pre-wrap;
+  padding: 0 10px;
+}
+
+.tool-diff-marker {
+  display: inline-block;
+  width: 1.2em;
+  user-select: none;
+  opacity: 0.75;
+}
+
+.tool-diff-ctx { color: #9ca3af; }
+.tool-diff-del { background: rgba(239, 68, 68, 0.16); color: #fca5a5; }
+.tool-diff-add { background: rgba(34, 197, 94, 0.16); color: #86efac; }
+
+.tool-cmd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.76rem;
+  white-space: pre-wrap;
+  color: #e2e8f0;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.tool-fallback {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.74rem;
+  white-space: pre-wrap;
+  color: #9ca3af;
+  padding: 8px 10px;
+}
+
+.tool-output {
+  white-space: pre-wrap;
+  font-size: 0.78rem;
+  color: #aaa;
+}
+
+.tool-output-error { color: #fca5a5; }
 
 .message-system {
   align-self: center;
@@ -1293,6 +1391,16 @@ body {
   .msg-header:hover { color: #444; }
   .msg-preview { color: #999; }
   .msg-name { color: #666; }
+  .tool-input { border-color: rgba(0, 0, 0, 0.15); }
+  .tool-input-head { background: rgba(0, 0, 0, 0.04); color: #666; }
+  .tool-path, .tool-pattern { color: #444; }
+  .tool-diff-ctx { color: #6b7280; }
+  .tool-diff-del { background: rgba(239, 68, 68, 0.10); color: #b91c1c; }
+  .tool-diff-add { background: rgba(34, 197, 94, 0.10); color: #15803d; }
+  .tool-cmd { background: rgba(0, 0, 0, 0.06); color: #1f2937; }
+  .tool-fallback { color: #6b7280; }
+  .tool-output { color: #555; }
+  .tool-output-error { color: #b91c1c; }
 }
 @media (prefers-color-scheme: light) {
   .input-area { background: transparent; color: #1a1a2e; }

@@ -7,6 +7,7 @@ module Session.Handlers exposing
 import Dict exposing (Dict)
 import Set exposing (Set)
 import Json.Decode as D
+import Json.Encode as E
 import Session.Types exposing (..)
 import Session.Protocol exposing (..)
 
@@ -507,7 +508,8 @@ handleSystemToolConfirm s data =
                     , toolInput =
                         tc
                             |> Maybe.andThen (\t -> t.input)
-                            |> Maybe.map (\_ -> "pending")
+                            |> Maybe.andThen (Dict.get "raw")
+                            |> Maybe.map (E.encode 2)
                     }
             in
             { s | pendingConfirm = s.pendingConfirm ++ [ item ] }
@@ -714,6 +716,16 @@ appendSystemMessage s role text =
 
 
 -- Tool Call Frame (AF)
+--
+-- AlayaCore emits TWO AF frames per tool call (wire protocol):
+--   * start frame:    {id, name}            — announces the tool name
+--   * complete frame: {id, input}           — full arguments (name omitted)
+-- Replayed history carries the full {id, name, input} in one frame.
+-- The start frame creates the ToolCall + message window; the complete
+-- frame only fills the input into the existing ToolCall (no second
+-- message). Without this split the complete frame used to be dropped
+-- (name is required by the decoder), so edit_file/write_file arguments
+-- never reached the transcript.
 
 handleToolCallFrame : SessionState -> D.Value -> Maybe String -> SessionState
 handleToolCallFrame s json historyId =
@@ -727,8 +739,19 @@ handleToolCallFrame s json historyId =
         toolInput =
             D.decodeValue (D.field "input" D.value) json |> Result.toMaybe
     in
-    case toolName of
-        Just name ->
+    case ( toolName, toolInput ) of
+        -- Complete frame: the full arguments arrive after the start frame.
+        -- The wire protocol omits the name field entirely; some adapters
+        -- send it as an explicit empty string — both are handled here.
+        ( Just "", Just raw ) ->
+            fillToolInput s toolId raw
+
+        ( Nothing, Just raw ) ->
+            fillToolInput s toolId raw
+
+        -- Start frame (or a full replayed frame): create the ToolCall and
+        -- its message window. A replayed frame carries input too.
+        ( Just name, _ ) ->
             let
                 newToolCalls =
                     Dict.insert toolId
@@ -758,6 +781,43 @@ handleToolCallFrame s json historyId =
                 | toolCalls = newToolCalls
                 , messages = s.messages ++ [ newMsg ]
             }
+
+        -- Neither name nor input: nothing to do.
+        ( Nothing, Nothing ) ->
+            s
+
+
+-- Complete AF frame: fill the full arguments into the existing ToolCall
+-- (created by the start frame); clear any Af-streamed input text from the
+-- message body — the per-tool input view renders the full arguments
+-- instead of the raw stream.
+
+fillToolInput : SessionState -> String -> D.Value -> SessionState
+fillToolInput s toolId raw =
+    case Dict.get toolId s.toolCalls of
+        Just tc ->
+            let
+                newTc =
+                    { tc
+                        | input = Just (Dict.singleton "raw" raw)
+                        , inputReceived = True
+                        , accumulatedDelta = Nothing
+                    }
+
+                newToolCalls =
+                    Dict.insert toolId newTc s.toolCalls
+
+                newMsgs =
+                    List.map
+                        (\m ->
+                            if m.toolId == Just toolId then
+                                { m | content = "" }
+                            else
+                                m
+                        )
+                        s.messages
+            in
+            { s | toolCalls = newToolCalls, messages = newMsgs }
 
         Nothing ->
             s

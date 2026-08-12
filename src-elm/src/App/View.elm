@@ -20,6 +20,7 @@ import App.Update exposing (SessionDir, decodeSessionDir, helpItems, nextCopyNam
 import Session.Types as T
 import Session.Selector as Sel exposing (Page(..))
 import Session.FilePicker as FP
+import Session.ToolView as ToolView
 import Fuzzy
 import Plan.Types as PT
 import Plan.Meta as PM
@@ -1570,13 +1571,33 @@ viewMsgHeader session msg collapsed =
 
         _ ->
             Html.text ""
-    , if collapsed && msg.role /= T.Tool then
-        Html.span [ Attr.class "msg-preview" ]
-            [ Html.text (previewText msg) ]
+    , if collapsed then
+        -- One-line preview for every collapsed message. Tool windows are
+        -- collapsed by default, so this is how streamed tool input (Af
+        -- deltas) surfaces while the window is folded — the preview shows
+        -- the accumulating delta text, truncated to one line.
+        previewHtml msg
 
       else
         Html.text ""
     ]
+
+
+{-| Preview span for the collapsed header. Stays populated even when the
+preview text is empty: under `align-items: baseline` an empty flex child
+has no baseline and aligns by its bottom edge instead, so the header
+jumps vertically while streamed deltas toggle the preview between empty
+and non-empty. A non-breaking space keeps a real baseline and a stable
+height.
+-}
+previewHtml : T.Message -> Html Msg
+previewHtml msg =
+    let
+        p =
+            previewText msg
+    in
+    Html.span [ Attr.class "msg-preview" ]
+        [ Html.text (if String.isEmpty p then "\u{00A0}" else p) ]
 
 
 -- Tool state icon derived from the tool call lifecycle:
@@ -1599,27 +1620,33 @@ toolStatus session msg =
                 "✅"
 
 
--- One-line preview used by the collapsed header. Shows the first line of
--- the body, truncated to 80 chars with an ellipsis.
+-- One-line preview used by the collapsed header. Collapsed and expanded
+-- views treat streaming deltas differently:
+--   * expanded: the FULL accumulated content is rendered;
+--   * collapsed: the LAST line is shown, so newly streamed deltas (which
+--     are appended to the tail of multi-line reasoning/assistant text)
+--     surface in the preview and the user can tell data is arriving.
+-- Tool deltas are single-line JSON, so last-line == first-line there.
+-- Truncated to 80 chars with an ellipsis.
 previewText : T.Message -> String
 previewText msg =
     let
-        first =
-            case List.head (String.lines msg.content) of
+        last =
+            case List.reverse (String.lines msg.content) |> List.head of
                 Just l ->
                     String.trim l
 
                 Nothing ->
                     ""
     in
-    if String.isEmpty first then
+    if String.isEmpty last then
         ""
 
-    else if String.length first > 80 then
-        String.left 80 first ++ "…"
+    else if String.length last > 80 then
+        String.left 80 last ++ "…"
 
     else
-        first
+        last
 
 
 viewMsgBody : Model -> String -> T.Message -> Html Msg
@@ -1639,15 +1666,27 @@ viewMsgBody model sid msg =
                 [ Html.text msg.content ]
 
         T.Tool ->
-            -- Plain text output — no markdown, no code fence border. The
-            -- header carries the tool name and status, so the body is just
-            -- the raw input/output text (empty while nothing has arrived).
-            if String.isEmpty (String.trim msg.content) then
-                Html.text ""
+            -- Per-tool rendering (Session/ToolView.elm): edit_file shows a
+            -- red/green diff, write_file a green new-file block,
+            -- execute_command a terminal block, unknown tools fall back to
+            -- pretty-printed JSON. The output stays plain text. The tool
+            -- input lives in session.toolCalls (in-memory), looked up by
+            -- msg.toolId; while the input is streaming (Af) the call may be
+            -- missing, in which case the body falls back to plain text.
+            let
+                session =
+                    Dict.get sid model.sessions
 
-            else
-                Html.div [ Attr.class "msg-body" ]
-                    [ Html.text msg.content ]
+                toolCall =
+                    case ( session, msg.toolId ) of
+                        ( Just s, Just tid ) ->
+                            Dict.get tid s.toolCalls
+
+                        _ ->
+                            Nothing
+            in
+            Html.div [ Attr.class "msg-body" ]
+                [ ToolView.viewToolCall toolCall msg ]
 
         T.User ->
             Html.div [ Attr.class "msg-body" ]

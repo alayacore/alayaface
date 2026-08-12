@@ -60,6 +60,35 @@ toolCall id name =
         ]
 
 
+-- Start AF frame as alayacore emits it live: id + name only (input is
+-- delivered later in a separate complete frame).
+toolCallStart : String -> String -> D.Value
+toolCallStart id name =
+    E.object
+        [ ( "id", E.string id )
+        , ( "name", E.string name )
+        ]
+
+
+-- Complete AF frame: id + input only (name is omitted by the wire
+-- protocol; some adapters send it as an explicit empty string).
+toolCallInput : String -> D.Value -> D.Value
+toolCallInput id input =
+    E.object
+        [ ( "id", E.string id )
+        , ( "input", input )
+        ]
+
+
+toolCallInputWithEmptyName : String -> D.Value -> D.Value
+toolCallInputWithEmptyName id input =
+    E.object
+        [ ( "id", E.string id )
+        , ( "name", E.string "" )
+        , ( "input", input )
+        ]
+
+
 toolResult : String -> D.Value -> D.Value
 toolResult id output =
     E.object
@@ -110,6 +139,104 @@ tests =
             [ test "creates a message with empty body (header only)" <|
                 \_ ->
                     Expect.equal "" (msgContent withToolCall)
+            , test "start frame creates the call with no input yet" <|
+                \_ ->
+                    let
+                        s =
+                            emptySession "s1"
+                                |> applyFrame (frame "AF" (toolCallStart "t1" "edit_file"))
+                    in
+                    case Dict.get "t1" s.toolCalls of
+                        Just tc ->
+                            Expect.equal (tc.name, tc.input) ( "edit_file", Nothing )
+
+                        Nothing ->
+                            Expect.fail "tool call missing after AF start"
+            , test "complete frame fills the input into the existing call" <|
+                \_ ->
+                    let
+                        input =
+                            E.object
+                                [ ( "path", E.string "src/Main.elm" )
+                                , ( "old_string", E.string "old" )
+                                , ( "new_string", E.string "new" )
+                                ]
+
+                        s =
+                            emptySession "s1"
+                                |> applyFrame (frame "AF" (toolCallStart "t1" "edit_file"))
+                                |> applyFrame (frame "AF" (toolCallInput "t1" input))
+                    in
+                    case Dict.get "t1" s.toolCalls of
+                        Just c ->
+                            case c.input of
+                                Just d ->
+                                    case Dict.get "raw" d of
+                                        Just raw ->
+                                            Expect.equal (D.decodeValue (D.field "path" D.string) raw) (Ok "src/Main.elm")
+
+                                        Nothing ->
+                                            Expect.fail "raw input missing"
+
+                                Nothing ->
+                                    Expect.fail "input missing after AF complete"
+
+                        Nothing ->
+                            Expect.fail "tool call missing after AF complete"
+            , test "complete frame does not create a duplicate message" <|
+                \_ ->
+                    let
+                        s =
+                            emptySession "s1"
+                                |> applyFrame (frame "AF" (toolCallStart "t1" "edit_file"))
+                                |> applyFrame (frame "AF" (toolCallInput "t1" (E.object [])))
+                    in
+                    Expect.equal 1 (List.length (List.filter (\m -> m.toolId == Just "t1") s.messages))
+            , test "complete frame with explicit empty name also fills the input" <|
+                \_ ->
+                    let
+                        s =
+                            emptySession "s1"
+                                |> applyFrame (frame "AF" (toolCallStart "t1" "edit_file"))
+                                |> applyFrame (frame "AF" (toolCallInputWithEmptyName "t1" (E.object [])))
+                    in
+                    case Dict.get "t1" s.toolCalls of
+                        Just tc ->
+                            Expect.equal True (tc.input /= Nothing)
+
+                        Nothing ->
+                            Expect.fail "tool call missing"
+            , test "complete frame before the start frame is ignored" <|
+                \_ ->
+                    let
+                        s =
+                            emptySession "s1"
+                                |> applyFrame (frame "AF" (toolCallInput "t1" (E.object [])))
+                    in
+                    Expect.equal Dict.empty s.toolCalls
+            , test "full replayed frame (name + input) creates the call with input" <|
+                \_ ->
+                    let
+                        s =
+                            emptySession "s1"
+                                |> applyFrame (frame "AF" (toolCall "t1" "write_file"))
+                    in
+                    case Dict.get "t1" s.toolCalls of
+                        Just tc ->
+                            Expect.equal True (tc.input /= Nothing)
+
+                        Nothing ->
+                            Expect.fail "tool call missing after replayed AF"
+            , test "complete frame clears streamed input text from the message body" <|
+                \_ ->
+                    let
+                        s =
+                            emptySession "s1"
+                                |> applyFrame (frame "AF" (toolCallStart "t1" "edit_file"))
+                                |> applyFrame (frame "Af" (E.object [ ( "id", E.string "t1" ), ( "delta", E.string "{\"path\":" ) ]))
+                                |> applyFrame (frame "AF" (toolCallInput "t1" (E.object [])))
+                    in
+                    Expect.equal "" (msgContent s)
             ]
         , describe "UF (authoritative result)"
             [ test "renders text output blocks joined by newline (no prefix)" <|
