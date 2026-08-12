@@ -3663,8 +3663,8 @@ update msg model =
             , Cmd.none
             )
 
-        ToggleGlobalMenu ->
-            ( { model | showGlobalMenu = not model.showGlobalMenu }, Cmd.none )
+        ShowGlobalMenuAt x y ->
+            ( { model | showGlobalMenu = True, globalMenuX = x, globalMenuY = y }, Cmd.none )
 
         CloseGlobalMenu ->
             ( { model | showGlobalMenu = False }, Cmd.none )

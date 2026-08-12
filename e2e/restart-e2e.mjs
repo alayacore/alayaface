@@ -103,6 +103,16 @@ async function launchChrome() {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// The global menu is opened by RIGHT-CLICKING the canvas (the fixed
+// ⚙ button was removed) and closed by clicking outside the menu.
+// Page is passed explicitly because restart-e2e relaunches Chrome.
+const openGlobalMenu = async (pg) => {
+  await pg.waitForSelector('.main-content', { timeout: 30000 });
+  await pg.$eval('.main-content', el => el.dispatchEvent(
+    new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 30, clientY: 30 })));
+  await pg.waitForSelector('.global-menu-panel', { timeout: 10000, visible: true });
+};
+
 // ── cleanup ─────────────────────────────────────────────────────────
 // Remove the tmp dir on exit (unless ALAYAFACE_KEEP_ARTIFACTS=1 — useful
 // to inspect screenshots after a failed run). Signal handlers also kill
@@ -134,8 +144,7 @@ try {
   browser = chrome.b;
   let page = chrome.page;
   await page.goto(base + '/', { waitUntil: 'networkidle0', timeout: 30000 });
-  await page.waitForSelector('.global-menu-btn', { timeout: 30000 });
-  await page.click('.global-menu-btn');
+  await openGlobalMenu(page);
   await page.waitForSelector('.global-menu-panel');
   const clickByText = async (sel, text) => {
     const handles = await page.$$(sel);
@@ -202,12 +211,10 @@ try {
     existsSync(path.join(sessionsRoot, sess, 'plans', planId, planId + '.meta.json')));
   assert(originDir, 'origin session dir found on disk');
   await page.reload({ waitUntil: 'networkidle0', timeout: 30000 });
-  await page.waitForSelector('.global-menu-btn', { timeout: 30000 });
   // Let close_all_sessions (orphan reclaim) + the planMetas scan settle.
   await sleep(1500);
   await page.screenshot({ path: path.join(artifacts, 'r0-after-refresh.png') });
-  await page.click('.global-menu-btn');
-  await page.waitForSelector('.global-menu-panel');
+  await openGlobalMenu(page);
   assert(await clickByText('.global-menu-item', 'Session Manager'), 'Session Manager menu item (refresh)');
   await page.waitForSelector('.sel-page-item', { timeout: 10000 });
   const refreshed = await page.evaluate((prefix) => {
@@ -243,7 +250,6 @@ try {
   browser = chrome.b;
   page = chrome.page;
   await page.goto(base + '/', { waitUntil: 'networkidle0', timeout: 30000 });
-  await page.waitForSelector('.global-menu-btn', { timeout: 30000 });
   // Let the planMetas index rebuild finish (sessions/ → plans/ → reads).
   await sleep(2500);
   await page.screenshot({ path: path.join(artifacts, 'r1-after-restart.png') });
@@ -252,8 +258,7 @@ try {
   // after restart the user resumes that session (Session Manager), the
   // replayed plan message re-binds via planMetas, and the status-bar
   // button reopens the plan. Do exactly that (originDir from phase 1.5):
-  await page.click('.global-menu-btn');
-  await page.waitForSelector('.global-menu-panel');
+  await openGlobalMenu(page);
   assert(await clickByText('.global-menu-item', 'Session Manager'), 'Session Manager menu item');
   await page.waitForSelector('.sel-page-item', { timeout: 10000 });
   // Resume the origin session (identified by its id prefix).

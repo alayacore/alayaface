@@ -155,6 +155,19 @@ try {
 
   const waitFor = (sel, ms = 30000) => page.waitForSelector(sel, { timeout: ms, visible: true });
   const sleep = ms => new Promise(r => setTimeout(r, ms));
+  // The global menu is opened by RIGHT-CLICKING the canvas (the fixed
+  // ⚙ button was removed) and closed by clicking outside the menu.
+  const openGlobalMenu = async () => {
+    await page.waitForSelector('.main-content', { timeout: 30000 });
+    await page.$eval('.main-content', el => el.dispatchEvent(
+      new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 30, clientY: 30 })));
+    await waitFor('.global-menu-panel');
+  };
+  const closeGlobalMenu = async () => {
+    await page.$eval('.main-content', el => el.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true })));
+    await sleep(100);
+  };
   const clickByText = async (sel, text) => {
     const handles = await page.$$(sel);
     for (const h of handles) {
@@ -166,9 +179,7 @@ try {
 
   // ── 4. Plan Session → offer ───────────────────────────────────────
   await page.goto(base + '/', { waitUntil: 'networkidle0', timeout: 30000 });
-  await waitFor('.global-menu-btn');
-  await page.click('.global-menu-btn');
-  await waitFor('.global-menu-panel');
+  await openGlobalMenu();
   // R2: no "New Plan Session" — every session is plan-capable.
   assert(await clickByText('.global-menu-item', 'New Session'), 'New Session menu item');
 
@@ -858,20 +869,18 @@ try {
   // ── 9. No Plans manager in the system menu (P30: plans are reopened
   // via the session's [Plan: …] status-bar link; the standalone manager
   // entry was removed).
-  await page.click('.global-menu-btn');
-  await waitFor('.global-menu-panel');
+  await openGlobalMenu();
   const menuItems = await page.$$eval('.global-menu-item', els => els.map(e => e.textContent));
   assert(!menuItems.some(t => t.includes('Plans')), 'no "Plans" item in the system menu, got: ' + JSON.stringify(menuItems));
   console.log('PASS: system menu has no Plans entry (plans reopen via [Plan: …] status-bar links)');
-  await page.click('.global-menu-btn'); // close the menu
+  await closeGlobalMenu();
   await sleep(200);
 
   // ── 9. Auto-open is immediate for live plans (R6 playback-aware) ──
   // A LIVE plan message auto-opens right away (no settle delay), even if
   // a follow-up message arrives shortly after. History replays (resumed
   // sessions) are suppressed — covered by the dedicated verification.
-  await page.click('.global-menu-btn');
-  await waitFor('.global-menu-panel', 10000);
+  await openGlobalMenu();
   await clickByText('.global-menu-item', 'New Session');
   await waitFor('.session-panel', 10000);
   await sleep(600);

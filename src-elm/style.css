@@ -272,48 +272,16 @@ body {
 
 /* ─── Sidebar ──────────────────────────────────────────────────────── */
 
-/* ─── Global Floating Menu ──────────────────────────────────────────── */
+/* ─── Global Menu (right-click on the canvas) ──────────────────────── */
 
 .global-menu {
   position: fixed;
-  bottom: 20px;
-  right: 20px;
+  /* left/top set inline from the right-click position */
   z-index: 99999;
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: flex-start;
   gap: 6px;
-}
-
-/* ─── Button ────────────────────────────────────────────────────────── */
-
-.global-menu-btn {
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  background: rgba(99,102,241,0.2);
-  border: 1px solid rgba(99,102,241,0.3);
-  color: #818cf8;
-  cursor: pointer;
-  font-size: 1.2rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  backdrop-filter: blur(8px);
-  box-shadow: 0 2px 12px rgba(0,0,0,0.3);
-  transition: opacity 0.2s ease, transform 0.2s ease;
-}
-.global-menu-btn:hover {
-  background: rgba(99,102,241,0.35);
-  transform: scale(1.08);
-}
-.global-menu-btn:active {
-  transform: scale(0.95);
-}
-.global-menu.open .global-menu-btn {
-  opacity: 0;
-  transform: scale(0.85);
-  pointer-events: none;
 }
 
 /* ─── Panel ─────────────────────────────────────────────────────────── */
@@ -326,16 +294,6 @@ body {
   min-width: 180px;
   box-shadow: 0 4px 24px rgba(0,0,0,0.4);
   backdrop-filter: blur(12px);
-  opacity: 0;
-  transform: scale(0.85) translateY(10px);
-  pointer-events: none;
-  transition: opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1), transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-  transform-origin: bottom right;
-}
-.global-menu.open .global-menu-panel {
-  opacity: 1;
-  transform: scale(1) translateY(0);
-  pointer-events: auto;
 }
 
 /* ─── Menu Items ────────────────────────────────────────────────────── */
@@ -365,14 +323,6 @@ body {
 }
 
 @media (prefers-color-scheme: light) {
-  .global-menu-btn {
-    background: rgba(99,102,241,0.1);
-    border-color: rgba(99,102,241,0.2);
-    color: #6366f1;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.08);
-  }
-  .global-menu-btn:hover { background: rgba(99,102,241,0.2); }
-  .global-menu.open .global-menu-btn { opacity: 0; }
   .global-menu-panel {
     background: rgba(248,248,252,0.98);
     border-color: rgba(0,0,0,0.08);
@@ -1497,6 +1447,13 @@ body {
   color: #666;
   font-size: 0.82rem;
   min-height: 0;
+}
+
+/* The hint line under the title must NOT stretch (flex:1 would split
+   the available height with the list). Only the empty-state message
+   ("No saved sessions.") keeps flex:1 so it centers in the blank area. */
+.sel-page-status-fixed {
+  flex: none;
 }
 
 .sel-page-status-error {
@@ -2840,44 +2797,6 @@ body {
 }
 .main-content.panning {
   cursor: grabbing;
-}
-
-/* Bottom-left zoom badge (fixed: lives outside the panning canvas layer).
-   Click resets the canvas to 100%. Mirrors the global menu button on the
-   bottom-right. */
-.canvas-zoom-indicator {
-  position: fixed;
-  left: 16px;
-  bottom: 20px;
-  /* Above the canvas (0) but below modal overlays (200) and the
-     context menu (99998+): the badge must never float over a dialog. */
-  z-index: 150;
-  padding: 4px 10px;
-  border-radius: 999px;
-  background: rgba(20, 20, 35, 0.75);
-  border: 1px solid rgba(99, 102, 241, 0.35);
-  color: #a5b4fc;
-  font-size: 0.72rem;
-  font-family: monospace;
-  cursor: pointer;
-  user-select: none;
-  backdrop-filter: blur(8px);
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
-  transition: background 0.15s ease;
-}
-.canvas-zoom-indicator:hover {
-  background: rgba(99, 102, 241, 0.3);
-}
-@media (prefers-color-scheme: light) {
-  .canvas-zoom-indicator {
-    background: rgba(255, 255, 255, 0.88);
-    border-color: rgba(0, 0, 0, 0.15);
-    color: #4f46e5;
-    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
-  }
-  .canvas-zoom-indicator:hover {
-    background: #eef0ff;
-  }
 }
 
 /* The canvas layer: zero-size origin that windows anchor to; the whole

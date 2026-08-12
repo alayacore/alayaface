@@ -78,8 +78,11 @@ async function clickByText(sel, text) {
 }
 
 // Open the settings gear → New Session
-await page.waitForSelector('.global-menu-btn', { timeout: 15000 });
-await page.click('.global-menu-btn');
+// (The global menu is opened by RIGHT-CLICKING the canvas — the fixed
+// ⚙ button was removed.)
+await page.waitForSelector('.main-content', { timeout: 15000 });
+await page.$eval('.main-content', el => el.dispatchEvent(
+  new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 30, clientY: 30 })));
 await page.waitForSelector('.global-menu-panel', { timeout: 10000 });
 await clickByText('.global-menu-item', 'New Session');
 await page.waitForFunction(() => document.querySelectorAll('.session-panel').length > 0, { timeout: 15000 });

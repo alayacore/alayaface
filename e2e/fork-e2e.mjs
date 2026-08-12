@@ -152,6 +152,14 @@ try {
 
   const waitFor = (sel, ms = 30000) => page.waitForSelector(sel, { timeout: ms, visible: true });
   const sleep = ms => new Promise(r => setTimeout(r, ms));
+  // The global menu is opened by RIGHT-CLICKING the canvas (the fixed
+  // ⚙ button was removed) and closed by clicking outside the menu.
+  const openGlobalMenu = async () => {
+    await page.waitForSelector('.main-content', { timeout: 30000 });
+    await page.$eval('.main-content', el => el.dispatchEvent(
+      new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 30, clientY: 30 })));
+    await waitFor('.global-menu-panel');
+  };
   const clickByText = async (sel, text) => {
     const handles = await page.$$(sel);
     for (const h of handles) {
@@ -170,9 +178,7 @@ try {
       .then(() => sleep(400));
   };
   await page.goto(base + '/', { waitUntil: 'networkidle0', timeout: 30000 });
-  await waitFor('.global-menu-btn');
-  await page.click('.global-menu-btn');
-  await waitFor('.global-menu-panel');
+  await openGlobalMenu();
   assert(await clickByText('.global-menu-item', 'New Session'), 'New Session menu item');
   await waitFor('.session-panel');
   await sleep(600);
@@ -336,10 +342,8 @@ try {
   // (the fork's truncated history) → replays → the replayed plan
   // message binds by Session.id (no "Open plan").
   await page.reload({ waitUntil: 'networkidle0', timeout: 30000 });
-  await waitFor('.global-menu-btn');
   await sleep(2000); // close_all_sessions + scan settle
-  await page.click('.global-menu-btn');
-  await waitFor('.global-menu-panel');
+  await openGlobalMenu();
   assert(await clickByText('.global-menu-item', 'Session Manager'), 'Session Manager menu item (refresh)');
   // The overlay list may be considered non-visible by Puppeteer (scroll
   // container); wait for presence, not visibility.
@@ -425,10 +429,8 @@ try {
   // ── 10. RESTART with a chained work copy ──────────────────────────
   // Resuming the Session root restores the LATEST work copy (fork2).
   await page.reload({ waitUntil: 'networkidle0', timeout: 30000 });
-  await waitFor('.global-menu-btn');
   await sleep(2000); // close_all_sessions + scan settle
-  await page.click('.global-menu-btn');
-  await waitFor('.global-menu-panel');
+  await openGlobalMenu();
   assert(await clickByText('.global-menu-item', 'Session Manager'), 'Session Manager menu item (chained refresh)');
   await page.waitForSelector('.sel-page-item', { timeout: 10000 });
   const managerNames2 = await page.$$eval('.sel-page-item-name', els => els.map(e => e.textContent || ''));

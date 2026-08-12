@@ -133,6 +133,14 @@ try {
 
   const waitFor = (sel, ms = 30000) => page.waitForSelector(sel, { timeout: ms });
   const sleep = ms => new Promise(r => setTimeout(r, ms));
+  // The global menu is opened by RIGHT-CLICKING the canvas (the fixed
+  // ⚙ button was removed).
+  const openGlobalMenu = async () => {
+    await page.waitForSelector('.main-content', { timeout: 30000 });
+    await page.$eval('.main-content', el => el.dispatchEvent(
+      new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 30, clientY: 30 })));
+    await waitFor('.global-menu-panel');
+  };
   const clickByText = async (sel, text) => {
     const handles = await page.$$(sel);
     for (const h of handles) {
@@ -144,9 +152,7 @@ try {
 
   // ── 4. Session S → plan A ─────────────────────────────────────────
   await page.goto(base + '/', { waitUntil: 'networkidle0', timeout: 30000 });
-  await waitFor('.global-menu-btn');
-  await page.click('.global-menu-btn');
-  await waitFor('.global-menu-panel');
+  await openGlobalMenu();
   assert(await clickByText('.global-menu-item', 'New Session'), 'New Session menu item');
   await waitFor('.session-panel');
   await sleep(600);
@@ -350,8 +356,7 @@ try {
 
   // ── 10. C4 version browsing UI ────────────────────────────────────
   // Session Manager → Versions (n) → View v0 → read-only message list.
-  await page.click('.global-menu-btn');
-  await waitFor('.global-menu-panel');
+  await openGlobalMenu();
   assert(await clickByText('.global-menu-item', 'Session Manager'), 'Session Manager menu item (versions)');
   await page.waitForSelector('.sel-page-item', { timeout: 10000 });
   const openedVersions = await page.evaluate(() => {

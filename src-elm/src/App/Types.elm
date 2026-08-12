@@ -86,6 +86,10 @@ type alias Model =
     , dragInfo : Maybe DragInfo
     , resizeInfo : Maybe ResizeInfo
     , showGlobalMenu : Bool
+    -- Where the global menu pops up (right-click position, viewport
+    -- coordinates) when opened via context menu on the canvas.
+    , globalMenuX : Int
+    , globalMenuY : Int
     , defaultModelsEditor : DefaultModelsEditor
     , mcpEditor : McpEditor
     , settingsEditor : SettingsEditor
@@ -519,8 +523,8 @@ type Msg
     | ForkFromCtx
       -- Message collapse/expand
     | ToggleMsgCollapse String String
-      -- Global menu
-    | ToggleGlobalMenu
+      -- Global menu (opened by right-clicking the canvas at (x, y))
+    | ShowGlobalMenuAt Int Int
     | CloseGlobalMenu
       -- Internal
     | NoOp

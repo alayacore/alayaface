@@ -71,6 +71,19 @@ view model =
                     ++ (if model.canvasDrag == Nothing then "" else " panning")
                 )
             , Ev.preventDefaultOn "mousedown" canvasDragStartDecoder
+            -- Right-clicking the canvas (or the empty background) opens
+            -- the global menu at the pointer position. Window panels
+            -- stop contextmenu propagation, and message windows already
+            -- stopPropagation their own context menu, so this only fires
+            -- on empty canvas space.
+            , Ev.preventDefaultOn "contextmenu"
+                (D.map2
+                    (\clientX clientY ->
+                        ( ShowGlobalMenuAt (round clientX) (round clientY), True )
+                    )
+                    (D.field "clientX" D.float)
+                    (D.field "clientY" D.float)
+                )
             ]
             (if List.isEmpty model.sessionOrder && List.isEmpty model.planOrder then
                 [ viewNoSessionPanel model ]
@@ -89,7 +102,6 @@ view model =
             )
         , viewGlobalMenu model
         , viewContextMenu model
-        , viewZoomIndicator model
         , viewSessionManagerOverlay model
         , viewVersionOverlays model
         , viewPresetManagerOverlay model
@@ -121,20 +133,6 @@ canvasTransform model =
         ++ "px,0) scale("
         ++ String.fromFloat model.canvasScale
         ++ ")"
-
-
-{-| Bottom-left zoom badge: shows the current scale as a percentage;
-clicking it resets the canvas to 100% (viewport center stays fixed).
-Fixed positioning keeps it out of the panning canvas layer.
--}
-viewZoomIndicator : Model -> Html Msg
-viewZoomIndicator model =
-    Html.div
-        [ Attr.class "canvas-zoom-indicator"
-        , Attr.title "Reset zoom to 100%"
-        , Ev.onClick CanvasZoomReset
-        ]
-        [ Html.text (String.fromInt (round (model.canvasScale * 100)) ++ "%") ]
 
 
 viewSessionPanel : Model -> String -> Html Msg
@@ -179,6 +177,10 @@ viewSessionPanel model id =
                  -- stopPropagation so window mousedowns never reach the
                  -- canvas pan handler on main-content.
                  , Ev.stopPropagationOn "mousedown" (D.succeed ( ActivateSession id, True ))
+                 -- Right-clicking inside a window must not open the
+                 -- global menu (the canvas context menu); keep the
+                 -- browser's default menu for copy/paste etc.
+                 , Ev.stopPropagationOn "contextmenu" (D.succeed ( NoOp, True ))
                  ]
                     ++ positionStyles
                 )
@@ -251,66 +253,72 @@ viewNoSessionPanel model =
 
 viewGlobalMenu : Model -> Html Msg
 viewGlobalMenu model =
-    let
-        isOpen =
-            model.showGlobalMenu
-    in
-    Html.div
-        [ Attr.class ("global-menu" ++ (if isOpen then " open" else "")) ]
-        [ Html.div
-            [ Attr.class "global-menu-panel"
-            -- Clicks inside the panel must not bubble to the app root's
-            -- close handler; each menu item closes the menu through its
-            -- own action, and clicking the panel background keeps it
-            -- open. The menu closes only when clicking OUTSIDE it.
-            , Ev.stopPropagationOn "click" (D.succeed ( NoOp, True ))
+    if model.showGlobalMenu then
+        Html.div
+            [ Attr.class "global-menu"
+            , Attr.style "left" (String.fromInt model.globalMenuX ++ "px")
+            , Attr.style "top" (String.fromInt model.globalMenuY ++ "px")
             ]
             [ Html.div
-                [ Attr.class "global-menu-item"
-                , Ev.onClick CreateSession
+                [ Attr.class "global-menu-panel"
+                -- Clicks inside the panel must not bubble to the app root's
+                -- close handler; each menu item closes the menu through its
+                -- own action, and clicking the panel background keeps it
+                -- open. The menu closes only when clicking OUTSIDE it.
+                , Ev.stopPropagationOn "click" (D.succeed ( NoOp, True ))
                 ]
-                [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "+" ]
-                , Html.text " New Session"
-                ]
-            , Html.div
-                [ Attr.class "global-menu-item"
-                , Ev.onClick OpenSessionManager
-                ]
-                [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "☰" ]
-                , Html.text " Session Manager"
-                ]
-            , Html.div
-                [ Attr.class "global-menu-item"
-                , Ev.onClick OpenPresetManager
-                ]
-                [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "◱" ]
-                , Html.text
-                    ("Presets"
-                        ++ (if model.activePreset /= "" then
-                                " (" ++ model.activePreset ++ ")"
-                            else
-                                ""
-                           )
-                    )
-                ]
-            , Html.div
-                [ Attr.class "global-menu-item"
-                , Ev.onClick OpenGlobalConfig
-                ]
-                [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "⚙" ]
-                , Html.text "Global config"
+                [ Html.div
+                    [ Attr.class "global-menu-item"
+                    , Ev.onClick CreateSession
+                    ]
+                    [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "+" ]
+                    , Html.text " New Session"
+                    ]
+                , Html.div
+                    [ Attr.class "global-menu-item"
+                    , Ev.onClick OpenSessionManager
+                    ]
+                    [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "☰" ]
+                    , Html.text " Session Manager"
+                    ]
+                , Html.div
+                    [ Attr.class "global-menu-item"
+                    , Ev.onClick OpenPresetManager
+                    ]
+                    [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "◱" ]
+                    , Html.text
+                        ("Presets"
+                            ++ (if model.activePreset /= "" then
+                                    " (" ++ model.activePreset ++ ")"
+                                else
+                                    ""
+                               )
+                        )
+                    ]
+                , Html.div
+                    [ Attr.class "global-menu-item"
+                    , Ev.onClick OpenGlobalConfig
+                    ]
+                    [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "⚙" ]
+                    , Html.text "Global config"
+                    ]
+                , Html.div
+                    [ Attr.class "global-menu-item"
+                    , Ev.onClick CanvasZoomReset
+                    , Attr.title "Reset zoom to 100%"
+                    ]
+                    [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "🔍" ]
+                    , Html.text
+                        ("Zoom "
+                            ++ String.fromInt (round (model.canvasScale * 100))
+                            ++ "%"
+                        )
+                    ]
                 ]
             ]
-        , Html.button
-            [ Attr.class "global-menu-btn"
-            , Attr.title "Menu"
-            -- stopPropagation so the toggle never bubbles to the app
-            -- root's close handler (which would immediately re-close
-            -- a just-opened menu).
-            , Ev.stopPropagationOn "click" (D.succeed ( ToggleGlobalMenu, True ))
-            ]
-            [ Html.text "⚙" ]
-        ]
+
+    else
+        Html.text ""
 
 
 viewContextMenu : Model -> Html Msg
@@ -357,7 +365,7 @@ viewSessionManagerOverlay model =
         viewOverlay CloseSessionManager
             [ Html.div [ Attr.class "sel-page" ]
                 [ Html.div [ Attr.class "sel-page-title" ] [ Html.text "Session Manager" ]
-                , Html.div [ Attr.class "sel-page-status" ]
+                , Html.div [ Attr.class "sel-page-status sel-page-status-fixed" ]
                     [ Html.text "Resume re-opens a saved session (its history is replayed from disk)." ]
                 , case model.sessionManagerError of
                     Just err ->
@@ -623,6 +631,10 @@ viewPlanPanel model planId =
                  -- stopPropagation so window mousedowns never reach the
                  -- canvas pan handler on main-content.
                  , Ev.stopPropagationOn "mousedown" (D.succeed ( PlanActivate planId, True ))
+                 -- Right-clicking inside a window must not open the
+                 -- global menu (the canvas context menu); keep the
+                 -- browser's default menu for copy/paste etc.
+                 , Ev.stopPropagationOn "contextmenu" (D.succeed ( NoOp, True ))
                  ]
                     ++ positionStyles
                 )
