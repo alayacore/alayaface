@@ -6,20 +6,25 @@
 //   → RE-RUN with the version marker (fakecore replies differ, so the
 //     cascade gate passes) → S is FORKED to S' (session.alaya truncated
 //     up to the old [Plan Result], then replayed by the forked process)
-//     → S' registers its lineage + replays the truncated history + gets
-//       the new [Plan Result]; the original S window closes.
 //
-// Assertions (regression for the user-reported bug + P39-B3 lineage):
-//   * the replayed plan message in S' binds the status bar to
-//     "[Plan: e2e-demo-…] E2E Demo · Completed" — NOT the generic
-//     "Open plan" fallback (the original bug: fork sessions lost the
-//     plan binding because it matched origin only);
+// Assertions (C2b — the fork replaces the Session's WORK COPY, not its
+// identity):
+//   * the replayed plan message in the fork window binds the status bar
+//     to "[Plan: e2e-demo-…] E2E Demo · Completed" — NOT the generic
+//     "Open plan" fallback (the original bug);
 //   * the [Plan Result] message carries the [Plan: …] link with the
 //     (v2) summary;
 //   * no duplicate plan window / plan file (replay suppression);
-//   * S' wrote sessions/<S'>/session.meta.json with conversation_id =
-//     the ORIGINAL session's id (fork lineage, survives restart);
-//   * the original S window is gone (adoption closed it).
+//   * ownership on disk: the Session root (sessions/<root>/) holds
+//     session.refs.json with head=V1 and workCopy=<fork dir>; the work
+//     copy dir is NOT a session (no refs.json); NO session.meta.json
+//     (lineage deleted, C2b-7);
+//   * the SAME session window stays (window key = Session.id — no new
+//     window, position preserved);
+//   * restart: the manager lists ONLY the Session root; resuming it
+//     restores the WORK COPY (refs.workCopy) and rebinds;
+//   * chained fork: refs.workCopy advances to the second fork and the
+//     previous work copy dir is deleted (work copy lifecycle).
 
 import puppeteer from 'puppeteer-core';
 import { execSync, spawn } from 'node:child_process';
@@ -241,9 +246,9 @@ try {
     if (b) b.click();
   });
 
-  // The cascade completes → fork → S' registers lineage + replays the
-  // truncated history + receives the v2 [Plan Result]; the ORIGINAL S
-  // window closes. Wait for the v2 feedback message AND a status bar
+  // The cascade completes → fork → the SAME window takes over the fork
+  // world (work copy): replays the truncated history + receives the v2
+  // [Plan Result]. Wait for the v2 feedback message AND a status bar
   // that binds (no "Open plan" fallback — the original bug).
   await page.waitForFunction(() => {
     const bars = [...document.querySelectorAll('.plan-offer-btn')].map(e => e.textContent || '');
@@ -279,61 +284,72 @@ try {
   assert(planFilesAfter === 1, 'replayed plan message did NOT create a duplicate plan, got: ' + planFilesAfter);
   console.log('PASS: no duplicate plan window/file after fork replay');
 
-  // d) Lineage: the fork registered session.meta.json whose
-  //    conversation_id is the ORIGINAL session's id; the original
-  //    session carries its own root meta (conversation = itself).
+  // d) C2b ownership: the Session root (sessions/<rootId>/) holds
+  //    session.refs.json with `workCopy` = the fork dir; the work copy
+  //    dir (sessions/<forkId>/) is NOT a session (no refs.json); the
+  //    lineage meta (session.meta.json) is GONE (C2b-7).
   const sessionsRoot = path.join(home, '.alayaface', 'sessions');
   const sessionDirs = readdirSync(sessionsRoot).filter(d => !d.endsWith('.tmp'));
-  const lineageFiles = [];
-  for (const sid of sessionDirs) {
-    const f = path.join(sessionsRoot, sid, 'session.meta.json');
-    if (existsSync(f)) lineageFiles.push({ sid, meta: JSON.parse(readFileSync(f, 'utf8')) });
+  let rootRefs = null;
+  for (let tries = 0; tries < 20 && !rootRefs; tries++) {
+    await sleep(500);
+    for (const sid of sessionDirs) {
+      const f = path.join(sessionsRoot, sid, 'session.refs.json');
+      if (existsSync(f)) { rootRefs = { sid, refs: JSON.parse(readFileSync(f, 'utf8')) }; break; }
+    }
   }
-  assert(lineageFiles.length === 2, 'root meta + fork lineage meta, got: ' + JSON.stringify(lineageFiles));
-  const forkEntry = lineageFiles.find(e => e.meta.parent_instance_id);
-  const rootEntry = lineageFiles.find(e => !e.meta.parent_instance_id);
-  assert(forkEntry && rootEntry, 'one root + one fork entry, got: ' + JSON.stringify(lineageFiles));
-  assert(forkEntry.meta.conversation_id === rootEntry.sid,
-    'fork lineage conversation_id = original session, got: ' + JSON.stringify(lineageFiles));
-  assert(forkEntry.meta.parent_instance_id === rootEntry.sid, 'fork parent = original session');
-  const rootSid = rootEntry.sid;
-  const forkSid = forkEntry.sid;
-  console.log('PASS: fork lineage: ' + rootSid + ' (root) → ' + forkSid + ' (fork) in session.meta.json');
+  assert(rootRefs, 'Session root (session.refs.json) found on disk');
+  assert(rootRefs.refs.head && rootRefs.refs.head !== '', 'refs.head set (V1 frozen), got: ' + JSON.stringify(rootRefs.refs));
+  assert(typeof rootRefs.refs.workCopy === 'string' && rootRefs.refs.workCopy.length > 0,
+    'refs.workCopy records the fork dir, got: ' + JSON.stringify(rootRefs.refs));
+  assert(!existsSync(path.join(sessionsRoot, rootRefs.sid, 'session.meta.json')),
+    'no session.meta.json (lineage deleted, C2b-7)');
+  const rootSid = rootRefs.sid;
+  const forkSid = rootRefs.refs.workCopy;
+  assert(existsSync(path.join(sessionsRoot, forkSid, 'session.alaya')), 'work copy dir has session.alaya');
+  assert(!existsSync(path.join(sessionsRoot, forkSid, 'session.refs.json')),
+    'work copy dir is NOT a Session (no refs.json)');
+  console.log('PASS: ownership on disk — root=' + rootSid + ', refs.workCopy=' + forkSid + ' (fork dir), no lineage meta');
 
-  // e) The original S window is gone (adoption closed it); the fork
-  //    session (with the plan status bar) is the active one — and it
-  //    opened at the SAME spot as the window it replaced.
-  const panelCount = await page.$$eval('.session-panel', els => els.length);
-  assert(panelCount >= 1, 'fork session window present, got: ' + panelCount);
+  // e) The SAME window stays (window key = Session.id — the fork only
+  //    replaced the work copy), so its position is trivially preserved.
+  const panelCount = await page.$$eval('.session-panel:not(.plan-panel)', els => els.length);
+  assert(panelCount === 1, 'exactly ONE session window (no new window for the fork), got: ' + panelCount);
   const sPosAfter = await page.evaluate(() => {
     const p = document.querySelector('.session-panel:not(.plan-panel)');
     const cs = getComputedStyle(p);
     return { left: cs.left, top: cs.top, width: cs.width, height: cs.height };
   });
   assert(JSON.stringify(sPosAfter) === JSON.stringify(sPosBefore),
-    'fork session window opened at the replaced window\'s position, got before=' +
+    'session window kept its position (same window), got before=' +
       JSON.stringify(sPosBefore) + ' after=' + JSON.stringify(sPosAfter));
-  console.log('PASS: fork session window inherits the replaced window\'s position');
+  console.log('PASS: same window kept its position (no window jump)');
   await shot(page, '04-final.png');
-  console.log('PASS: original session closed, fork session takes over');
+  console.log('PASS: work copy takeover — the same window now shows the fork world');
 
-  // ── 8. RESTART consistency (P39-B5) ───────────────────────────────
+  // ── 8. RESTART consistency (C2b) ─────────────────────────────────
   // Page refresh: close_all_sessions gracefully saves every session
   // (fakecore's save KEEPS the fork's truncated history), then the
-  // plan-meta scan rebuilds planMetas AND the lineage registry from the
-  // session.meta.json files. Resume the FORK (the conversation HEAD) →
-  // it replays its truncated history → the replayed plan message binds
-  // the status bar through the REBUILT registry (no "Open plan").
+  // scan rebuilds planMetas + sessionRefs from session.refs.json (the
+  // manager lists ONLY Session roots — the work copy dir is hidden).
+  // Resume the Session ROOT → the backend restores refs.workCopy dir
+  // (the fork's truncated history) → replays → the replayed plan
+  // message binds by Session.id (no "Open plan").
   await page.reload({ waitUntil: 'networkidle0', timeout: 30000 });
   await waitFor('.global-menu-btn');
-  await sleep(2000); // close_all_sessions + planMetas/lineage scan settle
+  await sleep(2000); // close_all_sessions + scan settle
   await page.click('.global-menu-btn');
   await waitFor('.global-menu-panel');
   assert(await clickByText('.global-menu-item', 'Session Manager'), 'Session Manager menu item (refresh)');
   // The overlay list may be considered non-visible by Puppeteer (scroll
   // container); wait for presence, not visibility.
   await page.waitForSelector('.sel-page-item', { timeout: 10000 });
-  const resumedFork = await page.evaluate((fid) => {
+  // The manager must show ONLY the Session root (never the work copy).
+  const managerNames = await page.$$eval('.sel-page-item-name', els => els.map(e => e.textContent || ''));
+  assert(managerNames.length === 1, 'manager lists exactly one Session (the root), got: ' + JSON.stringify(managerNames));
+  assert(managerNames[0].includes(rootSid.slice(0, 8)),
+    'manager shows the root, got: ' + JSON.stringify(managerNames));
+  const resumedRoot = await page.evaluate((fid) => {
     const items = [...document.querySelectorAll('.sel-page-item')];
     for (const it of items) {
       const name = it.querySelector('.sel-page-item-name')?.textContent || '';
@@ -341,10 +357,10 @@ try {
       if (name === fid.slice(0, 8) && btn && !btn.disabled) { btn.click(); return true; }
     }
     return false;
-  }, forkSid);
-  assert(resumedFork, 'fork (head) session Resume clickable after refresh');
-  // The resumed fork replays its truncated history; the replayed plan
-  // message must bind via the REBUILT lineage registry.
+  }, rootSid);
+  assert(resumedRoot, 'Session root Resume clickable after refresh (restores the work copy)');
+  // The resumed session replays the work copy's truncated history; the
+  // replayed plan message must bind by Session.id.
   await page.waitForFunction(() => {
     const bars = [...document.querySelectorAll('.plan-offer-btn')].map(e => e.textContent || '');
     if (bars.length === 0) return false;
@@ -355,7 +371,7 @@ try {
   const planFilesAfterRestart = findPlanDirs().length;
   assert(planFilesAfterRestart === 1, 'no duplicate plan after restart+resume, got: ' + planFilesAfterRestart);
   await shot(page, '05-after-restart.png');
-  console.log('PASS: after refresh, resuming the fork (head) rebinds the status bar via the rebuilt lineage (no duplicate plan)');
+  console.log('PASS: after refresh, resuming the root restores the work copy and rebinds the status bar (no duplicate plan)');
 
   // ── 9. CHAINED fork: re-run the plan AGAIN on the resumed head (S') ─
   // Marker content → "v3": the new run's summaries differ from v2, so
@@ -381,35 +397,42 @@ try {
   await sleep(800);
   await shot(page, '06-chained-fork.png');
 
-  // Multi-level lineage on disk: root → fork1 (parent root) → fork2
-  // (parent fork1), all sharing the root's conversation id.
+  // Work-copy lifecycle: refs.workCopy advanced to the SECOND fork; the
+  // FIRST fork's dir was deleted (delayed until the old process's
+  // graceful close finishes — old work copy lifecycle).
   const sessionsRoot2 = path.join(home, '.alayaface', 'sessions');
-  const lineage2 = [];
+  const roots2 = [];
   for (const sid of readdirSync(sessionsRoot2).filter(d => !d.endsWith('.tmp'))) {
-    const f = path.join(sessionsRoot2, sid, 'session.meta.json');
-    if (existsSync(f)) lineage2.push({ sid, meta: JSON.parse(readFileSync(f, 'utf8')) });
+    const f = path.join(sessionsRoot2, sid, 'session.refs.json');
+    if (existsSync(f)) roots2.push({ sid, refs: JSON.parse(readFileSync(f, 'utf8')) });
   }
-  assert(lineage2.length === 3, 'three lineage metas (root + 2 forks), got: ' + JSON.stringify(lineage2));
-  const root2 = lineage2.find(e => !e.meta.parent_instance_id);
-  const fork1 = lineage2.find(e => e.meta.parent_instance_id === root2.sid);
-  const fork2 = lineage2.find(e => e.meta.parent_instance_id === fork1.sid);
-  assert(root2 && fork1 && fork2, 'lineage chain root→fork1→fork2, got: ' + JSON.stringify(lineage2));
-  assert(fork2.meta.conversation_id === root2.sid, 'fork2 conversation = root, got: ' + JSON.stringify(lineage2));
-  const fork1Sid = fork1.sid;
-  const fork2Sid = fork2.sid;
-  console.log('PASS: chained fork lineage on disk: ' + root2.sid + ' → ' + fork1Sid + ' → ' + fork2Sid);
+  assert(roots2.length === 1, 'exactly ONE Session root after chained fork, got: ' + JSON.stringify(roots2));
+  const root2 = roots2[0];
+  const fork2Sid = root2.refs.workCopy;
+  assert(fork2Sid && fork2Sid !== forkSid, 'work copy advanced to the second fork, got: ' + JSON.stringify(roots2));
+  // The old work copy dir is removed AFTER the old process's graceful
+  // close (delayed delete) — poll for it.
+  let oldDirGone = false;
+  for (let tries = 0; tries < 20 && !oldDirGone; tries++) {
+    await sleep(400);
+    oldDirGone = !existsSync(path.join(sessionsRoot2, forkSid));
+  }
+  assert(oldDirGone, 'previous work copy dir deleted after the chained fork, got sids: ' +
+    JSON.stringify(readdirSync(sessionsRoot2).filter(d => !d.endsWith('.tmp'))));
+  assert(existsSync(path.join(sessionsRoot2, fork2Sid, 'session.alaya')), 'new work copy dir present');
+  console.log('PASS: chained fork — root=' + root2.sid + ' refs.workCopy=' + fork2Sid + ' (old work copy deleted)');
 
-  // ── 10. RESTART with a 3-deep chain ────────────────────────────────
-  // headInstanceFor must resolve the HEAD to fork2 (the only instance
-  // that is nobody's parent) — resuming it replays the truncated history
-  // and binds the status bar via the REBUILT lineage.
+  // ── 10. RESTART with a chained work copy ──────────────────────────
+  // Resuming the Session root restores the LATEST work copy (fork2).
   await page.reload({ waitUntil: 'networkidle0', timeout: 30000 });
   await waitFor('.global-menu-btn');
-  await sleep(2000); // close_all_sessions + planMetas/lineage scan settle
+  await sleep(2000); // close_all_sessions + scan settle
   await page.click('.global-menu-btn');
   await waitFor('.global-menu-panel');
   assert(await clickByText('.global-menu-item', 'Session Manager'), 'Session Manager menu item (chained refresh)');
   await page.waitForSelector('.sel-page-item', { timeout: 10000 });
+  const managerNames2 = await page.$$eval('.sel-page-item-name', els => els.map(e => e.textContent || ''));
+  assert(managerNames2.length === 1, 'manager lists exactly one Session (root), got: ' + JSON.stringify(managerNames2));
   const resumedHead = await page.evaluate((fid) => {
     const items = [...document.querySelectorAll('.sel-page-item')];
     for (const it of items) {
@@ -418,8 +441,8 @@ try {
       if (name === fid.slice(0, 8) && btn && !btn.disabled) { btn.click(); return true; }
     }
     return false;
-  }, fork2Sid);
-  assert(resumedHead, 'head (fork2) Resume clickable after chained refresh');
+  }, root2.sid);
+  assert(resumedHead, 'Session root Resume clickable after chained refresh (restores fork2)');
   await page.waitForFunction(() => {
     const bars = [...document.querySelectorAll('.plan-offer-btn')].map(e => e.textContent || '');
     if (bars.length === 0) return false;
@@ -428,7 +451,7 @@ try {
   }, { timeout: 30000 });
   await sleep(600);
   await shot(page, '07-chained-restart.png');
-  console.log('PASS: after chained refresh, head resolution found fork2 (3-deep) and it rebinds via the rebuilt lineage');
+  console.log('PASS: after chained refresh, resuming the root restores the latest work copy (fork2) and rebinds');
 
   console.log('\nALL PASS ✅');
   console.log('screenshots:');

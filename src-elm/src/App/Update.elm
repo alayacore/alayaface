@@ -285,6 +285,10 @@ minimalCloseSession id model =
         , planResumedFrom = Dict.remove id model.planResumedFrom
         , planTaskStarted = Set.remove id model.planTaskStarted
         , connectionChain = dropChainSession model.connectionChain id
+        , sessionWorkCopies = Dict.remove id model.sessionWorkCopies
+        -- C2b：关闭时清掉该会话工作副本的临时 resume 标记（live 已死）。
+        , sessionResumedLives =
+            Set.remove (PU.workCopyId model id) (Set.remove id model.sessionResumedLives)
         , activeId =
             if model.activeId == Just id then
                 List.head (List.reverse (List.filter (\k -> k /= id) model.sessionOrder))
@@ -540,6 +544,9 @@ resumeSessionCreated liveId model =
                 , planResumeOwner = Nothing
                 , activeId = Just sessionId
                 , pendingSwitchOnCreate = False
+                -- C2b：记录临时 resume live（无磁盘目录；persistableWorkCopy
+                -- 靠它不把 live 写进 refs.workCopy）。
+                , sessionResumedLives = Set.insert liveId model.sessionResumedLives
             }
 
         -- 窗口已关（常态）：创建窗口条目（key = Session.id）。
@@ -3766,6 +3773,13 @@ update msg model =
                         Cmd.none
                 , Ports.setConnectionChain (chainPayload m3 m3.connectionChain)
                 ]
+            )
+
+        DeleteWorkCopyDir dir ->
+            -- C2b：延迟删除旧工作副本目录（fork 接管后旧进程优雅关闭
+            -- 完成才执行，避免 save 写回竞态重建目录）。
+            ( model
+            , Ports.deleteSessionDir { sessionId = dir, planId = Nothing, nodeId = Nothing, originSessionId = Nothing }
             )
 
         -- Window

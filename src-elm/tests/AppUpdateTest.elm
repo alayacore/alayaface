@@ -1,6 +1,7 @@
 module AppUpdateTest exposing (tests)
 
 import Dict
+import Set
 import Expect
 import Plan.Update as PU
 import Test exposing (Test, describe, test)
@@ -68,7 +69,7 @@ tests =
                             m =
                                 { initModelWithSession
                                     | sessionWorkCopies = Dict.fromList [ ( "s1", "live-7" ) ]
-                                    , planResumedFrom = Dict.fromList [ ( "live-7", "s1" ) ]
+                                    , sessionResumedLives = Set.fromList [ "live-7" ]
                                     , sessionRefs =
                                         Dict.insert "s1"
                                             (AV.SessionRefs "s1" "v0" [ "v0" ] (Just "wc-9"))
@@ -83,7 +84,7 @@ tests =
                             m =
                                 { initModelWithSession
                                     | sessionWorkCopies = Dict.fromList [ ( "s1", "live-7" ) ]
-                                    , planResumedFrom = Dict.fromList [ ( "live-7", "s1" ) ]
+                                    , sessionResumedLives = Set.fromList [ "live-7" ]
                                 }
                         in
                         PU.persistableWorkCopy m "s1"

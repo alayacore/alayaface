@@ -27,7 +27,7 @@
 import puppeteer from 'puppeteer-core';
 import { execSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, writeFileSync, rmSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, readdirSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
@@ -302,72 +302,55 @@ try {
   assert(planPages === 0, 'no plan windows remain, got: ' + planPages);
   console.log('PASS: plan windows closed after the cascade');
 
-  // ── 9. C-architecture regression: resume the OLD session (pre-rerun
-  //        world) — plan A must still show "Created" (not Completed),
-  //        plan B "Completed". The old session's version (V0, frozen at
-  //        confirm) isolates its plan state from the rerun.
+  // ── 9. C-architecture regression: version-isolated plan state.
+  //        The Session root (sessions/<rootId>/) holds session.refs.json
+  //        (head = V1, versions = [V0, V1]) and objects/ keeps both
+  //        worlds: V0 (pre-rerun: A unexecuted, B completed) and V1
+  //        (A completed). The OLD world is a VERSION — resume always
+  //        restores the CURRENT work copy (head), so the old-world
+  //        check reads the version objects on disk (C4 will add UI).
   const sessionsRoot = path.join(home, '.alayaface', 'sessions');
-  // The old session's close+save (async) must have flushed session.alaya
-  // with plan B's messages before we read it back.
-  let oldSid = null;
-  for (let tries = 0; tries < 20 && !oldSid; tries++) {
+  const objectsRoot = path.join(home, '.alayaface', 'objects');
+  let rootSid = null;
+  let rootRefs = null;
+  for (let tries = 0; tries < 20 && !rootRefs; tries++) {
     await sleep(500);
     const allSids = readdirSync(sessionsRoot).filter(d => !d.endsWith('.tmp'));
     for (const sid of allSids) {
       try {
-        const p = path.join(sessionsRoot, sid, 'session.alaya');
-        const content = readFileSync(p, 'utf8');
-        if (content.includes('E2E Demo Beta')) { oldSid = sid; break; }
-      } catch (e) {
-        console.log('[debug] read fail', sid.slice(0, 8), String(e).slice(0, 80));
-      }
+        const refsPath = path.join(sessionsRoot, sid, 'session.refs.json');
+        if (!existsSync(refsPath)) continue;
+        const refs = JSON.parse(readFileSync(refsPath, 'utf8'));
+        if (refs.head && refs.head !== '' && refs.versions && refs.versions.length >= 2) {
+          rootSid = sid;
+          rootRefs = refs;
+          break;
+        }
+      } catch (e) { /* not yet */ }
     }
   }
-  assert(oldSid, 'old session (with plan B) found on disk');
-  // The old session's version (V0, frozen at confirm) must be on disk:
-  // session.refs.json + its head version object.
-  try {
-    const refsPath = path.join(sessionsRoot, oldSid, 'session.refs.json');
-    const refsTxt = readFileSync(refsPath, 'utf8');
-    const refs = JSON.parse(refsTxt);
-    const vObj = readFileSync(path.join(home, '.alayaface', 'objects', refs.head, 'content.json'), 'utf8');
-    assert(refsTxt.includes('"head"') && vObj.includes('"planViews"'), 'old session version + head object on disk');
-    console.log('PASS: old session version (V0) persisted to session.refs.json + objects/');
-  } catch (e) {
-    throw new Error('old session version missing on disk: ' + String(e));
-  }
-  await page.click('.global-menu-btn');
-  await waitFor('.global-menu-panel');
-  assert(await clickByText('.global-menu-item', 'Session Manager'), 'Session Manager menu item');
-  await page.waitForSelector('.sel-page-item', { timeout: 10000 });
-  await sleep(600);
-  const resumedOld = await page.evaluate((fid) => {
-    const items = [...document.querySelectorAll('.sel-page-item')];
-    for (const it of items) {
-      const name = it.querySelector('.sel-page-item-name')?.textContent || '';
-      if (!name.includes(fid.slice(0, 8))) continue;
-      const btn = [...it.querySelectorAll('button')].find(b => b.textContent.trim() === 'Resume');
-      if (btn) { btn.click(); return true; }
-    }
-    return false;
-  }, oldSid);
-  assert(resumedOld, 'old session resume clicked: ' + oldSid.slice(0, 8));
-  await waitFor('.session-panel');
-  await sleep(1200);
-  const oldBars = await page.$$eval('.plan-offer-btn', els => els.map(e => e.textContent || ''));
-  const oldA = oldBars.filter(t => t.includes('E2E Demo') && !t.includes('Beta'));
-  const oldB = oldBars.filter(t => t.includes('E2E Demo Beta'));
-  // Two worlds coexist: the rerun's fork session (A=Completed) and the
-  // resumed OLD session (A=Created, B=Completed) — version-isolated plan
-  // state. The old session must contribute a Created A and a Completed B.
-  assert(oldA.some(t => t.includes('Created')),
-    'old session world: A stays Created (version view), got: ' + JSON.stringify(oldBars));
-  assert(oldB.some(t => t.includes('Completed')),
-    'old session world: B shows Completed, got: ' + JSON.stringify(oldBars));
-  console.log('PASS: old session keeps A=Created, B=Completed (version-isolated plan state)');
+  assert(rootRefs, 'Session root with two versions found on disk');
+  const readVersion = h =>
+    JSON.parse(readFileSync(path.join(objectsRoot, h, 'content.json'), 'utf8'));
+  const v0 = readVersion(rootRefs.versions[0]);
+  const v1 = readVersion(rootRefs.versions[rootRefs.versions.length - 1]);
+  const planKeys = Object.keys(v0.planViews || {});
+  const aKey = planKeys.find(k => /^e2e-demo-/.test(k) && !/beta/.test(k));
+  const bKey = planKeys.find(k => /beta/.test(k));
+  assert(aKey && bKey, 'V0 planViews has A and B keys, got: ' + JSON.stringify(planKeys));
+  const runStatus = rv => (rv === null ? null : (readVersion(rv) || {}).status || '?');
+  const a0 = runStatus(v0.planViews[aKey]);
+  assert(a0 === null || a0 === 'not_started',
+    'V0 world: A unexecuted (null or not_started view), got: ' + a0);
+  assert(runStatus(v0.planViews[bKey]) === 'completed',
+    'V0 world: B completed, got: ' + runStatus(v0.planViews[bKey]));
+  assert(runStatus(v1.planViews[aKey]) === 'completed',
+    'V1 world: A completed, got: ' + runStatus(v1.planViews[aKey]));
+  console.log('PASS: version isolation on disk — V0 (A unexecuted, B completed) vs V1 (A completed)');
 
   console.log('\nALL PASS ✅');
-  console.log('screenshots:\n  ' + readdirSync(artifacts).map(f => path.join(artifacts, f)).join('\n  '));
+  console.log('screenshots:');
+  for (const f of readdirSync(artifacts)) console.log('  ' + path.join(artifacts, f));
 } catch (err) {
   if (page) {
     await shot(page, 'failure.png').catch(() => {});

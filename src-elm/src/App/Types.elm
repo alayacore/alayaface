@@ -254,6 +254,10 @@ type alias Model =
     -- 缺省 = 自身（查无 → 自身）。窗口/管理器始终以 Session.id 为
     -- 身份；命令经正向查（workCopyId）、帧经反查（sessionIdOfWorkCopy）。
     , sessionWorkCopies : Dict String String
+    -- C2b：临时 resume live core id 集合（resume_session 返回的新 UUID，
+    -- 无磁盘目录）。persistableWorkCopy 用它区分"可持久化工作副本目录"
+    -- 与"临时 live"（live 不写 refs.workCopy）。
+    , sessionResumedLives : Set String
     }
 
 
@@ -312,6 +316,9 @@ type Msg
     | SessionActionResult E.Value
     | ResumeSession String
     | DeleteSession String
+    -- C2b：删除工作副本目录（延迟到旧进程优雅关闭后，避免 save 写回
+    -- 竞态重建目录）。
+    | DeleteWorkCopyDir String
       -- Window
     | WindowMaximized Bool
     | GotContainerSize (Result Dom.Error Dom.Element)

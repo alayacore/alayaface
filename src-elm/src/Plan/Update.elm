@@ -1018,12 +1018,15 @@ feedbackCompletedPlan planId now model =
         case Dict.get planId model.planMetas of
             Just meta ->
                 let
-                    -- C2b：结果回到 plan origin（Session.id，稳定）。
+                    -- C2b：结果回到 plan origin（Session.id，稳定）；后端
+                    -- 投递目标是当前工作副本的 live core id（workCopyId——
+                    -- resume 后 live ≠ Session.id）。
                     headSid =
                         meta.origin.sessionId
 
                     liveOrigin =
                         NC.liveSessionForOrigin model.sessions model.planResumedFrom headSid
+                            |> Maybe.map (workCopyId model)
 
                     summary =
                         summaryOf planId model
@@ -1192,8 +1195,9 @@ sessionIdOfWorkCopyDict workCopies coreId =
 refs.workCopy，重启恢复用）：
 - 无映射 → Nothing（根目录即工作副本）。
 - 映射到 fork 出的会话（有真实目录 sessions/<forkId>/）→ forkId。
-- 映射到 resume 的 live 会话（临时 UUID，无目录）→ 保留现有
-  refs.workCopy（resume 不改变磁盘工作副本）。
+- 映射到 resume 的 live 会话（临时 UUID，无目录，记录在
+  sessionResumedLives）→ 保留现有 refs.workCopy（resume 不改变磁盘
+  工作副本）。
 -}
 persistableWorkCopy : Model -> String -> Maybe String
 persistableWorkCopy model sessionId =
@@ -1202,7 +1206,7 @@ persistableWorkCopy model sessionId =
             Nothing
 
         Just coreId ->
-            if Dict.member coreId model.planResumedFrom then
+            if Set.member coreId model.sessionResumedLives then
                 Dict.get sessionId model.sessionRefs
                     |> Maybe.andThen .workCopy
 
@@ -1472,12 +1476,14 @@ forkOrInsertInPlace dispatch planId model =
     case Dict.get planId model.planMetas of
         Just meta ->
             let
-                -- C2b：工作副本 = plan origin（Session.id 稳定）。
+                -- C2b：plan origin = Session.id（稳定）；fork 的后端源会话
+                -- = 当前工作副本的 live core id（resume 后 live ≠ Session.id）。
                 headSid =
                     meta.origin.sessionId
 
                 liveOrigin =
                     NC.liveSessionForOrigin model.sessions model.planResumedFrom headSid
+                        |> Maybe.map (workCopyId model)
 
                 summary =
                     summaryOf planId model
@@ -1493,8 +1499,10 @@ forkOrInsertInPlace dispatch planId model =
                         mTrunc =
                             truncateOrigin planId model
 
+                        -- C2b：无 fork 点的首次完成——结果插回当前工作副本
+                        -- 的 live core id（resume 后 ≠ Session.id）。
                         ( m1, c1 ) =
-                            cascadeStepIn dispatch (PC.InsertInPlace headSid) mTrunc
+                            cascadeStepIn dispatch (PC.InsertInPlace (workCopyId model headSid)) mTrunc
                     in
                     ( m1, c1 )
 
@@ -1528,37 +1536,51 @@ registerForkInstance dispatch forkId model =
                             |> Maybe.map (.origin >> .sessionId)
                             |> Maybe.withDefault target.forkSource
 
-                    ( m1, closeCmd ) =
+                    -- 旧工作副本的磁盘目录 = refs.workCopy 旧值（前一个 fork
+                    -- 目录；从未 fork → Nothing → Session 根，不删）。resume
+                    -- 的 live 是临时 UUID 无目录，其 SessionDir 就是
+                    -- refs.workCopy 指向的目录——同样适用。
+                    oldDir =
+                        Dict.get sessionId model.sessionRefs
+                            |> Maybe.andThen .workCopy
+                            |> Maybe.withDefault sessionId
+
+                    ( m1, closeOldCmd ) =
                         if target.forkSource == "" then
                             ( model, Cmd.none )
 
-                        else if target.forkSource == sessionId then
-                            -- 旧工作副本 = Session 根：只关进程（根目录
-                            -- 持有身份 + refs，不能删）。
+                        else
+                            -- 关旧工作副本进程（后端按 live core id）。
                             ( model, Ports.closeSession { sessionId = target.forkSource } )
 
+                    ( m2, deleteOldCmd ) =
+                        if oldDir == "" || oldDir == sessionId then
+                            -- Session 根持有身份 + refs，不能删。
+                            ( m1, Cmd.none )
+
                         else
-                            -- 旧工作副本是更早的 fork：关进程 + 删目录
-                            -- （delete_session_dir 后端同时 close + remove）。
-                            ( model
-                            , Ports.deleteSessionDir
-                                { sessionId = target.forkSource
-                                , planId = Nothing
-                                , nodeId = Nothing
-                                , originSessionId = Nothing
-                                }
+                            -- 旧工作副本目录（更早的 fork）随接管删除——磁盘
+                            -- 始终只有 Session 根 + 当前工作副本。延迟执行：
+                            -- 旧进程的优雅关闭（save 写回 SessionDir）与
+                            -- RemoveAll 竞态会重建目录。
+                            ( m1
+                            , Task.perform
+                                (\_ -> DeleteWorkCopyDir oldDir)
+                                (Process.sleep 2000)
                             )
 
-                    m2 =
-                        { m1
+                    m3 =
+                        { m2
                             | planCascadeFork = Nothing
-                            , planReplaySessions = Set.insert sessionId m1.planReplaySessions
+                            , planReplaySessions = Set.insert sessionId m2.planReplaySessions
+                            -- 旧工作副本 live 已关，清临时标记。
+                            , sessionResumedLives = Set.remove target.forkSource m2.sessionResumedLives
                         }
 
                     closePlanCmd =
                         Task.perform (\_ -> PlanClose target.childPlanId) Time.now
                 in
-                ( m2, Cmd.batch [ closeCmd, closePlanCmd ] )
+                ( m3, Cmd.batch [ closeOldCmd, deleteOldCmd, closePlanCmd ] )
 
             else
                 -- 节点 fork（C3 前保留旧行为）：关旧实例 + 清 fork 标记 +
@@ -1655,7 +1677,9 @@ forkRequestFor planId liveOrigin summary model =
             Nothing
 
         Just liveSid ->
-            case Dict.get liveSid model.sessions of
+            -- C2b：后端源会话 = liveSid（工作副本 live core id）；前端
+            -- 会话状态按 Session.id 索引（反查）。
+            case Dict.get (sessionIdOfWorkCopy model liveSid) model.sessions of
                 Just s ->
                     -- P39/D8: the fork point is the plan's CREATION
                     -- anchor (its plan JSON's history id) — the fork

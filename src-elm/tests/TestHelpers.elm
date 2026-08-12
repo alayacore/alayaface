@@ -92,4 +92,5 @@ initModelWithSession =
     , freezeActive = Nothing
     , freezeQueue = []
     , sessionWorkCopies = Dict.empty
+    , sessionResumedLives = Set.empty
     }
