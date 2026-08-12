@@ -4810,17 +4810,68 @@ update msg model =
             if defaultPrevented then
                 ( model, Cmd.none )
 
-            -- Escape or Ctrl+[ dismisses the context menu and the media
-            -- preview. Other overlays are closed via their close buttons
-            -- only (no Escape).
+            -- Escape or Ctrl+[ closes the TOPMOST open overlay: context
+            -- menu → global overlays (session manager, version browsing,
+            -- editors…) → the active session's overlays (file picker,
+            -- model selector, help window) → media preview as fallback.
+            -- The tool-confirm dialog is intentionally NOT closed by
+            -- Escape (it requires an explicit Allow/Deny choice), and
+            -- MCP init/auth overlays keep their explicit buttons too.
             else if key == "Escape" || (key == "[" && ctrl) then
                 if model.ctxVisible then
                     ( { model | ctxVisible = False }, Cmd.none )
 
+                else if model.showSessionManager then
+                    update CloseSessionManager model
+
+                else if model.versionListFor /= Nothing then
+                    update CloseVersionList model
+
+                else if model.versionViewFor /= Nothing then
+                    update CloseVersionView model
+
+                else if model.presetManager.show then
+                    update ClosePresetManager model
+
+                else if model.defaultModelsEditor.show then
+                    update CloseDefaultModelsEditor model
+
+                else if model.mcpEditor.show then
+                    update CloseMcpEditor model
+
+                else if model.settingsEditor.show then
+                    update CloseSettingsEditor model
+
+                else if model.globalConfigEditor.show then
+                    update CloseGlobalConfig model
+
+                else if model.planCascadePreview /= Nothing then
+                    update PlanCascadeCancel model
+
                 else
-                    ( updateActiveSession model (\sess -> { sess | mediaPreview = Nothing })
-                    , Cmd.none
-                    )
+                    case model.activeId of
+                        Just sid ->
+                            case Dict.get sid model.sessions of
+                                Just sess ->
+                                    if sess.filePicker.show then
+                                        update (ForSession sid CloseFilePicker) model
+
+                                    else if sess.showModelSelector then
+                                        update (ForSession sid CloseModelSelector) model
+
+                                    else if sess.showHelpWindow then
+                                        update (ForSession sid CloseHelpWindow) model
+
+                                    else
+                                        ( updateActiveSession model (\s -> { s | mediaPreview = Nothing })
+                                        , Cmd.none
+                                        )
+
+                                Nothing ->
+                                    ( model, Cmd.none )
+
+                        Nothing ->
+                            ( model, Cmd.none )
 
             -- Ctrl+W closes the FOCUSED window. Both a session
             -- (activeId) and a plan (planActiveId) can be "active" at
