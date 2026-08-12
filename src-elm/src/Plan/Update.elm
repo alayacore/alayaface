@@ -62,6 +62,7 @@ module Plan.Update exposing
     , workCopyId
     , sessionIdOfWorkCopy
     , sessionIdOfWorkCopyDict
+    , persistableWorkCopy
     )
 
 {-| Plan Mode update logic (M2): auto-create / feedback / restart
@@ -1198,6 +1199,28 @@ sessionIdOfWorkCopyDict workCopies coreId =
         workCopies
 
 
+{-| C2b（§8.1）：会话当前工作副本的**可持久化目录 id**（写入
+refs.workCopy，重启恢复用）：
+- 无映射 → Nothing（根目录即工作副本）。
+- 映射到 fork 出的会话（有真实目录 sessions/<forkId>/）→ forkId。
+- 映射到 resume 的 live 会话（临时 UUID，无目录）→ 保留现有
+  refs.workCopy（resume 不改变磁盘工作副本）。
+-}
+persistableWorkCopy : Model -> String -> Maybe String
+persistableWorkCopy model sessionId =
+    case Dict.get sessionId model.sessionWorkCopies of
+        Nothing ->
+            Nothing
+
+        Just coreId ->
+            if Dict.member coreId model.planResumedFrom then
+                Dict.get sessionId model.sessionRefs
+                    |> Maybe.andThen .workCopy
+
+            else
+                Just coreId
+
+
 {-| C2b（§8.1）：alayacore 工作副本 id → Session.id（稳定身份）。
 反查 sessionWorkCopies；无映射 → 自身（root）。入站帧用它路由到
 会话条目。
@@ -1301,7 +1324,7 @@ freezeSessionVersion model sessionId runPlanId =
                 |> Maybe.map .head
 
         st =
-            Freeze.begin sessionId messages runs unexecuted parent
+            Freeze.begin sessionId messages runs unexecuted parent (persistableWorkCopy model sessionId)
     in
     case model.freezeActive of
         Just _ ->

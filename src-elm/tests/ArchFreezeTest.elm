@@ -37,6 +37,7 @@ tests =
                             [ ( "p1", run "p1" ) ]
                             [ "p2" ]
                             (Just "v0")
+                            Nothing
 
                     puts =
                         F.initialPuts st
@@ -54,6 +55,7 @@ tests =
                         F.begin "s1" [ msg 1 ]
                             [ ( "p1", run "p1" ) ]
                             [ "p2" ]
+                            Nothing
                             Nothing
 
                     -- 块（reqId 0）+ run（reqId 1）就绪
@@ -86,6 +88,7 @@ tests =
                             [ ( "p1", run "p1" ) ]
                             []
                             Nothing
+                            Nothing
                 in
                 Expect.equal (F.buildVersion st) Nothing
         , test "version put completes the freeze and exposes runSummaries" <|
@@ -95,6 +98,7 @@ tests =
                         F.begin "s1" [ msg 1 ]
                             [ ( "p1", run "p1" ) ]
                             []
+                            Nothing
                             Nothing
 
                     st1 =
@@ -119,7 +123,7 @@ tests =
             \_ ->
                 let
                     st0 =
-                        F.begin "s1" [ msg 1 ] [] [ "a", "b" ] Nothing
+                        F.begin "s1" [ msg 1 ] [] [ "a", "b" ] Nothing Nothing
 
                     st1 =
                         F.onPutResult 0 (Just "b0") st0

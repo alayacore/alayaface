@@ -483,6 +483,92 @@ forkSessionCreated forkId model =
     ( m0, cmds )
 
 
+{-| C2b：是否为顶层 resume（会话管理器 Resume 顶层会话）。顶层
+resume 的窗口 key = 磁盘目录 id（Session.id），live 会话只是工作副本；
+节点 resume（planResumeOwner 已设）保留旧行为（C3 统一）。
+-}
+isTopLevelResume : Model -> Bool
+isTopLevelResume model =
+    model.planResumeFrom /= Nothing && model.planResumeOwner == Nothing
+
+
+{-| C2b resume 分支（§8.1）：resume 不创建新身份——后端返回的 live
+会话只是同一 Session 的新工作副本：
+- Session.id = 磁盘目录 id（= resume 时传入的 dir id，即 Session 根）。
+- sessionWorkCopies[Session.id] = liveId；sessions[Session.id] 被 live
+  内容替换（缓冲帧按 workCopies 路由，liveId 的帧落到 Session.id）。
+- 窗口 key = Session.id：窗口已关（管理器 resume 的常态）→ 按常规创建
+  窗口条目；未关（防御）→ 复用现有窗口。
+- planReplaySessions 已由 ResumeSession 标记 Session.id；不建
+  planResumedFrom（C2b 消灭 live→orig 映射）。
+-}
+resumeSessionCreated : String -> Model -> ( Model, Cmd Msg )
+resumeSessionCreated liveId model =
+    let
+        sessionId =
+            Maybe.withDefault liveId model.planResumeFrom
+
+        newWorkCopies =
+            Dict.insert sessionId liveId model.sessionWorkCopies
+
+        newSessions =
+            Dict.insert sessionId (T.emptySession sessionId) model.sessions
+
+        buffered =
+            Dict.get liveId model.pendingEvents |> Maybe.withDefault []
+
+        sessionsAfterBuffer =
+            List.foldl
+                (applyPendingEvent (PU.sessionIdOfWorkCopyDict newWorkCopies))
+                newSessions
+                buffered
+
+        planCounts1 =
+            case Dict.get sessionId sessionsAfterBuffer of
+                Just s ->
+                    Dict.insert sessionId (planIndexForMessage s.messages) model.planMessageCounts
+
+                Nothing ->
+                    model.planMessageCounts
+
+        base =
+            { model
+                | sessionWorkCopies = newWorkCopies
+                , sessions = sessionsAfterBuffer
+                , planMessageCounts = planCounts1
+                , planReplaySessions = Set.insert sessionId model.planReplaySessions
+                , pendingEvents = Dict.remove liveId model.pendingEvents
+                , planResumeFrom = Nothing
+                , planResumeOwner = Nothing
+                , activeId = Just sessionId
+                , pendingSwitchOnCreate = False
+            }
+
+        -- 窗口已关（常态）：创建窗口条目（key = Session.id）。
+        m1 =
+            if Dict.member sessionId model.windowPositions then
+                base
+
+            else
+                { base
+                    | sessionOrder = base.sessionOrder ++ [ sessionId ]
+                    , sessionNums = Dict.insert sessionId base.nextSessionNum base.sessionNums
+                    , nextSessionNum = base.nextSessionNum + 1
+                    , windowPositions = Dict.insert sessionId (centeredSessionPos base) base.windowPositions
+                }
+
+        raised =
+            raiseWindow m1 sessionId
+
+        cmds =
+            Cmd.batch
+                [ Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ sessionId))
+                , Ports.scrollToBottom { sessionId = sessionId }
+                ]
+    in
+    ( raised, cmds )
+
+
 {-| 新会话窗口的常规创建（普通 New Session / resume / runner 节点会话
 / 节点级联 fork）。C2b 后只负责这些路径——顶层 fork 走 forkSessionCreated。
 -}
@@ -829,9 +915,13 @@ update msg model =
         SessionCreated id ->
             -- C2b（§8.1）：顶层级联 fork 不创建新窗口——fork 出的会话只是
             -- 同一 Session 的新工作副本（窗口 key = Session.id 不动）。
-            -- 节点 fork / 普通创建走 createSessionWindow（原逻辑）。
+            -- 顶层 resume 同理（窗口 key = 磁盘目录 id）。
+            -- 节点 fork / 节点 resume / 普通创建走 createSessionWindow（原逻辑）。
             if isPlainCascadeFork model then
                 forkSessionCreated id model
+
+            else if isTopLevelResume model then
+                resumeSessionCreated id model
 
             else
                 createSessionWindow id model
@@ -2438,12 +2528,15 @@ update msg model =
 
                                         refs0 =
                                             Dict.get st2.sessionId model.sessionRefs
-                                                |> Maybe.withDefault (AV.SessionRefs st2.sessionId "" [])
+                                                |> Maybe.withDefault (AV.SessionRefs st2.sessionId "" [] Nothing)
 
                                         refs =
                                             { refs0
                                                 | head = versionHash
                                                 , versions = refs0.versions ++ [ versionHash ]
+                                                -- C2b：本次固化时的工作副本目录
+                                                -- （fork 后 = forkId；resume 保留旧值）
+                                                , workCopy = st2.workCopy
                                             }
 
                                         m1 =

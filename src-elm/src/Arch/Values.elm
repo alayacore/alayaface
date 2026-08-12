@@ -70,12 +70,15 @@ type alias Version =
 
 
 {-| 会话的引用层（可变，轻量）：id 稳定（= 创建 id）；head = 当前版本；
-versions = 版本历史。**没有 conversation/instance 之分。**
+versions = 版本历史；workCopy = 当前工作副本目录 id（C2b：fork/resume
+后 = 新 alayacore 会话目录；Nothing = 根目录自身就是工作副本）。
+**没有 conversation/instance 之分。**
 -}
 type alias SessionRefs =
     { id : String
     , head : Hash
     , versions : List Hash
+    , workCopy : Maybe String
     }
 
 
@@ -159,6 +162,7 @@ encodeSessionRefs s =
         [ ( "id", E.string s.id )
         , ( "head", E.string s.head )
         , ( "versions", E.list E.string s.versions )
+        , ( "workCopy", maybeString s.workCopy )
         ]
 
 
@@ -248,10 +252,12 @@ decodeVersion =
 
 decodeSessionRefs : D.Decoder SessionRefs
 decodeSessionRefs =
-    D.map3 SessionRefs
+    D.map4 SessionRefs
         (D.field "id" D.string)
         (D.field "head" D.string)
         (D.field "versions" (D.list D.string))
+        -- Lenient：C2b 前无 workCopy 字段（= 根目录即工作副本）。
+        (D.oneOf [ D.field "workCopy" D.string |> D.map Just, D.succeed Nothing ])
 
 
 decodeMaybeRun : D.Decoder (Maybe Hash)

@@ -36,6 +36,10 @@ type alias FreezeState =
     -- 该版本下未执行的 plan（视图里 Nothing）
     , unexecuted : List String
     , parent : Maybe String
+    -- C2b：该会话当前工作副本的**可持久化目录 id**（写入 refs.workCopy；
+    -- 见 Plan.Update.persistableWorkCopy——fork 目录 / resume 保留旧值 /
+    -- 根 = Nothing）
+    , workCopy : Maybe String
     -- 组装好的版本对象（buildVersion 成功后暂存，version put 完成时
     -- 用它填充 versionCache）
     , built : Maybe AV.Version
@@ -46,8 +50,8 @@ type alias FreezeState =
 {-| 开始一次固化。`runs` = 本次要记录为"已执行"的 plan 状态（顺序
 固定，reqId 从块数开始）；`unexecuted` = 该版本下从未执行的 plan。
 -}
-begin : String -> List T.Message -> List ( String, AV.RunSummary ) -> List String -> Maybe String -> FreezeState
-begin sessionId messages runs unexecuted parent =
+begin : String -> List T.Message -> List ( String, AV.RunSummary ) -> List String -> Maybe String -> Maybe String -> FreezeState
+begin sessionId messages runs unexecuted parent workCopy =
     { sessionId = sessionId
     , blocks = AV.chunkMessages messages
     , blockHashes = Dict.empty
@@ -55,6 +59,7 @@ begin sessionId messages runs unexecuted parent =
     , runHashes = Dict.empty
     , unexecuted = unexecuted
     , parent = parent
+    , workCopy = workCopy
     , built = Nothing
     , versionHash = Nothing
     }

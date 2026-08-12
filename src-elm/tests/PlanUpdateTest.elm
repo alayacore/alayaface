@@ -471,7 +471,7 @@ suite =
                             { initModelWithSession
                                 | sessionRefs =
                                     Dict.insert "s1"
-                                        (AV.SessionRefs "s1" "v0" [ "v0" ])
+                                        (AV.SessionRefs "s1" "v0" [ "v0" ] Nothing)
                                         Dict.empty
                                 , versionCache = Dict.insert "v0" v0 Dict.empty
                                 , runSummaries = Dict.insert "run-b" runB Dict.empty
@@ -498,7 +498,7 @@ suite =
                             { initModelWithSession
                                 | sessionRefs =
                                     Dict.insert "s1"
-                                        (AV.SessionRefs "s1" "v0" [ "v0" ])
+                                        (AV.SessionRefs "s1" "v0" [ "v0" ] Nothing)
                                         Dict.empty
                                 , versionCache = Dict.insert "v0" v0 Dict.empty
                                 , runSummaries = Dict.insert "run-a" (AV.RunSummary "r-a" "completed" 1 (Just 2) "## a") Dict.empty

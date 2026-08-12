@@ -5,6 +5,7 @@ import Expect
 import Plan.Update as PU
 import Test exposing (Test, describe, test)
 import TestHelpers exposing (initModelWithSession)
+import Arch.Values as AV
 
 
 tests : Test
@@ -48,5 +49,45 @@ tests =
                         , \mm -> Expect.equal (PU.workCopyId mm "s1") "s3"
                         ]
                         m
+            , describe "persistableWorkCopy (refs.workCopy)"
+                [ test "root session (no mapping) → Nothing" <|
+                    \_ ->
+                        PU.persistableWorkCopy initModelWithSession "s1"
+                            |> Expect.equal Nothing
+                , test "forked session → the fork dir id" <|
+                    \_ ->
+                        let
+                            m =
+                                { initModelWithSession | sessionWorkCopies = Dict.fromList [ ( "s1", "wc-9" ) ] }
+                        in
+                        PU.persistableWorkCopy m "s1"
+                            |> Expect.equal (Just "wc-9")
+                , test "resumed session → keeps the existing refs.workCopy (live id is ephemeral, not a dir)" <|
+                    \_ ->
+                        let
+                            m =
+                                { initModelWithSession
+                                    | sessionWorkCopies = Dict.fromList [ ( "s1", "live-7" ) ]
+                                    , planResumedFrom = Dict.fromList [ ( "live-7", "s1" ) ]
+                                    , sessionRefs =
+                                        Dict.insert "s1"
+                                            (AV.SessionRefs "s1" "v0" [ "v0" ] (Just "wc-9"))
+                                            Dict.empty
+                                }
+                        in
+                        PU.persistableWorkCopy m "s1"
+                            |> Expect.equal (Just "wc-9")
+                , test "resumed session without existing refs → Nothing (root was the work copy)" <|
+                    \_ ->
+                        let
+                            m =
+                                { initModelWithSession
+                                    | sessionWorkCopies = Dict.fromList [ ( "s1", "live-7" ) ]
+                                    , planResumedFrom = Dict.fromList [ ( "live-7", "s1" ) ]
+                                }
+                        in
+                        PU.persistableWorkCopy m "s1"
+                            |> Expect.equal Nothing
+                ]
             ]
         ]

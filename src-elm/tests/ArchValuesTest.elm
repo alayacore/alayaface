@@ -110,10 +110,24 @@ tests =
                 \_ ->
                     let
                         s =
-                            V.SessionRefs "s1" "v2" [ "v0", "v1", "v2" ]
+                            V.SessionRefs "s1" "v2" [ "v0", "v1", "v2" ] Nothing
                     in
                     D.decodeString V.decodeSessionRefs (V.refsContent s)
                         |> Expect.equal (Ok s)
+            , test "session refs round-trips a work copy (C2b)" <|
+                \_ ->
+                    let
+                        s =
+                            V.SessionRefs "s1" "v2" [ "v0", "v1" ] (Just "wc-9")
+                    in
+                    D.decodeString V.decodeSessionRefs (V.refsContent s)
+                        |> Expect.equal (Ok s)
+            , test "session refs without a workCopy field decode as Nothing (lenient, pre-C2b)" <|
+                \_ ->
+                    -- 旧文件无 workCopy 字段：根目录即工作副本。
+                    D.decodeString V.decodeSessionRefs
+                        """{"id":"s1","head":"v2","versions":["v0"]}"""
+                        |> Expect.equal (Ok (V.SessionRefs "s1" "v2" [ "v0" ] Nothing))
             ]
         , describe "content determinism"
             [ test "same value encodes identically (hash stability)" <|
