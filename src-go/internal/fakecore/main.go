@@ -130,6 +130,20 @@ func nextReplyID() string {
 	return fmt.Sprintf("a-%d", replySeq)
 }
 
+// contextTokens tracks the session's consumed context tokens (mirrors
+// real alayacore's context_tokens field on task SM frames). Each
+// completed task consumes a fixed amount; the frontend renders the
+// session bar readout "used/limit pct%" from context_tokens and the
+// active model's context_limit.
+var contextTokens int
+
+// taskDoneFrame emits the task-completion SM frame carrying the current
+// context token count — real alayacore reports it on every task frame.
+func taskDoneFrame() string {
+	contextTokens += 4096
+	return fmt.Sprintf(`{"type":"task","data":{"in_progress":false,"task_error":false,"context_tokens":%d}}`, contextTokens)
+}
+
 type cmdMsg struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
@@ -170,7 +184,7 @@ func streamReply() {
 	echoID("AR", rid, "")
 	echoID("At", aid2, "Received prompt: "+stagedText+versionSuffix())
 	echoID("AT", aid2, "")
-	writeFrame("SM", `{"type":"task","data":{"in_progress":false,"task_error":false}}`)
+	writeFrame("SM", taskDoneFrame())
 	// Record the reply (merged) for fork-history replay.
 	history = append(history, histMsg{"assistant", "Hello world\n\nReceived prompt: " + stagedText + versionSuffix(), aid2})
 }
@@ -372,6 +386,11 @@ func main() {
 	})
 	writeFrame("SM", string(boot))
 
+	// Active-model notification (mirrors real alayacore's SM "model"
+	// frame): the frontend reads context_limit from it for the session
+	// bar's token readout.
+	writeFrame("SM", `{"type":"model","data":{"active_id":1,"active_name":"fake-model-1","context_limit":8192}}`)
+
 	// Boot SMs first, then replayed history content, then the explicit
 	// readiness signal — mirrors alayacore v0.62.4+:
 	//   SM {"type":"session","data":{"state":"ready"}}
@@ -426,7 +445,7 @@ func main() {
 					stagedText = ""
 					continue
 				}
-				writeFrame("SM", `{"type":"task","data":{"in_progress":true,"current_step":1,"context":0}}`)
+				writeFrame("SM", `{"type":"task","data":{"in_progress":true,"current_step":1,"context":0,"context_tokens":0}}`)
 				if hanging {
 					// Hung task: swallow the prompt (no reply) — the
 					// runner's timeout would fail the node (removed in
@@ -511,7 +530,7 @@ func planReply() {
 	// "task running" state (send button back to Send) — without this a
 	// session that creates a SECOND plan can never send it (the button
 	// stays Cancel).
-	writeFrame("SM", `{"type":"task","data":{"in_progress":false,"task_error":false}}`)
+	writeFrame("SM", taskDoneFrame())
 	// NOTE: deliberately NOT calling streamReply() afterwards — the plan
 	// message must stay the session's LAST message so the frontend's
 	// delayed auto-open (PlanOfferSettle) confirms it as the newest.
@@ -679,5 +698,5 @@ func loadRunPlanReply() {
 	echoID("AT", pid, msg)
 	echoID("AR", nextReplyID(), "")
 	history = append(history, histMsg{"assistant", msg, pid})
-	writeFrame("SM", `{"type":"task","data":{"in_progress":false,"task_error":false}}`)
+	writeFrame("SM", taskDoneFrame())
 }

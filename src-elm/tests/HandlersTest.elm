@@ -538,4 +538,69 @@ tests =
                         ]
                         s
             ]
+        , describe "system task/model frames (token usage)"
+            [ test "task frame context_tokens updates the session token count" <|
+                \_ ->
+                    let
+                        s =
+                            emptySession "s1"
+                                |> applyFrame
+                                    (frame "SM"
+                                        (E.object
+                                            [ ( "type", E.string "task" )
+                                            , ( "data"
+                                              , E.object
+                                                    [ ( "in_progress", E.bool False )
+                                                    , ( "task_error", E.bool False )
+                                                    , ( "context_tokens", E.int 4096 )
+                                                    ]
+                                              )
+                                            ]
+                                        )
+                                    )
+                    in
+                    Expect.equal 4096 s.contextTokens
+            , test "task frame falls back to the legacy context field" <|
+                \_ ->
+                    let
+                        s =
+                            emptySession "s1"
+                                |> applyFrame
+                                    (frame "SM"
+                                        (E.object
+                                            [ ( "type", E.string "task" )
+                                            , ( "data"
+                                              , E.object
+                                                    [ ( "in_progress", E.bool False )
+                                                    , ( "task_error", E.bool False )
+                                                    , ( "context", E.int 2048 )
+                                                    ]
+                                              )
+                                            ]
+                                        )
+                                    )
+                    in
+                    Expect.equal 2048 s.contextTokens
+            , test "model frame context_limit updates the session limit" <|
+                \_ ->
+                    let
+                        s =
+                            emptySession "s1"
+                                |> applyFrame
+                                    (frame "SM"
+                                        (E.object
+                                            [ ( "type", E.string "model" )
+                                            , ( "data"
+                                              , E.object
+                                                    [ ( "active_id", E.int 1 )
+                                                    , ( "active_name", E.string "fake-model-1" )
+                                                    , ( "context_limit", E.int 8192 )
+                                                    ]
+                                              )
+                                            ]
+                                        )
+                                    )
+                    in
+                    Expect.equal 8192 s.contextLimit
+            ]
         ]

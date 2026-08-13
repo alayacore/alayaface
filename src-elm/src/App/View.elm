@@ -21,6 +21,7 @@ import Session.Types as T
 import Session.Selector as Sel exposing (Page(..))
 import Session.FilePicker as FP
 import Session.ToolView as ToolView
+import Session.Format as F
 import Fuzzy
 import Plan.Types as PT
 import Plan.Meta as PM
@@ -208,6 +209,25 @@ viewSessionPanel model id =
                                    )
                             )
                         ]
+                    , let
+                        tokenLabel =
+                            F.formatTokenUsage session.contextTokens session.contextLimit
+                      in
+                      if tokenLabel == "" then
+                        Html.text ""
+
+                      else
+                        Html.span
+                            [ Attr.class "session-bar-tokens"
+                            , Attr.title
+                                ("Context: "
+                                    ++ String.fromInt session.contextTokens
+                                    ++ " / "
+                                    ++ String.fromInt session.contextLimit
+                                    ++ " tokens"
+                                )
+                            ]
+                            [ Html.text tokenLabel ]
                     , Html.button
                         [ Attr.class "session-bar-close"
                         , Ev.stopPropagationOn "mousedown" (D.succeed ( NoOp, True ))

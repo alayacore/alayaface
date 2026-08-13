@@ -443,6 +443,16 @@ body {
   min-width: 0;
 }
 
+.session-bar-tokens {
+  flex-shrink: 0;
+  margin-left: 8px;
+  font-size: 0.62rem;
+  color: #888;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+
 .session-bar-close {
   flex-shrink: 0;
   background: none;

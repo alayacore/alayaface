@@ -135,6 +135,14 @@
 - [ ] Session manager / deleting sessions / restoring sessions work
 - [ ] File picker, Settings editor (tool_confirm / builtin_tools / system_prompt) work
 
+## 8. Session Window Token Readout
+
+- [ ] After a reply, the session title bar shows a compact readout like `4.1K/8.2K 50.0%` (used / context limit / percent, one decimal each)
+- [ ] The readout grows as tasks complete; hovering it shows the exact integer counts ("Context: 4096 / 8192 tokens")
+- [ ] Before any data (fresh session, limit unknown) no readout is rendered — no stray "0" clutter
+- [ ] Readout updates live while a task runs and after it finishes; the limit comes from the active model's `context_limit`
+- [ ] Plan windows (no per-session token state) do NOT show the readout
+
 ## Known Limitations (acceptance: confirm "as expected")
 
 - Killing the app mid-task loses the in-flight turn (alayacore only saves at task end; C1 forbids modifying alayacore)

@@ -254,6 +254,17 @@ try {
   await shot(page, '01-auto-created-plan.png');
   console.log('PASS: plan auto-created (no button)');
 
+  // Token readout: after the reply, the owning session's bar shows
+  // "used/limit pct" — fakecore reports context_tokens on the task-done
+  // frame and the boot model SM provides context_limit (8192).
+  await page.waitForFunction(() => {
+    const el = document.querySelector('.session-bar-tokens');
+    return !!el && /^[0-9.]+[KM]?\/[0-9.]+[KM]? [0-9]+(\.[0-9]+)?%$/.test(el.textContent || '');
+  }, { timeout: 10000 });
+  const tokenText = await page.$eval('.session-bar-tokens', e => e.textContent);
+  assert(tokenText === '4.1K/8.2K 50.0%', 'token readout shows used/limit pct, got: ' + tokenText);
+  console.log('PASS: session bar token readout (' + tokenText + ')');
+
   // ── 4b. Plan window ↔ owning session curve ────────────────────────
   // The active plan window is connected to the session that auto-created
   // it: bridge.js draws the plan-connection overlay, anchored on the
