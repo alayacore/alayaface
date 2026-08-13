@@ -1148,8 +1148,7 @@ body {
     color: #1a1a2e;
     background-color: #f0f0f5;
   }
-
-  
+}
 
 /* ─── Responsive ───────────────────────────────────────────────────── */
 
@@ -1330,7 +1329,7 @@ body {
   border-radius: 4px;
   transition: background 0.12s, color 0.12s;
 }
-.footer-btn:hover { background: rgba(255,255,255,0.08); color: #ddd; }
+.footer-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
 .footer-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 
 /* SVG icons in the footer buttons (Icons.elm): block layout keeps them
@@ -1356,9 +1355,18 @@ body {
   -webkit-appearance: none;
   outline: none;
 }
-.reasoning-select:hover { background: rgba(255,255,255,0.08); color: #ddd; }
+.reasoning-select:hover { background: rgba(255,255,255,0.08); color: #fff; }
 .reasoning-select:disabled { opacity: 0.3; cursor: not-allowed; }
 .reasoning-select option { background: #1e1e2e; color: #ddd; }
+
+/* Light theme: #fff/#ddd would wash out on the near-white app
+   background, so hover uses the brand blue (like .send-btn:hover) and
+   the select dropdown goes light too. */
+@media (prefers-color-scheme: light) {
+  .footer-btn:hover { background: rgba(37,99,235,0.08); color: #2563eb; }
+  .reasoning-select:hover { background: rgba(37,99,235,0.08); color: #2563eb; }
+  .reasoning-select option { background: #fff; color: #1a1a2e; }
+}
 
 .input-footer-right {
   display: flex;
