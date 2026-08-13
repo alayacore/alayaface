@@ -347,7 +347,22 @@ handleSystemMsg s env =
         "model" -> handleSystemModel s env.data
         "tool_confirm" -> handleSystemToolConfirm s env.data
         "mcp" -> handleSystemMcp s env.data
+        "session" -> handleSystemSession s env.data
         _ -> s
+
+
+{-| SM {"type":"session","data":{"state":"ready"}} — the core's explicit
+readiness signal (MCP init done, replay ended, session interactive).
+Node prompts are held until this flips (see App/Update's readiness gate).
+-}
+handleSystemSession : SessionState -> D.Value -> SessionState
+handleSystemSession s data =
+    case D.decodeValue (D.field "state" D.string) data of
+        Ok "ready" ->
+            { s | ready = True }
+
+        _ ->
+            s
 
 
 handleSystemTask : SessionState -> D.Value -> SessionState

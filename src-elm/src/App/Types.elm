@@ -236,6 +236,11 @@ type alias Model =
     , planReplaySessions : Set String
     , planCreating : Maybe CreateTask
     , planCreateQueue : List CreateTask
+    -- Node prompts held until their session's readiness signal arrives
+    -- (sessionId → prompt text). alayacore rejects prompts with
+    -- MCP_NOT_READY before MCP init completes, so the runner's
+    -- SendPrompt effect is deferred and flushed on the ready SM.
+    , pendingNodePrompts : Dict String String
     , planReadTarget : Maybe PlanReadTarget
     , planNodeSessions : Dict String String
     -- Plan window owning the in-flight resume (for error surfacing).

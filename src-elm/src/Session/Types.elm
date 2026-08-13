@@ -215,6 +215,12 @@ type alias McpAuth =
 type alias SessionState =
     { id : String
     , connected : Bool
+    -- True once the core's explicit readiness signal arrives
+    -- (SM {"type":"session","data":{"state":"ready"}}): MCP servers are
+    -- initialized, replay ended, the session is interactive. Node
+    -- prompts are held until this flips (alayacore rejects prompts with
+    -- MCP_NOT_READY before it).
+    , ready : Bool
     , statusMsg : String
     , messages : List Message
     , staged : List StagedMedia
@@ -398,6 +404,7 @@ emptySession : String -> SessionState
 emptySession id =
     { id = id
     , connected = True
+    , ready = False
     , statusMsg = "Connected"
     , messages = []
     , staged = []

@@ -83,6 +83,7 @@ initModelWithSession =
     , planReplaySessions = Set.empty
     , planCreating = Nothing
     , planCreateQueue = []
+    , pendingNodePrompts = Dict.empty
     , planReadTarget = Nothing
     , planNodeSessions = Dict.empty
     , planResumeOwner = Nothing

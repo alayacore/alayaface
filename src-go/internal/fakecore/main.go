@@ -47,9 +47,11 @@ import (
 // sessionFile is the --session flag value; `save` writes to it (empty
 // filename semantics, like real alayacore). configDir is the
 // --config-path value; model_set writes runtime.conf into it (mirrors
-// real alayacore).
+// real alayacore). readySent tracks whether the ready SM has been
+// emitted: prompts before it are rejected (MCP_NOT_READY).
 var sessionFile string
 var configDir string
+var readySent bool
 
 // histMsg is one recorded message of this session's history. The fake
 // maintains it so `fork` can truncate it into the new session file and
@@ -379,6 +381,15 @@ func main() {
 		replayForkedHistory()
 		replayResumedHistory()
 	}
+	// ALAYACORE_DELAY_READY_MS delays the ready SM (and thus prompt
+	// acceptance) so the E2E can exercise the frontend's readiness gate:
+	// prompts sent before this point are rejected as MCP_NOT_READY.
+	if ms := os.Getenv("ALAYACORE_DELAY_READY_MS"); ms != "" {
+		if n, err := time.ParseDuration(ms + "ms"); err == nil {
+			time.Sleep(n)
+		}
+	}
+	readySent = true
 	writeFrame("SM", `{"type":"session","data":{"state":"ready"}}`)
 
 	reader := bufio.NewReader(os.Stdin)
@@ -406,6 +417,15 @@ func main() {
 				// seen this frame (so the boot in_progress:false is not a
 				// completion), so a hung task can still be aborted by the
 				// cancel-first close below (which emits in_progress:false).
+				// Before the ready SM, prompts are REJECTED like real
+				// alayacore's MCP_NOT_READY — the frontend's readiness
+				// gate must hold them until then.
+				if !readySent {
+					writeFrame("SM", `{"type":"error","data":{"text":"MCP servers are still initializing. Please wait."}}`)
+					staged = 0
+					stagedText = ""
+					continue
+				}
 				writeFrame("SM", `{"type":"task","data":{"in_progress":true,"current_step":1,"context":0}}`)
 				if hanging {
 					// Hung task: swallow the prompt (no reply) — the

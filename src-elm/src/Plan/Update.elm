@@ -2133,12 +2133,34 @@ applyEffectIn dispatch planId e ( m, cmds ) =
                 ( m, cmds )
 
             else
-                ( m
-                , Cmd.batch
-                    [ cmds
-                    , Ports.sendPrompt { sessionId = sid, text = text, media = [] }
-                    ]
-                )
+                -- Readiness gate: alayacore rejects prompts with
+                -- MCP_NOT_READY while its MCP servers are still
+                -- initializing, which would fail the node on a race
+                -- (Load run reviving a node is a common hit). If the
+                -- session hasn't signalled ready yet, HOLD the prompt and
+                -- flush it when the ready SM arrives (App/Update flushes
+                -- pendingNodePrompts).
+                case Dict.get sid m.sessions of
+                    Just s ->
+                        if s.ready then
+                            ( m
+                            , Cmd.batch
+                                [ cmds
+                                , Ports.sendPrompt { sessionId = sid, text = text, media = [] }
+                                ]
+                            )
+
+                        else
+                            ( { m | pendingNodePrompts = Dict.insert sid text m.pendingNodePrompts }
+                            , cmds
+                            )
+
+                    Nothing ->
+                        -- Session not registered yet at bind time: hold
+                        -- until it is (the ready frame will flush it).
+                        ( { m | pendingNodePrompts = Dict.insert sid text m.pendingNodePrompts }
+                        , cmds
+                        )
 
         PT.CloseSessionFor sid _ ->
             -- The runner closed this node's session (Stop / failure /

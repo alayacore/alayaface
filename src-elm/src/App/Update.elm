@@ -1075,6 +1075,13 @@ update msg model =
                                     becamePlan =
                                         becamePlanMessage prevAccum (Maybe.withDefault "" ev.content)
     
+                                    -- The core's explicit readiness signal
+                                    -- (SM {"type":"session","data":
+                                    -- {"state":"ready"}}): MCP init done,
+                                    -- replay ended, session interactive.
+                                    readyNow =
+                                        isSessionReady ev
+    
                                     newSession =
                                         H.handleFrameEvent session ev
     
@@ -1084,24 +1091,46 @@ update msg model =
                                     mcpJustCompleted =
                                         session.mcpStatus /= Nothing && newSession.mcpStatus == Nothing
     
+                                    -- A node prompt held by the readiness gate
+                                    -- (pendingNodePrompts) is flushed the
+                                    -- moment the session becomes ready.
+                                    flushPendingCmd =
+                                        if readyNow then
+                                            case Dict.get sid model.pendingNodePrompts of
+                                                Just text ->
+                                                    Ports.sendPrompt { sessionId = sid, text = text, media = [] }
+    
+                                                Nothing ->
+                                                    Cmd.none
+    
+                                        else
+                                            Cmd.none
+    
                                     -- scrollToBottom is frontend DOM scrolling:
                                     -- elements are named by window key
                                     -- (Session.id), so pass sid.
                                     cmds =
                                         Cmd.batch
-                                            (List.filterMap identity
-                                                [ if msgCountChanged && session.atBottom then
-                                                    Just (Ports.scrollToBottom { sessionId = sid })
+                                            (flushPendingCmd
+                                                :: List.filterMap identity
+                                                    [ if msgCountChanged && session.atBottom then
+                                                        Just (Ports.scrollToBottom { sessionId = sid })
     
-                                                  else
-                                                    Nothing
-                                                , Nothing
-                                                ]
+                                                      else
+                                                        Nothing
+                                                    , Nothing
+                                                    ]
                                             )
     
                                     updatedModel =
                                         { model
-                                            | sessions = Dict.insert sid { newSession | prevMsgCount = List.length newSession.messages } model.sessions
+                                            | sessions = Dict.insert sid { newSession | ready = newSession.ready || readyNow, prevMsgCount = List.length newSession.messages } model.sessions
+                                            , pendingNodePrompts =
+                                                if readyNow then
+                                                    Dict.remove sid model.pendingNodePrompts
+    
+                                                else
+                                                    model.pendingNodePrompts
                                             , planMessageCounts = bumpPlanCount model.planMessageCounts sid becamePlan
                                             -- Replay suppression: the marker is
                                             -- removed by the core's explicit
@@ -1114,7 +1143,7 @@ update msg model =
                                             -- older cores without the ready SM
                                             -- are not supported.
                                             , planReplaySessions =
-                                                if isSessionReady ev then
+                                                if readyNow then
                                                     Set.remove sid model.planReplaySessions
     
                                                 else
