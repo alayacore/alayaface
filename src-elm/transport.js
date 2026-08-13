@@ -873,28 +873,6 @@
     document.addEventListener("pointercancel", function (e) {
       app.ports.onPointerCancel.send(pointerPayload(e, pointerTargetKind(e)));
     }, true);
-
-    // Hover state for hover-dependent UI (D6): forward pointerover/
-    // pointerout CHANGES over hover surfaces as { inItem, pointerType }.
-    // Pointer events carry pointerType, so Elm ignores the compat
-    // enter/leave that touch taps synthesize (a tap must never count
-    // as hover, and its release must never close a click-opened
-    // flyout). Only send on state CHANGES to keep the traffic down.
-    var hoverInItem = false;
-    function hoverPayload(e) {
-      var t = e.target;
-      var inItem = !!(t && t.closest && t.closest(".global-menu-item"));
-      return { inItem: inItem, pointerType: e.pointerType || "mouse" };
-    }
-    function sendHover(e) {
-      var p = hoverPayload(e);
-      if (p.inItem !== hoverInItem) {
-        hoverInItem = p.inItem;
-        app.ports.onPointerHover.send(p);
-      }
-    }
-    document.addEventListener("pointerover", sendHover, true);
-    document.addEventListener("pointerout", sendHover, true);
   }
 
   // Wait for DOM + backend to be ready. __TAURI__ may be injected after

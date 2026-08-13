@@ -529,9 +529,6 @@ type Msg
     | PointerUp E.Value
     | PointerCancel E.Value
     | LongPressFired
-      -- Hover state for hover-dependent UI (D6): { inItem, pointerType }
-      -- from transport.js — touch taps' compat enter/leave are ignored.
-    | PointerHover E.Value
       -- Canvas zoom centered on the mouse: wheel deltaY + pointer position
     | CanvasZoom Float Float Float
     -- Reset zoom to 100% (click on the zoom indicator), keeping the

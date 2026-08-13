@@ -168,14 +168,14 @@ try {
     }
     return false;
   };
-  // New Session is a hover flyout: hover the item, then click a preset.
+  // New Session opens its preset flyout on CLICK: click the item, then
+  // click a preset.
   const newSession = async (preset = 'Simple') => {
     const handles = await page.$$('.global-menu-item');
     for (const h of handles) {
       const t = await h.evaluate(el => el.textContent || '');
       if (t.includes('New Session')) {
-        const box = await h.boundingBox();
-        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await h.click();
         await sleep(200);
         return clickByText('.global-menu-submenu-item', preset);
       }

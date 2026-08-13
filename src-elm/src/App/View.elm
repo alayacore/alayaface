@@ -276,14 +276,11 @@ viewGlobalMenu model =
                         ("global-menu-item"
                             ++ (if model.presetSubmenuOpen then " global-menu-item-hover" else "")
                         )
-                    -- Hover open/close comes from the pointer pipeline
-                    -- (PointerHover, D6): DOM mouseenter/mouseleave would
-                    -- fire for touch taps too, fighting the click-open.
-                    -- Clicking OPENS unconditionally (a tap fires compat
-                    -- mouseenter BEFORE the click, so a toggle would
-                    -- close the menu it just opened). Tapping outside
-                    -- closes it (the .app click handler).
-                    , Ev.onClick (SetPresetSubmenu True)
+                    -- Click toggles the preset flyout (no hover — a
+                    -- mouse over the item must not open it). Tapping
+                    -- outside closes the menu (the .app click handler),
+                    -- which also resets the flyout.
+                    , Ev.onClick (SetPresetSubmenu (not model.presetSubmenuOpen))
                     ]
                     [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "+" ]
                     , Html.text " New Session"

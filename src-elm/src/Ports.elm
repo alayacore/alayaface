@@ -95,7 +95,6 @@ port module Ports exposing
     , onPointerUp
     , onPointerCancel
     , longPressMenuOpened
-    , onPointerHover
     )
 
 import Json.Encode as E
@@ -283,11 +282,3 @@ port onPointerCancel : (E.Value -> msg) -> Sub msg
 -- release click bubbles to .app and closes the menu it just opened.
 -- The 500ms threshold lives only in App/Pointer.longPressMs.
 port longPressMenuOpened : () -> Cmd msg
-
--- Hover state for hover-dependent UI (D6): transport.js forwards
--- pointerover/pointerout CHANGES over hover surfaces as
--- { inItem : Bool, pointerType : String }. Pointer events carry
--- pointerType, so Elm can ignore the compat enter/leave that touch
--- taps synthesize — a tap must never count as hover, and its release
--- must never close a click-opened flyout.
-port onPointerHover : (E.Value -> msg) -> Sub msg

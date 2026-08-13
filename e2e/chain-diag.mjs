@@ -79,8 +79,8 @@ async function clickByText(sel, text) {
 
 // Open the settings gear → New Session
 // (The global menu is opened by RIGHT-CLICKING the canvas — the fixed
-// ⚙ button was removed. New Session is a hover flyout: hover the item,
-// then click a preset.)
+// ⚙ button was removed. New Session opens its preset flyout on CLICK:
+// click the item, then click a preset.)
 await page.waitForSelector('.main-content', { timeout: 15000 });
 await page.$eval('.main-content', el => el.dispatchEvent(
   new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 30, clientY: 30 })));
@@ -92,7 +92,7 @@ const nsBox = await page.evaluate(() => {
   return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
 });
 if (!nsBox) throw new Error('New Session menu item not found');
-await page.mouse.move(nsBox.x, nsBox.y);
+await page.mouse.click(nsBox.x, nsBox.y);
 await new Promise(r => setTimeout(r, 200));
 await clickByText('.global-menu-submenu-item', 'Simple');
 await page.waitForFunction(() => document.querySelectorAll('.session-panel').length > 0, { timeout: 15000 });

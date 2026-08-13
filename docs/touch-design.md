@@ -119,12 +119,10 @@ tap = enter → click → leave), so a hover flyout driven by them opens
 and closes in the same tap — unreachable on touch. The preset submenu
 now:
 
-- opens on `click` (unconditionally — a toggle would fight the
-  compat enter that precedes the click; tapping outside closes it),
-- opens/closes on hover via forwarded `pointerover/pointerout`
-  **changes** (`{ inItem, pointerType }`), and Elm ignores
-  `pointerType !== mouse/pen` — a tap never counts as hover and its
-  release never closes a click-opened flyout.
+- opens/closes on `click` (a toggle — clicking the item again closes
+  it; tapping outside closes the whole menu, which resets the flyout),
+- never opens on hover — a mouse over the item must not reveal the
+  flyout; it only opens from an explicit click (or tap).
 
 ### D7 — coarse-pointer ergonomics
 
@@ -149,7 +147,7 @@ surfaces.
 | left-drag bar/handle | single-finger drag bar/handle |
 | wheel / trackpad pinch → zoom | two-finger pinch → zoom (midpoint) |
 | right-click → global menu | long-press 500 ms → global menu |
-| hover → preset submenu | tap → submenu opens; tap outside closes |
+| click → preset submenu | tap → submenu opens; tap outside closes |
 | title tooltips | visible copy / aria (where critical) |
 
 ## Files
@@ -159,13 +157,13 @@ surfaces.
 - `src-elm/src/App/Types.elm` — `DragKind/DragState/PinchState/
   LongPress`, `toDragKind`, `handleFromString`, model fields, msgs.
 - `src-elm/src/App/Update.elm` — gesture FSM (`Pointer*`,
-  `LongPressFired`, `PointerHover`).
+  `LongPressFired`).
 - `src-elm/src/App/Windows.elm` — `handleResizeMove` from `DragState`.
 - `src-elm/src/App/View.elm` — drag handlers removed; `data-handle`
   attrs; click-open submenu.
 - `src-elm/src/Main.elm`, `src-elm/src/Ports.elm` — pointer ports.
 - `src-elm/transport.js` — the dumb pipe (capture/classify/forward,
-  long-press click swallow, hover forwarding).
+  long-press click swallow).
 - `src-elm/overlay.js` — scrollbar gated on `(hover: hover)`.
 - `src-elm/style.css` — touch-action, overscroll, callout, media
   queries.

@@ -109,8 +109,11 @@ try {
     const r = el.getBoundingClientRect();
     return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
   });
+  // New Session opens its preset flyout on CLICK (not hover): click it.
   await cd.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: itemBox.x, y: itemBox.y });
-  await sleep(400);
+  await cd.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: itemBox.x, y: itemBox.y, button: 'left', clickCount: 1 });
+  await cd.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: itemBox.x, y: itemBox.y, button: 'left', clickCount: 1 });
+  await sleep(300);
   await page.waitForSelector('.global-menu-submenu-item', { timeout: 5000, visible: true });
   const subBox = await page.$eval('.global-menu-submenu-item', el => {
     const r = el.getBoundingClientRect();

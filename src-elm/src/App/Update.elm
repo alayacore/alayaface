@@ -3725,23 +3725,6 @@ update msg model =
         SetPresetSubmenu open ->
             ( { model | presetSubmenuOpen = open }, Cmd.none )
 
-        PointerHover raw ->
-            -- Hover open/close for the New Session preset submenu (D6):
-            -- only hover-capable pointers (mouse/pen) count — touch taps
-            -- synthesize compat mouseenter/leave that must NOT open or
-            -- close the flyout (a tap opens it via click; its release
-            -- must not close it).
-            case ( D.decodeValue (D.field "inItem" D.bool) raw, D.decodeValue (D.field "pointerType" D.string) raw ) of
-                ( Ok inItem, Ok ptype ) ->
-                    if ptype == "mouse" || ptype == "pen" then
-                        ( { model | presetSubmenuOpen = inItem }, Cmd.none )
-
-                    else
-                        ( model, Cmd.none )
-
-                _ ->
-                    ( model, Cmd.none )
-
         SessionDirsResult raw ->
             case D.decodeValue sessionDirsDecoder raw of
                 Ok { ok, dirs, error } ->

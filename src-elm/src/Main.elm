@@ -190,7 +190,6 @@ subscriptions model =
         , Ports.onPointerMove (\raw -> PointerMove raw)
         , Ports.onPointerUp (\raw -> PointerUp raw)
         , Ports.onPointerCancel (\raw -> PointerCancel raw)
-        , Ports.onPointerHover (\raw -> PointerHover raw)
         , Ports.onCanvasWheel (\raw ->
             case D.decodeValue (D.map3 CanvasZoom (D.field "deltaY" D.float) (D.field "clientX" D.float) (D.field "clientY" D.float)) raw of
                 Ok m ->
