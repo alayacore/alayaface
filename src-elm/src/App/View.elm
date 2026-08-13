@@ -113,15 +113,34 @@ view model =
         ]
 
 
+{-| Drag/pan/resize may only start on the PRIMARY (left) button.
+Right/middle mousedowns (context-menu, aux-click) must never enter
+drag mode: a right-press that moves before release — or whose mouseup
+is missed (released outside the window / while the OS menu has focus)
+— would otherwise leave the canvas or a window "grabbed" and pan/drag
+on any subsequent mouse movement with no button held.
+-}
+primaryDragStart : (Float -> Float -> Msg) -> D.Decoder ( Msg, Bool )
+primaryDragStart mk =
+    D.map3
+        (\button x y ->
+            if button == 0 then
+                ( mk x y, True )
+
+            else
+                ( NoOp, False )
+        )
+        (D.field "button" D.int)
+        (D.field "clientX" D.float)
+        (D.field "clientY" D.float)
+
+
 {-| Canvas pan starts on the empty background. Window panels stop
-mousedown propagation, so this decoder only ever sees true background
-clicks.
+mousedown propagation, so this only ever sees true background clicks.
 -}
 canvasDragStartDecoder : D.Decoder ( Msg, Bool )
 canvasDragStartDecoder =
-    D.map2 (\x y -> ( CanvasDragStart x y, True ))
-        (D.field "clientX" D.float)
-        (D.field "clientY" D.float)
+    primaryDragStart CanvasDragStart
 
 
 canvasTransform : Model -> String
@@ -195,13 +214,7 @@ viewSessionPanel model id =
                 , Html.div
                     [ Attr.class "session-bar"
                     , Ev.preventDefaultOn "mousedown"
-                        (D.map2
-                            (\clientX clientY ->
-                                ( WindowDragStart id clientX clientY, True )
-                            )
-                            (D.field "clientX" D.float)
-                            (D.field "clientY" D.float)
-                        )
+                        (primaryDragStart (WindowDragStart id))
                     , Attr.title "Drag to move"
                     ]
                     [ Html.span [ Attr.class "session-bar-title" ]
@@ -661,13 +674,7 @@ viewPlanPanel model planId =
                 , Html.div
                     [ Attr.class "session-bar plan-bar"
                     , Ev.preventDefaultOn "mousedown"
-                        (D.map2
-                            (\clientX clientY ->
-                                ( PlanWindowDragStart planId clientX clientY, True )
-                            )
-                            (D.field "clientX" D.float)
-                            (D.field "clientY" D.float)
-                        )
+                        (primaryDragStart (PlanWindowDragStart planId))
                     , Attr.title "Drag to move"
                     ]
                     [ Html.span [ Attr.class "session-bar-title" ]
@@ -732,13 +739,7 @@ viewPlanResizeHandle planId handle =
     Html.div
         [ Attr.class className
         , Ev.preventDefaultOn "mousedown"
-            (D.map2
-                (\clientX clientY ->
-                    ( PlanResizeStart planId handle clientX clientY, True )
-                )
-                (D.field "clientX" D.float)
-                (D.field "clientY" D.float)
-            )
+            (primaryDragStart (PlanResizeStart planId handle))
         ]
         []
 
@@ -1920,13 +1921,7 @@ viewResizeHandle sid handle =
     Html.div
         [ Attr.class className
         , Ev.preventDefaultOn "mousedown"
-            (D.map2
-                (\clientX clientY ->
-                    ( ResizeStart sid handle clientX clientY, True )
-                )
-                (D.field "clientX" D.float)
-                (D.field "clientY" D.float)
-            )
+            (primaryDragStart (ResizeStart sid handle))
         ]
         []
 
