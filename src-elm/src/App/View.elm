@@ -241,12 +241,8 @@ viewNoSessionPanel model =
     Html.div [ Attr.class "chat-area chat-area-centered no-sessions" ]
         [ Html.div [ Attr.class "hs-container-inline" ]
             [ Html.div [ Attr.class "hs-logo" ] [ Html.text "AlayaFace" ]
-            , Html.div [ Attr.class "hs-tagline" ] [ Html.text "No session open — start a new conversation" ]
-            , Html.button
-                [ Attr.class "no-sessions-cta"
-                , Ev.onClick CreateSession
-                ]
-                [ Html.text "+ New Session" ]
+            , Html.div [ Attr.class "hs-tagline" ]
+                [ Html.text "No session open — right-click the canvas and pick a preset under New Session" ]
             ]
         ]
 
@@ -268,11 +264,34 @@ viewGlobalMenu model =
                 , Ev.stopPropagationOn "click" (D.succeed ( NoOp, True ))
                 ]
                 [ Html.div
-                    [ Attr.class "global-menu-item"
-                    , Ev.onClick CreateSession
+                    [ Attr.class
+                        ("global-menu-item"
+                            ++ (if model.presetSubmenuOpen then " global-menu-item-hover" else "")
+                        )
+                    , Ev.onMouseEnter (SetPresetSubmenu True)
+                    , Ev.onMouseLeave (SetPresetSubmenu False)
                     ]
                     [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "+" ]
                     , Html.text " New Session"
+                    , if model.presetSubmenuOpen then
+                        Html.div [ Attr.class "global-menu-submenu" ]
+                            (if List.isEmpty model.presets then
+                                [ Html.div [ Attr.class "global-menu-submenu-empty" ] [ Html.text "No presets yet." ] ]
+
+                             else
+                                List.map
+                                    (\p ->
+                                        Html.div
+                                            [ Attr.class "global-menu-submenu-item"
+                                            , Ev.onClick (CreateSessionWith p.name)
+                                            ]
+                                            [ Html.text p.name ]
+                                    )
+                                    model.presets
+                            )
+
+                      else
+                        Html.text ""
                     ]
                 , Html.div
                     [ Attr.class "global-menu-item"
@@ -286,14 +305,7 @@ viewGlobalMenu model =
                     , Ev.onClick OpenPresetManager
                     ]
                     [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "◱" ]
-                    , Html.text
-                        ("Presets"
-                            ++ (if model.activePreset /= "" then
-                                    " (" ++ model.activePreset ++ ")"
-                                else
-                                    ""
-                               )
-                        )
+                    , Html.text "Presets"
                     ]
                 , Html.div
                     [ Attr.class "global-menu-item"
@@ -2074,6 +2086,9 @@ viewModelSelectorList sid session =
         , itemTitle = \m -> m.name
         , itemSubtitle = \_ -> ""
         , isActive = \m -> session.activeModelId == Just m.id
+        , confirmOnClick = True
+        , onActivate = Nothing
+        , activateTitle = ""
         , editTitle = \m ->
             if session.activeModelId == Just m.id then
                 "Active model cannot be edited"
@@ -2090,7 +2105,7 @@ viewModelSelectorList sid session =
             else
                 "Delete model"
         , onSelect = \i -> ForSession sid (ModelSelectorSelectItem i)
-        , onConfirm = ForSession sid ModelSelectorConfirmItem
+        , onConfirm = \id -> ForSession sid (ModelSelectorConfirmItem id)
         , noOp = NoOp
         , onInput = \v -> ForSession sid (SetModelSelectorInput v)
         , onEdit = \id -> ForSession sid (ModelSelectorEditModel id)
@@ -2115,7 +2130,16 @@ viewDefaultModelsEditorOverlay model =
                 , dirty = Sel.isDirty ed.state
                 , syncError = ed.state.syncError
                 , listView =
-                    viewDefaultModelsList ed
+                    case ed.error of
+                        Just err ->
+                            Html.div []
+                                [ Html.div [ Attr.class "sel-page-status sel-page-status-error" ]
+                                    [ Html.text ("Failed to set default model: " ++ err) ]
+                                , viewDefaultModelsList ed
+                                ]
+
+                        Nothing ->
+                            viewDefaultModelsList ed
                 , editorView =
                     case ed.state.draft of
                         Just draft ->
@@ -2153,16 +2177,42 @@ viewDefaultModelsList ed =
         , selected = ed.state.selected
         , confirmDeleteId = ed.state.confirmDelete
         , canDelete = List.length ed.state.working > 1
-        , currentLabel = "Preset: "
-        , currentValue = ed.preset
+        , currentLabel = "Preset / default: "
+        , currentValue =
+            let
+                name =
+                    List.filterMap
+                        (\m ->
+                            if ed.activeModelId == Just m.id then
+                                Just m.name
+
+                            else
+                                Nothing
+                        )
+                        ed.state.working
+                        |> List.head
+                        |> Maybe.withDefault "—"
+            in
+            ed.preset ++ " · " ++ name
         , addTitle = "Add model"
         , itemId = \m -> m.id
         , itemTitle = \m -> m.name
         , itemSubtitle = \_ -> ""
-        , isActive = \_ -> False
-        , editTitle = \_ -> "Edit model"
-        , deleteTitle = \_ ->
-            if List.length ed.state.working <= 1 then
+        , isActive = \m -> ed.activeModelId == Just m.id
+        , confirmOnClick = False
+        , onActivate = Just DefaultModelsSetActive
+        , activateTitle = "Make this the preset's default model (new sessions start on it)"
+        , editTitle = \m ->
+            if ed.activeModelId == Just m.id then
+                "Default model cannot be edited"
+
+            else
+                "Edit model"
+        , deleteTitle = \m ->
+            if ed.activeModelId == Just m.id then
+                "Default model cannot be deleted"
+
+            else if List.length ed.state.working <= 1 then
                 "At least one model must remain"
 
             else
@@ -2256,6 +2306,9 @@ viewMcpList ed =
         , itemTitle = \s -> s.server
         , itemSubtitle = subtitle
         , isActive = \_ -> False
+        , confirmOnClick = False
+        , onActivate = Nothing
+        , activateTitle = ""
         , editTitle = \_ -> "Edit server"
         , deleteTitle = \_ ->
             if List.length ed.state.working <= 1 then
@@ -2286,11 +2339,13 @@ viewSettingsEditorOverlay model =
             [ Overlay.Settings.view
                 { toolConfirm = ed.toolConfirm
                 , builtinTools = ed.builtinTools
+                , systemPrompt = ed.systemPrompt
                 , loading = ed.loading
                 , syncing = ed.syncing
                 , error = ed.error
                 , onInput = SetToolConfirm
                 , onBuiltinToolsInput = SetBuiltinTools
+                , onSystemPromptInput = SetSystemPrompt
                 , onSave = SettingsSave
                 , onCancel = CloseSettingsEditor
                 }
@@ -2342,7 +2397,6 @@ viewPresetManagerOverlay model =
                 , confirmDelete = pm.confirmDelete
                 , error = pm.error
                 , onCopy = PresetCopy
-                , onSetActive = PresetSetActive
                 , onRenameStart = PresetRenameStart
                 , onRenameInput = SetPresetRenameInput
                 , onRenameSave = PresetRenameSave

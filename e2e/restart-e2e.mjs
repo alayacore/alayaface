@@ -154,7 +154,21 @@ try {
     }
     return false;
   };
-  assert(await clickByText('.global-menu-item', 'New Session'), 'New Session menu item');
+  // New Session is a hover flyout: hover the item, then click a preset.
+  const newSession = async (preset = 'Simple') => {
+    const handles = await page.$$('.global-menu-item');
+    for (const h of handles) {
+      const t = await h.evaluate(el => el.textContent || '');
+      if (t.includes('New Session')) {
+        const box = await h.boundingBox();
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await sleep(200);
+        return clickByText('.global-menu-submenu-item', preset);
+      }
+    }
+    return false;
+  };
+  assert(await newSession('Simple'), 'New Session → preset submenu');
   await page.waitForSelector('.session-panel');
   await sleep(600);
   // Type into the newest session.

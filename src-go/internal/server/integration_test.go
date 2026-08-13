@@ -135,7 +135,7 @@ func (e *testEnv) rpcErr(t *testing.T, cmd string, args any) string {
 // createSession runs create_session and returns the new session id.
 func (e *testEnv) createSession(t *testing.T) string {
 	t.Helper()
-	body := e.rpcOK(t, "create_session", map[string]any{"binaryPath": "", "configPath": "", "toolConfirm": nil})
+	body := e.rpcOK(t, "create_session", map[string]any{"binaryPath": "", "configPath": "", "toolConfirm": nil, "preset": "Simple"})
 	var id string
 	if err := json.Unmarshal(body, &id); err != nil {
 		t.Fatalf("create_session: bad id body %q: %v", body, err)
@@ -435,13 +435,54 @@ func TestIntegrationListModels(t *testing.T) {
 
 func TestIntegrationListDefaultModels(t *testing.T) {
 	e := newTestEnv(t, "")
-	body := e.rpcOK(t, "list_default_models", map[string]any{"binaryPath": "", "preset": ""})
-	var models []map[string]any
-	if err := json.Unmarshal(body, &models); err != nil {
+	body := e.rpcOK(t, "list_default_models", map[string]any{"binaryPath": "", "preset": "Simple"})
+	var res struct {
+		Models   []map[string]any `json:"models"`
+		ActiveID *int             `json:"active_id"`
+	}
+	if err := json.Unmarshal(body, &res); err != nil {
 		t.Fatalf("list_default_models: %s", body)
 	}
-	if len(models) != 2 || models[0]["name"] != "fake-model-1" {
+	if len(res.Models) != 2 || res.Models[0]["name"] != "fake-model-1" {
 		t.Fatalf("list_default_models = %s", body)
+	}
+	// No runtime.conf yet → no default model (active_id null).
+	if res.ActiveID != nil {
+		t.Fatalf("active_id = %v, want null without runtime.conf", *res.ActiveID)
+	}
+}
+
+// ─── set_default_model: probe model_set persists the default ────────
+
+func TestIntegrationSetDefaultModel(t *testing.T) {
+	e := newTestEnv(t, "")
+	// Unknown preset is rejected.
+	if msg := e.rpcErr(t, "set_default_model", map[string]any{"preset": "nope", "modelId": 0}); msg == "" {
+		t.Fatal("expected error for unknown preset")
+	}
+	// fakecore answers model_set with CO ok echoing the id AND writes
+	// runtime.conf (active_model: fake-model-<id>) into the preset dir —
+	// mirroring real alayacore, so the preset's default model persists.
+	body := e.rpcOK(t, "set_default_model", map[string]any{"preset": "Simple", "modelId": 1})
+	var out map[string]any
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("set_default_model: %s", body)
+	}
+	if out["modelId"] != "1" {
+		t.Fatalf("set_default_model output = %s, want echoed id", body)
+	}
+
+	// The default now shows up in list_default_models as active_id.
+	body = e.rpcOK(t, "list_default_models", map[string]any{"binaryPath": "", "preset": "Simple"})
+	var res struct {
+		Models   []map[string]any `json:"models"`
+		ActiveID *int             `json:"active_id"`
+	}
+	if err := json.Unmarshal(body, &res); err != nil {
+		t.Fatalf("list_default_models: %s", body)
+	}
+	if res.ActiveID == nil || *res.ActiveID != 1 {
+		t.Fatalf("active_id = %v, want 1 (fake-model-1), models=%s", res.ActiveID, body)
 	}
 }
 
@@ -452,7 +493,7 @@ func TestIntegrationSyncDefaultModels(t *testing.T) {
 
 	// Success: CO is_error=false → handler returns CO output.
 	body := e.rpcOK(t, "sync_default_models", map[string]any{
-		"binaryPath": "", "preset": "", "config": `{"name":"new-model"}`,
+		"binaryPath": "", "preset": "Simple", "config": `{"name":"new-model"}`,
 	})
 	var out map[string]any
 	if err := json.Unmarshal(body, &out); err != nil {
@@ -464,7 +505,7 @@ func TestIntegrationSyncDefaultModels(t *testing.T) {
 
 	// Error: CO is_error=true → handler surfaces {"error": message}.
 	if msg := e.rpcErr(t, "sync_default_models", map[string]any{
-		"binaryPath": "", "preset": "", "config": `{"invalid":true}`,
+		"binaryPath": "", "preset": "Simple", "config": `{"invalid":true}`,
 	}); msg != "invalid config" {
 		t.Errorf("sync_default_models error = %q, want 'invalid config'", msg)
 	}
@@ -561,6 +602,7 @@ func TestIntegrationResumeKeepsSpawnArgs(t *testing.T) {
 		"binaryPath":   "",
 		"configPath":   "",
 		"toolConfirm":  "allow",
+		"preset": "Simple",
 		"builtinTools": "", // explicitly NO builtin tools (Plan Session)
 		"systemPrompt": "planner-hint",
 		"workDir":      workDir,
@@ -670,7 +712,7 @@ func TestIntegrationCloseAllSessionsScopedByClient(t *testing.T) {
 	createFor := func(client string) string {
 		t.Helper()
 		body := e.rpcOK(t, "create_session", map[string]any{
-			"binaryPath": "", "configPath": "", "toolConfirm": nil, "clientId": client,
+			"binaryPath": "", "configPath": "", "toolConfirm": nil, "clientId": client, "preset": "Simple",
 		})
 		var id string
 		if err := json.Unmarshal(body, &id); err != nil {
@@ -800,7 +842,7 @@ func TestIntegrationSessionWorkDir(t *testing.T) {
 	// create_session with workDir: the backend must create it and spawn
 	// the child with it as cwd (fakecore reports cwd in the boot SM).
 	sid := e.rpcOK(t, "create_session", map[string]any{
-		"binaryPath": "", "configPath": "", "toolConfirm": nil, "workDir": workDir,
+		"binaryPath": "", "configPath": "", "toolConfirm": nil, "preset": "Simple", "workDir": workDir,
 	})
 	var id string
 	if err := json.Unmarshal(sid, &id); err != nil {
@@ -893,7 +935,7 @@ func TestIntegrationNestedPlanSessionDir(t *testing.T) {
 	workDir := filepath.Join(sessionsRoot, originSid, "plans", "demo 1", "work")
 	body := e.rpcOK(t, "create_session", map[string]any{
 		"binaryPath": "", "configPath": "", "toolConfirm": nil,
-		"workDir": workDir, "planId": "demo 1", "nodeId": "t1/x", "originSessionId": filepath.Join(sessionsRoot, originSid),
+		"preset": "Simple", "workDir": workDir, "planId": "demo 1", "nodeId": "t1/x", "originSessionId": filepath.Join(sessionsRoot, originSid),
 	})
 	var sid string
 	if err := json.Unmarshal(body, &sid); err != nil {

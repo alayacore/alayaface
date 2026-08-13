@@ -2,17 +2,17 @@
 //!
 //! Manages `~/.alayaface/` structure:
 //!   ~/.alayaface/
-//!     active-preset        — name of the currently active preset
+//!     global.conf          — cross-preset global config overlay (recursion_limit etc.)
 //!     presets/
 //!       <name>/            — one config directory per preset
 //!         model.conf       (auto-created by alayacore when missing)
 //!         runtime.conf     (auto-managed by alayacore)
 //!         mcp.conf         (optional; copied when present)
-//!         settings.conf    — AlayaFace-owned (tool_confirm etc.); NOT copied into sessions
+//!         settings.conf    — AlayaFace-owned (tool_confirm, builtin_tools, system_prompt); NOT copied into sessions
 //!         themes/          (auto-created by alayacore when missing)
 //!     sessions/
 //!       <uuid>/            — PLAIN sessions only (top level is never a plan child)
-//!         config/          — copy of the active preset's config (minus settings.conf)
+//!         config/          — copy of the creating preset's config (minus settings.conf)
 //!         session.alaya    (created by alayacore)
 //!         plans/           — plans created by this session (0..N)
 //!           <planId>/      — one subtree per plan (sanitized id)
@@ -20,6 +20,11 @@
 //!             work/        — per-plan working directory
 //!             <nodeId>/    — one subtree per plan node (sanitized id)
 //!               <uuid>/    — the node's session dir (config/ + session.alaya)
+//!
+//! There is no "active preset": every session is created under an
+//! explicitly chosen preset (the frontend always passes one), and each
+//! preset carries its own settings.conf including the system_prompt
+//! used as --system.
 
 use std::path::PathBuf;
 
@@ -36,11 +41,6 @@ pub fn presets_root() -> PathBuf {
     alayaface_dir().join("presets")
 }
 
-/// File recording the active preset name (~/.alayaface/active-preset).
-pub fn active_preset_file() -> PathBuf {
-    alayaface_dir().join("active-preset")
-}
-
 /// A preset name is a short, filesystem-safe identifier.
 pub fn valid_preset_name(name: &str) -> bool {
     !name.is_empty()
@@ -53,52 +53,14 @@ pub fn preset_dir(name: &str) -> PathBuf {
     presets_root().join(name)
 }
 
-/// Read the active preset name. Errors if the marker is missing/invalid.
-pub fn read_active_preset() -> Result<String, String> {
-    let path = active_preset_file();
-    let text = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read active preset: {e}"))?;
-    let name = text.trim().to_string();
-    if !valid_preset_name(&name) {
-        return Err(format!("Invalid active preset name: {name:?}"));
-    }
-    Ok(name)
-}
-
-/// Persist the active preset name (atomic: temp file + rename).
-/// The temp name is unique per call (pid + nanosecond timestamp) so
-/// concurrent writers (e.g. init seeding racing create_session's ensure)
-/// never clobber each other's temp file before its rename.
-pub fn write_active_preset(name: &str) -> Result<(), String> {
-    if !valid_preset_name(name) {
-        return Err(format!("Invalid preset name: {name:?}"));
-    }
-    let path = active_preset_file();
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let tmp = alayaface_dir().join(format!("active-preset-{}-{}.tmp", std::process::id(), nanos));
-    std::fs::write(&tmp, name)
-        .map_err(|e| format!("Failed to write active preset: {e}"))?;
-    std::fs::rename(&tmp, &path)
-        .map_err(|e| format!("Failed to replace active preset: {e}"))?;
-    Ok(())
-}
-
-/// Config directory of the active preset.
-pub fn active_config_dir() -> Result<PathBuf, String> {
-    Ok(preset_dir(&read_active_preset()?))
-}
-
-/// Resolve the config dir for a preset name. Empty/whitespace means the
-/// active preset. Errors for unknown presets or invalid names.
+/// Resolve the config dir for a preset name. The preset is REQUIRED —
+/// there is no active-preset fallback. Errors for empty/invalid names
+/// or unknown presets.
 pub fn resolve_config_dir(preset: &str) -> Result<PathBuf, String> {
-    if preset.trim().is_empty() {
-        let (config_dir, _) = ensure()?;
-        return Ok(config_dir);
-    }
     let name = preset.trim().to_string();
+    if name.is_empty() {
+        return Err("Preset is required".to_string());
+    }
     if !valid_preset_name(&name) {
         return Err(format!("Invalid preset name: {name:?}"));
     }
@@ -133,10 +95,12 @@ pub fn list_preset_names() -> Result<Vec<String>, String> {
 }
 
 /// Ensure `~/.alayaface/` exists with the preset structure.
-/// On first run, seeds the built-in presets (Default/Fast/Deep/Data/Safe)
-/// and marks Default active.
-/// Returns `(active_config_dir, sessions_dir)`.
-pub fn ensure() -> Result<(PathBuf, PathBuf), String> {
+/// On FIRST RUN (empty presets root), seeds the built-in presets
+/// (Simple/Complex) with their settings.conf (tool_confirm/builtin_tools/
+/// system_prompt). Once seeded, the seeds are regular presets: deleting
+/// one must not resurrect it, so seeding never runs again on a non-empty
+/// root. Returns the sessions dir.
+pub fn ensure() -> Result<PathBuf, String> {
     let base = alayaface_dir();
     let presets = presets_root();
     let sessions = base.join("sessions");
@@ -146,37 +110,42 @@ pub fn ensure() -> Result<(PathBuf, PathBuf), String> {
     std::fs::create_dir_all(&sessions)
         .map_err(|e| format!("Cannot create {:?}: {}", sessions, e))?;
 
-    // Seed built-in presets on first run (idempotent per preset).
-    for name in SEED_PRESETS {
-        let dir = presets.join(name);
-        if !dir.exists() {
+    // Seed built-in presets on first run only (a non-empty root means
+    // the user has already managed presets — deleting a seed must not
+    // resurrect it).
+    let entries: Vec<_> = std::fs::read_dir(&presets)
+        .map_err(|e| format!("Cannot read {:?}: {}", presets, e))?
+        .collect();
+    if entries.is_empty() {
+        for name in SEED_PRESETS {
+            let dir = presets.join(name);
             create_preset_defaults(&dir, name)?;
         }
     }
 
-    if !active_preset_file().exists() {
-        write_active_preset("Default")?;
-    }
-
-    let active = read_active_preset()?;
-    let config = preset_dir(&active);
-    Ok((config, sessions))
+    Ok(sessions)
 }
 
-/// Built-in presets seeded on first run. Each is a config template
-/// (model/mcp placeholders); users fill keys and can copy/rename.
-pub const SEED_PRESETS: [&str; 5] = ["Default", "Fast", "Deep", "Data", "Safe"];
+/// Built-in presets seeded on first run:
+///   - Simple  — light everyday chat and one-sentence subtasks
+///   - Complex — heavy reasoning / multi-step / research subtasks
+///
+/// Each is a config template (model/mcp placeholders); users fill keys,
+/// tune settings.conf and can copy them. The plan contract in the seeded
+/// system_prompt names these presets, so they cannot be renamed (see
+/// `is_seed_preset`).
+pub const SEED_PRESETS: [&str; 2] = ["Simple", "Complex"];
 
-/// Create a session directory with a copy of the active preset's config.
-/// The session.alaya file itself is created by alayacore when the session starts.
-/// settings.conf is AlayaFace-owned and intentionally NOT copied into sessions.
-pub fn create_session_dir(sessions_dir: &PathBuf, uuid: &str) -> Result<PathBuf, String> {
-    create_session_dir_from(sessions_dir, uuid, "")
+/// Whether a preset is one of the built-in seeds. Seed presets are
+/// referenced by name in the seeded system_prompt, so renaming them is
+/// rejected (rename_preset).
+pub fn is_seed_preset(name: &str) -> bool {
+    SEED_PRESETS.contains(&name)
 }
 
-/// Create a session directory from a specific preset's config
-/// (`preset` empty = active preset). Used by Plan Mode so different DAG
-/// nodes can run under different presets. settings.conf is excluded.
+/// Create a session directory from a specific preset's config (preset
+/// REQUIRED). Used by Plan Mode so different DAG nodes can run under
+/// different presets. settings.conf is excluded.
 pub fn create_session_dir_from(
     sessions_dir: &PathBuf,
     uuid: &str,
@@ -229,20 +198,23 @@ pub fn create_session_dir_nested(
 }
 
 /// Shared body: copy the preset's config into parent/<uuid>/config.
+/// The preset is REQUIRED — there is no active-preset fallback.
 fn create_session_dir_in(parent: &std::path::Path, uuid: &str, preset: &str) -> Result<PathBuf, String> {
-    ensure()?; // guarantee presets exist + active marker set
+    ensure()?; // guarantee presets exist (seeded on first run)
+    let name = preset.trim().to_string();
+    if name.is_empty() {
+        return Err("Preset is required".to_string());
+    }
+    if !valid_preset_name(&name) {
+        return Err(format!("Invalid preset name: {name:?}"));
+    }
+    let template = preset_dir(&name);
+    if !template.exists() {
+        return Err(format!("Preset not found: {name}"));
+    }
+
     let session_dir = parent.join(uuid);
     let dst_config = session_dir.join("config");
-    let template = if preset.is_empty() {
-        active_config_dir()?
-    } else {
-        let dir = preset_dir(preset);
-        if !dir.exists() {
-            return Err(format!("Preset not found: {preset}"));
-        }
-        dir
-    };
-
     copy_dir_excluding(&template, &dst_config, &["settings.conf"])?;
 
     Ok(session_dir)
@@ -251,31 +223,76 @@ fn create_session_dir_in(parent: &std::path::Path, uuid: &str, preset: &str) -> 
 // ─── Internal Helpers ────────────────────────────────────────────────
 
 /// Recursively copy a whole preset directory (including settings.conf) —
-/// used when cloning the active preset to create a new one.
+/// used when cloning a preset to create a new one.
 pub fn clone_preset_dir(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String> {
     copy_dir(src, dst)
 }
 
-/// Seed a new preset's config with built-in defaults. `name` selects the
-/// template: the Safe preset disables execute_command via settings.conf.
+/// The plan-mode contract shared by every seed preset: when to output a
+/// plan, the exact JSON schema, per-task preset choice and stopping
+/// rules. Keep in sync with src-go/internal/dirs/dirs.go planContract.
+pub const PLAN_CONTRACT: &str = r#"
+You can use AlayaFace's plan mode: for complex or multi-step tasks, first output a plan so its subtasks run in parallel / by dependency, instead of doing everything yourself in one go.
+
+When to output a plan:
+- The task needs multiple steps, research/search across several areas, or a summarized report -> output a plan;
+- A simple task (doable in one sentence) -> just do it directly, do not output a plan.
+
+Plan format (output exactly one ```json code block, then stop and wait for the plan to finish executing):
+{
+  "type": "alayaface-plan",
+  "schema_version": 1,
+  "name": "plan name",
+  "goal": "goal description",
+  "concurrency": 8,
+  "default_max_attempts": 3,
+  "tasks": [
+    { "id": "t1", "title": "subtask title", "prompt": "complete, self-contained instruction", "depends_on": [], "preset": "Simple", "max_attempts": 3 }
+  ]
+}
+Rules:
+- The top level MUST include "type": "alayaface-plan" (without it the framework will not recognize the plan)
+- Field names must be spelled exactly as in the schema above (depends_on, concurrency, max_attempts, ...) — a misspelled or extra field makes the whole plan be rejected; do not invent fields
+- ids are globally unique; prompts are self-contained by default; if a downstream task needs an upstream task's output, reference it in the prompt with {{t1.output}} (the framework replaces it with that upstream task's final output once it completes; you may only reference tasks already declared as dependencies — never reference tasks outside the dependency graph)
+- Tasks that can run in parallel must not depend on each other
+- Set "preset" on EVERY task: "Simple" for light, one-sentence subtasks; "Complex" for heavy reasoning, multi-step or research subtasks. Both presets have models configured
+- For risky tasks involving commands, restrict the tool set with the tools field (e.g. read-only tools)
+- Even if a task needs no decomposition (doable in one sentence), still output a plan (a single task is fine) — that is your output format
+- After outputting the plan: stop, wait for the plan to finish and its result to come back, then continue your answer based on the result"#;
+
+/// The seeded --system text for a preset. Both seeds carry the full
+/// plan-mode contract (any session may be asked to create a plan); the
+/// difference is the role framing. Keep in sync with
+/// src-go/internal/dirs/dirs.go seedSystemPrompt.
+pub fn seed_system_prompt(name: &str) -> String {
+    let role = if name == "Complex" {
+        "You are the Complex preset of AlayaFace: you handle heavy reasoning, multi-step and research-heavy tasks. Prefer decomposing them into a plan.\n"
+    } else {
+        "You are the Simple preset of AlayaFace: handle everyday chat and light tasks directly, in one go, without planning.\n"
+    };
+    format!("{role}{PLAN_CONTRACT}")
+}
+
+/// Seed a new preset's config with built-in defaults. Both seed presets
+/// carry a settings.conf with their system_prompt (see seed_system_prompt).
 ///
 /// Presets are seeded as EMPTY shells: model.conf, runtime.conf and
 /// themes/ are auto-created by alayacore on first use (verified against
 /// the real binary — an empty config dir starts clean and alayacore
 /// writes a working local-Ollama default model). Only AlayaFace-owned
-/// settings.conf is written here, and only where it is meaningful.
+/// settings.conf is written here.
 pub fn create_preset_defaults(dir: &std::path::Path, name: &str) -> Result<(), String> {
     std::fs::create_dir_all(dir)
         .map_err(|e| format!("Cannot create {:?}: {}", dir, e))?;
-    if name == "Safe" {
-        // No execute_command: read/write/edit/search only.
-        std::fs::write(
-            dir.join("settings.conf"),
-            "{\n  \"tool_confirm\": \"\",\n  \"builtin_tools\": \"read_file,write_file,edit_file,search_content\"\n}\n",
-        )
-        .map_err(|e| format!("Cannot write settings.conf: {e}"))?;
-    }
-    Ok(())
+    let settings = serde_json::json!({
+        "tool_confirm": "",
+        "builtin_tools": "",
+        "system_prompt": seed_system_prompt(name),
+    });
+    let text = serde_json::to_string_pretty(&settings)
+        .map_err(|e| format!("Cannot build settings.conf: {e}"))?;
+    std::fs::write(dir.join("settings.conf"), text)
+        .map_err(|e| format!("Cannot write settings.conf: {e}"))
 }
 
 /// Recursively copy a directory, skipping any files whose names are in `exclude`.
@@ -331,10 +348,14 @@ pub struct SpawnArgs {
     /// None = don't pass --builtin-tools (all tools); Some("") = NO
     /// builtin tools (Plan Sessions); Some("a,b") = those tools only.
     pub builtin_tools: Option<String>,
-    /// --system text (planner hint / delegation).
+    /// --system text (the preset's system_prompt, or a recursion guard
+    /// over the plan depth limit).
     pub system_prompt: String,
     /// Child working directory (per-plan isolation).
     pub work_dir: String,
+    /// The preset this session was created under; forks of plain
+    /// sessions inherit it so they stay in the same preset.
+    pub preset: String,
 }
 
 impl SpawnArgs {
@@ -433,39 +454,52 @@ mod tests {
     #[test]
     fn ensure_seeds_defaults() {
         isolated_home(|| {
-            let (config, _) = ensure().unwrap();
+            let sessions = ensure().unwrap();
             // Presets are EMPTY shells: alayacore auto-creates
             // model.conf/runtime.conf/themes on first use. Seeding an
             // empty model.conf even produced "API key is required"
             // noise (fake Placeholder model), and a "{}" runtime.conf
             // made alayacore emit a parse error on every startup.
-            assert!(!config.join("model.conf").exists(), "model.conf must not be pre-seeded");
-            assert!(!config.join("runtime.conf").exists(), "runtime.conf must not be pre-seeded");
-            assert_eq!(read_active_preset().unwrap(), "Default");
-
-            // All seed presets exist; Safe disables execute_command.
+            assert!(!sessions.join("config").exists(), "sessions dir is not a config dir");
             for name in SEED_PRESETS {
-                assert!(preset_dir(name).is_dir(), "missing seed preset {name}");
+                let dir = preset_dir(name);
+                assert!(dir.is_dir(), "missing seed preset {name}");
+                assert!(!dir.join("model.conf").exists(), "{name}: model.conf must not be pre-seeded");
+                assert!(!dir.join("runtime.conf").exists(), "{name}: runtime.conf must not be pre-seeded");
+                // Both seed presets carry AlayaFace-owned settings.conf
+                // with the plan-mode system_prompt.
+                let settings = std::fs::read_to_string(dir.join("settings.conf")).unwrap();
+                assert!(settings.contains("system_prompt"), "{name}: settings.conf lacks system_prompt");
+                assert!(settings.contains("alayaface-plan"), "{name}: system_prompt lacks the plan contract");
+                assert!(settings.contains("Simple") && settings.contains("Complex"),
+                    "{name}: system_prompt must name both presets");
             }
-            let safe_settings =
-                std::fs::read_to_string(preset_dir("Safe").join("settings.conf")).unwrap();
-            assert!(safe_settings.contains("read_file,write_file,edit_file,search_content"));
-            assert!(!safe_settings.contains("execute_command"));
-            // Non-Safe presets carry no settings.conf (defaults apply).
-            assert!(!preset_dir("Default").join("settings.conf").exists());
+            // No active-preset marker anymore.
+            assert!(!alayaface_dir().join("active-preset").exists());
+        });
+    }
+
+    #[test]
+    fn resolve_config_dir_requires_preset() {
+        isolated_home(|| {
+            ensure().unwrap();
+            assert!(resolve_config_dir("").is_err(), "empty preset must be rejected");
+            assert!(resolve_config_dir("nope").is_err(), "unknown preset must be rejected");
+            assert_eq!(resolve_config_dir("Simple").unwrap(), preset_dir("Simple"));
         });
     }
 
     #[test]
     fn session_dir_copy_excludes_settings_conf() {
         isolated_home(|| {
-            let (config, sessions) = ensure().unwrap();
+            let sessions = ensure().unwrap();
+            let config = preset_dir("Simple");
             // Copying an EXISTING preset is the meaningful path: files in
             // the source are copied, settings.conf (AlayaFace-owned) is not.
             std::fs::write(config.join("model.conf"), "name: \"Real\"\n").unwrap();
             std::fs::write(config.join("settings.conf"), "{\"tool_confirm\":\"x\"}").unwrap();
 
-            let session_dir = create_session_dir(&sessions, "abc").unwrap();
+            let session_dir = create_session_dir_from(&sessions, "abc", "Simple").unwrap();
             assert_eq!(
                 std::fs::read_to_string(session_dir.join("config").join("model.conf")).unwrap(),
                 "name: \"Real\"\n"
@@ -477,19 +511,21 @@ mod tests {
     #[test]
     fn create_session_dir_from_specific_preset() {
         isolated_home(|| {
-            let (_, sessions) = ensure().unwrap();
-            // Safe's settings.conf must not leak into the session config,
-            // while its real files (e.g. a configured model.conf) are copied.
-            std::fs::write(preset_dir("Safe").join("model.conf"), "name: \"SafeModel\"\n").unwrap();
-            let dir = create_session_dir_from(&sessions, "xyz", "Safe").unwrap();
+            let sessions = ensure().unwrap();
+            // The preset's settings.conf must not leak into the session
+            // config, while its real files (e.g. a configured model.conf)
+            // are copied.
+            std::fs::write(preset_dir("Simple").join("model.conf"), "name: \"SimpleModel\"\n").unwrap();
+            let dir = create_session_dir_from(&sessions, "xyz", "Simple").unwrap();
             assert_eq!(
                 std::fs::read_to_string(dir.join("config").join("model.conf")).unwrap(),
-                "name: \"SafeModel\"\n"
+                "name: \"SimpleModel\"\n"
             );
             assert!(!dir.join("config").join("settings.conf").exists());
 
-            // Unknown preset is rejected.
+            // Unknown or empty preset is rejected.
             assert!(create_session_dir_from(&sessions, "q", "nope").is_err());
+            assert!(create_session_dir_from(&sessions, "q", "").is_err());
         });
     }
 
@@ -508,10 +544,10 @@ mod tests {
     #[test]
     fn create_session_dir_nested_keeps_plan_children_out_of_top_level() {
         isolated_home(|| {
-            let (config, sessions) = ensure().unwrap();
-            std::fs::write(config.join("model.conf"), "name: \"Real\"\n").unwrap();
+            let sessions = ensure().unwrap();
+            std::fs::write(preset_dir("Simple").join("model.conf"), "name: \"Real\"\n").unwrap();
 
-            let dir = create_session_dir_nested(&sessions, &sessions.join("sess-1").to_string_lossy(), "demo plan/x", "t1", "uuid-1", "").unwrap();
+            let dir = create_session_dir_nested(&sessions, &sessions.join("sess-1").to_string_lossy(), "demo plan/x", "t1", "uuid-1", "Simple").unwrap();
             let want = sessions.join("sess-1").join("plans").join("demo_plan_x").join("t1").join("uuid-1");
             assert_eq!(dir, want);
             assert!(dir.join("config").join("model.conf").exists());
@@ -533,18 +569,20 @@ mod tests {
             std::fs::create_dir_all(&dir).unwrap();
 
             // Full envelope: no-tools restriction + runner tool-confirm +
-            // planner prompt + work dir.
+            // preset system prompt + work dir + preset name.
             let full = SpawnArgs {
                 tool_confirm: "allow".into(),
                 builtin_tools: Some(String::new()),
                 system_prompt: "planner-hint".into(),
                 work_dir: "/tmp/plan-work".into(),
+                preset: "Complex".into(),
             };
             write_spawn_args(&dir, &full).unwrap();
             let got = read_spawn_args(&dir);
             assert_eq!(got.tool_confirm, "allow");
             assert_eq!(got.system_prompt, "planner-hint");
             assert_eq!(got.work_dir, "/tmp/plan-work");
+            assert_eq!(got.preset, "Complex");
             assert_eq!(got.builtin_tools, Some(String::new()), "explicit empty = NO tools");
 
             // Nil builtin_tools (don't pass the flag = all tools).
@@ -586,6 +624,7 @@ mod tests {
             builtin_tools: Option<String>,
             system_prompt: String,
             work_dir: String,
+            preset: String,
         }
 
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -599,6 +638,7 @@ mod tests {
                 builtin_tools: c.input.builtin_tools,
                 system_prompt: c.input.system_prompt,
                 work_dir: c.input.work_dir,
+                preset: c.input.preset,
             };
             let got = serde_json::to_string_pretty(&args).unwrap();
             assert_eq!(got, c.expected, "SpawnArgs case {}", c.name);

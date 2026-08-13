@@ -20,6 +20,7 @@ import (
 type SessionDirInfo struct {
 	ID        string `json:"id"`
 	CreatedAt string `json:"created_at"`
+	Preset    string `json:"preset"`
 }
 
 // CreateSession spawns a new alayacore session.
@@ -41,7 +42,7 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 
-	_, sessionsDir, err := dirs.Ensure()
+	sessionsDir, err := dirs.Ensure()
 	if err != nil {
 		return err
 	}
@@ -50,6 +51,11 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	presetName := ""
 	if args.Preset != nil {
 		presetName = *args.Preset
+	}
+	// The preset is REQUIRED (there is no active preset): resolve it now
+	// so a missing/unknown preset fails before any directory is created.
+	if _, err := dirs.ResolveConfigDir(presetName); err != nil {
+		return err
 	}
 	// Plan node sessions live NESTED under
 	// sessions/<originSessionId>/plans/<planId>/<nodeId>/ — every plan
@@ -84,7 +90,7 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	if args.ToolConfirm != nil && strings.TrimSpace(*args.ToolConfirm) != "" {
 		tc = *args.ToolConfirm
 	} else {
-		if eff, err := effectiveToolConfirm(); err != nil {
+		if eff, err := effectiveToolConfirm(presetName); err != nil {
 			log.Printf("[settings] tool-confirm unavailable, spawning without it: %v", err)
 		} else {
 			tc = eff
@@ -93,23 +99,33 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	// Builtin tools: an EXPLICIT override wins — including an explicit
 	// empty string, which means NO builtin tools (alayacore treats
 	// `--builtin-tools=` as an empty list; Plan Sessions use this so the
-	// planner physically cannot execute tools). Unspecified = the active
-	// preset's builtin_tools; an empty effective value means don't pass
-	// the flag = all tools.
+	// planner physically cannot execute tools). Unspecified = the
+	// session's preset's builtin_tools; an empty effective value means
+	// don't pass the flag = all tools.
 	var bt *string
 	if args.BuiltinTools != nil {
 		v := *args.BuiltinTools
 		bt = &v
 	} else {
-		if eff, err := effectiveBuiltinTools(); err != nil {
+		if eff, err := effectiveBuiltinTools(presetName); err != nil {
 			log.Printf("[settings] builtin-tools unavailable, spawning without it: %v", err)
 		} else if eff != "" {
 			bt = &eff
 		}
 	}
+	// System prompt: an explicit non-empty override wins (the frontend
+	// sends only the recursion guard over the plan depth limit);
+	// otherwise the session's preset's system_prompt (settings.conf) is
+	// used as --system.
 	sp := ""
-	if args.SystemPrompt != nil {
+	if args.SystemPrompt != nil && strings.TrimSpace(*args.SystemPrompt) != "" {
 		sp = *args.SystemPrompt
+	} else {
+		if eff, err := effectiveSystemPrompt(presetName); err != nil {
+			log.Printf("[settings] system-prompt unavailable, spawning without it: %v", err)
+		} else {
+			sp = eff
+		}
 	}
 	// Optional per-plan working directory (Plan Mode node sessions):
 	// created if needed, and the child is spawned with it as cwd.
@@ -143,14 +159,16 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 
 	// Persist the effective spawn args so resume_session can re-apply
 	// them: a resumed session must keep its capability envelope
-	// (builtin-tools restriction, tool-confirm policy, planner prompt,
-	// work dir) — otherwise e.g. a Plan Session with NO tools would
-	// come back with ALL tools after a restart.
+	// (builtin-tools restriction, tool-confirm policy, preset system
+	// prompt, work dir) — otherwise e.g. a Plan Session with NO tools
+	// would come back with ALL tools after a restart. The preset name is
+	// recorded too so plain forks of this session can inherit it.
 	if err := dirs.WriteSpawnArgs(sessionDir, dirs.SpawnArgs{
 		ToolConfirm:  tc,
 		BuiltinTools: bt,
 		SystemPrompt: sp,
 		WorkDir:      wd,
+		Preset:       presetName,
 	}); err != nil {
 		log.Printf("[session] warning: cannot persist spawn args for %s: %v", sessionDir, err)
 	}
@@ -368,6 +386,7 @@ func ListSessionDirs(h *Handler, w http.ResponseWriter, r *http.Request) error {
 			info: SessionDirInfo{
 				ID:        e.Name(),
 				CreatedAt: fmt.Sprintf("%d", created.Unix()),
+				Preset:    dirs.ReadSpawnArgs(path).Preset,
 			},
 			mod: mod,
 		})
@@ -442,7 +461,7 @@ func ForkSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 
-	_, sessionsDir, err := dirs.Ensure()
+	sessionsDir, err := dirs.Ensure()
 	if err != nil {
 		return err
 	}
@@ -451,6 +470,29 @@ func ForkSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	if args.Preset != nil {
 		presetName = *args.Preset
 	}
+
+	src, err := h.Sessions.Get(args.SourceSessionID)
+	if err != nil {
+		return err
+	}
+	// A plain fork (no explicit preset) is a work copy of the source
+	// session: it inherits the source's preset (recorded in its
+	// session.spawn.json) and its spawn envelope. Node forks carry an
+	// explicit preset from the DAG node.
+	srcArgs := dirs.ReadSpawnArgs(src.SessionDir)
+	isPlainFork := presetName == ""
+	if isPlainFork {
+		presetName = srcArgs.Preset
+		if presetName == "" {
+			return fmt.Errorf("Preset is required: the source session has no recorded preset")
+		}
+	}
+	// Resolve the preset now so a missing/unknown preset fails before
+	// any directory is created.
+	if _, err := dirs.ResolveConfigDir(presetName); err != nil {
+		return err
+	}
+
 	var newSessionDir string
 	if args.PlanID != nil && strings.TrimSpace(*args.PlanID) != "" {
 		originID := ""
@@ -473,10 +515,6 @@ func ForkSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 
 	log.Printf("Forking %s up to history %s → %s", args.SourceSessionID, args.HistoryID, targetFile)
 
-	src, err := h.Sessions.Get(args.SourceSessionID)
-	if err != nil {
-		return err
-	}
 	input := fmt.Sprintf("%s %s", args.HistoryID, targetFile)
 	if _, err := src.SendCmd("fork", input); err != nil {
 		return err
@@ -488,12 +526,17 @@ func ForkSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	}
 
 	// Mirror create_session's optional overrides so the fork keeps the
-	// node session's tool/preset/system-prompt behavior.
+	// node session's tool/preset/system-prompt behavior. An explicit
+	// override wins; plain forks inherit the source session's spawn
+	// envelope (it is a work copy); node forks resolve the node's
+	// preset settings like create_session.
 	tc := ""
 	if args.ToolConfirm != nil && strings.TrimSpace(*args.ToolConfirm) != "" {
 		tc = *args.ToolConfirm
+	} else if isPlainFork {
+		tc = srcArgs.ToolConfirm
 	} else {
-		if eff, err := effectiveToolConfirm(); err != nil {
+		if eff, err := effectiveToolConfirm(presetName); err != nil {
 			log.Printf("[settings] tool-confirm unavailable, spawning without it: %v", err)
 		} else {
 			tc = eff
@@ -503,16 +546,26 @@ func ForkSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	if args.BuiltinTools != nil {
 		v := *args.BuiltinTools
 		bt = &v
+	} else if isPlainFork {
+		bt = srcArgs.BuiltinTools
 	} else {
-		if eff, err := effectiveBuiltinTools(); err != nil {
+		if eff, err := effectiveBuiltinTools(presetName); err != nil {
 			log.Printf("[settings] builtin-tools unavailable, spawning without it: %v", err)
 		} else if eff != "" {
 			bt = &eff
 		}
 	}
 	sp := ""
-	if args.SystemPrompt != nil {
+	if args.SystemPrompt != nil && strings.TrimSpace(*args.SystemPrompt) != "" {
 		sp = *args.SystemPrompt
+	} else if isPlainFork {
+		sp = srcArgs.SystemPrompt
+	} else {
+		if eff, err := effectiveSystemPrompt(presetName); err != nil {
+			log.Printf("[settings] system-prompt unavailable, spawning without it: %v", err)
+		} else {
+			sp = eff
+		}
 	}
 	wd := ""
 	if args.WorkDir != nil && strings.TrimSpace(*args.WorkDir) != "" {
@@ -520,14 +573,18 @@ func ForkSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		if err := os.MkdirAll(wd, 0o755); err != nil {
 			return fmt.Errorf("Cannot create work dir %s: %w", wd, err)
 		}
+	} else if isPlainFork {
+		wd = srcArgs.WorkDir
 	}
 	// Persist the effective spawn args so resume_session re-applies them
-	// (same as create_session).
+	// (same as create_session). The preset name is recorded too so later
+	// plain forks can inherit it.
 	if err := dirs.WriteSpawnArgs(newSessionDir, dirs.SpawnArgs{
 		ToolConfirm:  tc,
 		BuiltinTools: bt,
 		SystemPrompt: sp,
 		WorkDir:      wd,
+		Preset:       presetName,
 	}); err != nil {
 		log.Printf("[session] warning: cannot persist spawn args for %s: %v", newSessionDir, err)
 	}

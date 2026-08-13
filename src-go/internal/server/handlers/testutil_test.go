@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"alayaface/src-go/internal/dirs"
 	"alayaface/src-go/internal/hub"
 	"alayaface/src-go/internal/session"
 )
@@ -53,4 +54,14 @@ func isolatedHome(t *testing.T, f func()) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	f()
+}
+
+// seedPresets runs dirs.Ensure() so the Simple/Complex seed presets
+// exist under the isolated HOME (many handler tests need a real preset
+// now that `preset` is a required argument).
+func seedPresets(t *testing.T) {
+	t.Helper()
+	if _, err := dirs.Ensure(); err != nil {
+		t.Fatal(err)
+	}
 }

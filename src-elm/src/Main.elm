@@ -62,7 +62,7 @@ init _ =
       , globalConfig = emptyGlobalConfig
       , globalConfigEditor = emptyGlobalConfigEditor
       , presets = []
-      , activePreset = ""
+      , presetSubmenuOpen = False
       , presetManager = emptyPresetManager
       , ctxVisible = False
       , ctxX = 0
@@ -154,6 +154,7 @@ subscriptions model =
         , Ports.onRpcError (\raw -> RpcError raw)
         , Ports.onDefaultModelsList (\raw -> DefaultModelsListResult raw)
         , Ports.onDefaultModelsSyncResult (\raw -> DefaultModelsSyncResult raw)
+        , Ports.onDefaultModelSetResult (\raw -> DefaultModelsSetActiveResult raw)
         , Ports.onDefaultMcpList (\raw -> McpListResult raw)
         , Ports.onDefaultMcpSyncResult (\raw -> McpSyncResult raw)
         , Ports.onGlobalSettingsList (\raw -> SettingsListResult raw)

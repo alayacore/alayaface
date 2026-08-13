@@ -28,11 +28,14 @@ pub async fn create_session(
     sessions: State<'_, SessionMap>,
     model_cache: State<'_, ModelCache>,
 ) -> Result<String, String> {
-    let (_template_dir, sessions_dir) = dirs::ensure()?;
+    let sessions_dir = dirs::ensure()?;
 
     let bin = resolve_binary(&binary_path);
     let session_id = Uuid::new_v4().to_string();
     let preset_name = preset.unwrap_or_default();
+    // The preset is REQUIRED (there is no active preset): resolve it now
+    // so a missing/unknown preset fails before any directory is created.
+    dirs::resolve_config_dir(&preset_name)?;
     // Plan node sessions live NESTED under
     // sessions/<originSessionId>/plans/<planId>/<nodeId>/ — every plan
     // belongs to the session that created it, and the sessions/ top
@@ -58,9 +61,9 @@ pub async fn create_session(
     let session_file = session_dir.join("session.alaya").to_string_lossy().to_string();
 
     let tc = match tool_confirm {
-        // Explicit per-session override wins; otherwise use the global setting.
+        // Explicit per-session override wins; otherwise use the preset's setting.
         Some(v) if !v.trim().is_empty() => v,
-        _ => crate::commands::effective_tool_confirm().unwrap_or_else(|e| {
+        _ => crate::commands::effective_tool_confirm(&preset_name).unwrap_or_else(|e| {
             log::warn!("[settings] tool-confirm unavailable, spawning without it: {e}");
             String::new()
         }),
@@ -69,15 +72,23 @@ pub async fn create_session(
     // explicit empty string, which means NO builtin tools (alayacore
     // treats `--builtin-tools=` as an empty list; Plan Sessions use this
     // so the planner physically cannot execute tools). Unspecified =
-    // the active preset's builtin_tools; an empty effective value means
-    // don't pass the flag = all tools.
+    // the session's preset's builtin_tools; an empty effective value
+    // means don't pass the flag = all tools.
     let bt: Option<String> = match builtin_tools {
         Some(v) => Some(v.to_string()),
-        None => crate::commands::effective_builtin_tools().ok().filter(|s| !s.is_empty()),
+        None => crate::commands::effective_builtin_tools(&preset_name).ok().filter(|s| !s.is_empty()),
     };
-    // Optional extra system prompt (Plan Sessions inject the planner
-    // instructions here; empty = don't pass --system).
-    let sp = system_prompt.unwrap_or_default();
+    // System prompt: an explicit non-empty override wins (the frontend
+    // sends only the recursion guard over the plan depth limit);
+    // otherwise the session's preset's system_prompt (settings.conf) is
+    // used as --system.
+    let sp = match system_prompt {
+        Some(v) if !v.trim().is_empty() => v,
+        _ => crate::commands::effective_system_prompt(&preset_name).unwrap_or_else(|e| {
+            log::warn!("[settings] system-prompt unavailable, spawning without it: {e}");
+            String::new()
+        }),
+    };
     log::info!("Spawning: {} --rawio --config-path {} --session {}", &bin, &effective_config, &session_file);
     if !tc.is_empty() {
         log::info!("  with --tool-confirm={}", &tc);
@@ -107,13 +118,15 @@ pub async fn create_session(
 
     // Persist the effective spawn args so resume_session can re-apply
     // them (capability envelope: builtin-tools restriction, tool-confirm
-    // policy, planner prompt, work dir). Best-effort — a failure must
-    // not prevent the session from starting.
+    // policy, preset system prompt, work dir). Best-effort — a failure
+    // must not prevent the session from starting. The preset name is
+    // recorded too so plain forks of this session can inherit it.
     if let Err(e) = dirs::write_spawn_args(&session_dir, &dirs::SpawnArgs {
         tool_confirm: tc.clone(),
         builtin_tools: bt.clone(),
         system_prompt: sp.clone(),
         work_dir: wd.clone().unwrap_or_default(),
+        preset: preset_name.clone(),
     }) {
         log::warn!("[session] cannot persist spawn args for {:?}: {e}", session_dir);
     }
@@ -340,6 +353,7 @@ pub async fn list_session_dirs() -> Result<Vec<SessionDirInfo>, String> {
         result.push(SessionDirInfo {
             id,
             created_at,
+            preset: dirs::read_spawn_args(&path).preset,
         });
     }
     Ok(result)
@@ -392,9 +406,29 @@ pub async fn fork_session(
     sessions: State<'_, SessionMap>,
     model_cache: State<'_, ModelCache>,
 ) -> Result<String, String> {
-    let (_template_dir, sessions_dir) = dirs::ensure()?;
+    let sessions_dir = dirs::ensure()?;
     let new_id = Uuid::new_v4().to_string();
-    let preset_name = preset.unwrap_or_default();
+    let mut preset_name = preset.unwrap_or_default();
+
+    // A plain fork (no explicit preset) is a work copy of the source
+    // session: it inherits the source's preset (recorded in its
+    // session.spawn.json) and its spawn envelope. Node forks carry an
+    // explicit preset from the DAG node.
+    let (src_args, is_plain_fork) = {
+        let map = sessions.0.lock().await;
+        let handle = crate::session::get(&map, &source_session_id)?;
+        (dirs::read_spawn_args(&handle.session_dir), preset_name.is_empty())
+    };
+    if is_plain_fork {
+        preset_name = src_args.preset.clone();
+        if preset_name.is_empty() {
+            return Err("Preset is required: the source session has no recorded preset".to_string());
+        }
+    }
+    // Resolve the preset now so a missing/unknown preset fails before
+    // any directory is created.
+    dirs::resolve_config_dir(&preset_name)?;
+
     // P38: a forked plan NODE session lands in the SAME nested subtree
     // as the original (sessions/<origin>/plans/<planId>/<nodeId>/<uuid>/)
     // and carries the node's config — so the fork replaces the node
@@ -427,38 +461,52 @@ pub async fn fork_session(
 
     let bin = resolve_binary(&binary_path);
     // Mirror create_session's optional overrides so the fork keeps the
-    // node session's tool/preset/system-prompt behavior.
+    // node session's tool/preset/system-prompt behavior. An explicit
+    // override wins; plain forks inherit the source session's spawn
+    // envelope (it is a work copy); node forks resolve the node's
+    // preset settings like create_session.
     let tc = match tool_confirm {
         Some(v) if !v.trim().is_empty() => v,
-        _ => crate::commands::effective_tool_confirm().unwrap_or_else(|e| {
+        _ if is_plain_fork => src_args.tool_confirm.clone(),
+        _ => crate::commands::effective_tool_confirm(&preset_name).unwrap_or_else(|e| {
             log::warn!("[settings] tool-confirm unavailable, spawning without it: {e}");
             String::new()
         }),
     };
     let bt: Option<String> = match builtin_tools {
         Some(v) => Some(v.to_string()),
-        None => crate::commands::effective_builtin_tools().ok().filter(|s| !s.is_empty()),
+        _ if is_plain_fork => src_args.builtin_tools.clone(),
+        _ => crate::commands::effective_builtin_tools(&preset_name).ok().filter(|s| !s.is_empty()),
     };
-    let sp = system_prompt.unwrap_or_default();
+    let sp = match system_prompt {
+        Some(v) if !v.trim().is_empty() => v,
+        _ if is_plain_fork => src_args.system_prompt.clone(),
+        _ => crate::commands::effective_system_prompt(&preset_name).unwrap_or_else(|e| {
+            log::warn!("[settings] system-prompt unavailable, spawning without it: {e}");
+            String::new()
+        }),
+    };
     let wd = match &work_dir {
         Some(d) if !d.trim().is_empty() => {
             std::fs::create_dir_all(d)
                 .map_err(|e| format!("Cannot create work dir {}: {}", d, e))?;
             Some(d.clone())
         }
+        _ if is_plain_fork => Some(src_args.work_dir.clone()).filter(|s| !s.is_empty()),
         _ => None,
     };
     // Persist the effective spawn args so resume_session re-applies them
     // after a restart (capability envelope: builtin-tools restriction,
-    // tool-confirm policy, planner prompt, work dir). Mirrors
-    // create_session above AND Go's fork_session — without this a forked
-    // Plan node session resumed later would come back WITHOUT its
-    // restrictions (e.g. a "no tools" planner regaining all tools).
+    // tool-confirm policy, preset system prompt, work dir, preset name).
+    // Mirrors create_session above AND Go's fork_session — without this
+    // a forked Plan node session resumed later would come back WITHOUT
+    // its restrictions (e.g. a "no tools" planner regaining all tools).
     if let Err(e) = dirs::write_spawn_args(&new_session_dir, &dirs::SpawnArgs {
         tool_confirm: tc.clone(),
         builtin_tools: bt.clone(),
         system_prompt: sp.clone(),
         work_dir: wd.clone().unwrap_or_default(),
+        preset: preset_name.clone(),
     }) {
         log::warn!("[session] cannot persist spawn args for {:?}: {e}", new_session_dir);
     }
@@ -503,6 +551,7 @@ mod tests {
             builtin_tools: Some("read_file,write_file".into()),
             system_prompt: "planner".into(),
             work_dir: "/tmp/wd".into(),
+            preset: "Complex".into(),
         };
         dirs::write_spawn_args(&dir, &args).unwrap();
         let got = dirs::read_spawn_args(&dir);
@@ -510,6 +559,7 @@ mod tests {
         assert_eq!(got.builtin_tools.as_deref(), Some("read_file,write_file"));
         assert_eq!(got.system_prompt, "planner");
         assert_eq!(got.work_dir, "/tmp/wd");
+        assert_eq!(got.preset, "Complex");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -111,10 +111,10 @@ func TestCreateSessionWithPreset(t *testing.T) {
 		t.Fatalf("preset error parity broken: %q", msg)
 	}
 
-	// Creating with the Safe preset works and returns a session id.
+	// Creating with the Simple preset works and returns a session id.
 	body := e.rpcOK(t, "create_session", map[string]any{
 		"binaryPath": "", "configPath": "", "toolConfirm": nil,
-		"preset": "Safe", "builtinTools": "",
+		"preset": "Simple", "builtinTools": "",
 	})
 	var sid string
 	if err := json.Unmarshal(body, &sid); err != nil || sid == "" {
@@ -122,16 +122,16 @@ func TestCreateSessionWithPreset(t *testing.T) {
 	}
 
 	// Session dir must exist and its config must contain the preset's
-	// copied files (write a real model.conf into Safe first — presets
+	// copied files (write a real model.conf into Simple first — presets
 	// are empty shells until the user/alayacore create files) but NOT
-	// settings.conf (Safe's builtin_tools must not leak into sessions).
-	safePreset := filepath.Join(os.Getenv("HOME"), ".alayaface", "presets", "Safe")
-	if err := os.WriteFile(filepath.Join(safePreset, "model.conf"), []byte("name: \"SafeModel\"\n"), 0o644); err != nil {
+	// settings.conf (Simple's tool lists must not leak into sessions).
+	simplePreset := filepath.Join(os.Getenv("HOME"), ".alayaface", "presets", "Simple")
+	if err := os.WriteFile(filepath.Join(simplePreset, "model.conf"), []byte("name: \"SimpleModel\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	body = e.rpcOK(t, "create_session", map[string]any{
 		"binaryPath": "", "configPath": "", "toolConfirm": nil,
-		"preset": "Safe", "builtinTools": "",
+		"preset": "Simple", "builtinTools": "",
 	})
 	if err := json.Unmarshal(body, &sid); err != nil || sid == "" {
 		t.Fatalf("create with preset failed: body=%s err=%v", body, err)
@@ -141,7 +141,7 @@ func TestCreateSessionWithPreset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session config missing copied model.conf: %v", err)
 	}
-	if string(copied) != "name: \"SafeModel\"\n" {
+	if string(copied) != "name: \"SimpleModel\"\n" {
 		t.Fatalf("session model.conf copy wrong: %q", string(copied))
 	}
 	if _, err := os.Stat(filepath.Join(sessionsDir, "config", "settings.conf")); err == nil {
@@ -158,7 +158,7 @@ func TestCreateSessionExplicitBuiltinTools(t *testing.T) {
 	createAndBoot := func(builtinTools any) (bool, string) {
 		body := e.rpcOK(t, "create_session", map[string]any{
 			"binaryPath": "", "configPath": "", "toolConfirm": nil,
-			"builtinTools": builtinTools,
+			"preset": "Simple", "builtinTools": builtinTools,
 		})
 		var sid string
 		if err := json.Unmarshal(body, &sid); err != nil || sid == "" {
@@ -211,6 +211,7 @@ func TestCreateSessionWithSystemPrompt(t *testing.T) {
 		"binaryPath":   "",
 		"configPath":   "",
 		"toolConfirm":  nil,
+		"preset":       "Simple",
 		"systemPrompt": "You are the task planner. Output a ```json plan block.",
 	})
 	var sid string

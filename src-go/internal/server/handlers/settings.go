@@ -24,6 +24,10 @@ type GlobalSettings struct {
 	// --builtin-tools=id1,id2,... Empty = don't pass the flag (alayacore
 	// default: all tools).
 	BuiltinTools string `json:"builtin_tools"`
+	// SystemPrompt is the preset's --system text: the plan-mode contract
+	// and role framing for the preset's sessions. Free text, not
+	// normalized. Passed to alayacore as --system=<text>.
+	SystemPrompt string `json:"system_prompt"`
 }
 
 // readSettingsFrom reads settings from a config dir; a missing/empty
@@ -69,41 +73,56 @@ func NormalizeToolConfirm(raw string) (string, error) {
 	return strings.Join(out, ","), nil
 }
 
-// readGlobalSettings reads the active preset's settings; a missing or
+// readPresetSettings reads a named preset's settings; a missing or
 // empty file yields defaults.
-func readGlobalSettings() (GlobalSettings, error) {
-	configDir, _, err := dirs.Ensure()
+func readPresetSettings(preset string) (GlobalSettings, error) {
+	configDir, err := dirs.ResolveConfigDir(preset)
 	if err != nil {
 		return GlobalSettings{}, err
 	}
 	return readSettingsFrom(configDir)
 }
 
-// effectiveToolConfirm returns the normalized global tool-confirm list.
-func effectiveToolConfirm() (string, error) {
-	s, err := readGlobalSettings()
+// effectiveToolConfirm returns the normalized tool-confirm list of a
+// named preset.
+func effectiveToolConfirm(preset string) (string, error) {
+	s, err := readPresetSettings(preset)
 	if err != nil {
 		return "", err
 	}
 	return NormalizeToolConfirm(s.ToolConfirm)
 }
 
-// effectiveBuiltinTools returns the normalized global builtin-tools list
-// (empty = don't pass the flag = all tools).
-func effectiveBuiltinTools() (string, error) {
-	s, err := readGlobalSettings()
+// effectiveBuiltinTools returns the normalized builtin-tools list of a
+// named preset (empty = don't pass the flag = all tools).
+func effectiveBuiltinTools(preset string) (string, error) {
+	s, err := readPresetSettings(preset)
 	if err != nil {
 		return "", err
 	}
 	return NormalizeToolConfirm(s.BuiltinTools)
 }
 
-// GetGlobalSettings reads a preset's settings (`preset` empty = active).
+// effectiveSystemPrompt returns a named preset's system_prompt (empty =
+// no --system).
+func effectiveSystemPrompt(preset string) (string, error) {
+	s, err := readPresetSettings(preset)
+	if err != nil {
+		return "", err
+	}
+	return s.SystemPrompt, nil
+}
+
+// GetGlobalSettings reads a preset's settings (preset REQUIRED).
 func GetGlobalSettings(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	var args struct {
 		Preset string `json:"preset"`
 	}
 	if err := decodeArgs(r, &args); err != nil {
+		return err
+	}
+	// Ensure first so the seed presets exist on first run.
+	if _, err := dirs.Ensure(); err != nil {
 		return err
 	}
 	configDir, err := dirs.ResolveConfigDir(args.Preset)
@@ -122,12 +141,12 @@ func GetGlobalSettings(h *Handler, w http.ResponseWriter, r *http.Request) error
 	if err != nil {
 		return err
 	}
-	return writeJSON(w, map[string]string{"tool_confirm": tc, "builtin_tools": bt})
+	return writeJSON(w, map[string]string{"tool_confirm": tc, "builtin_tools": bt, "system_prompt": s.SystemPrompt})
 }
 
-// SyncGlobalSettings replaces a preset's settings (`preset` empty =
-// active). Accepts {"tool_confirm": "id1,id2", "builtin_tools": "..."};
-// writes atomically.
+// SyncGlobalSettings replaces a preset's settings (preset REQUIRED).
+// Accepts {"tool_confirm": "id1,id2", "builtin_tools": "...",
+// "system_prompt": "..."}; writes atomically.
 func SyncGlobalSettings(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	var args struct {
 		Config string `json:"config"`
@@ -140,22 +159,39 @@ func SyncGlobalSettings(h *Handler, w http.ResponseWriter, r *http.Request) erro
 	if err := json.Unmarshal([]byte(args.Config), &value); err != nil {
 		return fmt.Errorf("Invalid settings JSON: %w", err)
 	}
-	rawTc, _ := value["tool_confirm"].(string)
-	rawBt, _ := value["builtin_tools"].(string)
-	tc, err := NormalizeToolConfirm(rawTc)
-	if err != nil {
+	// Ensure first so the seed presets exist on first run.
+	if _, err := dirs.Ensure(); err != nil {
 		return err
 	}
-	bt, err := NormalizeToolConfirm(rawBt)
-	if err != nil {
-		return err
-	}
-	settings := GlobalSettings{ToolConfirm: tc, BuiltinTools: bt}
-
 	configDir, err := dirs.ResolveConfigDir(args.Preset)
 	if err != nil {
 		return err
 	}
+	// MERGE semantics: fields absent from the payload keep their current
+	// value (a partial sync must not wipe e.g. system_prompt).
+	existing, err := readSettingsFrom(configDir)
+	if err != nil {
+		return err
+	}
+	settings := existing
+	if rawTc, ok := value["tool_confirm"].(string); ok {
+		tc, err := NormalizeToolConfirm(rawTc)
+		if err != nil {
+			return err
+		}
+		settings.ToolConfirm = tc
+	}
+	if rawBt, ok := value["builtin_tools"].(string); ok {
+		bt, err := NormalizeToolConfirm(rawBt)
+		if err != nil {
+			return err
+		}
+		settings.BuiltinTools = bt
+	}
+	if rawSp, ok := value["system_prompt"].(string); ok {
+		settings.SystemPrompt = rawSp
+	}
+
 	path := filepath.Join(configDir, "settings.conf")
 	tmp := filepath.Join(configDir, "settings.conf.tmp")
 	text, err := json.MarshalIndent(settings, "", "  ")

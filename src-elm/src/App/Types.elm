@@ -99,7 +99,9 @@ type alias Model =
     , globalConfig : GlobalConfig
     , globalConfigEditor : GlobalConfigEditor
     , presets : List PresetInfo
-    , activePreset : String
+    -- Hover flyout state for the global menu's "New Session" item:
+    -- True while the pointer is over the item or its preset submenu.
+    , presetSubmenuOpen : Bool
     , presetManager : PresetManager
     , ctxVisible : Bool
     , ctxX : Int
@@ -288,8 +290,9 @@ type alias Model =
 -- MSG
 
 type Msg
-    = -- Session lifecycle
-      CreateSession
+    = -- Session lifecycle (the preset is chosen from the global menu's
+      -- hover submenu — every session runs under an explicit preset)
+      CreateSessionWith String
     | SessionCreated String
     | SessionCreateError String
     | CloseSession String
@@ -355,7 +358,7 @@ type Msg
     | CloseModelSelector
     | SetModelSelectorInput String
     | ModelSelectorSelectItem Int
-    | ModelSelectorConfirmItem
+    | ModelSelectorConfirmItem Int
     | ModelSelectorEditModel Int
     | ModelSelectorAddModel
     | ModelSelectorEditBack
@@ -373,7 +376,7 @@ type Msg
     | CloseDefaultModelsEditor
     | SetDefaultModelsInput String
     | DefaultModelsSelectItem Int
-    | DefaultModelsConfirmItem
+    | DefaultModelsConfirmItem Int
     | DefaultModelsEditModel Int
     | DefaultModelsAddModel
     | DefaultModelsEditBack
@@ -387,12 +390,16 @@ type Msg
     | DefaultModelsCancelSyncPrompt
     | DefaultModelsListResult E.Value
     | DefaultModelsSyncResult E.Value
+    -- Set a model as the preset's DEFAULT (runtime.conf active_model);
+    -- new sessions under the preset start on it.
+    | DefaultModelsSetActive Int
+    | DefaultModelsSetActiveResult E.Value
       -- MCP server editor (targets a specific preset)
     | EditPresetMcp String
     | CloseMcpEditor
     | SetMcpInput String
     | McpSelectItem Int
-    | McpConfirmItem
+    | McpConfirmItem Int
     | McpEditServer Int
     | McpAddServer
     | McpEditBack
@@ -411,6 +418,7 @@ type Msg
     | CloseSettingsEditor
     | SetToolConfirm String
     | SetBuiltinTools String
+    | SetSystemPrompt String
     | SettingsSave
     | SettingsListResult E.Value
     | SettingsSyncResult E.Value
@@ -425,7 +433,6 @@ type Msg
     | OpenPresetManager
     | ClosePresetManager
     | PresetCopy String
-    | PresetSetActive String
     | PresetRenameStart String
     | SetPresetRenameInput String
     | PresetRenameSave String
@@ -523,9 +530,10 @@ type Msg
     | ForkFromCtx
       -- Message collapse/expand
     | ToggleMsgCollapse String String
-      -- Global menu (opened by right-clicking the canvas at (x, y))
+      -- Global menu
     | ShowGlobalMenuAt Int Int
     | CloseGlobalMenu
+    | SetPresetSubmenu Bool
       -- Internal
     | NoOp
     | KeyDown String Bool Bool Bool
@@ -589,12 +597,17 @@ type alias ResizeInfo =
 -- EDITOR STATE (global presets)
 
 -- Default (global) model list editor state. Edits a specific preset's
--- model.conf (the preset is chosen when opening from the preset manager).
+-- model.conf (the preset is chosen when opening from the preset manager)
+-- and shows/selects its DEFAULT model (runtime.conf active_model).
 
 type alias DefaultModelsEditor =
     { show : Bool
     , preset : String
     , state : Sel.State T.ModelInfo T.ModelDraft
+    -- The preset's default model id (null when none matches runtime.conf).
+    , activeModelId : Maybe Int
+    -- Non-nil after a failed "set default model" action.
+    , error : Maybe String
     }
 
 
@@ -603,6 +616,8 @@ emptyDefaultModelsEditor =
     { show = False
     , preset = ""
     , state = Sel.empty
+    , activeModelId = Nothing
+    , error = Nothing
     }
 
 
@@ -627,6 +642,7 @@ type alias SettingsEditor =
     , syncing : Bool
     , toolConfirm : String
     , builtinTools : String
+    , systemPrompt : String
     , error : Maybe String
     , preset : String
     }
@@ -639,6 +655,7 @@ emptySettingsEditor =
     , syncing = False
     , toolConfirm = ""
     , builtinTools = ""
+    , systemPrompt = ""
     , error = Nothing
     , preset = ""
     }
@@ -680,7 +697,10 @@ emptyGlobalConfigEditor =
 
 type alias PresetInfo =
     { name : String
-    , isActive : Bool
+    -- Built-in seed preset (Simple/Complex): referenced by the seeded
+    -- plan contract, so it cannot be renamed (the backend rejects it and
+    -- the manager hides the Rename button).
+    , isSeed : Bool
     }
 
 

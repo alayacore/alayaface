@@ -7,7 +7,7 @@ import Html.Events as Ev
 
 type alias PresetInfo =
     { name : String
-    , isActive : Bool
+    , isSeed : Bool
     }
 
 
@@ -21,7 +21,6 @@ view :
     , confirmDelete : Maybe String
     , error : Maybe String
     , onCopy : String -> msg
-    , onSetActive : String -> msg
     , onRenameStart : String -> msg
     , onRenameInput : String -> msg
     , onRenameSave : String -> msg
@@ -39,7 +38,7 @@ view config =
     Html.div [ Attr.class "sel-page" ]
         [ Html.div [ Attr.class "sel-page-title" ] [ Html.text "Presets" ]
         , Html.div [ Attr.class "me-hint" ]
-            [ Html.text "Each preset is a full config set (models, MCP servers, tool-confirm settings). Use one to make it the template for new sessions; Copy duplicates it; Edit opens its config — you can edit any preset without switching." ]
+            [ Html.text "Each preset is a full config set (models, MCP servers, tool settings and its own system prompt). New sessions pick a preset from the global menu; Copy duplicates it; Edit opens its config — you can edit any preset without switching. Built-in presets (Simple/Complex) cannot be renamed or deleted — copy one to customize." ]
         , case config.error of
             Just err ->
                 Html.div [ Attr.class "sel-page-status sel-page-status-error" ]
@@ -59,6 +58,22 @@ view config =
         ]
 
 
+{-| The preset name plus a small "built-in" tag for the seed presets
+(Simple/Complex), which cannot be renamed or deleted. The tag lives in
+its own flex child so it is never clipped by the name's ellipsis.
+-}
+nameLabel : PresetInfo -> Html msg
+nameLabel p =
+    Html.span [ Attr.class "pm-name-wrap" ]
+        [ Html.span [ Attr.class "pm-name" ] [ Html.text p.name ]
+        , if p.isSeed then
+            Html.span [ Attr.class "pm-builtin-tag" ] [ Html.text "built-in" ]
+
+          else
+            Html.text ""
+        ]
+
+
 viewRow :
     { a
         | renaming : Maybe String
@@ -67,7 +82,6 @@ viewRow :
         , busy : Bool
         , confirmDelete : Maybe String
         , onCopy : String -> msg
-        , onSetActive : String -> msg
         , onRenameStart : String -> msg
         , onRenameInput : String -> msg
         , onRenameSave : String -> msg
@@ -87,7 +101,7 @@ viewRow config p =
         Just name ->
             if name == p.name then
                 [ Html.div [ Attr.class "pm-row pm-row-confirm" ]
-                    [ Html.span [ Attr.class "pm-name" ] [ Html.text p.name ]
+                    [ nameLabel p
                     , Html.span [ Attr.class "pm-confirm-text" ] [ Html.text "Delete this preset?" ]
                     , Html.button
                         [ Attr.class "pm-btn pm-btn-danger"
@@ -106,13 +120,17 @@ viewRow config p =
 
             else
                 [ Html.div [ Attr.class "pm-row" ]
-                    [ Html.span [ Attr.class "pm-name" ] [ Html.text p.name ]
-                    , Html.button
-                        [ Attr.class "pm-btn"
-                        , Attr.disabled config.busy
-                        , Ev.onClick (config.onDelete p.name)
-                        ]
-                        [ Html.text "Delete" ]
+                    [ nameLabel p
+                    , if p.isSeed then
+                        Html.text ""
+
+                      else
+                        Html.button
+                            [ Attr.class "pm-btn"
+                            , Attr.disabled config.busy
+                            , Ev.onClick (config.onDelete p.name)
+                            ]
+                            [ Html.text "Delete" ]
                     ]
                 ]
 
@@ -146,13 +164,17 @@ viewRow config p =
 
                     else
                         [ Html.div [ Attr.class "pm-row" ]
-                            [ Html.span [ Attr.class "pm-name" ] [ Html.text p.name ]
-                            , Html.button
-                                [ Attr.class "pm-btn"
-                                , Attr.disabled config.busy
-                                , Ev.onClick (config.onRenameStart p.name)
-                                ]
-                                [ Html.text "Rename" ]
+                            [ nameLabel p
+                            , if p.isSeed then
+                                Html.text ""
+
+                              else
+                                Html.button
+                                    [ Attr.class "pm-btn"
+                                    , Attr.disabled config.busy
+                                    , Ev.onClick (config.onRenameStart p.name)
+                                    ]
+                                    [ Html.text "Rename" ]
                             ]
                         ]
 
@@ -162,19 +184,8 @@ viewRow config p =
                             config.editing == Just p.name
 
                         mainRow =
-                            Html.div
-                                [ Attr.class ("pm-row" ++ (if p.isActive then " pm-row-active" else "")) ]
-                                [ Html.span [ Attr.class "pm-name" ] [ Html.text p.name ]
-                                , if p.isActive then
-                                    Html.text ""
-
-                                  else
-                                    Html.button
-                                        [ Attr.class "pm-btn pm-btn-primary"
-                                        , Attr.disabled config.busy
-                                        , Ev.onClick (config.onSetActive p.name)
-                                        ]
-                                        [ Html.text "Use" ]
+                            Html.div [ Attr.class "pm-row" ]
+                                [ nameLabel p
                                 , Html.button
                                     [ Attr.class "pm-btn"
                                     , Attr.disabled config.busy
@@ -188,18 +199,26 @@ viewRow config p =
                                     , Ev.onClick (config.onToggleEdit p.name)
                                     ]
                                     [ Html.text (if isEditing then "Done" else "Edit") ]
-                                , Html.button
-                                    [ Attr.class "pm-btn"
-                                    , Attr.disabled config.busy
-                                    , Ev.onClick (config.onRenameStart p.name)
-                                    ]
-                                    [ Html.text "Rename" ]
-                                , Html.button
-                                    [ Attr.class "pm-btn pm-btn-danger"
-                                    , Attr.disabled config.busy
-                                    , Ev.onClick (config.onDelete p.name)
-                                    ]
-                                    [ Html.text "Delete" ]
+                                , if p.isSeed then
+                                    Html.text ""
+
+                                  else
+                                    Html.button
+                                        [ Attr.class "pm-btn"
+                                        , Attr.disabled config.busy
+                                        , Ev.onClick (config.onRenameStart p.name)
+                                        ]
+                                        [ Html.text "Rename" ]
+                                , if p.isSeed then
+                                    Html.text ""
+
+                                  else
+                                    Html.button
+                                        [ Attr.class "pm-btn pm-btn-danger"
+                                        , Attr.disabled config.busy
+                                        , Ev.onClick (config.onDelete p.name)
+                                        ]
+                                        [ Html.text "Delete" ]
                                 ]
 
                         editRow =

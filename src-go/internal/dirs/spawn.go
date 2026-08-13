@@ -15,8 +15,11 @@ import (
 //   - builtin_tools: nil = don't pass --builtin-tools (all tools);
 //     "" = explicitly NO builtin tools (Plan Sessions);
 //     "a,b" = those tools only
-//   - system_prompt: the --system text (planner hint / delegation)
+//   - system_prompt: the --system text (the preset's system_prompt, or a
+//     recursion guard over the plan depth limit)
 //   - work_dir: the child's working directory (per-plan isolation)
+//   - preset: the preset this session was created under; forks of plain
+//     sessions inherit it so they stay in the same preset
 //
 // Sessions created before this file existed (no spawn.json) resume with
 // the old behavior (no restrictions) — the file is best-effort.
@@ -30,6 +33,7 @@ type SpawnArgs struct {
 	BuiltinTools *string `json:"builtin_tools"`
 	SystemPrompt string  `json:"system_prompt"`
 	WorkDir      string  `json:"work_dir"`
+	Preset       string  `json:"preset"`
 }
 
 // WriteSpawnArgs persists the spawn args atomically (tmp + rename).

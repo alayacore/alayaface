@@ -14,8 +14,10 @@ port module Ports exposing
       -- Default (global) model list editor
     , listDefaultModels
     , syncDefaultModels
+    , setDefaultModel
     , onDefaultModelsList
     , onDefaultModelsSyncResult
+    , onDefaultModelSetResult
       -- Default (global) MCP server editor
     , listDefaultMcp
     , syncDefaultMcp
@@ -36,7 +38,6 @@ port module Ports exposing
     , copyPreset
     , renamePreset
     , deletePreset
-    , setActivePreset
     , onPresetsList
     , onPresetActionResult
       -- Session
@@ -118,14 +119,16 @@ port setModel : { sessionId : String, modelId : Int } -> Cmd msg
 port modelSync : { sessionId : String, config : String } -> Cmd msg
 port listDefaultModels : { preset : String } -> Cmd msg
 port syncDefaultModels : { preset : String, config : String } -> Cmd msg
+port setDefaultModel : { preset : String, modelId : Int } -> Cmd msg
 port onDefaultModelsList : (E.Value -> msg) -> Sub msg
 port onDefaultModelsSyncResult : (E.Value -> msg) -> Sub msg
+port onDefaultModelSetResult : (E.Value -> msg) -> Sub msg
 port listDefaultMcp : { preset : String } -> Cmd msg
 port syncDefaultMcp : { preset : String, config : String } -> Cmd msg
 port onDefaultMcpList : (E.Value -> msg) -> Sub msg
 port onDefaultMcpSyncResult : (E.Value -> msg) -> Sub msg
 port listGlobalSettings : { preset : String } -> Cmd msg
-port syncGlobalSettings : { preset : String, toolConfirm : String, builtinTools : String } -> Cmd msg
+port syncGlobalSettings : { preset : String, toolConfirm : String, builtinTools : String, systemPrompt : String } -> Cmd msg
 port onGlobalSettingsList : (E.Value -> msg) -> Sub msg
 port onGlobalSettingsSyncResult : (E.Value -> msg) -> Sub msg
 port getGlobalConfig : {} -> Cmd msg
@@ -136,7 +139,6 @@ port listPresets : {} -> Cmd msg
 port copyPreset : { source : String, name : String } -> Cmd msg
 port renamePreset : { oldName : String, newName : String } -> Cmd msg
 port deletePreset : { name : String } -> Cmd msg
-port setActivePreset : { name : String } -> Cmd msg
 port onPresetsList : (E.Value -> msg) -> Sub msg
 port onPresetActionResult : (E.Value -> msg) -> Sub msg
 port confirmTool : { sessionId : String, id : String, allowed : Bool } -> Cmd msg

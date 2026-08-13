@@ -540,6 +540,7 @@ env: {"RUST_LOG": "info"}
     #[test]
     fn sync_validates() {
         crate::dirs::isolated_home(|| {
+            crate::dirs::ensure().unwrap();
             // Invalid args JSON must be rejected (stdio server)
             let bad = r#"[{"server":"x","command":"bin","args":"not json"}]"#;
             assert!(sync_isolated(bad).is_err());
@@ -561,6 +562,7 @@ env: {"RUST_LOG": "info"}
     #[test]
     fn sync_accepts_empty_args_env() {
         crate::dirs::isolated_home(|| {
+            crate::dirs::ensure().unwrap();
             // HTTP server: empty args/env strings must not be validated (not applicable)
             let http = r#"[{"server":"exa","url":"https://mcp.exa.ai/mcp","args":"","env":""}]"#;
             assert!(sync_isolated(http).is_ok());
@@ -576,16 +578,17 @@ env: {"RUST_LOG": "info"}
     #[test]
     fn list_default_mcp_missing_file_returns_empty() {
         crate::dirs::isolated_home(|| {
+            crate::dirs::ensure().unwrap();
             // A missing mcp.conf must be an empty list, not an error.
             let rt = tokio::runtime::Runtime::new().unwrap();
-            assert_eq!(rt.block_on(list_default_mcp("".to_string())).unwrap(), Vec::<serde_json::Value>::new());
+            assert_eq!(rt.block_on(list_default_mcp("Simple".to_string())).unwrap(), Vec::<serde_json::Value>::new());
         });
     }
 
     /// Run sync_default_mcp inside the caller's isolated HOME.
     fn sync_isolated(config: &str) -> Result<(), String> {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(sync_default_mcp(config.to_string(), "".to_string()))
+        rt.block_on(sync_default_mcp(config.to_string(), "Simple".to_string()))
     }
 
     #[test]

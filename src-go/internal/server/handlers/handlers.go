@@ -47,6 +47,7 @@ func Registry() map[string]Command {
 		"list_models":         ListModels,
 		"list_default_models": ListDefaultModels,
 		"sync_default_models": SyncDefaultModels,
+		"set_default_model":   SetDefaultModel,
 		// mcp
 		"list_default_mcp": ListDefaultMcp,
 		"sync_default_mcp": SyncDefaultMcp,
@@ -57,11 +58,10 @@ func Registry() map[string]Command {
 		"get_global_config":  GetGlobalConfig,
 		"sync_global_config": SyncGlobalConfig,
 		// presets
-		"list_presets":      ListPresets,
-		"copy_preset":       CopyPreset,
-		"rename_preset":     RenamePreset,
-		"delete_preset":     DeletePreset,
-		"set_active_preset": SetActivePreset,
+		"list_presets":  ListPresets,
+		"copy_preset":   CopyPreset,
+		"rename_preset": RenamePreset,
+		"delete_preset": DeletePreset,
 		// fs
 		"fs_list_dir":           FsListDir,
 		"fs_home_dir":           FsHomeDir,

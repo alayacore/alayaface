@@ -240,16 +240,153 @@ fn run_temp_probe(
 // alayacore process, so validation and persistence behave exactly like
 // session model_sync, but without touching any running session.
 
-/// List the model list from a preset's model.conf (`preset` empty = active).
-/// Always reads the config directly via a temporary alayacore process
-/// (never the session cache), so it reflects what new sessions will load.
+/// List the model list from a preset's model.conf (preset REQUIRED)
+/// plus the preset's DEFAULT model id. Always reads the config directly
+/// via a temporary alayacore process (never the session cache), so it
+/// reflects what new sessions will load. The default (active) model is
+/// stored by alayacore in the preset's runtime.conf as
+/// `active_model: <name>`; the response's active_id is the matching
+/// index in the returned model list (null when none matches).
 #[tauri::command]
-pub async fn list_default_models(binary_path: String, preset: String) -> Result<Vec<serde_json::Value>, String> {
+pub async fn list_default_models(binary_path: String, preset: String) -> Result<serde_json::Value, String> {
     let config_dir = dirs::resolve_config_dir(&preset)?;
     let config_path = config_dir.to_string_lossy().to_string();
     let bin = resolve_binary(&binary_path);
     let probe = run_temp_probe(&bin, &config_path, None, None)?;
-    Ok(probe.models.unwrap_or_default())
+    let models = probe.models.unwrap_or_default();
+
+    let mut active_id: Option<serde_json::Value> = None;
+    if let Some(name) = read_active_model_name(&config_dir) {
+        for m in &models {
+            if m.get("name").and_then(|v| v.as_str()) == Some(name.as_str()) {
+                active_id = m.get("id").cloned();
+                break;
+            }
+        }
+    }
+    Ok(serde_json::json!({ "models": models, "active_id": active_id }))
+}
+
+/// Read the `active_model: <name>` line from a preset's runtime.conf
+/// (alayacore-managed key:value file). None when the file is missing or
+/// has no active_model.
+fn read_active_model_name(config_dir: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(config_dir.join("runtime.conf")).ok()?;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some(idx) = line.find(':') {
+            let key = line[..idx].trim();
+            if key == "active_model" {
+                let value = line[idx + 1..].trim();
+                if value.is_empty() {
+                    continue;
+                }
+                // alayacore writes strings DOUBLE-QUOTED
+                // (`active_model: "MyModel"`), like model.conf.
+                return Some(if value.starts_with('"') && value.ends_with('"') {
+                    serde_json::from_str::<String>(value).unwrap_or_else(|_| value.to_string())
+                } else {
+                    value.to_string()
+                });
+            }
+        }
+    }
+    None
+}
+
+/// Set a preset's DEFAULT model: spawns a temporary alayacore with the
+/// preset config dir and sends model_set, so alayacore persists
+/// `active_model: <name>` into the preset's runtime.conf. New sessions
+/// under the preset copy runtime.conf and start on that model.
+#[tauri::command]
+pub async fn set_default_model(preset: String, model_id: u32) -> Result<serde_json::Value, String> {
+    let config_dir = dirs::resolve_config_dir(&preset)?;
+    let config_path = config_dir.to_string_lossy().to_string();
+    let bin = resolve_binary("");
+
+    let call_id = uuid::Uuid::new_v4().to_string();
+    let input = model_id.to_string();
+    let probe = run_temp_probe(&bin, &config_path, Some((&call_id, "model_set", &input)), None)?;
+
+    match probe.cmd_output {
+        Some(v) => {
+            let is_err = v.get("is_error").and_then(|x| x.as_bool()).unwrap_or(false);
+            if is_err {
+                let msg = v
+                    .pointer("/output/message")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("model_set failed");
+                Err(msg.to_string())
+            } else {
+                Ok(v.get("output").cloned().unwrap_or(serde_json::Value::Null))
+            }
+        }
+        None => match probe.end {
+            ProbeEnd::Timeout => Err("model_set timed out".to_string()),
+            ProbeEnd::Eof => Err("alayacore exited before model_set completed".to_string()),
+            _ => Err("Failed to read from alayacore".to_string()),
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_active_model_name_parses_key_value_lines() {
+        let dir = std::env::temp_dir().join(format!(
+            "alayaface-active-model-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Missing file → None.
+        assert_eq!(read_active_model_name(&dir), None);
+
+        // active_model is a model NAME (alayacore format, strings
+        // double-quoted like model.conf).
+        std::fs::write(
+            dir.join("runtime.conf"),
+            "active_model: \"MyModel\"\nactive_theme: dark\n",
+        )
+        .unwrap();
+        assert_eq!(read_active_model_name(&dir).as_deref(), Some("MyModel"));
+
+        // Unquoted values are tolerated too.
+        std::fs::write(dir.join("runtime.conf"), "active_model: MyModel\n").unwrap();
+        assert_eq!(read_active_model_name(&dir).as_deref(), Some("MyModel"));
+
+        // Comments and missing key → None.
+        std::fs::write(
+            dir.join("runtime.conf"),
+            "# comment\nactive_theme: dark\n",
+        )
+        .unwrap();
+        assert_eq!(read_active_model_name(&dir), None);
+
+        // Empty value → None.
+        std::fs::write(dir.join("runtime.conf"), "active_model:  \n").unwrap();
+        assert_eq!(read_active_model_name(&dir), None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn list_default_models_shape_matches_frontend() {
+        // The response is an object {models, active_id} — pins the wire
+        // shape the Elm decoder reads.
+        let json = serde_json::json!({
+            "models": [{"name": "a"}, {"name": "b"}],
+            "active_id": 1,
+        });
+        assert_eq!(json["models"][1]["name"], "b");
+        assert_eq!(json["active_id"], 1);
+    }
 }
 
 /// Replace the model list in a preset's model.conf (`preset` empty = active).

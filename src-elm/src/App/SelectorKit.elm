@@ -62,9 +62,10 @@ type alias Kit item draft =
     , inputId : Model -> String
     , editorId : Model -> String
     , scrollItemId : Model -> Int -> String
-      -- Confirm action (Enter on the list): per-session sets the active
-      -- model; the editors open the selected item's edit page.
-    , confirm : Model -> ( Model, Cmd Msg )
+      -- Confirm action: the item id is passed (single click / Enter on
+      -- a row). Per-session sets the active model; the preset editor
+      -- sets the default model; the MCP editor opens the edit page.
+    , confirm : Int -> Model -> ( Model, Cmd Msg )
       -- Command sent when the user confirms the sync prompt.
     , syncCmd : Model -> Cmd Msg
       -- Model transition on successful sync (close + focus vs reset editor).
@@ -132,9 +133,9 @@ selectItem kit idx model =
     )
 
 
-confirmItem : Kit item draft -> Model -> ( Model, Cmd Msg )
-confirmItem kit model =
-    kit.confirm model
+confirmItem : Kit item draft -> Int -> Model -> ( Model, Cmd Msg )
+confirmItem kit id model =
+    kit.confirm id model
 
 
 editItem : Kit item draft -> Int -> Model -> ( Model, Cmd Msg )

@@ -296,13 +296,14 @@ suite =
                             }
                     in
                     PU.lastAssistantOutput m "s1" |> Expect.equal (Just "world")
-            , test "planSystemPrompt pins the plan-mode contract" <|
+            , test "recursionGuardPrompt pins the recursion-bound contract" <|
                 \_ ->
                     let
                         p =
-                            PU.planSystemPrompt
+                            PU.recursionGuardPrompt
                     in
-                    Expect.equal ( String.contains "alayaface-plan" p, String.contains "type" p )
+                    Expect.equal
+                        ( String.contains "do NOT output another plan" p, String.length p > 20 )
                         ( True, True )
             ]
         , describe "findPlanIdBySession (P39/Phase B lineage routing)"

@@ -28,7 +28,7 @@ module Plan.Update exposing
     , planMetaForMessage
     , planRunningForSession
     , eventSessionId
-    , planSystemPrompt
+    , recursionGuardPrompt
     , runStepIn
     , startRunIn
     , feedbackCompletedPlan
@@ -713,35 +713,19 @@ ResumeDelegatedNode is caught by the test suite.
 eventSessionId : R.Event -> Maybe String
 eventSessionId =
     R.eventSessionId
-planSystemPrompt : String
-planSystemPrompt =
-    """You can use AlayaFace's plan mode: for complex or multi-step tasks, first output a plan so its subtasks run in parallel / by dependency, instead of doing everything yourself in one go.
 
-When to output a plan:
-- The task needs multiple steps, research/search across several areas, or a summarized report → output a plan;
-- A simple task (doable in one sentence) → just do it directly, do not output a plan.
 
-Plan format (output exactly one ```json code block, then stop and wait for the plan to finish executing):
-{
-  "type": "alayaface-plan",
-  "schema_version": 1,
-  "name": "plan name",
-  "goal": "goal description",
-  "concurrency": 8,
-  "default_max_attempts": 3,
-  "tasks": [
-    { "id": "t1", "title": "subtask title", "prompt": "complete, self-contained instruction", "depends_on": [], "preset": "Default", "max_attempts": 3 }
-  ]
-}
-Rules:
-- The top level MUST include "type": "alayaface-plan" (without it the framework will not recognize the plan)
-- Field names must be spelled exactly as in the schema above (depends_on, concurrency, max_attempts, ...) — a misspelled or extra field makes the whole plan be rejected; do not invent fields
-- ids are globally unique; prompts are self-contained by default; if a downstream task needs an upstream task's output, reference it in the prompt with {{t1.output}} (the framework replaces it with that upstream task's final output once it completes; you may only reference tasks already declared as dependencies — never reference tasks outside the dependency graph)
-- Tasks that can run in parallel must not depend on each other
-- By default, do NOT set a preset (absent = Default, which has a working model configured). Only set one if the user explicitly asks for a specific preset environment (Fast/Deep/Data/Safe, etc.) — those presets may have no model configured yet, and using one will make the task fail immediately
-- For risky tasks involving commands, restrict the tool set with the tools field (e.g. read-only tools); the "Safe" preset disables execute_command but likewise needs a model configured beforehand
-- Even if a task needs no decomposition (doable in one sentence), still output a plan (a single task is fine) — that is your output format
-- After outputting the plan: stop, wait for the plan to finish and its result to come back, then continue your answer based on the result"""
+{-| The recursion guard injected as --system ONLY for node sessions whose
+plan is deeper than the global recursion limit (plan.depth > limit). It
+replaces the preset's system_prompt for those sessions so the model
+stops delegating — the soft recursion bound. This is the only
+hardcoded prompt fragment left in the frontend: the plan-mode contract
+itself lives in each preset's system_prompt (settings.conf), resolved by
+the backend at session creation.
+-}
+recursionGuardPrompt : String
+recursionGuardPrompt =
+    "You are inside a deeply nested AlayaFace plan. Execute this task directly and do NOT output another plan."
 
 {-| Run one state-machine step for a specific plan window, with a
 timestamp, then dispatch effects. Appends a log line for every node
@@ -2198,17 +2182,17 @@ startNextCreateIn model =
                 RunnerCreate planId nodeId ->
                     ( m1, Ports.createSession (nodeSessionArgsIn planId nodeId model) )
 
-                UserCreate _ ->
-                    -- Fixed plan mode (D2): every user session gets the
-                    -- planner hint via --system — "complex tasks → output
-                    -- a plan JSON first". No role lock; the model keeps
-                    -- its tools and may still execute directly.
+                UserCreate preset ->
+                    -- A queued user session create: it carries the preset
+                    -- the user picked from the global menu's submenu. The
+                    -- system prompt is left to the backend, which resolves
+                    -- the preset's system_prompt from settings.conf.
                     ( { m1 | pendingSwitchOnCreate = True }
                     , Ports.createSession
                         { toolConfirm = Nothing
-                        , preset = Nothing
+                        , preset = Just preset
                         , builtinTools = Nothing
-                        , systemPrompt = Just planSystemPrompt
+                        , systemPrompt = Nothing
                         , workDir = Nothing
                         , planId = Nothing
                         , nodeId = Nothing
@@ -2222,10 +2206,12 @@ startNextCreateIn model =
 
 {-| Session-creation args for a runner node: toolConfirm=allow (auto-
 approve tools so tasks don't stall) plus the node's preset/tools
-overrides (Nothing = preset defaults / all tools). Node sessions carry
-the plan system prompt ONLY while the plan is within the global
-recursion limit (plan.depth ≤ recursion_limit, default 8): over the
-limit the prompt is omitted so the model stops delegating — that is how
+overrides (Nothing = preset defaults / all tools). The system prompt
+comes from the node's PRESET (the backend resolves the preset's
+system_prompt from settings.conf) — the frontend only overrides it with
+the recursion guard while the plan is within the global recursion limit
+(plan.depth ≤ recursion_limit, default 8): over the limit the guard
+replaces the preset prompt so the model stops delegating — that is how
 recursion is bounded. (This is the only gate; resume_session re-applies
 the persisted spawn args, so the decision is made once at creation.)
 
@@ -2233,7 +2219,7 @@ NOTE: alayacore's --tool-confirm is a list of tool names that REQUIRE
 confirmation; "allow" matches no real tool, so nothing is confirmed →
 every tool auto-runs. That is exactly the runner's intent (unattended
 execution), but it means a plan task CAN auto-run risky tools — use the
-Safe preset / tools field to restrict per node.
+tools field to restrict per node.
 
 planId/nodeId/originSessionId tag the session as a PLAN CHILD: the
 backend stores its directory nested under
@@ -2257,11 +2243,14 @@ nodeSessionArgsIn planId nodeId model =
             PM.depthOf model.planMetas planId
 
         systemPrompt =
+            -- Within the recursion limit: let the node's preset
+            -- system_prompt apply (backend resolves it). Over the
+            -- limit: send the recursion guard as an explicit override.
             if PM.shouldInjectPlanPrompt depth model.globalConfig.recursionLimit then
-                Just planSystemPrompt
+                Nothing
 
             else
-                Nothing
+                Just recursionGuardPrompt
     in
     { toolConfirm = Just "allow"
     , preset = task |> Maybe.andThen .preset

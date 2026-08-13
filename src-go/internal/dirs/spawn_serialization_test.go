@@ -28,6 +28,7 @@ type spawnInput struct {
 	BuiltinTools *string `json:"builtin_tools"`
 	SystemPrompt string  `json:"system_prompt"`
 	WorkDir      string  `json:"work_dir"`
+	Preset       string  `json:"preset"`
 }
 
 func loadSpawnFixture(t *testing.T) spawnFixture {
@@ -53,6 +54,7 @@ func TestSpawnArgsSerializationMatchesSharedFixture(t *testing.T) {
 				BuiltinTools: c.Input.BuiltinTools,
 				SystemPrompt: c.Input.SystemPrompt,
 				WorkDir:      c.Input.WorkDir,
+				Preset:       c.Input.Preset,
 			}
 			got, err := json.MarshalIndent(args, "", "  ")
 			if err != nil {

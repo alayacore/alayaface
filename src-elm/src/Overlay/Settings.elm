@@ -8,11 +8,13 @@ import Html.Events as Ev
 view :
     { toolConfirm : String
     , builtinTools : String
+    , systemPrompt : String
     , loading : Bool
     , syncing : Bool
     , error : Maybe String
     , onInput : String -> msg
     , onBuiltinToolsInput : String -> msg
+    , onSystemPromptInput : String -> msg
     , onSave : msg
     , onCancel : msg
     }
@@ -62,7 +64,21 @@ view config =
                             ]
                             []
                         , Html.div [ Attr.class "me-hint" ]
-                            [ Html.text "Comma-separated tool IDs (no spaces). Empty = all tools (AlayaCore default). Passed as --builtin-tools=id1,id2 on new sessions. e.g. Safe preset omits execute_command." ]
+                            [ Html.text "Comma-separated tool IDs (no spaces). Empty = all tools (AlayaCore default). Passed as --builtin-tools=id1,id2 on new sessions." ]
+                        ]
+                    , Html.div [ Attr.class "me-field" ]
+                        [ Html.label [ Attr.class "me-field-label" ] [ Html.text "System prompt" ]
+                        , Html.textarea
+                            [ Attr.class "me-field-input me-field-textarea"
+                            , Attr.id "settings-system-prompt"
+                            , Attr.rows 12
+                            , Attr.value config.systemPrompt
+                            , Attr.placeholder "System prompt passed to AlayaCore as --system on every new session of this preset."
+                            , Ev.onInput config.onSystemPromptInput
+                            ]
+                            []
+                        , Html.div [ Attr.class "me-hint" ]
+                            [ Html.text "Passed to AlayaCore as --system on new sessions of this preset. Every session can create plans, so keep the plan-mode contract here (or in a copy of a seed preset)." ]
                         ]
                     ]
                 , Html.div [ Attr.class "me-actions" ]

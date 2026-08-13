@@ -34,10 +34,12 @@ type settingsCase struct {
 	Input    struct {
 		ToolConfirm  string `json:"tool_confirm"`
 		BuiltinTools string `json:"builtin_tools"`
+		SystemPrompt string `json:"system_prompt"`
 	} `json:"input"`
 	Normalized struct {
 		ToolConfirm  string `json:"tool_confirm"`
 		BuiltinTools string `json:"builtin_tools"`
+		SystemPrompt string `json:"system_prompt"`
 	} `json:"normalized"`
 	ExpectedFile string `json:"expected_file"`
 }
@@ -63,7 +65,7 @@ func TestSettingsSerializationMatchesSharedFixture(t *testing.T) {
 				t.Errorf("normalized mismatch: got (%q, %q), want (%q, %q)",
 					tc, bt, c.Normalized.ToolConfirm, c.Normalized.BuiltinTools)
 			}
-			settings := GlobalSettings{ToolConfirm: tc, BuiltinTools: bt}
+			settings := GlobalSettings{ToolConfirm: tc, BuiltinTools: bt, SystemPrompt: c.Input.SystemPrompt}
 			got, err := json.MarshalIndent(settings, "", "  ")
 			if err != nil {
 				t.Fatalf("marshal: %v", err)

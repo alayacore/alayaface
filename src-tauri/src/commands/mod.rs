@@ -35,6 +35,7 @@ use std::io::Write;
 pub struct SessionDirInfo {
     pub id: String,
     pub created_at: String,
+    pub preset: String,
 }
 
 #[derive(serde::Deserialize)]

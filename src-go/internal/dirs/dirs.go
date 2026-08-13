@@ -1,18 +1,17 @@
 // Package dirs manages the ~/.alayaface/ directory structure.
 //
 //	~/.alayaface/
-//	  active-preset        — name of the currently active preset
 //	  global.conf          — cross-preset global config overlay (recursion_limit etc.)
 //	  presets/
 //	    <name>/            — one config directory per preset
 //	      model.conf
 //	      runtime.conf
 //	      mcp.conf
-//	      settings.conf    — AlayaFace-owned (tool_confirm etc.); NOT copied into sessions
+//	      settings.conf    — AlayaFace-owned (tool_confirm, builtin_tools, system_prompt); NOT copied into sessions
 //	      themes/
 //	  sessions/
 //	    <uuid>/            — PLAIN sessions only (top level is never a plan child)
-//	      config/          — copy of the active preset's config (minus settings.conf)
+//	      config/          — copy of the creating preset's config (minus settings.conf)
 //	      session.alaya
 //	      plans/           — plans created by this session (0..N)
 //	        <planId>/      — one subtree per plan (sanitized id)
@@ -21,16 +20,19 @@
 //	          <nodeId>/    — one subtree per plan node (sanitized id)
 //	            <uuid>/    — the node's session dir (config/ + session.alaya)
 //
-// Port of src-tauri/src/dirs.rs.
+// Port of src-tauri/src/dirs.rs. There is no "active preset": every
+// session is created under an explicitly chosen preset (the frontend
+// always passes one), and each preset carries its own settings.conf
+// including the system_prompt used as --system.
 package dirs
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 )
 
 // AlayafaceDir returns the base directory (~/.alayaface).
@@ -48,11 +50,6 @@ func AlayafaceDir() string {
 // PresetsRoot returns the directory holding all presets (~/.alayaface/presets).
 func PresetsRoot() string {
 	return filepath.Join(AlayafaceDir(), "presets")
-}
-
-// ActivePresetFile returns the file recording the active preset name.
-func ActivePresetFile() string {
-	return filepath.Join(AlayafaceDir(), "active-preset")
 }
 
 // GlobalConfigFile returns the cross-preset global config file
@@ -81,63 +78,20 @@ func PresetDir(name string) string {
 	return filepath.Join(PresetsRoot(), name)
 }
 
-// ReadActivePreset reads the active preset name. Errors if the marker
-// is missing/invalid.
-func ReadActivePreset() (string, error) {
-	text, err := os.ReadFile(ActivePresetFile())
-	if err != nil {
-		return "", err
-	}
-	name := strings.TrimSpace(string(text))
-	if !ValidPresetName(name) {
-		return "", os.ErrInvalid
-	}
-	return name, nil
-}
-
-// WriteActivePreset persists the active preset name (atomic: temp + rename).
-// The temp name is unique per call (pid + nanosecond timestamp) so
-// concurrent writers (e.g. init seeding racing create_session's Ensure)
-// never clobber each other's temp file before its rename.
-func WriteActivePreset(name string) error {
-	if !ValidPresetName(name) {
-		return os.ErrInvalid
-	}
-	path := ActivePresetFile()
-	tmp := filepath.Join(AlayafaceDir(), fmt.Sprintf("active-preset-%d-%d.tmp", os.Getpid(), time.Now().UnixNano()))
-	if err := os.WriteFile(tmp, []byte(name), 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
-}
-
-// ActiveConfigDir returns the config directory of the active preset.
-func ActiveConfigDir() (string, error) {
-	name, err := ReadActivePreset()
-	if err != nil {
-		return "", err
-	}
-	return PresetDir(name), nil
-}
-
 // ResolveConfigDir resolves the config dir for a preset name.
-// Empty/whitespace means the active preset. Errors for unknown presets
-// or invalid names.
+// The preset is REQUIRED — there is no active-preset fallback. Errors
+// for empty/invalid names or unknown presets.
 func ResolveConfigDir(preset string) (string, error) {
-	if strings.TrimSpace(preset) == "" {
-		configDir, _, err := Ensure()
-		if err != nil {
-			return "", err
-		}
-		return configDir, nil
-	}
 	name := strings.TrimSpace(preset)
+	if name == "" {
+		return "", fmt.Errorf("Preset is required")
+	}
 	if !ValidPresetName(name) {
-		return "", os.ErrInvalid
+		return "", fmt.Errorf("Invalid preset name: %q", name)
 	}
 	dir := PresetDir(name)
 	if _, err := os.Stat(dir); err != nil {
-		return "", os.ErrNotExist
+		return "", fmt.Errorf("Preset not found: %s", name)
 	}
 	return dir, nil
 }
@@ -163,59 +117,66 @@ func ListPresetNames() ([]string, error) {
 }
 
 // Ensure guarantees ~/.alayaface/ exists with the preset structure.
-// On first run, seeds the built-in presets (Default/Fast/Deep/Data/Safe)
-// and marks Default active. Returns (activeConfigDir, sessionsDir).
-func Ensure() (string, string, error) {
+// On FIRST RUN (empty presets root), seeds the built-in presets
+// (Simple/Complex) with their settings.conf (tool_confirm/builtin_tools/
+// system_prompt). Once seeded, the seeds are regular presets: deleting
+// one must not resurrect it, so seeding never runs again on a
+// non-empty root. Returns the sessions dir.
+func Ensure() (string, error) {
 	base := AlayafaceDir()
 	presets := PresetsRoot()
 	sessions := filepath.Join(base, "sessions")
 
 	for _, d := range []string{presets, sessions} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
-			return "", "", err
+			return "", err
 		}
 	}
 
-	// Seed built-in presets on first run (idempotent per preset).
-	for _, name := range SeedPresets {
-		dir := filepath.Join(presets, name)
-		if _, err := os.Stat(dir); err != nil {
-			if err := CreatePresetDefaults(dir, name); err != nil {
-				return "", "", err
+	// Seed built-in presets on first run only (a non-empty root means
+	// the user has already managed presets — deleting a seed must not
+	// resurrect it).
+	entries, err := os.ReadDir(presets)
+	if err != nil {
+		return "", err
+	}
+	if len(entries) == 0 {
+		for _, name := range SeedPresets {
+			if err := CreatePresetDefaults(filepath.Join(presets, name), name); err != nil {
+				return "", err
 			}
 		}
 	}
 
-	if _, err := os.Stat(ActivePresetFile()); err != nil {
-		if err := WriteActivePreset("Default"); err != nil {
-			return "", "", err
-		}
-	}
-
-	active, err := ReadActivePreset()
-	if err != nil {
-		return "", "", err
-	}
-	return PresetDir(active), sessions, nil
+	return sessions, nil
 }
 
-// SeedPresets lists the built-in presets seeded on first run. Each is a
-// config template (model/mcp placeholders); users fill keys and can
-// copy/rename them.
-var SeedPresets = []string{"Default", "Fast", "Deep", "Data", "Safe"}
+// SeedPresets lists the built-in presets seeded on first run:
+//   - Simple  — light everyday chat and one-sentence subtasks
+//   - Complex — heavy reasoning / multi-step / research subtasks
+//
+// Each is a config template (model/mcp placeholders); users fill keys,
+// tune settings.conf and can copy/rename them. The plan contract in the
+// seeded system_prompt names these presets, so they cannot be renamed
+// (see IsSeedPreset).
+var SeedPresets = []string{"Simple", "Complex"}
 
-// CreateSessionDir creates a session directory with a copy of the active
-// preset's config. The session.alaya file itself is created by alayacore
-// when the session starts. settings.conf is AlayaFace-owned and
-// intentionally NOT copied into sessions.
-func CreateSessionDir(sessionsDir, uuid string) (string, error) {
-	return CreateSessionDirFrom(sessionsDir, uuid, "")
+// IsSeedPreset reports whether a preset is one of the built-in seeds.
+// Seed presets are referenced by name in the seeded system_prompt, so
+// renaming them is rejected (rename_preset).
+func IsSeedPreset(name string) bool {
+	for _, s := range SeedPresets {
+		if s == name {
+			return true
+		}
+	}
+	return false
 }
 
 // CreateSessionDirFrom creates a session directory from a specific
-// preset's config (`preset` empty = active preset). Used by Plan Mode so
-// different DAG nodes can run under different presets. settings.conf is
-// excluded from the copy.
+// preset's config (`preset` REQUIRED). Used by Plan Mode so different
+// DAG nodes can run under different presets. settings.conf is excluded
+// from the copy.
 func CreateSessionDirFrom(sessionsDir, uuid, preset string) (string, error) {
 	return createSessionDirIn(sessionsDir, uuid, preset)
 }
@@ -263,27 +224,23 @@ func CreatePlanSessionDirFrom(sessionsDir, originSessionDir, planId, nodeId, uui
 
 // createSessionDirIn copies the preset config into parent/<uuid>/config.
 func createSessionDirIn(parent, uuid, preset string) (string, error) {
-	if _, _, err := Ensure(); err != nil {
+	if _, err := Ensure(); err != nil {
 		return "", err
 	}
-	sessionDir := filepath.Join(parent, uuid)
-	dstConfig := filepath.Join(sessionDir, "config")
-
-	var template string
-	if preset == "" {
-		active, err := ActiveConfigDir()
-		if err != nil {
-			return "", err
-		}
-		template = active
-	} else {
-		dir := PresetDir(preset)
-		if _, err := os.Stat(dir); err != nil {
-			return "", fmt.Errorf("Preset not found: %s", preset)
-		}
-		template = dir
+	name := strings.TrimSpace(preset)
+	if name == "" {
+		return "", fmt.Errorf("Preset is required")
+	}
+	if !ValidPresetName(name) {
+		return "", os.ErrInvalid
+	}
+	template := PresetDir(name)
+	if _, err := os.Stat(template); err != nil {
+		return "", fmt.Errorf("Preset not found: %s", preset)
 	}
 
+	sessionDir := filepath.Join(parent, uuid)
+	dstConfig := filepath.Join(sessionDir, "config")
 	if err := copyDirExcluding(template, dstConfig, []string{"settings.conf"}); err != nil {
 		return "", err
 	}
@@ -291,29 +248,93 @@ func createSessionDirIn(parent, uuid, preset string) (string, error) {
 }
 
 // ClonePresetDir recursively copies a whole preset directory (including
-// settings.conf) — used when cloning the active preset to create a new one.
+// settings.conf) — used when cloning a preset to create a new one.
 func ClonePresetDir(src, dst string) error {
 	return copyDirExcluding(src, dst, nil)
 }
 
+// seedSettingsConf builds the AlayaFace-owned settings.conf for a seed
+// preset: empty tool lists plus the preset's system_prompt (the plan
+// contract phrased for the preset's role).
+func seedSettingsConf(name string) string {
+	s := map[string]string{
+		"tool_confirm":  "",
+		"builtin_tools": "",
+		"system_prompt": seedSystemPrompt(name),
+	}
+	b, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// seedSystemPrompt returns the seeded --system text for a preset. Both
+// seeds carry the full plan-mode contract (any session may be asked to
+// create a plan); the difference is the role framing. Keep in sync with
+// src-tauri/src/dirs.rs seed_system_prompt.
+func seedSystemPrompt(name string) string {
+	role := "You are the Simple preset of AlayaFace: handle everyday chat and light tasks directly, in one go, without planning.\n"
+	if name == "Complex" {
+		role = "You are the Complex preset of AlayaFace: you handle heavy reasoning, multi-step and research-heavy tasks. Prefer decomposing them into a plan.\n"
+	}
+	return role + planContract
+}
+
+// planContract is the plan-mode contract shared by every seed preset:
+// when to output a plan, the exact JSON schema, per-task preset choice
+// and stopping rules. Keep in sync with src-tauri/src/dirs.rs.
+// (Written with a @@FENCE@@ placeholder because Go raw strings cannot
+// contain backticks — the plan format needs ```json fences.)
+var planContract = strings.ReplaceAll(planContractRaw, "@@FENCE@@", "```")
+
+const planContractRaw = `
+You can use AlayaFace's plan mode: for complex or multi-step tasks, first output a plan so its subtasks run in parallel / by dependency, instead of doing everything yourself in one go.
+
+When to output a plan:
+- The task needs multiple steps, research/search across several areas, or a summarized report -> output a plan;
+- A simple task (doable in one sentence) -> just do it directly, do not output a plan.
+
+Plan format (output exactly one @@FENCE@@json code block, then stop and wait for the plan to finish executing):
+{
+  "type": "alayaface-plan",
+  "schema_version": 1,
+  "name": "plan name",
+  "goal": "goal description",
+  "concurrency": 8,
+  "default_max_attempts": 3,
+  "tasks": [
+    { "id": "t1", "title": "subtask title", "prompt": "complete, self-contained instruction", "depends_on": [], "preset": "Simple", "max_attempts": 3 }
+  ]
+}
+Rules:
+- The top level MUST include "type": "alayaface-plan" (without it the framework will not recognize the plan)
+- Field names must be spelled exactly as in the schema above (depends_on, concurrency, max_attempts, ...) — a misspelled or extra field makes the whole plan be rejected; do not invent fields
+- ids are globally unique; prompts are self-contained by default; if a downstream task needs an upstream task's output, reference it in the prompt with {{t1.output}} (the framework replaces it with that upstream task's final output once it completes; you may only reference tasks already declared as dependencies — never reference tasks outside the dependency graph)
+- Tasks that can run in parallel must not depend on each other
+- Set "preset" on EVERY task: "Simple" for light, one-sentence subtasks; "Complex" for heavy reasoning, multi-step or research subtasks. Both presets have models configured
+- For risky tasks involving commands, restrict the tool set with the tools field (e.g. read-only tools)
+- Even if a task needs no decomposition (doable in one sentence), still output a plan (a single task is fine) — that is your output format
+- After outputting the plan: stop, wait for the plan to finish and its result to come back, then continue your answer based on the result`
+
 // CreatePresetDefaults seeds a new preset's config with built-in
-// defaults. The Safe preset disables execute_command via settings.conf.
+// defaults. Both seed presets carry a settings.conf with their
+// system_prompt (see seedSystemPrompt).
 //
 // Presets are seeded as EMPTY shells: model.conf, runtime.conf and
 // themes/ are auto-created by alayacore on first use (verified against
 // the real binary — an empty config dir starts clean and alayacore
 // writes a working local-Ollama default model). Only AlayaFace-owned
-// settings.conf is written here, and only where it is meaningful.
+// settings.conf is written here.
 func CreatePresetDefaults(dir, name string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	if name == "Safe" {
-		// No execute_command: read/write/edit/search only.
-		safe := "{\n  \"tool_confirm\": \"\",\n  \"builtin_tools\": \"read_file,write_file,edit_file,search_content\"\n}\n"
-		return os.WriteFile(filepath.Join(dir, "settings.conf"), []byte(safe), 0o644)
+	conf := seedSettingsConf(name)
+	if conf == "" {
+		return fmt.Errorf("Cannot build settings.conf for %s", name)
 	}
-	return nil
+	return os.WriteFile(filepath.Join(dir, "settings.conf"), []byte(conf), 0o644)
 }
 
 // copyDirExcluding recursively copies a directory, skipping any files

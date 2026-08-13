@@ -130,7 +130,8 @@ dump("event_cases.json", {"frame": frame_cases, "delta": delta_cases, "status": 
 
 
 # ─── session.spawn.json (SpawnArgs) ─────────────────────────────────
-# Field order (both): tool_confirm, builtin_tools, system_prompt, work_dir.
+# Field order (both): tool_confirm, builtin_tools, system_prompt, work_dir,
+# preset.
 # builtin_tools: None -> null, Some("") -> "", Some("a,b") -> "a,b".
 # File is written with 2-space indent (Go MarshalIndent / serde_json
 # to_string_pretty produce the same layout).
@@ -141,39 +142,39 @@ def pretty(d):
 spawn_cases = [
     {
         "name": "no_tools",
-        "input": {"tool_confirm": "allow", "builtin_tools": "", "system_prompt": "planner-hint", "work_dir": "/tmp/plan-work"},
-        "expected": pretty({"tool_confirm": "allow", "builtin_tools": "", "system_prompt": "planner-hint", "work_dir": "/tmp/plan-work"}),
+        "input": {"tool_confirm": "allow", "builtin_tools": "", "system_prompt": "planner-hint", "work_dir": "/tmp/plan-work", "preset": "Complex"},
+        "expected": pretty({"tool_confirm": "allow", "builtin_tools": "", "system_prompt": "planner-hint", "work_dir": "/tmp/plan-work", "preset": "Complex"}),
     },
     {
         "name": "selected_tools",
-        "input": {"tool_confirm": "", "builtin_tools": "a,b", "system_prompt": "", "work_dir": ""},
-        "expected": pretty({"tool_confirm": "", "builtin_tools": "a,b", "system_prompt": "", "work_dir": ""}),
+        "input": {"tool_confirm": "", "builtin_tools": "a,b", "system_prompt": "", "work_dir": "", "preset": "Simple"},
+        "expected": pretty({"tool_confirm": "", "builtin_tools": "a,b", "system_prompt": "", "work_dir": "", "preset": "Simple"}),
     },
     {
         "name": "unset_tools",
-        "input": {"tool_confirm": "", "builtin_tools": None, "system_prompt": "", "work_dir": ""},
-        "expected": pretty({"tool_confirm": "", "builtin_tools": None, "system_prompt": "", "work_dir": ""}),
+        "input": {"tool_confirm": "", "builtin_tools": None, "system_prompt": "", "work_dir": "", "preset": ""},
+        "expected": pretty({"tool_confirm": "", "builtin_tools": None, "system_prompt": "", "work_dir": "", "preset": ""}),
     },
 ]
 dump("spawn_cases.json", {"cases": spawn_cases})
 
 
 # ─── settings.conf (GlobalSettings) ─────────────────────────────────
-# Field order (both): tool_confirm, builtin_tools. Written with 2-space
-# indent; empty strings are kept (no omitempty / no skip).
+# Field order (both): tool_confirm, builtin_tools, system_prompt. Written
+# with 2-space indent; empty strings are kept (no omitempty / no skip).
 
 settings_cases = [
     {
         "name": "normalized",
-        "input": {"tool_confirm": " execute_command , search_files ,", "builtin_tools": "read_file,write_file"},
-        "normalized": {"tool_confirm": "execute_command,search_files", "builtin_tools": "read_file,write_file"},
-        "expected_file": pretty({"tool_confirm": "execute_command,search_files", "builtin_tools": "read_file,write_file"}),
+        "input": {"tool_confirm": " execute_command , search_files ,", "builtin_tools": "read_file,write_file", "system_prompt": "planner-hint"},
+        "normalized": {"tool_confirm": "execute_command,search_files", "builtin_tools": "read_file,write_file", "system_prompt": "planner-hint"},
+        "expected_file": pretty({"tool_confirm": "execute_command,search_files", "builtin_tools": "read_file,write_file", "system_prompt": "planner-hint"}),
     },
     {
         "name": "empty",
-        "input": {"tool_confirm": "", "builtin_tools": ""},
-        "normalized": {"tool_confirm": "", "builtin_tools": ""},
-        "expected_file": pretty({"tool_confirm": "", "builtin_tools": ""}),
+        "input": {"tool_confirm": "", "builtin_tools": "", "system_prompt": ""},
+        "normalized": {"tool_confirm": "", "builtin_tools": "", "system_prompt": ""},
+        "expected_file": pretty({"tool_confirm": "", "builtin_tools": "", "system_prompt": ""}),
     },
 ]
 dump("settings_cases.json", {"cases": settings_cases})

@@ -6,9 +6,10 @@
         "tool_confirm": "allow",
         "builtin_tools": "",
         "system_prompt": "planner-hint",
-        "work_dir": "/tmp/plan-work"
+        "work_dir": "/tmp/plan-work",
+        "preset": "Complex"
       },
-      "expected": "{\n  \"tool_confirm\": \"allow\",\n  \"builtin_tools\": \"\",\n  \"system_prompt\": \"planner-hint\",\n  \"work_dir\": \"/tmp/plan-work\"\n}"
+      "expected": "{\n  \"tool_confirm\": \"allow\",\n  \"builtin_tools\": \"\",\n  \"system_prompt\": \"planner-hint\",\n  \"work_dir\": \"/tmp/plan-work\",\n  \"preset\": \"Complex\"\n}"
     },
     {
       "name": "selected_tools",
@@ -16,9 +17,10 @@
         "tool_confirm": "",
         "builtin_tools": "a,b",
         "system_prompt": "",
-        "work_dir": ""
+        "work_dir": "",
+        "preset": "Simple"
       },
-      "expected": "{\n  \"tool_confirm\": \"\",\n  \"builtin_tools\": \"a,b\",\n  \"system_prompt\": \"\",\n  \"work_dir\": \"\"\n}"
+      "expected": "{\n  \"tool_confirm\": \"\",\n  \"builtin_tools\": \"a,b\",\n  \"system_prompt\": \"\",\n  \"work_dir\": \"\",\n  \"preset\": \"Simple\"\n}"
     },
     {
       "name": "unset_tools",
@@ -26,9 +28,10 @@
         "tool_confirm": "",
         "builtin_tools": null,
         "system_prompt": "",
-        "work_dir": ""
+        "work_dir": "",
+        "preset": ""
       },
-      "expected": "{\n  \"tool_confirm\": \"\",\n  \"builtin_tools\": null,\n  \"system_prompt\": \"\",\n  \"work_dir\": \"\"\n}"
+      "expected": "{\n  \"tool_confirm\": \"\",\n  \"builtin_tools\": null,\n  \"system_prompt\": \"\",\n  \"work_dir\": \"\",\n  \"preset\": \"\"\n}"
     }
   ]
 }

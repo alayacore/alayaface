@@ -95,19 +95,19 @@ One-way push (server → client), message format:
 | `alayacore_mcp_decline` | `POST /rpc/alayacore_mcp_decline` | `sessionId`, `server` | — |
 | `alayacore_mcp_cancel` | `POST /rpc/alayacore_mcp_cancel` | `sessionId` | — |
 | `list_models` | `POST /rpc/list_models` | `binaryPath`, `configPath` | `[model]` |
-| `list_default_models` | `POST /rpc/list_default_models` | `binaryPath`, `preset` | `[model]` |
+| `list_default_models` | `POST /rpc/list_default_models` | `binaryPath`, `preset` | `{models, active_id}` |
 | `sync_default_models` | `POST /rpc/sync_default_models` | `binaryPath`, `config`, `preset` | CO `output` |
+| `set_default_model` | `POST /rpc/set_default_model` | `preset`, `modelId` | CO `output` (probe `model_set` → persists `active_model` into the preset's runtime.conf) |
 | `list_default_mcp` | `POST /rpc/list_default_mcp` | `preset` | `[server]` |
 | `sync_default_mcp` | `POST /rpc/sync_default_mcp` | `config`, `preset` | — |
-| `get_global_settings` | `POST /rpc/get_global_settings` | `preset` | `{tool_confirm, builtin_tools}` |
-| `sync_global_settings` | `POST /rpc/sync_global_settings` | `config`, `preset` | — |
+| `get_global_settings` | `POST /rpc/get_global_settings` | `preset` | `{tool_confirm, builtin_tools, system_prompt}` |
+| `sync_global_settings` | `POST /rpc/sync_global_settings` | `config`, `preset` | — (merge semantics: absent fields keep current values) |
 | `get_global_config` | `POST /rpc/get_global_config` | — | `{recursion_limit}` |
 | `sync_global_config` | `POST /rpc/sync_global_config` | `config` | `{recursion_limit}` (normalized) |
-| `list_presets` | `POST /rpc/list_presets` | — | `[{name, is_active}]` |
+| `list_presets` | `POST /rpc/list_presets` | — | `[{name}]` |
 | `copy_preset` | `POST /rpc/copy_preset` | `source`, `name` | — |
 | `rename_preset` | `POST /rpc/rename_preset` | `oldName`, `newName` | — |
 | `delete_preset` | `POST /rpc/delete_preset` | `name` | — |
-| `set_active_preset` | `POST /rpc/set_active_preset` | `name` | — |
 | `fs_list_dir` | `POST /rpc/fs_list_dir` | `path` | `[{name, isDir}]` |
 | `fs_home_dir` | `POST /rpc/fs_home_dir` | — | string |
 | `fs_resolve_path` | `POST /rpc/fs_resolve_path` | `path` | `{resolved, exists, isDir}` |
@@ -118,8 +118,8 @@ One-way push (server → client), message format:
 | `start_mcp_auth_flow` | `POST /rpc/start_mcp_auth_flow` | `sessionId`, `serverName`, `authUrl` | string filled URL |
 | `fill_mcp_auth_url` | `POST /rpc/fill_mcp_auth_url` | `sessionId`, `serverName`, `authUrl` | string filled URL |
 
-> Note: snake_case fields in Rust command returns (`is_active`,
-> `tool_confirm`, `media_type`, ...) are serde defaults (no rename). Go JSON tags must
+> Note: snake_case fields in Rust command returns (`tool_confirm`,
+> `builtin_tools`, `system_prompt`, `media_type`, ...) are serde defaults (no rename). Go JSON tags must
 > match these exactly — do not "fix" them to camelCase — the Elm decoders read these keys.
 
 ---

@@ -58,6 +58,7 @@ func TestWriteRoundtrips(t *testing.T) {
 
 func TestSyncValidates(t *testing.T) {
 	isolatedHome(t, func() {
+		seedPresets(t)
 		badCases := []string{
 			// Invalid args JSON must be rejected (stdio server).
 			`[{"server":"x","command":"bin","args":"not json"}]`,
@@ -71,7 +72,7 @@ func TestSyncValidates(t *testing.T) {
 			`[{"server":"x","url":"https://example.com/mcp","auth_type":"static"}]`,
 		}
 		for _, c := range badCases {
-			if err := callErr(t, SyncDefaultMcp, map[string]any{"config": c, "preset": ""}); err == nil {
+			if err := callErr(t, SyncDefaultMcp, map[string]any{"config": c, "preset": "Simple"}); err == nil {
 				t.Errorf("expected error for config %s", c)
 			}
 		}
@@ -80,6 +81,7 @@ func TestSyncValidates(t *testing.T) {
 
 func TestSyncAcceptsEmptyArgsEnv(t *testing.T) {
 	isolatedHome(t, func() {
+		seedPresets(t)
 		okCases := []string{
 			// HTTP server: empty args/env strings must not be validated.
 			`[{"server":"exa","url":"https://mcp.exa.ai/mcp","args":"","env":""}]`,
@@ -89,7 +91,7 @@ func TestSyncAcceptsEmptyArgsEnv(t *testing.T) {
 			`[{"server":"blah","command":"my-mcp","args":"[\"--foo\"]","env":"{\"RUST_LOG\":\"info\"}"}]`,
 		}
 		for _, c := range okCases {
-			if err := callErr(t, SyncDefaultMcp, map[string]any{"config": c, "preset": ""}); err != nil {
+			if err := callErr(t, SyncDefaultMcp, map[string]any{"config": c, "preset": "Simple"}); err != nil {
 				t.Errorf("unexpected error for config %s: %v", c, err)
 			}
 		}
@@ -98,8 +100,9 @@ func TestSyncAcceptsEmptyArgsEnv(t *testing.T) {
 
 func TestListDefaultMcpMissingFileReturnsEmpty(t *testing.T) {
 	isolatedHome(t, func() {
+		seedPresets(t)
 		// A missing mcp.conf must be an empty list, not an error.
-		rr := call(t, ListDefaultMcp, map[string]any{"preset": ""})
+		rr := call(t, ListDefaultMcp, map[string]any{"preset": "Simple"})
 		var out []map[string]any
 		if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
 			t.Fatal(err)

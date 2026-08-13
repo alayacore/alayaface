@@ -45,8 +45,11 @@ import (
 )
 
 // sessionFile is the --session flag value; `save` writes to it (empty
-// filename semantics, like real alayacore).
+// filename semantics, like real alayacore). configDir is the
+// --config-path value; model_set writes runtime.conf into it (mirrors
+// real alayacore).
 var sessionFile string
+var configDir string
 
 // histMsg is one recorded message of this session's history. The fake
 // maintains it so `fork` can truncate it into the new session file and
@@ -91,9 +94,9 @@ const planJSON = `{
   "concurrency": 2,
   "default_max_attempts": 3,
   "tasks": [
-    { "id": "t1", "title": "Research", "prompt": "research the topic and summarize findings", "depends_on": [], "max_attempts": 3 },
-    { "id": "t2", "title": "Draft", "prompt": "draft the report from the research (fail-once marker). using upstream output: {{t1.output}}", "depends_on": ["t1"], "max_attempts": 3 },
-    { "id": "t3", "title": "Review", "prompt": "review the draft and fix any issues (hang-once marker)", "depends_on": ["t2"], "max_attempts": 3 }
+    { "id": "t1", "title": "Research", "prompt": "research the topic and summarize findings", "depends_on": [], "preset": "Simple", "max_attempts": 3 },
+    { "id": "t2", "title": "Draft", "prompt": "draft the report from the research (fail-once marker). using upstream output: {{t1.output}}", "depends_on": ["t1"], "preset": "Complex", "max_attempts": 3 },
+    { "id": "t3", "title": "Review", "prompt": "review the draft and fix any issues (hang-once marker)", "depends_on": ["t2"], "preset": "Complex", "max_attempts": 3 }
   ]
 }`
 
@@ -170,6 +173,16 @@ func streamReply() {
 	history = append(history, histMsg{"assistant", "Hello world\n\nReceived prompt: " + stagedText + versionSuffix(), aid2})
 }
 
+// writeRuntimeConf persists the active model name into a config dir's
+// runtime.conf (key: value lines, like real alayacore — strings are
+// double-quoted).
+func writeRuntimeConf(configDir, modelName string) error {
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(configDir, "runtime.conf"), []byte("active_model: \""+modelName+"\"\n"), 0o644)
+}
+
 func coOk(id string, output map[string]any) {
 	payload, _ := json.Marshal(map[string]any{
 		"id":       id,
@@ -189,9 +202,12 @@ func coErr(id, message string) {
 }
 
 func smModelList() {
+	// Full ModelInfo shape (mirrors real alayacore's model_list so the
+	// Elm modelInfoDecoder accepts it): id, name, protocol_type,
+	// base_url, api_key, model_name, context_limit, max_tokens.
 	payload := `{"type":"model_list","data":{"models":[` +
-		`{"id":1,"name":"fake-model-1"},` +
-		`{"id":2,"name":"fake-model-2"}]}}`
+		`{"id":1,"name":"fake-model-1","protocol_type":"openai","base_url":"http://localhost:11434/v1","api_key":"fake","model_name":"model-1","context_limit":8192,"max_tokens":2048},` +
+		`{"id":2,"name":"fake-model-2","protocol_type":"openai","base_url":"http://localhost:11434/v1","api_key":"fake","model_name":"model-2","context_limit":16384,"max_tokens":4096}]}}`
 	writeFrame("SM", payload)
 }
 
@@ -252,6 +268,16 @@ func handleCmd(raw string) {
 		}
 		coOk(msg.ID, map[string]any{"path": sessionFile})
 	case "model_set":
+		// Mirror real alayacore: model_set persists the active model to
+		// the config dir's runtime.conf (`active_model: <name>`), so the
+		// preset-level set-default-model flow is testable end to end.
+		if configDir != "" {
+			name := fmt.Sprintf("fake-model-%s", msg.Input)
+			if err := writeRuntimeConf(configDir, name); err != nil {
+				coErr(msg.ID, "cannot write runtime.conf")
+				return
+			}
+		}
 		coOk(msg.ID, map[string]any{"modelId": msg.Input})
 	case "model_load":
 		smModelList()
@@ -276,7 +302,7 @@ func handleCmd(raw string) {
 func main() {
 	rawio := flag.Bool("rawio", false, "required rawio mode flag")
 	flag.StringVar(&sessionFile, "session", "", "session file to create on startup")
-	_ = flag.String("config-path", "", "config dir (accepted, unused)")
+	flag.StringVar(&configDir, "config-path", "", "config dir (runtime.conf is written here by model_set)")
 	toolConfirmFlag := flag.String("tool-confirm", "", "pre-approved tool list (accepted; echoed in the boot frame)")
 	systemFlag := flag.String("system", "", "system prompt (accepted; non-empty switches to plan mode)")
 	builtinToolsFlag := flag.String("builtin-tools", "", "builtin tools (accepted; echoed in the boot frame)")

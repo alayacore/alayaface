@@ -272,12 +272,34 @@
 
     on("listDefaultModels", function (data) {
       transport.invoke("list_default_models", { binaryPath: "", preset: (data && data.preset) || "" })
-        .then(function (models) {
-          app.ports.onDefaultModelsList.send({ ok: true, models: models, error: "" });
+        .then(function (res) {
+          app.ports.onDefaultModelsList.send({
+            ok: true,
+            models: (res && res.models) || [],
+            active_id: (res && res.active_id) || null,
+            error: "",
+          });
         })
         .catch(function (err) {
           app.ports.onDefaultModelsList.send({
-            ok: false, models: [], error: String((err && err.message) || err),
+            ok: false, models: [], active_id: null,
+            error: String((err && err.message) || err),
+          });
+        });
+    });
+
+    on("setDefaultModel", function (data) {
+      const modelId = (data && data.modelId) || 0;
+      transport.invoke("set_default_model", {
+        preset: (data && data.preset) || "",
+        modelId: modelId,
+      })
+        .then(function () {
+          app.ports.onDefaultModelSetResult.send({ ok: true, modelId: modelId, error: "" });
+        })
+        .catch(function (err) {
+          app.ports.onDefaultModelSetResult.send({
+            ok: false, modelId: modelId, error: String((err && err.message) || err),
           });
         });
     });
@@ -329,12 +351,13 @@
             ok: true,
             tool_confirm: (res && res.tool_confirm) || "",
             builtin_tools: (res && res.builtin_tools) || "",
+            system_prompt: (res && res.system_prompt) || "",
             error: "",
           });
         })
         .catch(function (err) {
           app.ports.onGlobalSettingsList.send({
-            ok: false, tool_confirm: "", builtin_tools: "",
+            ok: false, tool_confirm: "", builtin_tools: "", system_prompt: "",
             error: String((err && err.message) || err),
           });
         });
@@ -345,6 +368,7 @@
         config: JSON.stringify({
           tool_confirm: data.toolConfirm || "",
           builtin_tools: data.builtinTools || "",
+          system_prompt: data.systemPrompt || "",
         }),
         preset: (data && data.preset) || "",
       })
@@ -432,16 +456,6 @@
 
     on("deletePreset", function (data) {
       transport.invoke("delete_preset", { name: data.name || "" })
-        .then(function () { app.ports.onPresetActionResult.send({ ok: true, error: "" }); })
-        .catch(function (err) {
-          app.ports.onPresetActionResult.send({
-            ok: false, error: String((err && err.message) || err),
-          });
-        });
-    });
-
-    on("setActivePreset", function (data) {
-      transport.invoke("set_active_preset", { name: data.name || "" })
         .then(function () { app.ports.onPresetActionResult.send({ ok: true, error: "" }); })
         .catch(function (err) {
           app.ports.onPresetActionResult.send({

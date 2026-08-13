@@ -107,15 +107,21 @@
 
 ## 6. Presets / Tool Sets (P4.5)
 
-- [ ] Presets manager shows the 5 seed presets (Default/Fast/Deep/Data/Safe)
-- [ ] Nodes running under the Safe preset never see execute_command (settings.conf builtin_tools applies)
+- [ ] Presets manager shows the 2 seed presets (Simple/Complex)
+- [ ] Simple/Complex show a "built-in" tag with NO Rename and NO Delete button; copies (e.g. Simple-copy) have both
+- [ ] `rename_preset` / `delete_preset` on Simple or Complex are rejected by the backend even without the UI
+- [ ] Each seed preset's Settings editor shows a System prompt (the plan contract) which reaches the session as `--system`
+- [ ] Preset Models editor: click "Set Default" on a model → it becomes the preset's default (● marker + header `preset · model`), runtime.conf gains `active_model: <name>`, and a NEW session under that preset starts on that model
+- [ ] Global menu → New Session hover submenu lists the presets and creates the session under the chosen preset (spawn log shows `preset=...`)
+- [ ] Plan node sessions under the Complex preset get Complex's system_prompt (spawn log `--system` + `preset=Complex`)
+- [ ] No `active-preset` file exists under `~/.alayaface/`; editing a preset's settings never affects another preset
 - [ ] Node-level `tools` field override works
 
 ## Regression (non-Plan features unaffected)
 
-- [ ] Normal New Session conversations work (no [Plan] prefix, no planner system prompt)
+- [ ] Normal New Session conversations work (no [Plan] prefix; the preset's system_prompt is the only system prompt)
 - [ ] Session manager / deleting sessions / restoring sessions work
-- [ ] File picker, Settings editor (tool_confirm / builtin_tools) work
+- [ ] File picker, Settings editor (tool_confirm / builtin_tools / system_prompt) work
 
 ## Known Limitations (acceptance: confirm "as expected")
 

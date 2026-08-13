@@ -1,10 +1,10 @@
 //! Preset management Tauri commands.
 //!
 //! A preset is a named config directory (~/.alayaface/presets/<name>) holding
-//! model.conf, runtime.conf, mcp.conf, settings.conf and themes/. Exactly one
-//! preset is active at a time (recorded in ~/.alayaface/active-preset); new
-//! sessions are created from a copy of the active preset's config, and the
-//! model/MCP/settings editors operate on it.
+//! model.conf, runtime.conf, mcp.conf, settings.conf and themes/. Every
+//! session is created under an EXPLICITLY chosen preset (the frontend always
+//! passes one — there is no active preset), and the model/MCP/settings
+//! editors operate on a specific preset.
 
 use crate::dirs;
 use serde::Serialize;
@@ -13,19 +13,18 @@ use serde::Serialize;
 #[derive(Serialize)]
 pub struct PresetInfo {
     pub name: String,
-    pub is_active: bool,
+    pub is_seed: bool,
 }
 
-/// List all presets, flagging the active one.
+/// List all presets.
 #[tauri::command]
 pub async fn list_presets() -> Result<Vec<PresetInfo>, String> {
     dirs::ensure()?;
-    let active = dirs::read_active_preset()?;
     let names = dirs::list_preset_names()?;
     Ok(names
         .into_iter()
         .map(|name| PresetInfo {
-            is_active: name == active,
+            is_seed: dirs::is_seed_preset(&name),
             name,
         })
         .collect())
@@ -55,17 +54,18 @@ pub async fn copy_preset(source: String, name: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Delete a preset. The active preset and the last remaining preset cannot be
-/// deleted.
+/// Delete a preset. Built-in seed presets (Simple/Complex) cannot be
+/// deleted (the seeded plan contract references them), and the last
+/// remaining preset cannot be deleted either.
 #[tauri::command]
 pub async fn delete_preset(name: String) -> Result<(), String> {
     let name = validate_name(&name)?;
     dirs::ensure()?;
 
-    let active = dirs::read_active_preset()?;
-    if name == active {
-        return Err("Cannot delete the active preset — switch to another preset first".to_string());
+    if dirs::is_seed_preset(&name) {
+        return Err(format!("Cannot delete the built-in preset: {name}"));
     }
+
     if dirs::list_preset_names()?.len() <= 1 {
         return Err("Cannot delete the last preset".to_string());
     }
@@ -80,13 +80,17 @@ pub async fn delete_preset(name: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Rename a preset. If the renamed preset was active, the active marker
-/// follows the new name.
+/// Rename a preset. Built-in seed presets (Simple/Complex) cannot be
+/// renamed — the seeded plan contract references them by name.
 #[tauri::command]
 pub async fn rename_preset(old_name: String, new_name: String) -> Result<(), String> {
     let old_name = validate_name(&old_name)?;
     let new_name = validate_name(&new_name)?;
     dirs::ensure()?;
+
+    if dirs::is_seed_preset(&old_name) {
+        return Err(format!("Cannot rename the built-in preset: {old_name}"));
+    }
 
     if old_name == new_name {
         return Ok(());
@@ -103,28 +107,7 @@ pub async fn rename_preset(old_name: String, new_name: String) -> Result<(), Str
 
     std::fs::rename(&old_dir, &new_dir)
         .map_err(|e| format!("Failed to rename preset: {e}"))?;
-
-    let active = dirs::read_active_preset()?;
-    if active == old_name {
-        dirs::write_active_preset(&new_name)?;
-    }
     log::info!("[presets] Renamed {:?} → {:?}", old_name, new_name);
-    Ok(())
-}
-
-/// Make a preset the active one. New sessions and the editors use it from
-/// now on; already-running sessions keep their own config copies.
-#[tauri::command]
-pub async fn set_active_preset(name: String) -> Result<(), String> {
-    let name = validate_name(&name)?;
-    dirs::ensure()?;
-
-    let dir = dirs::preset_dir(&name);
-    if !dir.exists() {
-        return Err(format!("Preset not found: {name}"));
-    }
-    dirs::write_active_preset(&name)?;
-    log::info!("[presets] Active preset set to {:?}", name);
     Ok(())
 }
 
@@ -147,50 +130,52 @@ mod tests {
         crate::dirs::isolated_home(|| {
             let rt = tokio::runtime::Runtime::new().unwrap();
 
-            // First run seeds the built-in presets and marks Default active.
+            // First run seeds the built-in presets (Simple/Complex).
             let list = rt.block_on(list_presets()).unwrap();
-            assert_eq!(list.len(), 5, "expected Default/Fast/Deep/Data/Safe seeds");
-            assert!(list.iter().any(|p| p.name == "Default" && p.is_active));
-            assert!(list.iter().any(|p| p.name == "Safe" && !p.is_active));
+            assert_eq!(list.len(), 2, "expected Simple/Complex seeds");
+            assert!(list.iter().any(|p| p.name == "Simple" && p.is_seed));
+            assert!(list.iter().any(|p| p.name == "Complex" && p.is_seed));
 
-            // Create a second preset by copying Default.
-            rt.block_on(copy_preset("Default".to_string(), "work".to_string()))
+            // Renaming a built-in seed is rejected (the seeded plan
+            // contract references the names).
+            assert!(rt
+                .block_on(rename_preset("Simple".to_string(), "foo".to_string()))
+                .is_err());
+            assert!(rt
+                .block_on(rename_preset("Complex".to_string(), "bar".to_string()))
+                .is_err());
+
+            // Create a second preset by copying Simple.
+            rt.block_on(copy_preset("Simple".to_string(), "work".to_string()))
                 .unwrap();
             let list = rt.block_on(list_presets()).unwrap();
-            assert_eq!(list.len(), 6, "5 seeds + work");
-            assert!(list.iter().any(|p| p.name == "work" && !p.is_active));
+            assert_eq!(list.len(), 3, "2 seeds + work");
+            assert!(list.iter().any(|p| p.name == "work" && !p.is_seed));
 
             // Copying a nonexistent source or an existing target is rejected.
             assert!(rt
                 .block_on(copy_preset("nope".to_string(), "x".to_string()))
                 .is_err());
             assert!(rt
-                .block_on(copy_preset("Default".to_string(), "Default".to_string()))
+                .block_on(copy_preset("Simple".to_string(), "Simple".to_string()))
                 .is_err());
 
-            // Switch active.
-            rt.block_on(set_active_preset("work".to_string())).unwrap();
-            let list = rt.block_on(list_presets()).unwrap();
-            assert!(list.iter().any(|p| p.name == "work" && p.is_active));
-            assert!(list.iter().any(|p| p.name == "Default" && !p.is_active));
-
-            // Renaming the active preset moves the marker too.
+            // A copy is NOT a seed → renameable.
             rt.block_on(rename_preset("work".to_string(), "work2".to_string()))
                 .unwrap();
-            assert_eq!(dirs::read_active_preset().unwrap(), "work2");
+            let list = rt.block_on(list_presets()).unwrap();
+            assert!(list.iter().any(|p| p.name == "work2"));
+            assert!(!list.iter().any(|p| p.name == "work"));
 
-            // Cannot delete the active preset.
-            assert!(rt.block_on(delete_preset("work2".to_string())).is_err());
-
-            // Cannot delete the last remaining preset.
-            rt.block_on(set_active_preset("Default".to_string())).unwrap();
-            assert!(rt.block_on(delete_preset("Default".to_string())).is_err());
-
-            // Deleting a non-active preset works.
+            // Deleting a non-seed preset works.
             rt.block_on(delete_preset("work2".to_string())).unwrap();
             let list = rt.block_on(list_presets()).unwrap();
-            assert_eq!(list.len(), 5, "back to the seeds");
-            assert!(list.iter().any(|p| p.name == "Default" && p.is_active));
+            assert_eq!(list.len(), 2, "back to the seeds");
+
+            // Deleting a built-in seed is rejected (the seeded plan
+            // contract references the names).
+            assert!(rt.block_on(delete_preset("Simple".to_string())).is_err());
+            assert!(rt.block_on(delete_preset("Complex".to_string())).is_err());
         });
     }
 
@@ -199,16 +184,16 @@ mod tests {
         crate::dirs::isolated_home(|| {
             let rt = tokio::runtime::Runtime::new().unwrap();
             assert!(rt
-                .block_on(copy_preset("Default".to_string(), "a/b".to_string()))
+                .block_on(copy_preset("Simple".to_string(), "a/b".to_string()))
                 .is_err());
             assert!(rt
-                .block_on(copy_preset("Default".to_string(), "..".to_string()))
+                .block_on(copy_preset("Simple".to_string(), "..".to_string()))
                 .is_err());
             assert!(rt
-                .block_on(copy_preset("Default".to_string(), "has space".to_string()))
+                .block_on(copy_preset("Simple".to_string(), "has space".to_string()))
                 .is_err());
             assert!(rt
-                .block_on(copy_preset("Default".to_string(), "".to_string()))
+                .block_on(copy_preset("Simple".to_string(), "".to_string()))
                 .is_err());
         });
     }

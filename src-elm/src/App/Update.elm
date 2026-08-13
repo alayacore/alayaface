@@ -861,19 +861,23 @@ update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
         -- Session Lifecycle
-        CreateSession ->
+        -- The user picked a preset from the global menu's hover submenu;
+        -- every session runs under an explicit preset (no active preset).
+        -- The system prompt is left to the backend: it resolves the
+        -- preset's system_prompt from settings.conf.
+        CreateSessionWith preset ->
             case model.planCreating of
                 -- A session create is in flight: queue the user's create
                 -- on the same serialized queue so the runner's
                 -- SessionCreated cannot be misbound to it.
                 Just _ ->
-                    ( { model | planCreateQueue = model.planCreateQueue ++ [ UserCreate "normal" ], showGlobalMenu = False }
+                    ( { model | planCreateQueue = model.planCreateQueue ++ [ UserCreate preset ], showGlobalMenu = False }
                     , Cmd.none
                     )
 
                 Nothing ->
                     ( { model | pendingSwitchOnCreate = True, showGlobalMenu = False }
-                    , Ports.createSession { toolConfirm = Nothing, preset = Nothing, builtinTools = Nothing, systemPrompt = Just planSystemPrompt, workDir = Nothing, planId = Nothing, nodeId = Nothing, originSessionId = Nothing }
+                    , Ports.createSession { toolConfirm = Nothing, preset = Just preset, builtinTools = Nothing, systemPrompt = Nothing, workDir = Nothing, planId = Nothing, nodeId = Nothing, originSessionId = Nothing }
                     )
 
         SessionCreated id ->
@@ -3664,10 +3668,13 @@ update msg model =
             )
 
         ShowGlobalMenuAt x y ->
-            ( { model | showGlobalMenu = True, globalMenuX = x, globalMenuY = y }, Cmd.none )
+            ( { model | showGlobalMenu = True, globalMenuX = x, globalMenuY = y, presetSubmenuOpen = False }, Cmd.none )
 
         CloseGlobalMenu ->
-            ( { model | showGlobalMenu = False }, Cmd.none )
+            ( { model | showGlobalMenu = False, presetSubmenuOpen = False }, Cmd.none )
+
+        SetPresetSubmenu open ->
+            ( { model | presetSubmenuOpen = open }, Cmd.none )
 
         SessionDirsResult raw ->
             case D.decodeValue sessionDirsDecoder raw of
@@ -3896,8 +3903,8 @@ update msg model =
         ModelSelectorSelectItem idx ->
             Kit.selectItem sessionModelKit idx model
 
-        ModelSelectorConfirmItem ->
-            Kit.confirmItem sessionModelKit model
+        ModelSelectorConfirmItem id ->
+            Kit.confirmItem sessionModelKit id model
 
         ModelSelectorEditModel id ->
             Kit.editItem sessionModelKit id model
@@ -3992,7 +3999,11 @@ update msg model =
                     if res.ok then
                         ( { model
                             | defaultModelsEditor =
-                                { ed | state = Sel.setList res.models ed.state }
+                                { ed
+                                    | state = Sel.setList res.models ed.state
+                                    , activeModelId = res.activeId
+                                    , error = Nothing
+                                }
                           }
                         , Cmd.batch
                             [ focusAfterDelay "model-selector-input-default"
@@ -4011,14 +4022,65 @@ update msg model =
                 Err _ ->
                     ( model, Cmd.none )
 
+        -- Make a model the preset's DEFAULT: the backend probes alayacore
+        -- with model_set so the preset's runtime.conf records it; new
+        -- sessions under the preset then start on that model.
+        DefaultModelsSetActive id ->
+            ( { model
+                | defaultModelsEditor =
+                    let
+                        ed =
+                            model.defaultModelsEditor
+                    in
+                    { ed | error = Nothing }
+              }
+            , Ports.setDefaultModel
+                { preset = model.defaultModelsEditor.preset
+                , modelId = id
+                }
+            )
+
+        -- Result of setting a model as the preset's DEFAULT.
+        DefaultModelsSetActiveResult raw ->
+            case D.decodeValue defaultModelsActionResultDecoder raw of
+                Ok res ->
+                    let
+                        ed =
+                            model.defaultModelsEditor
+                    in
+                    if res.ok then
+                        -- Optimistically mark the model as the default
+                        -- (instant header/● feedback), then re-list so
+                        -- the marker reflects what alayacore persisted.
+                        ( { model
+                            | defaultModelsEditor =
+                                { ed
+                                    | activeModelId = Just res.modelId
+                                    , error = Nothing
+                                }
+                          }
+                        , Ports.listDefaultModels { preset = ed.preset }
+                        )
+
+                    else
+                        ( { model
+                            | defaultModelsEditor =
+                                { ed | error = Just res.error }
+                          }
+                        , Cmd.none
+                        )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
         SetDefaultModelsInput val ->
             Kit.setInput defaultModelsKit val model
 
         DefaultModelsSelectItem idx ->
             Kit.selectItem defaultModelsKit idx model
 
-        DefaultModelsConfirmItem ->
-            Kit.confirmItem defaultModelsKit model
+        DefaultModelsConfirmItem id ->
+            Kit.confirmItem defaultModelsKit id model
 
         DefaultModelsEditModel id ->
             Kit.editItem defaultModelsKit id model
@@ -4141,8 +4203,8 @@ update msg model =
         McpSelectItem idx ->
             Kit.selectItem mcpKit idx model
 
-        McpConfirmItem ->
-            Kit.confirmItem mcpKit model
+        McpConfirmItem id ->
+            Kit.confirmItem mcpKit id model
 
         McpEditServer id ->
             Kit.editItem mcpKit id model
@@ -4250,6 +4312,21 @@ update msg model =
             , Cmd.none
             )
 
+        SetSystemPrompt val ->
+            let
+                ed =
+                    model.settingsEditor
+            in
+            ( { model
+                | settingsEditor =
+                    { ed
+                        | systemPrompt = val
+                        , error = Nothing
+                    }
+              }
+            , Cmd.none
+            )
+
         SettingsSave ->
             let
                 ed =
@@ -4262,6 +4339,7 @@ update msg model =
                 { preset = ed.preset
                 , toolConfirm = ed.toolConfirm
                 , builtinTools = ed.builtinTools
+                , systemPrompt = ed.systemPrompt
                 }
             )
 
@@ -4279,6 +4357,7 @@ update msg model =
                                     | loading = False
                                     , toolConfirm = res.toolConfirm
                                     , builtinTools = res.builtinTools
+                                    , systemPrompt = res.systemPrompt
                                     , error = Nothing
                                 }
                           }
@@ -4513,17 +4592,6 @@ update msg model =
                 }
             )
 
-        PresetSetActive name ->
-            let
-                pm =
-                    model.presetManager
-            in
-            ( { model
-                | presetManager = { pm | busy = True, error = Nothing }
-              }
-            , Ports.setActivePreset { name = name }
-            )
-
         PresetRenameStart name ->
             let
                 pm =
@@ -4626,17 +4694,9 @@ update msg model =
                         let
                             pm =
                                 model.presetManager
-
-                            active =
-                                List.filterMap
-                                    (\p -> if p.isActive then Just p.name else Nothing)
-                                    res.presets
-                                    |> List.head
-                                    |> Maybe.withDefault ""
                         in
                         ( { model
                             | presets = res.presets
-                            , activePreset = active
                             , presetManager = { pm | loading = False, error = Nothing }
                           }
                         , Cmd.none
@@ -5527,12 +5587,22 @@ decodeSyncOutcome raw =
             Nothing
 
 
-defaultModelsListResultDecoder : D.Decoder { ok : Bool, models : List T.ModelInfo, error : String }
+defaultModelsListResultDecoder : D.Decoder { ok : Bool, models : List T.ModelInfo, activeId : Maybe Int, error : String }
 defaultModelsListResultDecoder =
-    D.map3
-        (\ok models error -> { ok = ok, models = models, error = error })
+    D.map4
+        (\ok models activeId error -> { ok = ok, models = models, activeId = activeId, error = error })
         (D.field "ok" D.bool)
         (D.field "models" (D.list H.modelInfoDecoder))
+        (D.field "active_id" (D.maybe D.int))
+        (D.field "error" D.string)
+
+
+defaultModelsActionResultDecoder : D.Decoder { ok : Bool, modelId : Int, error : String }
+defaultModelsActionResultDecoder =
+    D.map3
+        (\ok modelId error -> { ok = ok, modelId = modelId, error = error })
+        (D.field "ok" D.bool)
+        (D.field "modelId" D.int)
         (D.field "error" D.string)
 
 
@@ -5597,13 +5667,14 @@ rpcErrorDecoder =
         (D.field "message" D.string)
 
 
-settingsListResultDecoder : D.Decoder { ok : Bool, toolConfirm : String, builtinTools : String, error : String }
+settingsListResultDecoder : D.Decoder { ok : Bool, toolConfirm : String, builtinTools : String, systemPrompt : String, error : String }
 settingsListResultDecoder =
-    D.map4
-        (\ok toolConfirm builtinTools error -> { ok = ok, toolConfirm = toolConfirm, builtinTools = builtinTools, error = error })
+    D.map5
+        (\ok toolConfirm builtinTools systemPrompt error -> { ok = ok, toolConfirm = toolConfirm, builtinTools = builtinTools, systemPrompt = systemPrompt, error = error })
         (D.field "ok" D.bool)
         (D.field "tool_confirm" D.string)
         (D.field "builtin_tools" D.string)
+        (D.field "system_prompt" D.string)
         (D.field "error" D.string)
 
 
@@ -5637,7 +5708,7 @@ presetInfoDecoder : D.Decoder PresetInfo
 presetInfoDecoder =
     D.map2 PresetInfo
         (D.field "name" D.string)
-        (D.field "is_active" D.bool)
+        (D.field "is_seed" D.bool)
 
 
 presetsListResultDecoder : D.Decoder { ok : Bool, presets : List PresetInfo, error : String }
@@ -5768,10 +5839,10 @@ sessionModelKit =
 
             Nothing ->
                 ""
-    , confirm = \model ->
+    , confirm = \id model ->
         case getActiveSession model of
             Just s ->
-                case Sel.selectedItem modelName s.modelSelector of
+                case List.filter (\m -> m.id == id) s.modelSelector.working |> List.head of
                     Just m ->
                         if Sel.isDirty s.modelSelector then
                             -- Unsaved edits: ask to sync before leaving
@@ -5836,19 +5907,22 @@ defaultModelsKit =
     , inputId = \_ -> "model-selector-input-default"
     , editorId = \_ -> "model-editor-name-default"
     , scrollItemId = \_ id -> "model-selector-item-default-" ++ String.fromInt id
-    , confirm = \model ->
-        let
-            ed =
-                model.defaultModelsEditor
-        in
-        case Sel.selectedItem modelName ed.state of
-            Just m ->
-                ( { model | defaultModelsEditor = { ed | state = Sel.openEdit (draftFromModel m) ed.state } }
-                , Kit.focusAndCursor "model-editor-name-default"
-                )
-
-            Nothing ->
-                ( model, Cmd.none )
+    , confirm = \id model ->
+        -- A single click on a model (or Enter) makes it the preset's
+        -- DEFAULT. Edit is only via the per-row Edit button.
+        ( { model
+            | defaultModelsEditor =
+                let
+                    ed =
+                        model.defaultModelsEditor
+                in
+                { ed | error = Nothing }
+          }
+        , Ports.setDefaultModel
+            { preset = model.defaultModelsEditor.preset
+            , modelId = id
+            }
+        )
     , syncCmd = \model ->
         Ports.syncDefaultModels
             { preset = model.defaultModelsEditor.preset
@@ -5888,12 +5962,13 @@ mcpKit =
     , inputId = \_ -> "mcp-selector-input-default"
     , editorId = \_ -> "mcp-editor-server-default"
     , scrollItemId = \_ id -> "mcp-selector-item-default-" ++ String.fromInt id
-    , confirm = \model ->
+    , confirm = \id model ->
+        -- A single click on a server (or Enter) opens its edit page.
         let
             ed =
                 model.mcpEditor
         in
-        case Sel.selectedItem mcpServerName ed.state of
+        case List.filter (\s -> s.id == id) ed.state.working |> List.head of
             Just s ->
                 ( { model | mcpEditor = { ed | state = Sel.openEdit (draftFromMcp s) ed.state } }
                 , Kit.focusAndCursor "mcp-editor-server-default"

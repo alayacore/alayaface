@@ -21,6 +21,12 @@ pub struct GlobalSettings {
     /// Empty/absent means DO NOT pass the flag (alayacore default: all tools).
     #[serde(default)]
     pub builtin_tools: String,
+
+    /// The preset's --system text: the plan-mode contract and role
+    /// framing for the preset's sessions. Free text, not normalized.
+    /// Passed to alayacore as `--system=<text>`.
+    #[serde(default)]
+    pub system_prompt: String,
 }
 
 /// Read settings from a specific config dir; a missing/empty file yields defaults.
@@ -33,9 +39,10 @@ fn read_settings_from(config_dir: &std::path::Path) -> Result<GlobalSettings, St
     }
 }
 
-/// Read global settings (active preset); a missing/empty file yields defaults.
-pub fn read_global_settings() -> Result<GlobalSettings, String> {
-    let (config_dir, _) = crate::dirs::ensure()?;
+/// Read a NAMED preset's settings (preset REQUIRED — no active preset);
+/// a missing or empty file yields defaults.
+pub fn read_preset_settings(preset: &str) -> Result<GlobalSettings, String> {
+    let config_dir = crate::dirs::resolve_config_dir(preset)?;
     read_settings_from(&config_dir)
 }
 
@@ -60,57 +67,76 @@ pub fn normalize_tool_confirm(raw: &str) -> Result<String, String> {
     Ok(out.join(","))
 }
 
-/// The effective global tool-confirm list (normalized; may be empty).
-pub fn effective_tool_confirm() -> Result<String, String> {
-    let s = read_global_settings()?;
+/// The effective tool-confirm list of a named preset (normalized; may be empty).
+pub fn effective_tool_confirm(preset: &str) -> Result<String, String> {
+    let s = read_preset_settings(preset)?;
     normalize_tool_confirm(&s.tool_confirm)
 }
 
-/// The effective global built-in tools list (normalized; may be empty =
-/// don't pass the flag = all tools).
-pub fn effective_builtin_tools() -> Result<String, String> {
-    let s = read_global_settings()?;
+/// The effective built-in tools list of a named preset (normalized; may
+/// be empty = don't pass the flag = all tools).
+pub fn effective_builtin_tools(preset: &str) -> Result<String, String> {
+    let s = read_preset_settings(preset)?;
     normalize_tool_confirm(&s.builtin_tools)
 }
 
-/// Read a preset's settings (tool-confirm + builtin-tools normalized).
-/// `preset` empty = active.
+/// The effective system prompt of a named preset (may be empty = no --system).
+pub fn effective_system_prompt(preset: &str) -> Result<String, String> {
+    let s = read_preset_settings(preset)?;
+    Ok(s.system_prompt)
+}
+
+/// Read a preset's settings (tool-confirm + builtin-tools normalized,
+/// system-prompt verbatim). `preset` REQUIRED.
 #[tauri::command]
 pub async fn get_global_settings(preset: String) -> Result<serde_json::Value, String> {
-    let config_dir = crate::dirs::resolve_config_dir(&preset)?;
-    let s = read_settings_from(&config_dir)?;
+    crate::dirs::ensure()?; // seed presets on first run
+    let s = read_preset_settings(&preset)?;
     let normalized_tc = normalize_tool_confirm(&s.tool_confirm)?;
     let normalized_bt = normalize_tool_confirm(&s.builtin_tools)?;
     Ok(serde_json::json!({
         "tool_confirm": normalized_tc,
         "builtin_tools": normalized_bt,
+        "system_prompt": s.system_prompt,
     }))
 }
 
-/// Replace a preset's settings (`preset` empty = active). Accepts
-/// `{"tool_confirm": "id1,id2", "builtin_tools": "id1,id2"}`; writes
-/// atomically (temp file + rename) like sync_default_mcp.
+/// Replace a preset's settings (`preset` REQUIRED). Accepts
+/// `{"tool_confirm": "id1,id2", "builtin_tools": "id1,id2",
+/// "system_prompt": "..."}`; MERGE semantics — fields absent from the
+/// payload keep their current value (a partial sync must not wipe e.g.
+/// system_prompt). Writes atomically (temp file + rename) like
+/// sync_default_mcp.
 #[tauri::command]
 pub async fn sync_global_settings(config: String, preset: String) -> Result<(), String> {
+    crate::dirs::ensure()?; // seed presets on first run
+    let config_dir = crate::dirs::resolve_config_dir(&preset)?;
     let value: serde_json::Value = serde_json::from_str(&config)
         .map_err(|e| format!("Invalid settings JSON: {e}"))?;
-    let raw_tc = value.get("tool_confirm").and_then(|v| v.as_str()).unwrap_or("");
-    let raw_bt = value.get("builtin_tools").and_then(|v| v.as_str()).unwrap_or("");
-    let normalized_tc = normalize_tool_confirm(raw_tc)?;
-    let normalized_bt = normalize_tool_confirm(raw_bt)?;
-    let settings = GlobalSettings {
-        tool_confirm: normalized_tc,
-        builtin_tools: normalized_bt,
-    };
 
-    let config_dir = crate::dirs::resolve_config_dir(&preset)?;
+    let mut settings = read_settings_from(&config_dir)?;
+    if let Some(v) = value.get("tool_confirm").and_then(|v| v.as_str()) {
+        settings.tool_confirm = normalize_tool_confirm(v)?;
+    }
+    if let Some(v) = value.get("builtin_tools").and_then(|v| v.as_str()) {
+        settings.builtin_tools = normalize_tool_confirm(v)?;
+    }
+    if let Some(v) = value.get("system_prompt").and_then(|v| v.as_str()) {
+        settings.system_prompt = v.to_string();
+    }
+
     let path = config_dir.join("settings.conf");
     let tmp = config_dir.join("settings.conf.tmp");
     let text = serde_json::to_string_pretty(&settings)
         .map_err(|e| format!("Failed to serialize settings: {e}"))?;
     std::fs::write(&tmp, &text).map_err(|e| format!("Failed to write settings.conf: {e}"))?;
     std::fs::rename(&tmp, &path).map_err(|e| format!("Failed to replace settings.conf: {e}"))?;
-    log::info!("[settings] Wrote tool_confirm={:?} builtin_tools={:?}", settings.tool_confirm, settings.builtin_tools);
+    log::info!(
+        "[settings] Wrote tool_confirm={:?} builtin_tools={:?} system_prompt={} chars",
+        settings.tool_confirm,
+        settings.builtin_tools,
+        settings.system_prompt.chars().count()
+    );
     Ok(())
 }
 
@@ -138,29 +164,42 @@ mod tests {
     #[test]
     fn missing_file_yields_defaults() {
         crate::dirs::isolated_home(|| {
-            let settings = read_global_settings().unwrap();
+            crate::dirs::ensure().unwrap();
+            let settings = read_preset_settings("Simple").unwrap();
             assert_eq!(settings.tool_confirm, "");
+            assert_eq!(settings.builtin_tools, "");
+            assert!(!settings.system_prompt.is_empty(), "seed system_prompt must not be empty");
         });
     }
 
     #[test]
     fn sync_roundtrips() {
         crate::dirs::isolated_home(|| {
+            crate::dirs::ensure().unwrap();
             let rt = tokio::runtime::Runtime::new().unwrap();
             let ok = rt.block_on(sync_global_settings(
                 r#"{"tool_confirm":"execute_command, search_files "}"#.to_string(),
-                "".to_string(),
+                "Simple".to_string(),
             ));
             assert!(ok.is_ok());
-            let settings = read_global_settings().unwrap();
+            let settings = read_preset_settings("Simple").unwrap();
             assert_eq!(settings.tool_confirm, "execute_command,search_files");
 
             // Invalid input must be rejected and must not clobber the file
             assert!(rt
-                .block_on(sync_global_settings(r#"{"tool_confirm":"a a"}"#.to_string(), "".to_string()))
+                .block_on(sync_global_settings(r#"{"tool_confirm":"a a"}"#.to_string(), "Simple".to_string()))
                 .is_err());
-            let settings = read_global_settings().unwrap();
+            let settings = read_preset_settings("Simple").unwrap();
             assert_eq!(settings.tool_confirm, "execute_command,search_files");
+
+            // System prompt round-trips verbatim (free text, not normalized).
+            let ok = rt.block_on(sync_global_settings(
+                r#"{"system_prompt":"line1\nline2 with \"quotes\""}"#.to_string(),
+                "Simple".to_string(),
+            ));
+            assert!(ok.is_ok());
+            let settings = read_preset_settings("Simple").unwrap();
+            assert_eq!(settings.system_prompt, "line1\nline2 with \"quotes\"");
         });
     }
 
@@ -171,25 +210,27 @@ mod tests {
             // Seed the built-in presets first.
             let _ = crate::dirs::ensure().unwrap();
 
-            // Safe seed preset already carries builtin_tools.
-            let safe = rt.block_on(get_global_settings("Safe".to_string())).unwrap();
-            assert_eq!(safe["builtin_tools"], "read_file,write_file,edit_file,search_content");
-
-            // Default is empty (all tools).
-            let def = rt.block_on(get_global_settings("".to_string())).unwrap();
-            assert_eq!(def["builtin_tools"], "");
+            // Both seed presets have empty tool lists (no Safe-style
+            // restriction preset anymore) and a system_prompt each.
+            for name in ["Simple", "Complex"] {
+                let out = rt.block_on(get_global_settings(name.to_string())).unwrap();
+                assert_eq!(out["builtin_tools"], "");
+                assert!(!out["system_prompt"].as_str().unwrap().is_empty(), "{name} system_prompt missing");
+            }
 
             // Sync a subset and read it back (per-preset).
             let ok = rt.block_on(sync_global_settings(
                 r#"{"builtin_tools":"read_file,write_file"}"#.to_string(),
-                "Data".to_string(),
+                "Complex".to_string(),
             ));
             assert!(ok.is_ok());
-            let data = rt.block_on(get_global_settings("Data".to_string())).unwrap();
+            let data = rt.block_on(get_global_settings("Complex".to_string())).unwrap();
             assert_eq!(data["builtin_tools"], "read_file,write_file");
 
-            // effective_builtin_tools reads the active preset (Default → "").
-            assert_eq!(effective_builtin_tools().unwrap(), "");
+            // Effective helpers read a NAMED preset; empty preset errors.
+            assert_eq!(effective_builtin_tools("Simple").unwrap(), "");
+            assert!(effective_builtin_tools("").is_err());
+            assert!(!effective_system_prompt("Complex").unwrap().is_empty());
         });
     }
 
@@ -214,11 +255,13 @@ mod tests {
         struct Input {
             tool_confirm: String,
             builtin_tools: String,
+            system_prompt: String,
         }
         #[derive(serde::Deserialize)]
         struct Normalized {
             tool_confirm: String,
             builtin_tools: String,
+            system_prompt: String,
         }
 
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -234,6 +277,7 @@ mod tests {
             let settings = GlobalSettings {
                 tool_confirm: tc,
                 builtin_tools: bt,
+                system_prompt: c.input.system_prompt,
             };
             let got = serde_json::to_string_pretty(&settings).unwrap();
             assert_eq!(got, c.expected_file, "case {}: file text", c.name);

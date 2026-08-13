@@ -86,10 +86,21 @@ viewList :
     , itemTitle : item -> String
     , itemSubtitle : item -> String
     , isActive : item -> Bool
+    -- Single click = select only (safe default); when True, clicking a
+    -- row also confirms it (session model selector: tap switches model).
+    , confirmOnClick : Bool
+    -- Optional "make this the default" action (per row). Nothing hides
+    -- the button (session/MCP); Just f renders it, disabled on the
+    -- already-active row.
+    , onActivate : Maybe (Int -> msg)
+    , activateTitle : String
+    -- Confirm action, item-aware: Enter on the selected row (and single
+    -- click when confirmOnClick) confirms it — double-click is avoided
+    -- because it is unusable on touch devices.
+    , onConfirm : Int -> msg
     , editTitle : item -> String
     , deleteTitle : item -> String
     , onSelect : Int -> msg
-    , onConfirm : msg
     , noOp : msg
     , onInput : String -> msg
     , onEdit : Int -> msg
@@ -103,6 +114,12 @@ viewList cfg =
     let
         filtered =
             filterItems cfg.itemTitle cfg.items cfg.input
+
+        -- Enter confirms the currently selected row (fallback: the
+        -- first filtered row).
+        enterId =
+            List.head (List.drop cfg.selected filtered)
+                |> Maybe.map cfg.itemId
     in
     Html.div [ Attr.class "sel-page" ]
         [ pageTitle cfg.title False
@@ -118,7 +135,12 @@ viewList cfg =
                     D.map2
                         (\key ctrl ->
                             if key == "Enter" && not ctrl then
-                                ( cfg.onConfirm, True )
+                                case enterId of
+                                    Just id ->
+                                        ( cfg.onConfirm id, True )
+
+                                    Nothing ->
+                                        ( cfg.noOp, False )
 
                             else
                                 ( cfg.noOp, False )
@@ -154,7 +176,7 @@ viewList cfg =
         ]
 
 
-viewItem : Int -> item -> { a | itemId : item -> Int, itemTitle : item -> String, itemSubtitle : item -> String, isActive : item -> Bool, editTitle : item -> String, deleteTitle : item -> String, selected : Int, confirmDeleteId : Maybe Int, canDelete : Bool, itemIdPrefix : String, onSelect : Int -> msg, onConfirm : msg, onEdit : Int -> msg, onDelete : Int -> msg, onDeleteConfirm : Int -> msg, onDeleteCancel : msg } -> Html msg
+viewItem : Int -> item -> { a | itemId : item -> Int, itemTitle : item -> String, itemSubtitle : item -> String, isActive : item -> Bool, confirmOnClick : Bool, onActivate : Maybe (Int -> msg), activateTitle : String, editTitle : item -> String, deleteTitle : item -> String, selected : Int, confirmDeleteId : Maybe Int, canDelete : Bool, itemIdPrefix : String, onSelect : Int -> msg, onConfirm : Int -> msg, onEdit : Int -> msg, onDelete : Int -> msg, onDeleteConfirm : Int -> msg, onDeleteCancel : msg } -> Html msg
 viewItem idx item cfg =
     let
         isSelected =
@@ -171,16 +193,23 @@ viewItem idx item cfg =
 
         stopClick msg =
             Ev.stopPropagationOn "click" (D.succeed ( msg, True ))
+
+        rowAttrs =
+            [ Attr.id (cfg.itemIdPrefix ++ "-" ++ idStr)
+            , Attr.class ("sel-page-item"
+                ++ (if isSelected then " sel-page-item-selected" else "")
+                ++ (if isActive then " sel-page-item-active" else "")
+              )
+            , Ev.onClick (cfg.onSelect idx)
+            ]
+                ++ (if cfg.confirmOnClick then
+                        [ Ev.onClick (cfg.onConfirm (cfg.itemId item)) ]
+
+                    else
+                        []
+                   )
     in
-    Html.div
-        [ Attr.id (cfg.itemIdPrefix ++ "-" ++ idStr)
-        , Attr.class ("sel-page-item"
-            ++ (if isSelected then " sel-page-item-selected" else "")
-            ++ (if isActive then " sel-page-item-active" else "")
-          )
-        , Ev.onClick (cfg.onSelect idx)
-        , Ev.onDoubleClick cfg.onConfirm
-        ]
+    Html.div rowAttrs
         [ Html.span [ Attr.class "sel-page-item-id" ] [ Html.text idStr ]
         , Html.span [ Attr.class "sel-page-item-main" ]
             [ Html.span [ Attr.class "sel-page-item-name" ] [ Html.text (cfg.itemTitle item) ]
@@ -204,7 +233,19 @@ viewItem idx item cfg =
 
           else
             Html.span [ Attr.class "sel-page-item-actions" ]
-                [ Html.button
+                [ case cfg.onActivate of
+                    Just activate ->
+                        Html.button
+                            [ Attr.class "sel-page-action sel-page-action-default"
+                            , Attr.disabled isActive
+                            , Attr.title cfg.activateTitle
+                            , stopClick (activate (cfg.itemId item))
+                            ]
+                            [ Html.text (if isActive then "Default" else "Set Default") ]
+
+                    Nothing ->
+                        Html.text ""
+                , Html.button
                     [ Attr.class "sel-page-action"
                     , Attr.disabled isActive
                     , Attr.title (cfg.editTitle item)

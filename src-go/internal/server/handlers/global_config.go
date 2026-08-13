@@ -85,7 +85,7 @@ func SyncGlobalConfig(h *Handler, w http.ResponseWriter, r *http.Request) error 
 	}
 	cfg.RecursionLimit = NormalizeRecursionLimit(cfg.RecursionLimit)
 
-	if _, _, err := dirs.Ensure(); err != nil {
+	if _, err := dirs.Ensure(); err != nil {
 		return err
 	}
 	path := dirs.GlobalConfigFile()

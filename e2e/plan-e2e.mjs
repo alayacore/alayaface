@@ -176,12 +176,27 @@ try {
     }
     return false;
   };
+  // New Session is a hover flyout now: hover the item to reveal the
+  // preset list, then click the chosen preset.
+  const newSession = async (preset = 'Simple') => {
+    const handles = await page.$$('.global-menu-item');
+    for (const h of handles) {
+      const t = await h.evaluate(el => el.textContent || '');
+      if (t.includes('New Session')) {
+        const box = await h.boundingBox();
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await sleep(200);
+        return clickByText('.global-menu-submenu-item', preset);
+      }
+    }
+    return false;
+  };
 
   // ── 4. Plan Session → offer ───────────────────────────────────────
   await page.goto(base + '/', { waitUntil: 'networkidle0', timeout: 30000 });
   await openGlobalMenu();
   // R2: no "New Plan Session" — every session is plan-capable.
-  assert(await clickByText('.global-menu-item', 'New Session'), 'New Session menu item');
+  assert(await newSession('Simple'), 'New Session → preset submenu');
 
   // A plain session window appears (no [Plan] prefix anymore).
   await waitFor('.session-panel');
@@ -881,7 +896,7 @@ try {
   // a follow-up message arrives shortly after. History replays (resumed
   // sessions) are suppressed — covered by the dedicated verification.
   await openGlobalMenu();
-  await clickByText('.global-menu-item', 'New Session');
+  await newSession('Simple');
   await waitFor('.session-panel', 10000);
   await sleep(600);
   const beforeSettleCount = await page.$$eval('.plan-page', els => els.length);

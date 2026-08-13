@@ -12,13 +12,17 @@ import (
 )
 
 // ListDefaultMcp lists the MCP server list from a preset's mcp.conf
-// (`preset` empty = active). A missing mcp.conf is treated as an empty
-// server list (first run), not an error.
+// (preset REQUIRED). A missing mcp.conf is treated as an empty server
+// list (first run), not an error.
 func ListDefaultMcp(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	var args struct {
 		Preset string `json:"preset"`
 	}
 	if err := decodeArgs(r, &args); err != nil {
+		return err
+	}
+	// Ensure first so the seed presets exist on first run.
+	if _, err := dirs.Ensure(); err != nil {
 		return err
 	}
 	configDir, err := dirs.ResolveConfigDir(args.Preset)
@@ -38,7 +42,7 @@ func ListDefaultMcp(h *Handler, w http.ResponseWriter, r *http.Request) error {
 }
 
 // SyncDefaultMcp replaces the MCP server list in a preset's mcp.conf
-// (`preset` empty = active). Validates per server kind: names must be
+// (preset REQUIRED). Validates per server kind: names must be
 // unique; http servers need a url and auth fields per auth-type; stdio
 // servers need a command and args/env as JSON. Writes atomically.
 func SyncDefaultMcp(h *Handler, w http.ResponseWriter, r *http.Request) error {
@@ -104,6 +108,10 @@ func SyncDefaultMcp(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	}
 
 	text := writeMcpConf(servers)
+	// Ensure first so the seed presets exist on first run.
+	if _, err := dirs.Ensure(); err != nil {
+		return err
+	}
 	configDir, err := dirs.ResolveConfigDir(args.Preset)
 	if err != nil {
 		return err

@@ -21,7 +21,7 @@ func TestPresetNameValidation(t *testing.T) {
 		name string
 		ok   bool
 	}{
-		{"Default", true},
+		{"Simple", true},
 		{"work-a_b2", true},
 		{"", false},
 		{"a/b", false},
@@ -38,7 +38,7 @@ func TestPresetNameValidation(t *testing.T) {
 
 func TestEnsureSeedsDefaults(t *testing.T) {
 	isolatedHome(t, func() {
-		config, _, err := Ensure()
+		_, err := Ensure()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -47,39 +47,80 @@ func TestEnsureSeedsDefaults(t *testing.T) {
 		// even produced "API key is required" noise (fake Placeholder
 		// model), and a "{}" runtime.conf made alayacore emit a parse
 		// error on every startup.
-		if _, err := os.Stat(filepath.Join(config, "model.conf")); err == nil {
-			t.Error("model.conf must not be pre-seeded")
+		for _, name := range SeedPresets {
+			dir := PresetDir(name)
+			if _, err := os.Stat(dir); err != nil {
+				t.Fatalf("seed preset %s missing: %v", name, err)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "model.conf")); err == nil {
+				t.Errorf("%s: model.conf must not be pre-seeded", name)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "runtime.conf")); err == nil {
+				t.Errorf("%s: runtime.conf must not be pre-seeded", name)
+			}
+			// Both seed presets carry AlayaFace-owned settings.conf with
+			// the plan-mode system_prompt.
+			settings, err := os.ReadFile(filepath.Join(dir, "settings.conf"))
+			if err != nil {
+				t.Fatalf("%s settings.conf missing: %v", name, err)
+			}
+			text := string(settings)
+			if !strings.Contains(text, "system_prompt") {
+				t.Errorf("%s settings.conf lacks system_prompt: %s", name, text)
+			}
+			if !strings.Contains(text, "alayaface-plan") {
+				t.Errorf("%s system_prompt lacks the plan contract: %s", name, text)
+			}
+			if !strings.Contains(text, "Simple") || !strings.Contains(text, "Complex") {
+				t.Errorf("%s system_prompt must name both presets: %s", name, text)
+			}
 		}
-		if _, err := os.Stat(filepath.Join(config, "runtime.conf")); err == nil {
-			t.Error("runtime.conf must not be pre-seeded")
+		// No active-preset marker anymore.
+		if _, err := os.Stat(filepath.Join(AlayafaceDir(), "active-preset")); err == nil {
+			t.Error("active-preset marker must not exist")
 		}
-		active, err := ReadActivePreset()
+	})
+}
+
+func TestResolveConfigDirRequiresPreset(t *testing.T) {
+	isolatedHome(t, func() {
+		if _, err := Ensure(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ResolveConfigDir(""); err == nil {
+			t.Error("empty preset must be rejected")
+		}
+		if _, err := ResolveConfigDir("nope"); err == nil {
+			t.Error("unknown preset must be rejected")
+		}
+		if dir, err := ResolveConfigDir("Simple"); err != nil || dir != PresetDir("Simple") {
+			t.Errorf("ResolveConfigDir(Simple) = %q, %v", dir, err)
+		}
+	})
+}
+
+func TestCreateSessionDirFromRequiresPreset(t *testing.T) {
+	isolatedHome(t, func() {
+		sessions, err := Ensure()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if active != "Default" {
-			t.Errorf("active preset = %q, want Default", active)
+		if _, err := CreateSessionDirFrom(sessions, "abc", ""); err == nil {
+			t.Error("empty preset must be rejected")
 		}
-		// Only the Safe preset carries AlayaFace-owned settings.conf.
-		if _, err := os.Stat(filepath.Join(config, "settings.conf")); err == nil {
-			t.Error("Default preset must not carry settings.conf")
-		}
-		safeSettings, err := os.ReadFile(filepath.Join(PresetsRoot(), "Safe", "settings.conf"))
-		if err != nil {
-			t.Fatalf("Safe settings.conf missing: %v", err)
-		}
-		if !strings.Contains(string(safeSettings), "read_file,write_file,edit_file,search_content") {
-			t.Errorf("Safe settings.conf wrong: %s", safeSettings)
+		if _, err := CreateSessionDirFrom(sessions, "abc", "nope"); err == nil {
+			t.Error("unknown preset must be rejected")
 		}
 	})
 }
 
 func TestSessionDirCopyExcludesSettingsConf(t *testing.T) {
 	isolatedHome(t, func() {
-		config, sessions, err := Ensure()
+		sessions, err := Ensure()
 		if err != nil {
 			t.Fatal(err)
 		}
+		config := PresetDir("Simple")
 		// Copying an EXISTING preset is the meaningful path: files in the
 		// source are copied, settings.conf (AlayaFace-owned) is not.
 		if err := os.WriteFile(filepath.Join(config, "model.conf"), []byte("name: \"Real\"\n"), 0o644); err != nil {
@@ -89,7 +130,7 @@ func TestSessionDirCopyExcludesSettingsConf(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		sessionDir, err := CreateSessionDir(sessions, "abc")
+		sessionDir, err := CreateSessionDirFrom(sessions, "abc", "Simple")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -133,15 +174,15 @@ func TestSanitizeDirComponent(t *testing.T) {
 
 func TestCreatePlanSessionDirFromNests(t *testing.T) {
 	isolatedHome(t, func() {
-		config, sessions, err := Ensure()
+		sessions, err := Ensure()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(config, "model.conf"), []byte("name: \"Real\"\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(PresetDir("Simple"), "model.conf"), []byte("name: \"Real\"\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 
-		sessionDir, err := CreatePlanSessionDirFrom(sessions, filepath.Join(sessions, "sess-1"), "demo plan/x", "t1", "uuid-1", "")
+		sessionDir, err := CreatePlanSessionDirFrom(sessions, filepath.Join(sessions, "sess-1"), "demo plan/x", "t1", "uuid-1", "Simple")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -168,14 +209,14 @@ func TestSpawnArgsRoundtrip(t *testing.T) {
 		dir := t.TempDir()
 
 		// Full envelope: no-tools restriction + runner tool-confirm +
-		// planner prompt + work dir.
+		// preset system prompt + work dir + preset name.
 		bt := ""
-		full := SpawnArgs{ToolConfirm: "allow", BuiltinTools: &bt, SystemPrompt: "planner-hint", WorkDir: "/tmp/plan-work"}
+		full := SpawnArgs{ToolConfirm: "allow", BuiltinTools: &bt, SystemPrompt: "planner-hint", WorkDir: "/tmp/plan-work", Preset: "Complex"}
 		if err := WriteSpawnArgs(dir, full); err != nil {
 			t.Fatal(err)
 		}
 		got := ReadSpawnArgs(dir)
-		if got.ToolConfirm != "allow" || got.SystemPrompt != "planner-hint" || got.WorkDir != "/tmp/plan-work" {
+		if got.ToolConfirm != "allow" || got.SystemPrompt != "planner-hint" || got.WorkDir != "/tmp/plan-work" || got.Preset != "Complex" {
 			t.Errorf("roundtrip = %+v, want the full envelope", got)
 		}
 		if got.BuiltinTools == nil || *got.BuiltinTools != "" {

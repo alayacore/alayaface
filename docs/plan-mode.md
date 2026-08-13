@@ -52,9 +52,9 @@ Add **Plan Mode** to AlayaFace: let the model decompose a large task into a
   - `mcp.conf` — MCP servers (external tool source); only copied if present;
   - `runtime.conf` — only active_model/active_theme (managed by alayacore; don't treat it as config).
     **Note: alayacore parses it as `key: value` lines, not JSON**;
-  - `settings.conf` — **AlayaFace-owned, stored per preset**, `{"tool_confirm": "id1,id2"}`; not copied into session dirs; `get_global_settings(preset)` / `sync_global_settings(config, preset)` already support per-preset read/write; only the Safe seed carries it;
+  - `settings.conf` — **AlayaFace-owned, stored per preset**, `{"tool_confirm": "id1,id2", "builtin_tools": "id1,id2", "system_prompt": "..."}`; not copied into session dirs; `get_global_settings(preset)` / `sync_global_settings(config, preset)` support per-preset read/write (sync has **merge semantics**: absent fields keep current values); both seed presets carry it (with the plan-mode system_prompt);
   - `themes/` — alayacore auto-creates default themes when missing.
-- **create_session command**: already supports `configPath` (non-empty = use the given dir directly as session config); `toolConfirm` defaults to the active preset's settings.conf tool_confirm; **creating a session dir copies the active preset into `session_dir/config`** (`dirs::create_session_dir`, excluding settings.conf).
+- **create_session command**: `preset` is REQUIRED (there is no active preset); `toolConfirm` / `builtinTools` default to the given preset's settings.conf; the system prompt (`--system`) defaults to the given preset's settings.conf `system_prompt` unless an explicit non-empty override is passed (the frontend sends only the recursion guard); **creating a session dir copies the given preset into `session_dir/config`** (excluding settings.conf).
 - **resume_session depends on `session_dir/config`** → passing a preset path directly as configPath would break resume; the "copy template by preset name" path must be used.
 - **The alayacore tool set cannot be extended on the UI side** → plan JSON can only be captured via a "fenced ```json output" or "write_file to a file".
 - `TODO.md` / `REFACTOR.md` were originally gitignored → the `TODO.md` ignore was removed and it became version-controlled; both were archived to `docs/archive/` once the R series completed.
@@ -96,12 +96,14 @@ Node succeeds → unlocks downstream → parallel scheduling (≤ concurrency ca
 **Status: removed.** The R-series refactor (R2) dropped the dedicated
 "New Plan Session" entry, the `[Plan]` title prefix (`planSessionIds`),
 the `builtinTools=""` planner spawn, and the role-locked planner prompt.
-Every session is now plan-capable: the planner hint
-(`planSystemPrompt`, a constant in Plan/Update.elm) is injected via
-`--system` on ALL user-created sessions — it is advisory ("complex tasks
-→ output a plan JSON first"), with no role lock; the model keeps its
-tools and may still execute directly. Plan detection (below) works in any
-session, and plan-node sessions are unaffected (no planner hint).
+Every session is now plan-capable: the plan-mode contract lives in each
+PRESET's `system_prompt` (settings.conf) and is injected via `--system`
+on every session of that preset (the backend resolves it at creation) —
+it is advisory ("complex tasks → output a plan JSON first"), with no
+role lock; the model keeps its tools and may still execute directly.
+Plan detection (below) works in any session, and plan-node sessions are
+unaffected (the recursion guard, only for plans deeper than the global
+recursion limit, is the sole frontend prompt override).
 
 > Historical design (no longer implemented): a dedicated menu entry
 > created a session with `--system` role-locked to "planner, not
@@ -163,7 +165,7 @@ session, and plan-node sessions are unaffected (no planner hint).
 | `tasks[].title` | yes | Node title |
 | `tasks[].prompt` | yes | Full prompt sent to the node's session; may reference upstream output via `{{<taskId>.output}}` (P24: replaced at runtime with that task's final answer; can only reference tasks already declared in `depends_on`) |
 | `tasks[].depends_on` | no | Dependency id list, default `[]`; references must exist, no self-dependency, overall acyclic |
-| `tasks[].preset` | no | Preset name the node runs under; default = active preset |
+| `tasks[].preset` | no | Preset name the node runs under; REQUIRED in practice — the plan contract tells the model to always set it (Simple for light subtasks, Complex for heavy ones) |
 | `tasks[].tools` | no | Node-level built-in tool set override (comma list); default = preset settings.conf builtin_tools (then default = all) |
 | `tasks[].max_attempts` | no | Node-level retry cap; default = default_max_attempts |
 
@@ -319,9 +321,12 @@ global.conf` (`{"recursion_limit": 8}`) is the cross-preset global config
 overlay (RPCs `get_global_config` / `sync_global_config`; edited via ⚙ →
 Global config). When a plan node session is created
 (`nodeSessionArgsIn`), the plan's `depth` is checked against the limit:
-- `depth ≤ limit` → the node session gets the plan system prompt
-  (`--system`), so its model may delegate again;
-- `depth > limit` → **no plan system prompt**: the model stops delegating.
+- `depth ≤ limit` → the node session gets its PRESET's system_prompt
+  (`--system`; the backend resolves it from the preset's settings.conf),
+  so its model may delegate again;
+- `depth > limit` → the frontend passes a short **recursion guard** as an
+  explicit `--system` override (replacing the preset prompt): "execute
+  directly, do NOT output another plan" — the model stops delegating.
   This is the soft recursion limit (default 8 levels of plans).
 - `resume_session` re-applies the persisted spawn args, so the decision is
   made once at creation and survives restarts.
@@ -505,7 +510,7 @@ wakes it (`resumeDelegatedNode` only acts on `WaitingForPlan`).
   Go, symmetric) to accept the node-session attributes — `preset`,
   `builtinTools`, `toolConfirm`, `systemPrompt`, `workDir`, `planId`,
   `nodeId`, `originSessionId` — so the fork lands in the plan's nested
-  node-session dir and keeps the node's config + plan system prompt. The
+  node-session dir and keeps the node's config + preset system prompt. The
   fork's `session.alaya` is written by alayacore and REALLY contains
   only the truncated history → reopening the session after a restart
   shows the correct state. Adoption (`adoptCascadeFork`): rebind the
@@ -556,10 +561,10 @@ wakes it (`resumeDelegatedNode` only acts on `WaitingForPlan`).
 | `src-tauri/src/alayacore.rs` `spawn()` | add a `builtin_tools: &str` argument; append `--builtin-tools=<list>` when non-empty (alongside `--tool-confirm`; **empty = not passed = alayacore default all tools**) |
 | `src-go/internal/core/core.go` `Spawn` | same as above |
 | `commands/settings.rs` + `handlers/settings.go` | `GlobalSettings` gains a `builtin_tools` field; get/sync support read/write; normalization reuses `normalize_tool_confirm` (trim/dedup/reject spaces) |
-| `commands/sessions.rs` + `handlers/sessions.go` | `create_session` gains an optional `builtinTools` argument (explicit override; default = active preset settings.conf builtin_tools) — fully symmetric with the existing `toolConfirm` logic |
-| `commands/sessions.rs` + `handlers/sessions.go` | `create_session` gains an optional `preset` argument: internally copies **the given preset** into `session_dir/config` (reusing `dirs::copy_dir_excluding`, excluding settings.conf), default = active preset (existing behavior). **Must not pass the preset path directly as configPath** (breaks resume_session) |
+| `commands/sessions.rs` + `handlers/sessions.go` | `create_session` gains an optional `builtinTools` argument (explicit override; default = the session's preset settings.conf builtin_tools) — fully symmetric with the existing `toolConfirm` logic |
+| `commands/sessions.rs` + `handlers/sessions.go` | `create_session` takes a REQUIRED `preset` argument (no active preset): internally copies **the given preset** into `session_dir/config` (reusing `dirs::copy_dir_excluding`, excluding settings.conf). **Must not pass the preset path directly as configPath** (breaks resume_session) |
 | `bridge.js` + `Ports.elm` | `createSession` port carries `toolConfirm` / `preset` / `builtinTools` fields |
-| `Overlay/Settings.elm` | add a "Built-in tools" input (alongside Tool confirm), configurable per preset |
+| `Overlay/Settings.elm` | add a "Built-in tools" input (alongside Tool confirm) and a "System prompt" textarea, configurable per preset |
 | Tests | Rust unit tests + Go unit tests + error-message parity assertions |
 
 **Flag semantics note**: alayacore `--builtin-tools` unspecified = all tools; explicit empty string = no built-in tools (MCP-only). v1 supports only two states: **empty = all, non-empty list = subset**; MCP-only is an edge case — if needed, discuss a `"none"` special value.
@@ -690,9 +695,10 @@ non-empty assistant text in the session):
   Succeeded nodes don't rerun; output must survive restarts); re-Run
   (StartRun) clears all outputs (a fresh round);
 - **UI**: the node detail panel shows Output (placeholder when none);
-- **Planner teaching**: the Plan Session's `planSystemPrompt` tells the model:
-  when a downstream task needs upstream output, reference it with
-  `{{t1.output}}` (only for tasks already declared as dependencies);
+- **Planner teaching**: each preset's `system_prompt` (settings.conf,
+  resolved to `--system` at session creation) tells the model: when a
+  downstream task needs upstream output, reference it with `{{t1.output}}`
+  (only for tasks already declared as dependencies);
 - Tests: `PlanInjectTest` (10 cases: replace/missing/unknown/keep-verbatim) +
   runner (success records, failure doesn't, downstream SendPrompt injects,
   missing → placeholder, re-Run clears) + codec roundtrip + E2E (fixture t2
@@ -782,22 +788,30 @@ There is **no top-level `plans/` root** anymore.
 
 ## 9. Presets & Seed Presets
 
-- Node `preset` default = active preset (consistent with existing behavior);
-- seed presets (built into the repo, seeded on first run, modeled on the Default mechanism `create_preset_defaults`):
+- There is NO active preset: every session (user or plan node) is created
+  under an EXPLICIT preset — the user picks one from the global menu's
+  "New Session" hover submenu; plan nodes set `tasks[].preset` per task
+  (the plan contract tells the model to always set it);
+- seed presets (built into the repo, seeded on FIRST RUN only — the
+  presets root is empty; deleting a seed never resurrects it):
 
-| preset | role | model.conf | builtin_tools (settings.conf) |
-|---|---|---|---|
-| `Default` | general | default placeholder model | (empty = all) |
-| `Fast` | quick subtasks (cheap model) | lightweight model placeholder | (empty = all) |
-| `Deep` | complex analysis/planning | strong model placeholder | (empty = all) |
-| `Data` | data tasks | default | (empty = all) |
-| `Safe` | safety-sensitive subtasks | default | `read_file,write_file,edit_file,search_content` (**no execute_command**) |
+| preset | role | settings.conf |
+|---|---|---|
+| `Simple` | light everyday chat + one-sentence subtasks | `system_prompt` = plan contract, Simple framing; empty tool lists |
+| `Complex` | heavy reasoning / multi-step / research subtasks | `system_prompt` = plan contract, Complex framing; empty tool lists |
 
-- Seed presets are just structural templates (model/MCP placeholders); the user
-  fills in api_key/connection strings; the preset manager supports
-  copy/rename, so users can customize from a seed;
-- v1 stage: P0–P4 nodes all use the active preset (the preset field is
-  optional); preset support lands with P4.5.
+- Each preset's `system_prompt` (settings.conf) is resolved by the
+  backend at session creation and passed as `--system`: the plan-mode
+  contract (when to plan, the exact DAG JSON schema, per-task preset
+  choice, `{{tX.output}}` rules, stop-and-wait). Both seeds carry the
+  full contract — any session may be asked to create a plan;
+- Seed presets are just structural templates (model/MCP placeholders);
+  the user fills in api_key/connection strings and tunes settings.conf;
+  the preset manager supports copy/rename/delete, so users can customize
+  from a seed (the New Session submenu lists whatever presets exist,
+  scrollable for large lists). The built-in seeds (Simple/Complex) can
+  be copied but NOT renamed or deleted — the seeded plan contract
+  references them by name.
 
 ---
 
@@ -883,7 +897,8 @@ There is **no top-level `plans/` root** anymore.
 - **Plan Session entry (superseded by R2 — fixed plan mode)**: originally the
   user only describes the need, a dedicated menu entry created a role-locked,
   tool-less planner session with a `[Plan]` prefix. R2 removed the entry: every
-  session carries the advisory planner hint via `--system`, and plan windows
+  session carries the advisory planner hint via `--system` (each preset's
+  system_prompt), and plan windows
   auto-create on detection.
 - **plan JSON top-level `"type": "alayaface-plan"` marker (P26, user instruction)**:
   only ```json blocks carrying the explicit marker are treated as plans (plain
@@ -897,7 +912,8 @@ There is **no top-level `plans/` root** anymore.
   cross-preset global config overlay (`~/.alayaface/global.conf`, RPCs
   `get_global_config`/`sync_global_config`, ⚙ → Global config) holds
   `recursion_limit` (default 8); node sessions of a plan with `depth > limit`
-  get **no plan system prompt** (soft limit — the model stops delegating);
+  get the **recursion guard** as `--system` (replacing the preset prompt —
+  the model stops delegating);
   **only the top-level plan needs the user's Run click — sub-plans auto-run**
   at creation.
   **required, no backward compat** — missing or wrong value errors out directly
