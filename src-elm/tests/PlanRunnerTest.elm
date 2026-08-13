@@ -1202,31 +1202,61 @@ tests =
                         , \_ -> Expect.equal P.InProgress restored.status |> Expect.onFail "run with pending work is InProgress"
                         ]
                         ()
-            , test "resumeState keeps Succeeded/Failed nodes terminal" <|
+            , test "resumeState keeps Succeeded terminal; revives Failed/Blocked/Canceled for a fresh attempt" <|
                 \_ ->
                     let
-                        ( run1, _ ) =
-                            R.step 1000 R.StartRun (runFromPlan chainPlan)
-
-                        ( run2, _ ) =
-                            R.step 2000 (R.SessionCreatedFor "a" "s1") run1
-
-                        ( run3, _ ) =
-                            R.step 3000 (R.TaskDone "s1" False (Just "out") False) run2
-
-                        ( run4, _ ) =
-                            R.step 4000 (R.SessionCreatedFor "b" "s2") run3
-
-                        ( run5, _ ) =
-                            R.step 5000 (R.TaskDone "s2" True Nothing False) run4
-
-                        -- b exhausted? no — one failure → Waiting; restore: Waiting → Pending
                         restored =
-                            R.resumeState run5
+                            runWithStatuses chainPlan
+                                [ ( "a", P.Succeeded )
+                                , ( "b", P.Failed )
+                                , ( "c", P.Blocked )
+                                ]
+                                |> R.resumeState
                     in
                     Expect.all
                         [ \_ -> Expect.equal P.Succeeded (nodeState "a" restored).status |> Expect.onFail "Succeeded stays"
-                        , \_ -> Expect.equal P.Pending (nodeState "b" restored).status |> Expect.onFail "Waiting (failed once) → Pending for retry"
+                        , \_ -> Expect.equal P.Pending (nodeState "b" restored).status |> Expect.onFail "Failed → Pending (Load run continues it)"
+                        , \_ -> Expect.equal 0 (nodeState "b" restored).attempts |> Expect.onFail "revived node gets a fresh attempt budget"
+                        , \_ -> Expect.equal P.Pending (nodeState "c" restored).status |> Expect.onFail "Blocked → Pending (re-schedules once its dep re-succeeds)"
+                        , \_ -> Expect.equal P.InProgress restored.status |> Expect.onFail "revived work flips the run to InProgress"
+                        ]
+                        ()
+            , test "Load run on a plan whose LAST node failed relaunches it (ContinueRun + scheduling)" <|
+                \_ ->
+                    let
+                        -- The user-visible case: every node done except the
+                        -- last, which exhausted its attempts (Failed).
+                        restored =
+                            runWithStatuses chainPlan
+                                [ ( "a", P.Succeeded )
+                                , ( "b", P.Succeeded )
+                                , ( "c", P.Failed )
+                                ]
+                                |> R.resumeState
+
+                        ( afterStep, evs ) =
+                            R.step 100 R.ContinueRun restored
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal P.InProgress restored.status |> Expect.onFail "Load run starts an InProgress run"
+                        , \_ -> Expect.equal P.Starting (nodeState "c" afterStep).status |> Expect.onFail "the failed last node is scheduled again"
+                        , \_ -> Expect.equal True (List.member "create:c" (effects evs)) |> Expect.onFail "Load run creates a session for the revived node"
+                        ]
+                        ()
+            , test "resumeState keeps Canceled-nothing terminal only when every node is done" <|
+                \_ ->
+                    let
+                        restored =
+                            runWithStatuses chainPlan
+                                [ ( "a", P.Succeeded )
+                                , ( "b", P.Canceled )
+                                , ( "c", P.Canceled )
+                                ]
+                                |> R.resumeState
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal P.Pending (nodeState "b" restored).status |> Expect.onFail "Canceled → Pending (Stop then Load run continues)"
+                        , \_ -> Expect.equal P.InProgress restored.status
                         ]
                         ()
             , test "resumeState on a fully-terminal run keeps its status (no spurious InProgress)" <|

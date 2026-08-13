@@ -862,9 +862,13 @@ eventSessionId ev =
 
 {-| Prepare a restored RunState (from run.json) for continuation: nodes
 that were mid-flight (Starting/Running/Waiting) go back to Pending and
-their stale session bindings are dropped; Succeeded/Failed/Blocked stay.
-Then feed `ContinueRun` to relaunch scheduling. v1 semantics: unfinished
-nodes re-run from scratch (no subprocess resume).
+their stale session bindings are dropped; nodes that are UNFINISHED for
+other reasons also revive for a fresh attempt — Failed (attempts
+exhausted), Blocked (dep failed) and Canceled (Stop) — mirroring the
+manual RetryNode semantics (attempts reset, failure history kept). Only
+Succeeded (and WaitingForPlan, whose sub-plan drives its feedback) stay
+terminal. Then feed `ContinueRun` to relaunch scheduling. v1 semantics:
+unfinished nodes re-run from scratch (no subprocess resume).
 -}
 resumeState : PT.RunState -> PT.RunState
 resumeState run =
@@ -881,6 +885,15 @@ resumeState run =
 
                         PT.Waiting ->
                             { n | status = PT.Pending }
+
+                        PT.Failed ->
+                            { n | status = PT.Pending, attempts = 0 }
+
+                        PT.Blocked ->
+                            { n | status = PT.Pending, attempts = 0 }
+
+                        PT.Canceled ->
+                            { n | status = PT.Pending, attempts = 0 }
 
                         _ ->
                             n

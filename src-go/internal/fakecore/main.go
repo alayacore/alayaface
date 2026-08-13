@@ -421,6 +421,11 @@ func main() {
 						// like "hang-once" that trigger marker scenarios) —
 						// it must ALWAYS get a normal reply.
 						streamReply()
+					case strings.Contains(stagedText, "load-run-plan"):
+						// The Load-run E2E's one-task always-failing plan
+						// (checked BEFORE the generic "plan" check since
+						// the keyword contains "plan").
+						loadRunPlanReply()
 					case planMode && strings.Contains(stagedText, "plan"):
 						// R2: EVERY session now carries the planner hint
 						// (--system). The fake answers with a fenced plan
@@ -434,6 +439,8 @@ func main() {
 						hangOnceReply()
 					case strings.Contains(stagedText, "fail-once"):
 						failOnceReply()
+					case strings.Contains(stagedText, "fail-always"):
+						failAlwaysReply()
 					default:
 						streamReply()
 					}
@@ -603,6 +610,13 @@ func failOnceReply() {
 	streamReply()
 }
 
+// failAlwaysReply simulates a task that FAILS on every attempt (used to
+// reach a terminal Failed node: max_attempts=1 + fail-always). Unlike
+// fail-once it needs no marker — the failure is permanent.
+func failAlwaysReply() {
+	writeFrame("SM", `{"type":"task","data":{"in_progress":false,"task_error":true,"error":"permanent fake failure"}}`)
+}
+
 // hangOnceReply simulates a task that HANGS: the first process writes the
 // shared marker and enters hang mode (no reply to prompts); the retry
 // process sees the marker and succeeds. Unlike a naive sleep, hang mode
@@ -618,4 +632,32 @@ func hangOnceReply() {
 		return
 	}
 	streamReply()
+}
+
+// loadRunPlanJSON is a ONE-task plan whose single node fails permanently
+// (max_attempts=1 + fail-always): the Load-run E2E clicks "Load run" on
+// the resulting FailedRun plan to verify the failed node is revived and
+// relaunched.
+const loadRunPlanJSON = `{
+  "type": "alayaface-plan",
+  "schema_version": 1,
+  "name": "Load Run E2E",
+  "goal": "verify Load run revives a failed node",
+  "concurrency": 1,
+  "default_max_attempts": 1,
+  "tasks": [
+    { "id": "t1", "title": "Always fails", "prompt": "always fails (fail-always marker)", "depends_on": [], "preset": "Simple", "max_attempts": 1 }
+  ]
+}`
+
+// loadRunPlanReply emits the one-task always-failing plan (triggered by a
+// user prompt containing "load-run-plan"). Mirrors planReply's framing:
+// AT/AR streaming + history recording + task-done.
+func loadRunPlanReply() {
+	pid := nextReplyID()
+	msg := "Here is the plan:\n```json\n" + loadRunPlanJSON + "\n```\nI'll wait for you to create it."
+	echoID("AT", pid, msg)
+	echoID("AR", nextReplyID(), "")
+	history = append(history, histMsg{"assistant", msg, pid})
+	writeFrame("SM", `{"type":"task","data":{"in_progress":false,"task_error":false}}`)
 }
