@@ -457,7 +457,7 @@ body {
   flex-shrink: 0;
   background: none;
   border: none;
-  color: transparent;
+  color: #888;
   cursor: pointer;
   font-size: 0.6rem;
   padding: 2px 4px;
@@ -466,10 +466,10 @@ body {
   transition: color 0.12s, background 0.12s;
   margin-left: 6px;
 }
-.session-bar:hover .session-bar-close { color: #888; }
 .session-bar-close:hover {
-  color: #e94560 !important;
+  color: #e94560;
   background: rgba(233,69,96,0.1);
+  font-weight: 700;
 }
 
 /* ─── Resize Handles ─────────────────────────────────────────────────── */
