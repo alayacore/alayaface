@@ -91,7 +91,16 @@
       thumb.style.transform = "translateY(" + (ratio * maxTop) + "px)";
     }
 
+    // The custom overlay thumb is mouse-oriented (drag / track-click).
+    // On touch / pen-first devices (hover: none) native scroll works
+    // and the thumb would be an unusable artifact — skip it there
+    // (touch & pointer design D7).
+    var HOVER_DEVICE = window.matchMedia
+      ? window.matchMedia("(hover: hover)").matches
+      : true;
+
     function attachOverlayScrollbar(el) {
+      if (!HOVER_DEVICE) return;
       if (el._overlaySb) return;
       var sb = document.createElement("div");
       sb.className = "overlay-scrollbar";

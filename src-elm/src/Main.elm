@@ -50,9 +50,10 @@ init _ =
       , nextZIndex = 1
       , canvasOffset = { x = 0, y = 0 }
       , canvasScale = 1.0
-      , canvasDrag = Nothing
-      , dragInfo = Nothing
-      , resizeInfo = Nothing
+      , activePointers = Dict.empty
+      , drag = Nothing
+      , pinch = Nothing
+      , longPress = Nothing
       , showGlobalMenu = False
       , globalMenuX = 0
       , globalMenuY = 0
@@ -185,8 +186,11 @@ subscriptions model =
                 (D.field "ctrlKey" D.bool)
                 (D.field "altKey" D.bool)
                 (D.field "defaultPrevented" D.bool)
-        , Evts.onMouseMove (D.map2 WindowDragMove (D.field "clientX" D.float) (D.field "clientY" D.float))
-        , Evts.onMouseUp (D.succeed WindowDragEnd)
+        , Ports.onPointerDown (\raw -> PointerDown raw)
+        , Ports.onPointerMove (\raw -> PointerMove raw)
+        , Ports.onPointerUp (\raw -> PointerUp raw)
+        , Ports.onPointerCancel (\raw -> PointerCancel raw)
+        , Ports.onPointerHover (\raw -> PointerHover raw)
         , Ports.onCanvasWheel (\raw ->
             case D.decodeValue (D.map3 CanvasZoom (D.field "deltaY" D.float) (D.field "clientX" D.float) (D.field "clientY" D.float)) raw of
                 Ok m ->

@@ -158,25 +158,28 @@ suite =
             [ test "east handle grows the width (canvas-scaled deltas)" <|
                 \_ ->
                     let
+                        d =
+                            { kind = AT.WindowResize "s1" AT.E
+                            , pointerId = 1
+                            , startMouseX = 0
+                            , startMouseY = 0
+                            , active = True
+                            , startWinX = 100
+                            , startWinY = 50
+                            , startWinW = 560
+                            , startWinH = 640
+                            , startOffsetX = 0
+                            , startOffsetY = 0
+                            }
+
                         m0 =
                             { initModelWithSession
                                 | canvasScale = 2.0
-                                , resizeInfo =
-                                    Just
-                                        { sessionId = "s1"
-                                        , handle = AT.E
-                                        , startMouseX = 0
-                                        , startMouseY = 0
-                                        , startWinX = 100
-                                        , startWinY = 50
-                                        , startWinW = 560
-                                        , startWinH = 640
-                                        }
                                 , windowPositions = Dict.insert "s1" { x = 100, y = 50, w = 560, h = 640, z = 1 } Dict.empty
                             }
 
                         ( m1, _ ) =
-                            W.handleResizeMove m0 40 0
+                            W.handleResizeMove m0 40 0 d
                     in
                     -- dx = 40/2 = 20 canvas px → w = 560+20 = 580
                     case Dict.get "s1" m1.windowPositions of
@@ -188,25 +191,28 @@ suite =
             , test "west handle moves x and shrinks width" <|
                 \_ ->
                     let
+                        d =
+                            { kind = AT.WindowResize "s1" AT.W
+                            , pointerId = 1
+                            , startMouseX = 0
+                            , startMouseY = 0
+                            , active = True
+                            , startWinX = 100
+                            , startWinY = 50
+                            , startWinW = 560
+                            , startWinH = 640
+                            , startOffsetX = 0
+                            , startOffsetY = 0
+                            }
+
                         m0 =
                             { initModelWithSession
                                 | canvasScale = 1.0
-                                , resizeInfo =
-                                    Just
-                                        { sessionId = "s1"
-                                        , handle = AT.W
-                                        , startMouseX = 0
-                                        , startMouseY = 0
-                                        , startWinX = 100
-                                        , startWinY = 50
-                                        , startWinW = 560
-                                        , startWinH = 640
-                                        }
                                 , windowPositions = Dict.insert "s1" { x = 100, y = 50, w = 560, h = 640, z = 1 } Dict.empty
                             }
 
                         ( m1, _ ) =
-                            W.handleResizeMove m0 -40 0
+                            W.handleResizeMove m0 -40 0 d
                     in
                     case Dict.get "s1" m1.windowPositions of
                         Just p ->

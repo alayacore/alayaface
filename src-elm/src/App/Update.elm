@@ -25,6 +25,7 @@ import App.Types exposing (..)
 import App.Windows as Win exposing (..)
 import App.NodeConnection as NC
 import App.SelectorKit as Kit
+import App.Pointer as P
 import Plan.Update as PU exposing (..)
 import Session.Types as T
 import Session.Protocol as P
@@ -3705,6 +3706,23 @@ update msg model =
         SetPresetSubmenu open ->
             ( { model | presetSubmenuOpen = open }, Cmd.none )
 
+        PointerHover raw ->
+            -- Hover open/close for the New Session preset submenu (D6):
+            -- only hover-capable pointers (mouse/pen) count — touch taps
+            -- synthesize compat mouseenter/leave that must NOT open or
+            -- close the flyout (a tap opens it via click; its release
+            -- must not close it).
+            case ( D.decodeValue (D.field "inItem" D.bool) raw, D.decodeValue (D.field "pointerType" D.string) raw ) of
+                ( Ok inItem, Ok ptype ) ->
+                    if ptype == "mouse" || ptype == "pen" then
+                        ( { model | presetSubmenuOpen = inItem }, Cmd.none )
+
+                    else
+                        ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
         SessionDirsResult raw ->
             case D.decodeValue sessionDirsDecoder raw of
                 Ok { ok, dirs, error } ->
@@ -4993,124 +5011,244 @@ update msg model =
         ForSession sid innerMsg ->
             update innerMsg { model | activeId = Just sid }
 
-        ResizeStart id handle mouseX mouseY ->
-            case Dict.get id model.windowPositions of
-                Just pos ->
+        -- Unified pointer pipeline (touch & pointer design D1/D2/D5):
+        -- transport.js forwards raw pointer events (a dumb pipe that
+        -- classifies the target and captures/preventDefaults draggable
+        -- surfaces); the gesture FSM below arms/activates drags, tracks
+        -- the two-pointer pinch and the touch long-press. Window
+        -- activation still happens via click/compat-mousedown paths
+        -- (taps on a window bar activate on pointerup — see PointerUp).
+
+        PointerDown raw ->
+            case D.decodeValue P.pointerEventDecoder raw of
+                Ok pe ->
                     let
-                        -- Raise the resized window (D6: bounded z).
                         m1 =
-                            raiseWindow model id
+                            { model | activePointers = Dict.insert pe.id pe model.activePointers }
                     in
-                    ( { m1
-                        | resizeInfo =
-                            Just
-                                { sessionId = id
-                                , handle = handle
-                                , startMouseX = mouseX
-                                , startMouseY = mouseY
-                                , startWinX = pos.x
-                                , startWinY = pos.y
-                                , startWinW = pos.w
-                                , startWinH = pos.h
-                                }
-                        , activeId = Just id
+                    -- Pinch: when a SECOND canvas pointer lands and no
+                    -- drag is in motion (and any armed drag is itself a
+                    -- canvas pan — a bar grab plus a canvas finger is a
+                    -- bar drag, not a pinch), switch to the two-pointer
+                    -- zoom: a lone canvas finger never pans alone.
+                    if canvasPointerCount m1 >= 2 && not (dragInMotion m1) && isPanArm m1.drag then
+                        startPinch m1
+
+                    else if m1.drag == Nothing && P.isDraggableTarget pe.target && pe.button == 0 then
+                        let
+                            ( m2, c1 ) =
+                                armDrag m1 pe
+
+                            ( m3, c2 ) =
+                                if shouldArmLongPress pe m2 then
+                                    ( { m2 | longPress = Just { pointerId = pe.id, x = pe.x, y = pe.y } }
+                                    , Task.perform (\_ -> LongPressFired) (Process.sleep (toFloat P.longPressMs))
+                                    )
+
+                                else
+                                    ( m2, Cmd.none )
+                        in
+                        ( m3, Cmd.batch [ c1, c2 ] )
+
+                    else
+                        ( m1, Cmd.none )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        PointerMove raw ->
+            case D.decodeValue P.pointerEventDecoder raw of
+                Ok pe ->
+                    let
+                        m1 =
+                            { model
+                                | activePointers =
+                                    Dict.update pe.id
+                                        (Maybe.map (\pi -> { pi | x = pe.x, y = pe.y }))
+                                        model.activePointers
+                            }
+
+                        m2 =
+                            -- Moving past the slop cancels the long-press
+                            -- (the gesture became a drag, not a menu tap).
+                            case m1.longPress of
+                                Just lp ->
+                                    if lp.pointerId == pe.id && P.distance ( lp.x, lp.y ) ( pe.x, pe.y ) > P.slop then
+                                        { m1 | longPress = Nothing }
+
+                                    else
+                                        m1
+
+                                Nothing ->
+                                    m1
+                    in
+                    case m2.drag of
+                        Just d ->
+                            if d.pointerId == pe.id then
+                                dragMove pe d m2
+
+                            else
+                                ( m2, Cmd.none )
+
+                        Nothing ->
+                            case m2.pinch of
+                                Just pc ->
+                                    if pe.id == pc.pointerA || pe.id == pc.pointerB then
+                                        pinchMove m2
+
+                                    else
+                                        ( m2, Cmd.none )
+
+                                Nothing ->
+                                    ( m2, Cmd.none )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        PointerUp raw ->
+            case D.decodeValue P.pointerEventDecoder raw of
+                Ok pe ->
+                    let
+                        m1 =
+                            { model | activePointers = Dict.remove pe.id model.activePointers }
+                    in
+                    case m1.drag of
+                        Just d ->
+                            if d.pointerId == pe.id then
+                                -- A TAP on a window bar (armed but never
+                                -- activated) still activates the window:
+                                -- pointer capture preventDefaults the
+                                -- compat mousedown, so the panel's
+                                -- mousedown activation never fires for
+                                -- bar taps (mouse or touch).
+                                let
+                                    base =
+                                        { m1 | drag = Nothing, longPress = clearLongPressFor pe.id m1.longPress }
+
+                                    m2 =
+                                        if d.active then
+                                            base
+
+                                        else
+                                            activateArmedTap d base
+                                in
+                                ( m2, Cmd.none )
+
+                            else
+                                ( m1, Cmd.none )
+
+                        Nothing ->
+                            let
+                                m2 =
+                                    case m1.pinch of
+                                        Just pc ->
+                                            if pe.id == pc.pointerA || pe.id == pc.pointerB then
+                                                { m1 | pinch = Nothing }
+
+                                            else
+                                                m1
+
+                                        Nothing ->
+                                            m1
+
+                                m3 =
+                                    { m2 | longPress = clearLongPressFor pe.id m2.longPress }
+                            in
+                            ( m3, Cmd.none )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        PointerCancel raw ->
+            -- The browser stole the gesture (OS gesture, notification
+            -- shade, element scroll): end everything cleanly so no
+            -- drag/pinch/long-press stays armed.
+            case D.decodeValue P.pointerEventDecoder raw of
+                Ok pe ->
+                    ( { model
+                        | activePointers = Dict.remove pe.id model.activePointers
+                        , drag =
+                            case model.drag of
+                                Just d ->
+                                    if d.pointerId == pe.id then
+                                        Nothing
+
+                                    else
+                                        model.drag
+
+                                Nothing ->
+                                    Nothing
+                        , pinch =
+                            case model.pinch of
+                                Just pc ->
+                                    if pe.id == pc.pointerA || pe.id == pc.pointerB then
+                                        Nothing
+
+                                    else
+                                        model.pinch
+
+                                Nothing ->
+                                    Nothing
+                        , longPress =
+                            case model.longPress of
+                                Just lp ->
+                                    if lp.pointerId == pe.id then
+                                        Nothing
+
+                                    else
+                                        model.longPress
+
+                                Nothing ->
+                                    Nothing
                       }
                     , Cmd.none
                     )
 
-                Nothing ->
+                Err _ ->
                     ( model, Cmd.none )
 
-        PlanResizeStart id handle mouseX mouseY ->
-            case Dict.get id model.windowPositions of
-                Just pos ->
-                    let
-                        m1 =
-                            raiseWindow model id
-                    in
-                    ( { m1
-                        | resizeInfo =
-                            Just
-                                { sessionId = id
-                                , handle = handle
-                                , startMouseX = mouseX
-                                , startMouseY = mouseY
-                                , startWinX = pos.x
-                                , startWinY = pos.y
-                                , startWinW = pos.w
-                                , startWinH = pos.h
-                                }
-                        , planActiveId = Just id
-                      }
-                    , Cmd.none
-                    )
+        LongPressFired ->
+            -- 500ms hold on the canvas with no movement: the touch
+            -- equivalent of a right-click — open the global menu at the
+            -- finger. Only fires if the finger is still down and has not
+            -- crossed the slop.
+            case model.longPress of
+                Just lp ->
+                    if model.pinch /= Nothing then
+                        ( { model | longPress = Nothing }, Cmd.none )
 
-                Nothing ->
-                    ( model, Cmd.none )
+                    else
+                        case Dict.get lp.pointerId model.activePointers of
+                            Just pi ->
+                                if P.distance ( lp.x, lp.y ) ( pi.x, pi.y ) <= P.slop then
+                                    ( { model
+                                        | showGlobalMenu = True
+                                        , globalMenuX = round pi.x
+                                        , globalMenuY = round pi.y
+                                        , presetSubmenuOpen = False
+                                        , longPress = Nothing
+                                        -- The hold was a menu gesture,
+                                        -- not a drag: discard the inert
+                                        -- pan arm so moving the finger
+                                        -- with the menu open does not
+                                        -- pan underneath it.
+                                        , drag = clearArmedPan model.drag
+                                      }
+                                    -- The finger release produces a
+                                    -- click that would bubble to .app
+                                    -- and close the menu; transport.js
+                                    -- swallows that one click.
+                                    , Ports.longPressMenuOpened ()
+                                    )
 
-        WindowDragStart id mouseX mouseY ->
-            case Dict.get id model.windowPositions of
-                Just pos ->
-                    let
-                        m1 =
-                            raiseWindow model id
-                    in
-                    ( { m1
-                        | dragInfo =
-                            Just
-                                { sessionId = id
-                                , startMouseX = mouseX
-                                , startMouseY = mouseY
-                                , startWinX = pos.x
-                                , startWinY = pos.y
-                                }
-                        , activeId = Just id
-                      }
-                    , Cmd.none
-                    )
+                                else
+                                    ( { model | longPress = Nothing }, Cmd.none )
+
+                            Nothing ->
+                                ( { model | longPress = Nothing }, Cmd.none )
 
                 Nothing ->
                     ( model, Cmd.none )
-
-        PlanWindowDragStart id mouseX mouseY ->
-            case Dict.get id model.windowPositions of
-                Just pos ->
-                    let
-                        m1 =
-                            raiseWindow model id
-                    in
-                    ( { m1
-                        | dragInfo =
-                            Just
-                                { sessionId = id
-                                , startMouseX = mouseX
-                                , startMouseY = mouseY
-                                , startWinX = pos.x
-                                , startWinY = pos.y
-                                }
-                        , planActiveId = Just id
-                      }
-                    , Cmd.none
-                    )
-
-                Nothing ->
-                    ( model, Cmd.none )
-
-        CanvasDragStart mouseX mouseY ->
-            -- Drag on the empty canvas background: pan the infinite
-            -- canvas. Window mousedowns never reach here (panels
-            -- stopPropagation), so this only fires on true background.
-            ( { model
-                | canvasDrag =
-                    Just
-                        { startMouseX = mouseX
-                        , startMouseY = mouseY
-                        , startOffsetX = model.canvasOffset.x
-                        , startOffsetY = model.canvasOffset.y
-                        }
-              }
-            , Cmd.none
-            )
 
         CanvasZoom deltaY mouseX mouseY ->
             -- Wheel over the canvas: zoom centered on the cursor.
@@ -5136,93 +5274,6 @@ update msg model =
             , Ports.setConnectionChain (chainPayload m1 m1.connectionChain)
             )
 
-        WindowDragMove mouseX mouseY ->
-            case model.dragInfo of
-                Just info ->
-                    let
-                        -- Mouse deltas are screen pixels; window coords
-                        -- are canvas pixels (canvas layer scaled by
-                        -- canvasScale), so divide to keep the window
-                        -- glued to the cursor at any zoom level.
-                        dx =
-                            round ((mouseX - info.startMouseX) / model.canvasScale)
-
-                        dy =
-                            round ((mouseY - info.startMouseY) / model.canvasScale)
-
-                        -- No viewport clamp: the canvas is unbounded and
-                        -- the user recovers off-screen windows by panning.
-                        newX =
-                            info.startWinX + dx
-
-                        newY =
-                            info.startWinY + dy
-                    in
-                    ( { model
-                        | windowPositions =
-                            Dict.update info.sessionId
-                                (Maybe.map (\pos -> { pos | x = newX, y = newY }))
-                                model.windowPositions
-                      }
-                    -- Re-emit the chain (discrete redraw, Phase A): the
-                    -- dragged window moved — curves follow it live.
-                    , Ports.setConnectionChain
-                        (chainPayload
-                            { model
-                                | windowPositions =
-                                    Dict.update info.sessionId
-                                        (Maybe.map (\pos -> { pos | x = newX, y = newY }))
-                                        model.windowPositions
-                            }
-                            model.connectionChain
-                        )
-                    )
-
-                Nothing ->
-                    case model.canvasDrag of
-                        Just cd ->
-                            let
-                                dx =
-                                    round mouseX - round cd.startMouseX
-
-                                dy =
-                                    round mouseY - round cd.startMouseY
-
-                                -- Pan offset is in SCREEN pixels (the
-                                -- translate part of the transform), so
-                                -- deltas need no scale division. The
-                                -- safety bound grows with zoom (high zoom
-                                -- covers a smaller canvas area).
-                                maxPan =
-                                    round (toFloat canvasMaxPan * model.canvasScale)
-
-                                newX =
-                                    clamp -maxPan maxPan (cd.startOffsetX + dx)
-
-                                newY =
-                                    clamp -maxPan maxPan (cd.startOffsetY + dy)
-                            in
-                            -- Canvas PAN needs no redraw: the connection
-                            -- layer lives INSIDE .canvas, so the
-                            -- transform carries the curves along.
-                            ( { model | canvasOffset = { x = newX, y = newY } }
-                            , Cmd.none
-                            )
-
-                        Nothing ->
-                            let
-                                ( m1, _ ) =
-                                    handleResizeMove model mouseX mouseY
-                            in
-                            -- Window RESIZE (drag handle): curves follow
-                            -- the resized edge live.
-                            ( m1
-                            , Ports.setConnectionChain (chainPayload m1 m1.connectionChain)
-                            )
-
-        WindowDragEnd ->
-            ( { model | dragInfo = Nothing, resizeInfo = Nothing, canvasDrag = Nothing }, Cmd.none )
-
         ActivateSession id ->
             -- Always re-raise + rebuild the chain, even when this
             -- session is already `activeId`: focusing the plan window in
@@ -5232,6 +5283,354 @@ update msg model =
             activateSessionModel model id
 
         NoOp ->
+            ( model, Cmd.none )
+
+
+-- ─── Pointer gesture FSM helpers (D4/D5) ────────────────────────────
+
+{-| Pointers currently down on the canvas background (pinch candidates).
+-}
+canvasPointers : Model -> List P.PointerInfo
+canvasPointers model =
+    Dict.toList model.activePointers
+        |> List.filter (\( _, pi ) -> pi.target == P.TCanvas)
+        |> List.map Tuple.second
+
+
+canvasPointerCount : Model -> Int
+canvasPointerCount model =
+    List.length (canvasPointers model)
+
+
+dragInMotion : Model -> Bool
+dragInMotion model =
+    case model.drag of
+        Just d ->
+            d.active
+
+        Nothing ->
+            False
+
+
+{-| Two fingers on the canvas: start the pinch zoom at the current
+distance. Clears any armed pan (a lone canvas finger never pans) and
+the long-press (the second finger means zoom, not menu).
+-}
+startPinch : Model -> ( Model, Cmd Msg )
+startPinch model =
+    let
+        pts =
+            canvasPointers model
+    in
+    case ( List.head pts, List.head (List.drop 1 pts) ) of
+        ( Just a, Just b ) ->
+            ( { model
+                | pinch = Just { pointerA = a.id, pointerB = b.id, startDist = P.distance ( a.x, a.y ) ( b.x, b.y ) }
+                , longPress = Nothing
+                , drag = clearArmedPan model.drag
+              }
+            , Cmd.none
+            )
+
+        _ ->
+            ( model, Cmd.none )
+
+
+clearArmedPan : Maybe DragState -> Maybe DragState
+clearArmedPan drag =
+    case drag of
+        Just d ->
+            if d.active || d.kind /= Pan then
+                drag
+
+            else
+                Nothing
+
+        Nothing ->
+            Nothing
+
+
+{-| Pointer down on a draggable surface: arm the drag with an origin
+snapshot. The drag stays inert (a tap) until the pointer crosses the
+slop (see dragMove). Raises nothing here — activation happens either on
+slop crossing or on a bar tap's pointerup.
+-}
+armDrag : Model -> P.PointerInfo -> ( Model, Cmd Msg )
+armDrag model pe =
+    case toDragKind pe.target pe.sessionId pe.planId pe.handle of
+        Just kind ->
+            let
+                key =
+                    dragKindKey kind
+
+                pos =
+                    Dict.get key model.windowPositions
+
+                winX =
+                    pos |> Maybe.map .x |> Maybe.withDefault 0
+
+                winY =
+                    pos |> Maybe.map .y |> Maybe.withDefault 0
+
+                winW =
+                    pos |> Maybe.map .w |> Maybe.withDefault 0
+
+                winH =
+                    pos |> Maybe.map .h |> Maybe.withDefault 0
+            in
+            ( { model
+                | drag =
+                    Just
+                        { kind = kind
+                        , pointerId = pe.id
+                        , startMouseX = pe.x
+                        , startMouseY = pe.y
+                        , active = False
+                        , startWinX = winX
+                        , startWinY = winY
+                        , startWinW = winW
+                        , startWinH = winH
+                        , startOffsetX = model.canvasOffset.x
+                        , startOffsetY = model.canvasOffset.y
+                        }
+              }
+            , Cmd.none
+            )
+
+        Nothing ->
+            ( model, Cmd.none )
+
+
+dragKindKey : DragKind -> String
+dragKindKey kind =
+    case kind of
+        Pan ->
+            ""
+
+        WindowMove sid ->
+            sid
+
+        WindowResize sid _ ->
+            sid
+
+        PlanMove pid ->
+            pid
+
+        PlanResize pid _ ->
+            pid
+
+
+{-| True when the armed drag is a canvas pan (both fingers on the
+canvas → pinch; a bar grab + a canvas finger is a bar drag).
+-}
+isPanArm : Maybe DragState -> Bool
+isPanArm drag =
+    case drag of
+        Just d ->
+            d.kind == Pan
+
+        Nothing ->
+            False
+
+
+{-| Touch (or button-less pen) hold on the canvas arms the menu
+long-press — but only as the FIRST canvas finger (a second finger means
+pinch, and the timer is discarded when the pinch starts). The pan drag
+arm coexists: moving past the slop cancels the long-press and pans;
+holding still opens the menu (and discards the pan arm).
+-}
+shouldArmLongPress : P.PointerInfo -> Model -> Bool
+shouldArmLongPress pe model =
+    pe.target == P.TCanvas
+        && canvasPointerCount model == 1
+        && model.pinch == Nothing
+        && (pe.kind == P.TouchPointer || (pe.kind == P.PenPointer && pe.button == 0))
+
+
+clearLongPressFor : Int -> Maybe LongPress -> Maybe LongPress
+clearLongPressFor pointerId longPress =
+    case longPress of
+        Just lp ->
+            if lp.pointerId == pointerId then
+                Nothing
+
+            else
+                longPress
+
+        Nothing ->
+            Nothing
+
+
+{-| Apply an in-flight drag move: cross the slop to activate (raising +
+focusing window drags), then move the target by kind.
+-}
+dragMove : P.PointerInfo -> DragState -> Model -> ( Model, Cmd Msg )
+dragMove pe d model =
+    let
+        setDragActive m =
+            { m | drag = Maybe.map (\x -> { x | active = True }) m.drag }
+
+        pastSlop =
+            P.distance ( d.startMouseX, d.startMouseY ) ( pe.x, pe.y ) > P.slop
+
+        m1 =
+            if d.active then
+                model
+
+            else if pastSlop then
+                -- Activation: the drag is in motion. Raise + focus on
+                -- crossing the slop, not on pointerdown, so a tap on a
+                -- lower window's bar does not steal focus before the
+                -- user commits to a move.
+                setDragActive
+                    (case d.kind of
+                        WindowMove sid ->
+                            raiseWindow { model | activeId = Just sid } sid
+
+                        PlanMove pid ->
+                            raiseWindow { model | planActiveId = Just pid } pid
+
+                        _ ->
+                            model
+                    )
+
+            else
+                model
+    in
+    if d.active || pastSlop then
+        case d.kind of
+            Pan ->
+                -- Pan offset is in SCREEN pixels (the translate part of
+                -- the transform), so deltas need no scale division. The
+                -- safety bound grows with zoom (high zoom covers a
+                -- smaller canvas area). No chain redraw: the connection
+                -- layer lives INSIDE .canvas, so the transform carries
+                -- the curves along.
+                let
+                    dx =
+                        round pe.x - round d.startMouseX
+
+                    dy =
+                        round pe.y - round d.startMouseY
+
+                    maxPan =
+                        round (toFloat canvasMaxPan * model.canvasScale)
+
+                    newX =
+                        clamp -maxPan maxPan (d.startOffsetX + dx)
+
+                    newY =
+                        clamp -maxPan maxPan (d.startOffsetY + dy)
+                in
+                ( { m1 | canvasOffset = { x = newX, y = newY } }, Cmd.none )
+
+            WindowMove sid ->
+                let
+                    -- Mouse deltas are screen pixels; window coords are
+                    -- canvas pixels (canvas layer scaled by
+                    -- canvasScale), so divide to keep the window glued
+                    -- to the cursor at any zoom level. No viewport
+                    -- clamp: the canvas is unbounded and the user
+                    -- recovers off-screen windows by panning.
+                    dx =
+                        round ((pe.x - d.startMouseX) / model.canvasScale)
+
+                    dy =
+                        round ((pe.y - d.startMouseY) / model.canvasScale)
+
+                    m2 =
+                        { m1
+                            | windowPositions =
+                                Dict.update sid
+                                    (Maybe.map (\pos -> { pos | x = d.startWinX + dx, y = d.startWinY + dy }))
+                                    m1.windowPositions
+                        }
+                in
+                -- Re-emit the chain (discrete redraw, Phase A): the
+                -- dragged window moved — curves follow it live.
+                ( m2, Ports.setConnectionChain (chainPayload m2 m2.connectionChain) )
+
+            PlanMove pid ->
+                let
+                    dx =
+                        round ((pe.x - d.startMouseX) / model.canvasScale)
+
+                    dy =
+                        round ((pe.y - d.startMouseY) / model.canvasScale)
+
+                    m2 =
+                        { m1
+                            | windowPositions =
+                                Dict.update pid
+                                    (Maybe.map (\pos -> { pos | x = d.startWinX + dx, y = d.startWinY + dy }))
+                                    m1.windowPositions
+                        }
+                in
+                ( m2, Ports.setConnectionChain (chainPayload m2 m2.connectionChain) )
+
+            WindowResize _ _ ->
+                let
+                    ( m2, _ ) =
+                        handleResizeMove m1 pe.x pe.y d
+                in
+                ( m2, Ports.setConnectionChain (chainPayload m2 m2.connectionChain) )
+
+            PlanResize _ _ ->
+                let
+                    ( m2, _ ) =
+                        handleResizeMove m1 pe.x pe.y d
+                in
+                ( m2, Ports.setConnectionChain (chainPayload m2 m2.connectionChain) )
+
+    else
+        ( m1, Cmd.none )
+
+
+{-| A tap on a window bar (drag armed, never crossed the slop) still
+activates the window: pointer capture preventDefaults the compat
+mousedown, so the panel's mousedown activation never fires for bar
+taps — do the raise/focus here instead.
+-}
+activateArmedTap : DragState -> Model -> Model
+activateArmedTap d model =
+    case d.kind of
+        WindowMove sid ->
+            raiseWindow { model | activeId = Just sid } sid
+
+        PlanMove pid ->
+            raiseWindow { model | planActiveId = Just pid } pid
+
+        _ ->
+            model
+
+
+{-| Two-finger pinch zoom centered on the fingers' midpoint; the zoom
+factor is the current/start distance ratio (clamped by applyZoom).
+-}
+pinchMove : Model -> ( Model, Cmd Msg )
+pinchMove model =
+    case model.pinch of
+        Just pc ->
+            case ( Dict.get pc.pointerA model.activePointers, Dict.get pc.pointerB model.activePointers ) of
+                ( Just a, Just b ) ->
+                    let
+                        ( midX, midY ) =
+                            P.midpoint ( a.x, a.y ) ( b.x, b.y )
+
+                        ratio =
+                            P.pinchRatio pc.startDist (P.distance ( a.x, a.y ) ( b.x, b.y ))
+
+                        m1 =
+                            applyZoom ratio midX midY model
+                    in
+                    -- Re-emit the chain: curve stroke-width is
+                    -- compensated by canvasScale (3 / scale).
+                    ( m1, Ports.setConnectionChain (chainPayload m1 m1.connectionChain) )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        Nothing ->
             ( model, Cmd.none )
 
 

@@ -87,6 +87,14 @@ port module Ports exposing
       -- Canvas zoom (wheel from bridge.js, non-passive so the browser
       -- page zoom / scroll can be prevented)
     , onCanvasWheel
+      -- Unified pointer input (touch & pointer design): raw events from
+      -- the transport.js dumb pipe; the gesture FSM lives in Elm.
+    , onPointerDown
+    , onPointerMove
+    , onPointerUp
+    , onPointerCancel
+    , longPressMenuOpened
+    , onPointerHover
     )
 
 import Json.Encode as E
@@ -255,3 +263,29 @@ port onWindowMaximized : (Bool -> msg) -> Sub msg
 -- Canvas zoom: bridge.js forwards wheel events (with native scroll /
 -- browser zoom prevented) as { deltaY, clientX, clientY }.
 port onCanvasWheel : (E.Value -> msg) -> Sub msg
+
+-- Unified pointer input (touch & pointer design D1/D2): transport.js
+-- forwards raw pointer events from a dumb pipe that classifies the
+-- target (canvas/bar/handle/content/menu/overlay), captures + prevent-
+-- defaults draggable surfaces, and forwards:
+--   { pointerId, pointerType, button, clientX, clientY, targetKind,
+--     sessionId, planId, handle }
+-- The gesture state machine (drag/pinch/long-press) lives in Elm.
+port onPointerDown : (E.Value -> msg) -> Sub msg
+port onPointerMove : (E.Value -> msg) -> Sub msg
+port onPointerUp : (E.Value -> msg) -> Sub msg
+port onPointerCancel : (E.Value -> msg) -> Sub msg
+
+-- Touch long-press menu opened (D5): Elm tells transport.js so it can
+-- swallow the click that the finger release produces — otherwise the
+-- release click bubbles to .app and closes the menu it just opened.
+-- The 500ms threshold lives only in App/Pointer.longPressMs.
+port longPressMenuOpened : () -> Cmd msg
+
+-- Hover state for hover-dependent UI (D6): transport.js forwards
+-- pointerover/pointerout CHANGES over hover surfaces as
+-- { inItem : Bool, pointerType : String }. Pointer events carry
+-- pointerType, so Elm can ignore the compat enter/leave that touch
+-- taps synthesize — a tap must never count as hover, and its release
+-- must never close a click-opened flyout.
+port onPointerHover : (E.Value -> msg) -> Sub msg

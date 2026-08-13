@@ -669,56 +669,62 @@ addPlanWindow key win model =
             m1
 
 
-{-| Window key for a plan file path: the plan file name minus .json
-(= the planId — plans always live at
-sessions/<origin>/plans/<planId>/<planId>.json; there is no import).
+{-| Apply an in-flight RESIZE drag (D4): reads the origin + handle from
+the unified DragState and recomputes the window rect from the current
+pointer position. Returns Cmd.none; the caller re-emits the chain.
 -}
-handleResizeMove : Model -> Float -> Float -> ( Model, Cmd Msg )
-handleResizeMove model mouseX mouseY =
-    case model.resizeInfo of
-        Just info ->
-            let
-                -- Mouse deltas are screen pixels; window coords are
-                -- canvas pixels (the canvas layer is scaled by
-                -- canvasScale), so divide to keep the resize edge under
-                -- the cursor at any zoom level.
-                dx =
-                    round ((mouseX - info.startMouseX) / model.canvasScale)
+handleResizeMove : Model -> Float -> Float -> DragState -> ( Model, Cmd Msg )
+handleResizeMove model mouseX mouseY d =
+    case d.kind of
+        WindowResize key handle ->
+            resizeMove model key handle mouseX mouseY d
 
-                dy =
-                    round ((mouseY - info.startMouseY) / model.canvasScale)
-            in
-            let
-                config =
-                    { handle = info.handle
-                    , dx = dx
-                    , dy = dy
-                    , startX = info.startWinX
-                    , startY = info.startWinY
-                    , startW = info.startWinW
-                    , startH = info.startWinH
-                    , minW = minWinW
-                    , minH = minWinH
-                    }
+        PlanResize key handle ->
+            resizeMove model key handle mouseX mouseY d
 
-                r =
-                    resizeDimensions config
-
-                -- No viewport clamp on resize either: the canvas is
-                -- unbounded, only the minimum size is enforced (inside
-                -- resizeDimensions). Positions move freely off-screen.
-            in
-            ( { model
-                | windowPositions =
-                    Dict.update info.sessionId
-                        (Maybe.map (\pos -> { pos | x = r.x, y = r.y, w = r.w, h = r.h }))
-                        model.windowPositions
-              }
-            , Cmd.none
-            )
-
-        Nothing ->
+        _ ->
             ( model, Cmd.none )
+
+
+resizeMove : Model -> String -> ResizeHandle -> Float -> Float -> DragState -> ( Model, Cmd Msg )
+resizeMove model key handle mouseX mouseY d =
+    let
+        -- Mouse deltas are screen pixels; window coords are canvas
+        -- pixels (the canvas layer is scaled by canvasScale), so divide
+        -- to keep the resize edge under the cursor at any zoom level.
+        dx =
+            round ((mouseX - d.startMouseX) / model.canvasScale)
+
+        dy =
+            round ((mouseY - d.startMouseY) / model.canvasScale)
+
+        config =
+            { handle = handle
+            , dx = dx
+            , dy = dy
+            , startX = d.startWinX
+            , startY = d.startWinY
+            , startW = d.startWinW
+            , startH = d.startWinH
+            , minW = minWinW
+            , minH = minWinH
+            }
+
+        r =
+            resizeDimensions config
+
+        -- No viewport clamp on resize either: the canvas is unbounded,
+        -- only the minimum size is enforced (inside resizeDimensions).
+        -- Positions move freely off-screen.
+    in
+    ( { model
+        | windowPositions =
+            Dict.update key
+                (Maybe.map (\pos -> { pos | x = r.x, y = r.y, w = r.w, h = r.h }))
+                model.windowPositions
+      }
+    , Cmd.none
+    )
 
 
 -- Apply a buffered transport event to the sessions dict.

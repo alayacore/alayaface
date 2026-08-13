@@ -756,6 +756,7 @@
     //   overlay.js — overlay scrollbar (P37), canvas zoom, cursor/scroll ports
     window.AlayaChain.init(app);
     window.AlayaOverlay.init(app, root);
+    installPointerPipe(app);
 
     // 5. Window maximize state
     transport.isMaximized().then(function (v) {
@@ -764,6 +765,130 @@
     transport.onWindowEvent(function (v) {
       app.ports.onWindowMaximized.send(v);
     });
+  }
+
+  // ─── Pointer input pipe (touch & pointer design D1/D2) ─────────────
+  //
+  // A DUMB pipe — no gesture logic here. It classifies the pointerdown
+  // target, captures + preventDefaults draggable surfaces (so move/up
+  // keep flowing even when released outside the window, and the compat
+  // mouse events are suppressed for a single input path), and forwards
+  // every raw event to Elm. The gesture state machine (drag / pinch /
+  // long-press) lives in App/Update + App/Pointer and is elm-tested.
+  //
+  // Classification order matters: handles and bars are INSIDE panels,
+  // so check the most specific selectors first. Plan windows carry
+  // both .plan-panel and .session-panel (they are session panels), so
+  // plan kinds are decided by presence of .plan-panel.
+  var DRAGGABLE = [".main-content", ".session-bar", ".resize-handle"];
+
+  function pointerTargetKind(e) {
+    var t = e.target;
+    if (!t || typeof t.closest !== "function") return "other";
+    if (t.closest(".resize-handle")) {
+      return t.closest(".plan-panel") ? "plan-handle" : "session-handle";
+    }
+    if (t.closest(".session-bar")) {
+      return t.closest(".plan-panel") ? "plan-bar" : "session-bar";
+    }
+    if (t.closest(".global-menu")) return "menu";
+    if (t.closest(".overlay") || t.closest(".ctx-overlay") || t.closest(".ctx-menu")) return "overlay";
+    if (t.closest(".session-panel")) return "content";
+    if (t.closest("#main-content")) return "canvas";
+    return "other";
+  }
+
+  function pointerPayload(e, kind) {
+    var t = e.target;
+    var panel = (t && t.closest) ? t.closest(".session-panel") : null;
+    var plan = (t && t.closest) ? t.closest(".plan-panel") : null;
+    var handle = (t && t.closest) ? t.closest(".resize-handle") : null;
+    return {
+      pointerId: e.pointerId,
+      pointerType: e.pointerType || "mouse",
+      button: e.button,
+      clientX: e.clientX,
+      clientY: e.clientY,
+      targetKind: kind,
+      sessionId: (panel && panel.dataset) ? (panel.dataset.session || "") : "",
+      planId: (plan && plan.dataset) ? (plan.dataset.plan || "") : "",
+      handle: (handle && handle.dataset) ? (handle.dataset.handle || "") : "",
+    };
+  }
+
+  function isDraggable(kind) {
+    return kind === "canvas" || kind === "session-bar" || kind === "plan-bar" ||
+           kind === "session-handle" || kind === "plan-handle";
+  }
+
+  function isPrimary(e) {
+    // Primary contact: left button (mouse/pen) or any touch contact.
+    return e.button === 0 || e.pointerType !== "mouse";
+  }
+
+  function installPointerPipe(app) {
+    // Long-press menu: Elm opens the global menu on a 500ms touch hold
+    // (App/Pointer.longPressMs). The finger release produces a click
+    // that would bubble to .app and close the menu it just opened, so
+    // when Elm says the menu opened we swallow exactly the next click
+    // (a new pointerdown — any new gesture — re-arms the swallow).
+    var swallowNextClick = false;
+    if (app.ports.longPressMenuOpened && app.ports.longPressMenuOpened.subscribe) {
+      app.ports.longPressMenuOpened.subscribe(function () { swallowNextClick = true; });
+    }
+    document.addEventListener("click", function (e) {
+      if (swallowNextClick) {
+        swallowNextClick = false;
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }, true);
+
+    // Capture phase: sees pointerdown even where bubble handlers stop
+    // propagation, so classification is always based on the real target.
+    document.addEventListener("pointerdown", function (e) {
+      swallowNextClick = false;
+      var kind = pointerTargetKind(e);
+      if (isDraggable(kind) && isPrimary(e) && e.target && e.target.setPointerCapture) {
+        try { e.target.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+        // Suppress compatibility mouse events (single input path) and
+        // text selection. Click still fires, so taps on bars/handles
+        // keep working.
+        e.preventDefault();
+      }
+      app.ports.onPointerDown.send(pointerPayload(e, kind));
+    }, true);
+    document.addEventListener("pointermove", function (e) {
+      app.ports.onPointerMove.send(pointerPayload(e, pointerTargetKind(e)));
+    }, true);
+    document.addEventListener("pointerup", function (e) {
+      app.ports.onPointerUp.send(pointerPayload(e, pointerTargetKind(e)));
+    }, true);
+    document.addEventListener("pointercancel", function (e) {
+      app.ports.onPointerCancel.send(pointerPayload(e, pointerTargetKind(e)));
+    }, true);
+
+    // Hover state for hover-dependent UI (D6): forward pointerover/
+    // pointerout CHANGES over hover surfaces as { inItem, pointerType }.
+    // Pointer events carry pointerType, so Elm ignores the compat
+    // enter/leave that touch taps synthesize (a tap must never count
+    // as hover, and its release must never close a click-opened
+    // flyout). Only send on state CHANGES to keep the traffic down.
+    var hoverInItem = false;
+    function hoverPayload(e) {
+      var t = e.target;
+      var inItem = !!(t && t.closest && t.closest(".global-menu-item"));
+      return { inItem: inItem, pointerType: e.pointerType || "mouse" };
+    }
+    function sendHover(e) {
+      var p = hoverPayload(e);
+      if (p.inItem !== hoverInItem) {
+        hoverInItem = p.inItem;
+        app.ports.onPointerHover.send(p);
+      }
+    }
+    document.addEventListener("pointerover", sendHover, true);
+    document.addEventListener("pointerout", sendHover, true);
   }
 
   // Wait for DOM + backend to be ready. __TAURI__ may be injected after

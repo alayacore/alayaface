@@ -3,10 +3,13 @@ module App.Types exposing
     , Model
     , Msg(..)
     , WindowPos
-    , DragInfo
-    , CanvasDragInfo
     , ResizeHandle(..)
-    , ResizeInfo
+    , DragKind(..)
+    , DragState
+    , PinchState
+    , LongPress
+    , toDragKind
+    , handleFromString
     , DefaultModelsEditor
     , emptyDefaultModelsEditor
     , McpEditor
@@ -46,6 +49,7 @@ import Plan.Cascade as PC
 import Session.Selector as Sel
 import Session.Types as T
 import App.NodeConnection as NC
+import App.Pointer as P
 import Arch.Values as AV
 import Arch.Freeze as Freeze
 
@@ -82,9 +86,14 @@ type alias Model =
     -- + offset). Kept GPU-composited: transform becomes
     -- translate3d(offset) scale(scale), origin stays 0 0.
     , canvasScale : Float
-    , canvasDrag : Maybe CanvasDragInfo
-    , dragInfo : Maybe DragInfo
-    , resizeInfo : Maybe ResizeInfo
+    -- Unified pointer/gesture state (D4/D5): ONE drag state covers
+    -- canvas pan, window move and resize; activePointers tracks every
+    -- live pointer (for pinch and for drag-end attribution); pinch is
+    -- the two-pointer canvas zoom; longPress is the touch menu gesture.
+    , activePointers : Dict Int P.PointerInfo
+    , drag : Maybe DragState
+    , pinch : Maybe PinchState
+    , longPress : Maybe LongPress
     , showGlobalMenu : Bool
     -- Where the global menu pops up (right-click position, viewport
     -- coordinates) when opened via context menu on the canvas.
@@ -512,21 +521,21 @@ type Msg
     | PlanResume
       -- Session wrapper
     | ForSession String Msg
-      -- Window dragging
-    | WindowDragStart String Float Float
-    | WindowDragMove Float Float
-    | WindowDragEnd
-    | PlanWindowDragStart String Float Float
-    -- Canvas pan (drag on the empty background)
-    | CanvasDragStart Float Float
-    -- Canvas zoom centered on the mouse: wheel deltaY + pointer position
+      -- Unified pointer input (touch & pointer design D1): raw events
+      -- forwarded by transport.js; the gesture FSM lives in Update.
+    | PointerDown E.Value
+    | PointerMove E.Value
+    | PointerUp E.Value
+    | PointerCancel E.Value
+    | LongPressFired
+      -- Hover state for hover-dependent UI (D6): { inItem, pointerType }
+      -- from transport.js — touch taps' compat enter/leave are ignored.
+    | PointerHover E.Value
+      -- Canvas zoom centered on the mouse: wheel deltaY + pointer position
     | CanvasZoom Float Float Float
     -- Reset zoom to 100% (click on the zoom indicator), keeping the
     -- viewport center fixed
     | CanvasZoomReset
-      -- Window resizing
-    | ResizeStart String ResizeHandle Float Float
-    | PlanResizeStart String ResizeHandle Float Float
       -- Instant activation on mousedown
     | ActivateSession String
       -- Context menu
@@ -556,24 +565,114 @@ type alias WindowPos =
     }
 
 
-type alias DragInfo =
-    { sessionId : String
+{-| What an in-flight drag is moving (D4): the canvas, a session
+window, or a plan window (move or resize). One state replaces the old
+canvasDrag / dragInfo / resizeInfo triple.
+-}
+type DragKind
+    = Pan
+    | WindowMove String
+    | WindowResize String ResizeHandle
+    | PlanMove String
+    | PlanResize String ResizeHandle
+
+
+type alias DragState =
+    { kind : DragKind
+    , pointerId : Int
     , startMouseX : Float
     , startMouseY : Float
+    -- True once the pointer passed the drag slop: the drag is in
+    -- motion and moves windows / pans / resizes. Until then the
+    -- pointerdown is just an armed tap (activation only).
+    , active : Bool
+    -- Origin snapshot taken at pointerdown (canvas coords for windows,
+    -- screen coords for the canvas offset).
     , startWinX : Int
     , startWinY : Int
-    }
-
-
-{-| In-flight canvas pan: pointer start position + the canvas offset at
-drag start, so the pan delta accumulates from where the user grabbed.
--}
-type alias CanvasDragInfo =
-    { startMouseX : Float
-    , startMouseY : Float
+    , startWinW : Int
+    , startWinH : Int
     , startOffsetX : Int
     , startOffsetY : Int
     }
+
+
+{-| Two-pointer canvas pinch zoom (D5): the two pointer ids and the
+distance between them when the second finger landed.
+-}
+type alias PinchState =
+    { pointerA : Int
+    , pointerB : Int
+    , startDist : Float
+    }
+
+
+{-| Touch long-press in flight (D5): the pointer that is held down and
+where it started, so LongPressFired can validate (still down, not moved
+past the slop) before opening the global menu.
+-}
+type alias LongPress =
+    { pointerId : Int
+    , x : Float
+    , y : Float
+    }
+
+
+{-| Map a pointerdown target to the drag kind it arms (D5). Returns
+Nothing for targets that cannot drag. Requires the ids that only the
+DOM knows: sessionId/planId for bars and handles.
+-}
+toDragKind : P.TargetKind -> String -> String -> String -> Maybe DragKind
+toDragKind target sessionId planId handle =
+    case target of
+        P.TCanvas ->
+            Just Pan
+
+        P.TSessionBar ->
+            Just (WindowMove sessionId)
+
+        P.TPlanBar ->
+            Just (PlanMove planId)
+
+        P.TSessionHandle ->
+            Maybe.map (WindowResize sessionId) (handleFromString handle)
+
+        P.TPlanHandle ->
+            Maybe.map (PlanResize planId) (handleFromString handle)
+
+        _ ->
+            Nothing
+
+
+handleFromString : String -> Maybe ResizeHandle
+handleFromString s =
+    case s of
+        "nw" ->
+            Just NW
+
+        "n" ->
+            Just N
+
+        "ne" ->
+            Just NE
+
+        "w" ->
+            Just W
+
+        "e" ->
+            Just E
+
+        "sw" ->
+            Just SW
+
+        "s" ->
+            Just S
+
+        "se" ->
+            Just SE
+
+        _ ->
+            Nothing
 
 
 type ResizeHandle
@@ -586,17 +685,6 @@ type ResizeHandle
     | SW
     | SE
 
-
-type alias ResizeInfo =
-    { sessionId : String
-    , handle : ResizeHandle
-    , startMouseX : Float
-    , startMouseY : Float
-    , startWinX : Int
-    , startWinY : Int
-    , startWinW : Int
-    , startWinH : Int
-    }
 
 
 -- EDITOR STATE (global presets)

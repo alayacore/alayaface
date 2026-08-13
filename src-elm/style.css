@@ -2881,3 +2881,68 @@ body {
   cursor: default;
 }
 
+
+/* ─── Touch & pointer input (D3/D7/D8) ───────────────────────────────
+   Declarative gesture suppression: the browser must never steal a
+   touch on a draggable surface (canvas pan, window bars, resize
+   handles) for its own scrolling/zooming — touch-action: none is the
+   deterministic way (JS preventDefault on touchmove is a race). Scroll
+   containers (.messages, .plan-page-canvas, menus) deliberately keep
+   the default touch-action so native touch scrolling/selection works. */
+
+.main-content,
+.session-bar,
+.plan-bar,
+.resize-handle {
+  touch-action: none;
+  -webkit-touch-callout: none;
+}
+
+/* No pull-to-refresh / overscroll glow when panning at the edges. */
+body,
+.app {
+  overscroll-behavior: none;
+}
+
+/* ─── Coarse pointers (touchscreens): ≥44px hit targets (D7) ──────── */
+
+@media (pointer: coarse) {
+  .session-bar {
+    min-height: 44px;
+  }
+  /* Corner handles grow, edges get thicker; the enlarged hit area is
+     the invisible part outside the window (offset stays negative). */
+  .resize-handle-nw,
+  .resize-handle-ne,
+  .resize-handle-sw,
+  .resize-handle-se {
+    width: 22px;
+    height: 22px;
+  }
+  .resize-handle-n,
+  .resize-handle-s {
+    height: 12px;
+    left: 14px;
+    right: 14px;
+  }
+  .resize-handle-w,
+  .resize-handle-e {
+    width: 12px;
+    top: 14px;
+    bottom: 14px;
+  }
+  .global-menu-item,
+  .global-menu-submenu-item {
+    padding-top: 12px;
+    padding-bottom: 12px;
+  }
+}
+
+/* ─── No-hover devices: hide the mouse-oriented overlay thumbs (D7);
+   native touch scrolling is the interaction there. (overlay.js also
+   skips installing them entirely — this is belt and suspenders.) */
+@media (hover: none) {
+  .overlay-scrollbar {
+    display: none;
+  }
+}

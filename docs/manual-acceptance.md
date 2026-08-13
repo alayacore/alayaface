@@ -117,6 +117,18 @@
 - [ ] No `active-preset` file exists under `~/.alayaface/`; editing a preset's settings never affects another preset
 - [ ] Node-level `tools` field override works
 
+## 7. Touch & Pointer Input (docs/touch-design.md, D1–D8)
+
+- [ ] Single-finger drag on the canvas pans it (no browser scroll/pull-to-refresh — `touch-action: none` holds)
+- [ ] Single-finger drag on a window title bar moves the window; drag on a resize handle resizes it (handles are ≥22px hit targets on touch)
+- [ ] Two-finger pinch on the canvas zooms centered on the fingers; the zoom indicator (🔍) reflects it
+- [ ] Long-press (500 ms, no movement) on the canvas opens the global menu at the finger; the menu stays open when the finger lifts
+- [ ] Tap the "New Session" menu item opens the preset submenu (no hover needed); tap a preset creates the session; tap outside closes the menu
+- [ ] Message lists and the plan DAG scroll natively with a finger (custom overlay thumbs hidden on touch)
+- [ ] A tap on a window bar activates the window without moving it
+- [ ] Dragging a window and releasing OUTSIDE the browser window does not leave the window/canvas "grabbed" (pointer capture)
+- [ ] Mouse still works identically: right-click menu, hover flyout, left-drag pan/window/handles, wheel zoom (mouse regression covered by e2e)
+
 ## Regression (non-Plan features unaffected)
 
 - [ ] Normal New Session conversations work (no [Plan] prefix; the preset's system_prompt is the only system prompt)

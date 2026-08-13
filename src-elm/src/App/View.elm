@@ -68,9 +68,8 @@ view model =
             [ Attr.id "main-content"
             , Attr.class
                 ("main-content"
-                    ++ (if model.canvasDrag == Nothing then "" else " panning")
+                    ++ (if model.drag == Nothing then "" else " panning")
                 )
-            , Ev.preventDefaultOn "mousedown" canvasDragStartDecoder
             -- Right-clicking the canvas (or the empty background) opens
             -- the global menu at the pointer position. Window panels
             -- stop contextmenu propagation, and message windows already
@@ -113,35 +112,12 @@ view model =
         ]
 
 
-{-| Drag/pan/resize may only start on the PRIMARY (left) button.
-Right/middle mousedowns (context-menu, aux-click) must never enter
-drag mode: a right-press that moves before release — or whose mouseup
-is missed (released outside the window / while the OS menu has focus)
-— would otherwise leave the canvas or a window "grabbed" and pan/drag
-on any subsequent mouse movement with no button held.
+{-| Canvas pan is started by the pointer pipeline (App.Pointer +
+App/Update FSM), not by DOM mousedown handlers: transport.js classifies
+the pointerdown target, captures draggable surfaces, and forwards raw
+events; a drag activates only after the primary pointer crosses the
+slop. See App/Pointer.elm and the Pointer* handlers in App/Update.
 -}
-primaryDragStart : (Float -> Float -> Msg) -> D.Decoder ( Msg, Bool )
-primaryDragStart mk =
-    D.map3
-        (\button x y ->
-            if button == 0 then
-                ( mk x y, True )
-
-            else
-                ( NoOp, False )
-        )
-        (D.field "button" D.int)
-        (D.field "clientX" D.float)
-        (D.field "clientY" D.float)
-
-
-{-| Canvas pan starts on the empty background. Window panels stop
-mousedown propagation, so this only ever sees true background clicks.
--}
-canvasDragStartDecoder : D.Decoder ( Msg, Bool )
-canvasDragStartDecoder =
-    primaryDragStart CanvasDragStart
-
 
 canvasTransform : Model -> String
 canvasTransform model =
@@ -213,8 +189,6 @@ viewSessionPanel model id =
                 , viewResizeHandle id SE
                 , Html.div
                     [ Attr.class "session-bar"
-                    , Ev.preventDefaultOn "mousedown"
-                        (primaryDragStart (WindowDragStart id))
                     , Attr.title "Drag to move"
                     ]
                     [ Html.span [ Attr.class "session-bar-title" ]
@@ -281,8 +255,14 @@ viewGlobalMenu model =
                         ("global-menu-item"
                             ++ (if model.presetSubmenuOpen then " global-menu-item-hover" else "")
                         )
-                    , Ev.onMouseEnter (SetPresetSubmenu True)
-                    , Ev.onMouseLeave (SetPresetSubmenu False)
+                    -- Hover open/close comes from the pointer pipeline
+                    -- (PointerHover, D6): DOM mouseenter/mouseleave would
+                    -- fire for touch taps too, fighting the click-open.
+                    -- Clicking OPENS unconditionally (a tap fires compat
+                    -- mouseenter BEFORE the click, so a toggle would
+                    -- close the menu it just opened). Tapping outside
+                    -- closes it (the .app click handler).
+                    , Ev.onClick (SetPresetSubmenu True)
                     ]
                     [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "+" ]
                     , Html.text " New Session"
@@ -673,8 +653,6 @@ viewPlanPanel model planId =
                 , viewPlanResizeHandle planId SE
                 , Html.div
                     [ Attr.class "session-bar plan-bar"
-                    , Ev.preventDefaultOn "mousedown"
-                        (primaryDragStart (PlanWindowDragStart planId))
                     , Attr.title "Drag to move"
                     ]
                     [ Html.span [ Attr.class "session-bar-title" ]
@@ -738,8 +716,7 @@ viewPlanResizeHandle planId handle =
     in
     Html.div
         [ Attr.class className
-        , Ev.preventDefaultOn "mousedown"
-            (primaryDragStart (PlanResizeStart planId handle))
+        , Attr.attribute "data-handle" (resizeHandleString handle)
         ]
         []
 
@@ -1920,8 +1897,7 @@ viewResizeHandle sid handle =
     in
     Html.div
         [ Attr.class className
-        , Ev.preventDefaultOn "mousedown"
-            (primaryDragStart (ResizeStart sid handle))
+        , Attr.attribute "data-handle" (resizeHandleString handle)
         ]
         []
 

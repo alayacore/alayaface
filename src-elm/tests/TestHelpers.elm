@@ -32,9 +32,10 @@ initModelWithSession =
     , nextZIndex = 1
     , canvasOffset = { x = 0, y = 0 }
     , canvasScale = 1.0
-    , canvasDrag = Nothing
-    , dragInfo = Nothing
-    , resizeInfo = Nothing
+    , activePointers = Dict.empty
+    , drag = Nothing
+    , pinch = Nothing
+    , longPress = Nothing
     , showGlobalMenu = False
     , globalMenuX = 0
     , globalMenuY = 0
