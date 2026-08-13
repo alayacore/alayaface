@@ -254,13 +254,15 @@ func ClonePresetDir(src, dst string) error {
 }
 
 // seedSettingsConf builds the AlayaFace-owned settings.conf for a seed
-// preset: empty tool lists plus the preset's system_prompt (the plan
-// contract phrased for the preset's role).
+// preset: empty tool lists, the default reasoning level (1 = Balanced)
+// plus the preset's system_prompt (the plan contract phrased for the
+// preset's role).
 func seedSettingsConf(name string) string {
-	s := map[string]string{
-		"tool_confirm":  "",
-		"builtin_tools": "",
-		"system_prompt": seedSystemPrompt(name),
+	s := map[string]any{
+		"tool_confirm":    "",
+		"builtin_tools":   "",
+		"reasoning_level": 1,
+		"system_prompt":   seedSystemPrompt(name),
 	}
 	b, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {

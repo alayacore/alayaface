@@ -4376,6 +4376,21 @@ update msg model =
             , Cmd.none
             )
 
+        SetSettingsReasoningLevel lvl ->
+            let
+                ed =
+                    model.settingsEditor
+            in
+            ( { model
+                | settingsEditor =
+                    { ed
+                        | reasoningLevel = lvl
+                        , error = Nothing
+                    }
+              }
+            , Cmd.none
+            )
+
         SettingsSave ->
             let
                 ed =
@@ -4389,6 +4404,7 @@ update msg model =
                 , toolConfirm = ed.toolConfirm
                 , builtinTools = ed.builtinTools
                 , systemPrompt = ed.systemPrompt
+                , reasoningLevel = ed.reasoningLevel
                 }
             )
 
@@ -4407,6 +4423,7 @@ update msg model =
                                     , toolConfirm = res.toolConfirm
                                     , builtinTools = res.builtinTools
                                     , systemPrompt = res.systemPrompt
+                                    , reasoningLevel = res.reasoningLevel
                                     , error = Nothing
                                 }
                           }
@@ -6097,14 +6114,23 @@ rpcErrorDecoder =
         (D.field "message" D.string)
 
 
-settingsListResultDecoder : D.Decoder { ok : Bool, toolConfirm : String, builtinTools : String, systemPrompt : String, error : String }
+settingsListResultDecoder : D.Decoder { ok : Bool, toolConfirm : String, builtinTools : String, systemPrompt : String, reasoningLevel : Int, error : String }
 settingsListResultDecoder =
-    D.map5
-        (\ok toolConfirm builtinTools systemPrompt error -> { ok = ok, toolConfirm = toolConfirm, builtinTools = builtinTools, systemPrompt = systemPrompt, error = error })
+    D.map6
+        (\ok toolConfirm builtinTools systemPrompt reasoningLevel error ->
+            { ok = ok
+            , toolConfirm = toolConfirm
+            , builtinTools = builtinTools
+            , systemPrompt = systemPrompt
+            , reasoningLevel = reasoningLevel
+            , error = error
+            }
+        )
         (D.field "ok" D.bool)
         (D.field "tool_confirm" D.string)
         (D.field "builtin_tools" D.string)
         (D.field "system_prompt" D.string)
+        (D.field "reasoning_level" D.int)
         (D.field "error" D.string)
 
 

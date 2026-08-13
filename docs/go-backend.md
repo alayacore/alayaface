@@ -80,13 +80,13 @@ One-way push (server → client), message format:
 
 | Rust command | Go endpoint | Args (camelCase) | Return |
 |--------------|-------------|------------------|--------|
-| `create_session` | `POST /rpc/create_session` | `binaryPath`, `configPath`, `toolConfirm`(nullable), `preset`(nullable), `builtinTools`(nullable), `systemPrompt`(nullable), `workDir`(nullable), `planId`(nullable), `nodeId`(nullable), `originSessionId`(nullable), `clientId` | string sessionId (spawn args persisted to `<sessionDir>/session.spawn.json` for resume) |
-| `resume_session` | `POST /rpc/resume_session` | `sessionId`, `binaryPath`, `workDir`(nullable), `planId`(nullable), `nodeId`(nullable), `originSessionId`(nullable), `clientId` | string sessionId (re-applies the persisted spawn args: tool-confirm policy, builtin-tools restriction, system prompt, work dir) |
+| `create_session` | `POST /rpc/create_session` | `binaryPath`, `configPath`, `toolConfirm`(nullable), `preset`(nullable), `builtinTools`(nullable), `systemPrompt`(nullable), `reasoningLevel`(nullable, 0|1|2), `workDir`(nullable), `planId`(nullable), `nodeId`(nullable), `originSessionId`(nullable), `clientId` | string sessionId (spawn args persisted to `<sessionDir>/session.spawn.json` for resume, incl. `reasoning_level`; the level is resolved from the preset's settings.conf by default and passed as `--reasoning-level=<n>`) |
+| `resume_session` | `POST /rpc/resume_session` | `sessionId`, `binaryPath`, `workDir`(nullable), `planId`(nullable), `nodeId`(nullable), `originSessionId`(nullable), `clientId` | string sessionId (re-applies the persisted spawn args: tool-confirm policy, builtin-tools restriction, system prompt, reasoning level, work dir) |
 | `close_session` | `POST /rpc/close_session` | `sessionId` | — (graceful: CI cancel → CI save → stdin EOF → ≤5s natural exit → SIGKILL fallback) |
 | `close_all_sessions` | `POST /rpc/close_all_sessions` | `clientId` | — (graceful close of the CALLING client's sessions only — empty `clientId` = all; the frontend fires it once on page load so sessions orphaned by a page refresh are reclaimed — otherwise `resume_session` fails with "Session is already active" until the backend restarts) |
 | `list_session_dirs` | `POST /rpc/list_session_dirs` | — | `[{id, created_at}]` (top-level session dirs only; plan subtrees excluded) |
 | `delete_session_dir` | `POST /rpc/delete_session_dir` | `sessionId`, `planId`(nullable), `nodeId`(nullable), `originSessionId`(nullable) | — |
-| `fork_session` | `POST /rpc/fork_session` | `sourceSessionId`, `historyId`, `binaryPath` + optional (P38): `toolConfirm`, `preset`, `builtinTools`, `systemPrompt`, `workDir`, `planId`, `nodeId`, `originSessionId`, `clientId` | string sessionId |
+| `fork_session` | `POST /rpc/fork_session` | `sourceSessionId`, `historyId`, `binaryPath` + optional (P38): `toolConfirm`, `preset`, `builtinTools`, `systemPrompt`, `reasoningLevel`(nullable, 0|1|2), `workDir`, `planId`, `nodeId`, `originSessionId`, `clientId` | string sessionId |
 | `alayacore_send_prompt` | `POST /rpc/alayacore_send_prompt` | `sessionId`, `text`, `media:[{media_type,uri}]` | — |
 | `alayacore_cancel` | `POST /rpc/alayacore_cancel` | `sessionId` | — |
 | `alayacore_model_set` | `POST /rpc/alayacore_model_set` | `sessionId`, `modelId`(int) | — |
@@ -100,7 +100,7 @@ One-way push (server → client), message format:
 | `set_default_model` | `POST /rpc/set_default_model` | `preset`, `modelId` | CO `output` (probe `model_set` → persists `active_model` into the preset's runtime.conf) |
 | `list_default_mcp` | `POST /rpc/list_default_mcp` | `preset` | `[server]` |
 | `sync_default_mcp` | `POST /rpc/sync_default_mcp` | `config`, `preset` | — |
-| `get_global_settings` | `POST /rpc/get_global_settings` | `preset` | `{tool_confirm, builtin_tools, system_prompt}` |
+| `get_global_settings` | `POST /rpc/get_global_settings` | `preset` | `{tool_confirm, builtin_tools, reasoning_level, system_prompt}` |
 | `sync_global_settings` | `POST /rpc/sync_global_settings` | `config`, `preset` | — (merge semantics: absent fields keep current values) |
 | `get_global_config` | `POST /rpc/get_global_config` | — | `{recursion_limit}` |
 | `sync_global_config` | `POST /rpc/sync_global_config` | `config` | `{recursion_limit}` (normalized) |

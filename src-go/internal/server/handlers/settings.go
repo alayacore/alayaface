@@ -28,6 +28,12 @@ type GlobalSettings struct {
 	// and role framing for the preset's sessions. Free text, not
 	// normalized. Passed to alayacore as --system=<text>.
 	SystemPrompt string `json:"system_prompt"`
+	// ReasoningLevel is the preset's initial reasoning level (0|1|2),
+	// passed to alayacore as --reasoning-level=<n> when a session of
+	// this preset is spawned. nil = unset → effective default 1
+	// ("Balanced"). Level 0 ("Off") is a VALID explicit value, so the
+	// field is a pointer to distinguish it from an absent one.
+	ReasoningLevel *int `json:"reasoning_level,omitempty"`
 }
 
 // readSettingsFrom reads settings from a config dir; a missing/empty
@@ -113,6 +119,34 @@ func effectiveSystemPrompt(preset string) (string, error) {
 	return s.SystemPrompt, nil
 }
 
+// effectiveReasoningLevel returns a named preset's reasoning level
+// (0|1|2), defaulting to 1 ("Balanced") when unset or out of range.
+// Level 0 ("Off") is valid — only an absent field or an out-of-range
+// value falls back to the default.
+func effectiveReasoningLevel(preset string) (int, error) {
+	s, err := readPresetSettings(preset)
+	if err != nil {
+		return 1, err
+	}
+	if s.ReasoningLevel == nil {
+		return 1, nil
+	}
+	lvl := *s.ReasoningLevel
+	if lvl < 0 || lvl > 2 {
+		return 1, nil
+	}
+	return lvl, nil
+}
+
+// NormalizeReasoningLevel validates a reasoning level (0|1|2); anything
+// outside the range is rejected.
+func NormalizeReasoningLevel(raw int) (int, error) {
+	if raw < 0 || raw > 2 {
+		return 0, fmt.Errorf("Reasoning level must be 0, 1 or 2")
+	}
+	return raw, nil
+}
+
 // GetGlobalSettings reads a preset's settings (preset REQUIRED).
 func GetGlobalSettings(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	var args struct {
@@ -141,12 +175,21 @@ func GetGlobalSettings(h *Handler, w http.ResponseWriter, r *http.Request) error
 	if err != nil {
 		return err
 	}
-	return writeJSON(w, map[string]string{"tool_confirm": tc, "builtin_tools": bt, "system_prompt": s.SystemPrompt})
+	rl, err := effectiveReasoningLevel(args.Preset)
+	if err != nil {
+		return err
+	}
+	return writeJSON(w, map[string]any{
+		"tool_confirm":    tc,
+		"builtin_tools":   bt,
+		"system_prompt":   s.SystemPrompt,
+		"reasoning_level": rl,
+	})
 }
 
 // SyncGlobalSettings replaces a preset's settings (preset REQUIRED).
 // Accepts {"tool_confirm": "id1,id2", "builtin_tools": "...",
-// "system_prompt": "..."}; writes atomically.
+// "system_prompt": "...", "reasoning_level": 0|1|2}; writes atomically.
 func SyncGlobalSettings(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	var args struct {
 		Config string `json:"config"`
@@ -190,6 +233,18 @@ func SyncGlobalSettings(h *Handler, w http.ResponseWriter, r *http.Request) erro
 	}
 	if rawSp, ok := value["system_prompt"].(string); ok {
 		settings.SystemPrompt = rawSp
+	}
+	if rawRl, ok := value["reasoning_level"]; ok {
+		// JSON numbers decode as float64 in Go's map[string]any.
+		f, ok := rawRl.(float64)
+		if !ok || f != float64(int(f)) {
+			return fmt.Errorf("Reasoning level must be 0, 1 or 2")
+		}
+		rl, err := NormalizeReasoningLevel(int(f))
+		if err != nil {
+			return err
+		}
+		settings.ReasoningLevel = &rl
 	}
 
 	path := filepath.Join(configDir, "settings.conf")

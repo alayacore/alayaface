@@ -32,6 +32,7 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		Preset          *string `json:"preset"`
 		BuiltinTools    *string `json:"builtinTools"`
 		SystemPrompt    *string `json:"systemPrompt"`
+		ReasoningLevel  *int    `json:"reasoningLevel"`
 		WorkDir         *string `json:"workDir"`
 		PlanID          *string `json:"planId"`
 		NodeID          *string `json:"nodeId"`
@@ -127,6 +128,22 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 			sp = eff
 		}
 	}
+	// Reasoning level: an explicit per-session override wins (validated
+	// 0|1|2); otherwise the session's preset's reasoning_level
+	// (settings.conf) is used as --reasoning-level; default 1.
+	rl := 1
+	if args.ReasoningLevel != nil {
+		if *args.ReasoningLevel < 0 || *args.ReasoningLevel > 2 {
+			return fmt.Errorf("Reasoning level must be 0, 1 or 2")
+		}
+		rl = *args.ReasoningLevel
+	} else {
+		if eff, err := effectiveReasoningLevel(presetName); err != nil {
+			log.Printf("[settings] reasoning-level unavailable, spawning with default: %v", err)
+		} else {
+			rl = eff
+		}
+	}
 	// Optional per-plan working directory (Plan Mode node sessions):
 	// created if needed, and the child is spawned with it as cwd.
 	wd := ""
@@ -150,6 +167,7 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	if sp != "" {
 		log.Printf("  with --system (%d chars)", len(sp))
 	}
+	log.Printf("  with --reasoning-level=%d", rl)
 	if presetName != "" {
 		log.Printf("  preset=%s", presetName)
 	}
@@ -160,30 +178,33 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	// Persist the effective spawn args so resume_session can re-apply
 	// them: a resumed session must keep its capability envelope
 	// (builtin-tools restriction, tool-confirm policy, preset system
-	// prompt, work dir) — otherwise e.g. a Plan Session with NO tools
-	// would come back with ALL tools after a restart. The preset name is
-	// recorded too so plain forks of this session can inherit it.
+	// prompt, reasoning level, work dir) — otherwise e.g. a Plan Session
+	// with NO tools would come back with ALL tools after a restart. The
+	// preset name is recorded too so plain forks of this session can
+	// inherit it.
 	if err := dirs.WriteSpawnArgs(sessionDir, dirs.SpawnArgs{
-		ToolConfirm:  tc,
-		BuiltinTools: bt,
-		SystemPrompt: sp,
-		WorkDir:      wd,
-		Preset:       presetName,
+		ToolConfirm:    tc,
+		BuiltinTools:   bt,
+		SystemPrompt:   sp,
+		ReasoningLevel: &rl,
+		WorkDir:        wd,
+		Preset:         presetName,
 	}); err != nil {
 		log.Printf("[session] warning: cannot persist spawn args for %s: %v", sessionDir, err)
 	}
 
 	s, err := h.Sessions.Create(session.CreateConfig{
-		ID:           id,
-		Binary:       bin,
-		ConfigPath:   effectiveConfig,
-		SessionFile:  sessionFile,
-		SessionDir:   sessionDir,
-		ToolConfirm:  tc,
-		BuiltinTools: bt,
-		SystemPrompt: sp,
-		WorkDir:      wd,
-		Owner:        args.ClientID,
+		ID:             id,
+		Binary:         bin,
+		ConfigPath:     effectiveConfig,
+		SessionFile:    sessionFile,
+		SessionDir:     sessionDir,
+		ToolConfirm:    tc,
+		BuiltinTools:   bt,
+		SystemPrompt:   sp,
+		ReasoningLevel: rl,
+		WorkDir:        wd,
+		Owner:          args.ClientID,
 	}, h.Hub, h.Cache)
 	if err != nil {
 		return err
@@ -297,17 +318,24 @@ func ResumeSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 	log.Printf("Resuming %s with spawn args %s", sessionsDir, spawn.String())
+	// Re-apply the persisted reasoning level (nil = legacy session /
+	// pre-reasoning spawn.json → default 1 "Balanced").
+	rl := 1
+	if spawn.ReasoningLevel != nil {
+		rl = *spawn.ReasoningLevel
+	}
 	s, err := h.Sessions.Create(session.CreateConfig{
-		ID:           uuid.NewString(),
-		Binary:       bin,
-		ConfigPath:   configDir,
-		SessionFile:  sessionFile,
-		SessionDir:   sessionsDir,
-		ToolConfirm:  spawn.ToolConfirm,
-		BuiltinTools: spawn.BuiltinTools,
-		SystemPrompt: spawn.SystemPrompt,
-		WorkDir:      wd,
-		Owner:        args.ClientID,
+		ID:             uuid.NewString(),
+		Binary:         bin,
+		ConfigPath:     configDir,
+		SessionFile:    sessionFile,
+		SessionDir:     sessionsDir,
+		ToolConfirm:    spawn.ToolConfirm,
+		BuiltinTools:   spawn.BuiltinTools,
+		SystemPrompt:   spawn.SystemPrompt,
+		ReasoningLevel: rl,
+		WorkDir:        wd,
+		Owner:          args.ClientID,
 	}, h.Hub, h.Cache)
 	if err != nil {
 		return err
@@ -451,6 +479,7 @@ func ForkSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		Preset          *string `json:"preset"`
 		BuiltinTools    *string `json:"builtinTools"`
 		SystemPrompt    *string `json:"systemPrompt"`
+		ReasoningLevel  *int    `json:"reasoningLevel"`
 		WorkDir         *string `json:"workDir"`
 		PlanID          *string `json:"planId"`
 		NodeID          *string `json:"nodeId"`
@@ -567,6 +596,26 @@ func ForkSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 			sp = eff
 		}
 	}
+	// Reasoning level: an explicit override wins; plain forks inherit
+	// the source session's persisted level; node forks resolve the
+	// node's preset setting (default 1).
+	rl := 1
+	if args.ReasoningLevel != nil {
+		rl = *args.ReasoningLevel
+	} else if isPlainFork {
+		if srcArgs.ReasoningLevel != nil {
+			rl = *srcArgs.ReasoningLevel
+		}
+	} else {
+		if eff, err := effectiveReasoningLevel(presetName); err != nil {
+			log.Printf("[settings] reasoning-level unavailable, spawning with default: %v", err)
+		} else {
+			rl = eff
+		}
+	}
+	if rl < 0 || rl > 2 {
+		rl = 1
+	}
 	wd := ""
 	if args.WorkDir != nil && strings.TrimSpace(*args.WorkDir) != "" {
 		wd = *args.WorkDir
@@ -580,27 +629,29 @@ func ForkSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	// (same as create_session). The preset name is recorded too so later
 	// plain forks can inherit it.
 	if err := dirs.WriteSpawnArgs(newSessionDir, dirs.SpawnArgs{
-		ToolConfirm:  tc,
-		BuiltinTools: bt,
-		SystemPrompt: sp,
-		WorkDir:      wd,
-		Preset:       presetName,
+		ToolConfirm:    tc,
+		BuiltinTools:   bt,
+		SystemPrompt:   sp,
+		ReasoningLevel: &rl,
+		WorkDir:        wd,
+		Preset:         presetName,
 	}); err != nil {
 		log.Printf("[session] warning: cannot persist spawn args for %s: %v", newSessionDir, err)
 	}
 
 	bin := ResolveBinary(args.BinaryPath)
 	s, err := h.Sessions.Create(session.CreateConfig{
-		ID:           newID,
-		Binary:       bin,
-		ConfigPath:   configPath,
-		SessionFile:  targetFile,
-		SessionDir:   newSessionDir,
-		ToolConfirm:  tc,
-		BuiltinTools: bt,
-		SystemPrompt: sp,
-		WorkDir:      wd,
-		Owner:        args.ClientID,
+		ID:             newID,
+		Binary:         bin,
+		ConfigPath:     configPath,
+		SessionFile:    targetFile,
+		SessionDir:     newSessionDir,
+		ToolConfirm:    tc,
+		BuiltinTools:   bt,
+		SystemPrompt:   sp,
+		ReasoningLevel: rl,
+		WorkDir:        wd,
+		Owner:          args.ClientID,
 	}, h.Hub, h.Cache)
 	if err != nil {
 		return err

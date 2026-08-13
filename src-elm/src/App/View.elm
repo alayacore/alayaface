@@ -2360,12 +2360,14 @@ viewSettingsEditorOverlay model =
                 { toolConfirm = ed.toolConfirm
                 , builtinTools = ed.builtinTools
                 , systemPrompt = ed.systemPrompt
+                , reasoningLevel = ed.reasoningLevel
                 , loading = ed.loading
                 , syncing = ed.syncing
                 , error = ed.error
                 , onInput = SetToolConfirm
                 , onBuiltinToolsInput = SetBuiltinTools
                 , onSystemPromptInput = SetSystemPrompt
+                , onReasoningLevelInput = SetSettingsReasoningLevel
                 , onSave = SettingsSave
                 , onCancel = CloseSettingsEditor
                 }

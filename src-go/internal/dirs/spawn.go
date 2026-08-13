@@ -17,6 +17,8 @@ import (
 //     "a,b" = those tools only
 //   - system_prompt: the --system text (the preset's system_prompt, or a
 //     recursion guard over the plan depth limit)
+//   - reasoning_level: the --reasoning-level (0|1|2); nil = unset →
+//     default 1 on resume
 //   - work_dir: the child's working directory (per-plan isolation)
 //   - preset: the preset this session was created under; forks of plain
 //     sessions inherit it so they stay in the same preset
@@ -29,11 +31,12 @@ func SpawnArgsFile(sessionDir string) string {
 
 // SpawnArgs is the persisted spawn configuration of a session.
 type SpawnArgs struct {
-	ToolConfirm  string  `json:"tool_confirm"`
-	BuiltinTools *string `json:"builtin_tools"`
-	SystemPrompt string  `json:"system_prompt"`
-	WorkDir      string  `json:"work_dir"`
-	Preset       string  `json:"preset"`
+	ToolConfirm    string  `json:"tool_confirm"`
+	BuiltinTools   *string `json:"builtin_tools"`
+	SystemPrompt   string  `json:"system_prompt"`
+	ReasoningLevel *int    `json:"reasoning_level,omitempty"`
+	WorkDir        string  `json:"work_dir"`
+	Preset         string  `json:"preset"`
 }
 
 // WriteSpawnArgs persists the spawn args atomically (tmp + rename).
@@ -79,6 +82,10 @@ func (a SpawnArgs) String() string {
 			bt = "<none>"
 		}
 	}
-	return fmt.Sprintf("tool_confirm=%q builtin_tools=%s system_prompt=%d chars work_dir=%q",
-		a.ToolConfirm, bt, len(a.SystemPrompt), a.WorkDir)
+	rl := "<unset>"
+	if a.ReasoningLevel != nil {
+		rl = fmt.Sprintf("%d", *a.ReasoningLevel)
+	}
+	return fmt.Sprintf("tool_confirm=%q builtin_tools=%s system_prompt=%d chars reasoning_level=%s work_dir=%q",
+		a.ToolConfirm, bt, len(a.SystemPrompt), rl, a.WorkDir)
 }

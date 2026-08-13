@@ -325,6 +325,7 @@ func main() {
 	toolConfirmFlag := flag.String("tool-confirm", "", "pre-approved tool list (accepted; echoed in the boot frame)")
 	systemFlag := flag.String("system", "", "system prompt (accepted; non-empty switches to plan mode)")
 	builtinToolsFlag := flag.String("builtin-tools", "", "builtin tools (accepted; echoed in the boot frame)")
+	reasoningLevelFlag := flag.Int("reasoning-level", 1, "initial reasoning level 0|1|2 (accepted; echoed in the boot frame and an SM reasoning frame)")
 	flag.Parse()
 
 	if !*rawio {
@@ -385,9 +386,21 @@ func main() {
 			"builtin_tools_set": btSet,
 			"tool_confirm":      *toolConfirmFlag,
 			"system":            *systemFlag,
+			"reasoning_level":   *reasoningLevelFlag,
 		},
 	})
 	writeFrame("SM", string(boot))
+
+	// Reasoning-level notification (mirrors real alayacore's SM
+	// {"type":"reasoning","data":{"level":N}} boot frame): the frontend
+	// reads the level (0|1|2) from it for the session bar's reasoning
+	// select.
+	rl := *reasoningLevelFlag
+	if rl < 0 || rl > 2 {
+		rl = 1
+	}
+	reasoning, _ := json.Marshal(map[string]any{"type": "reasoning", "data": map[string]any{"level": rl}})
+	writeFrame("SM", string(reasoning))
 
 	// Active-model notification (mirrors real alayacore's SM "model"
 	// frame): the frontend reads context_limit from it for the session

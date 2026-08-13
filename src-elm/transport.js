@@ -358,12 +358,15 @@
             tool_confirm: (res && res.tool_confirm) || "",
             builtin_tools: (res && res.builtin_tools) || "",
             system_prompt: (res && res.system_prompt) || "",
+            reasoning_level: (res && typeof res.reasoning_level === "number")
+              ? res.reasoning_level : 1,
             error: "",
           });
         })
         .catch(function (err) {
           app.ports.onGlobalSettingsList.send({
             ok: false, tool_confirm: "", builtin_tools: "", system_prompt: "",
+            reasoning_level: 1,
             error: String((err && err.message) || err),
           });
         });
@@ -375,6 +378,8 @@
           tool_confirm: data.toolConfirm || "",
           builtin_tools: data.builtinTools || "",
           system_prompt: data.systemPrompt || "",
+          reasoning_level: (data.reasoningLevel === undefined || data.reasoningLevel === null)
+            ? 1 : data.reasoningLevel,
         }),
         preset: (data && data.preset) || "",
       })

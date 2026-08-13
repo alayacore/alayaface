@@ -25,6 +25,8 @@ pub struct CoreProcess {
 /// the flag = alayacore default (all tools).
 /// If `system_prompt` is non-empty, passes `--system=<text>` (appended to
 /// alayacore's default system prompt; used by Plan Sessions).
+/// If `reasoning_level` is in 0..=2, passes `--reasoning-level=<n>`
+/// (AlayaCore's initial reasoning level for the session).
 /// If `work_dir` is Some, the child's working directory is set to it
 /// (per-plan isolation for Plan Mode nodes; None = inherit the backend's
 /// cwd, the pre-isolation behavior).
@@ -36,6 +38,7 @@ pub fn spawn(
     tool_confirm: &str,
     builtin_tools: Option<&str>,
     system_prompt: &str,
+    reasoning_level: i64,
     work_dir: Option<&str>,
 ) -> io::Result<CoreProcess> {
     let mut cmd = Command::new(binary_path);
@@ -56,6 +59,9 @@ pub fn spawn(
     }
     if !system_prompt.is_empty() {
         cmd.arg(format!("--system={}", system_prompt));
+    }
+    if (0..=2).contains(&reasoning_level) {
+        cmd.arg(format!("--reasoning-level={}", reasoning_level));
     }
     if let Some(wd) = work_dir {
         cmd.current_dir(wd);
@@ -360,7 +366,7 @@ mod tests {
         use std::io::Read;
 
         let read_args = |bt: Option<&str>| {
-            let mut p = spawn("/bin/echo", "", "", "", bt, "", None).unwrap();
+            let mut p = spawn("/bin/echo", "", "", "", bt, "", 1, None).unwrap();
             let mut out = String::new();
             p.stdout.read_to_string(&mut out).unwrap();
             let _ = p.child.wait();
@@ -370,7 +376,7 @@ mod tests {
         // Some("") → explicit empty flag: alayacore treats it as NO tools.
         let out = read_args(Some(""));
         assert!(
-            out.contains("--builtin-tools=\n"),
+            out.contains("--builtin-tools= --reasoning-level=1"),
             "Some(\"\") must pass an empty --builtin-tools flag, got: {out:?}"
         );
 
@@ -386,6 +392,38 @@ mod tests {
         assert!(
             !out.contains("--builtin-tools"),
             "None must not pass the flag, got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn spawn_reasoning_level_flag_semantics() {
+        use std::io::Read;
+
+        let read_args = |rl: i64| {
+            let mut p = spawn("/bin/echo", "", "", "", None, "", rl, None).unwrap();
+            let mut out = String::new();
+            p.stdout.read_to_string(&mut out).unwrap();
+            let _ = p.child.wait();
+            out
+        };
+
+        // 0 ("Off") and 1 ("Balanced") are valid and must be passed.
+        let out = read_args(0);
+        assert!(
+            out.contains("--reasoning-level=0"),
+            "level 0 must pass --reasoning-level=0, got: {out:?}"
+        );
+        let out = read_args(1);
+        assert!(
+            out.contains("--reasoning-level=1"),
+            "level 1 must pass --reasoning-level=1, got: {out:?}"
+        );
+
+        // Out of range → no flag (defensive; callers resolve 0|1|2).
+        let out = read_args(7);
+        assert!(
+            !out.contains("--reasoning-level"),
+            "out-of-range must not pass the flag, got: {out:?}"
         );
     }
 

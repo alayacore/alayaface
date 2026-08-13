@@ -152,6 +152,9 @@ pub struct SessionConfig<'a> {
     /// execute tools); None = don't pass the flag = all tools.
     pub builtin_tools: Option<&'a str>,
     pub system_prompt: &'a str,
+    /// Initial reasoning level (0|1|2), passed to alayacore as
+    /// `--reasoning-level=<n>`.
+    pub reasoning_level: i64,
     /// Child process working directory (per-plan isolation; None =
     /// inherit the backend's cwd).
     pub work_dir: Option<String>,
@@ -177,6 +180,7 @@ pub async fn create(cfg: SessionConfig<'_>) -> Result<String, String> {
         cfg.tool_confirm,
         cfg.builtin_tools,
         cfg.system_prompt,
+        cfg.reasoning_level,
         cfg.work_dir.as_deref(),
     )
     .map_err(|e| format!("Failed to start alayacore: {e}"))?;

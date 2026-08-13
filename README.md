@@ -198,7 +198,8 @@ for you:
 
 - `~/.alayaface/presets/<name>/` bundles a model list (`model.conf`), MCP
   servers (`mcp.conf`) and AlayaFace-owned `settings.conf`
-  (`tool_confirm`, `builtin_tools`).
+  (`tool_confirm`, `builtin_tools`, `reasoning_level` 0|1|2,
+  `system_prompt`) — edit via **Preset Manager** → Edit → Settings.
 - `~/.alayaface/global.conf` is the **cross-preset global config overlay**
   (applies to every preset): currently `recursion_limit` (default 8) —
   edit via ⚙ → **Global config**. Plan Mode recursion is bounded by it:

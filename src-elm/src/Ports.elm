@@ -137,7 +137,7 @@ port syncDefaultMcp : { preset : String, config : String } -> Cmd msg
 port onDefaultMcpList : (E.Value -> msg) -> Sub msg
 port onDefaultMcpSyncResult : (E.Value -> msg) -> Sub msg
 port listGlobalSettings : { preset : String } -> Cmd msg
-port syncGlobalSettings : { preset : String, toolConfirm : String, builtinTools : String, systemPrompt : String } -> Cmd msg
+port syncGlobalSettings : { preset : String, toolConfirm : String, builtinTools : String, systemPrompt : String, reasoningLevel : Int } -> Cmd msg
 port onGlobalSettingsList : (E.Value -> msg) -> Sub msg
 port onGlobalSettingsSyncResult : (E.Value -> msg) -> Sub msg
 port getGlobalConfig : {} -> Cmd msg

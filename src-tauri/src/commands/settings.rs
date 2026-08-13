@@ -27,6 +27,15 @@ pub struct GlobalSettings {
     /// Passed to alayacore as `--system=<text>`.
     #[serde(default)]
     pub system_prompt: String,
+
+    /// The preset's initial reasoning level (0|1|2), passed to alayacore
+    /// as `--reasoning-level=<n>` when a session of this preset is
+    /// spawned. None = unset → effective default 1 ("Balanced").
+    /// Level 0 ("Off") is a VALID explicit value, so the field is an
+    /// Option to distinguish it from an absent one (skipped when None
+    /// so a preset that never set it keeps the pre-reasoning bytes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_level: Option<i64>,
 }
 
 /// Read settings from a specific config dir; a missing/empty file yields defaults.
@@ -86,6 +95,26 @@ pub fn effective_system_prompt(preset: &str) -> Result<String, String> {
     Ok(s.system_prompt)
 }
 
+/// The effective reasoning level (0|1|2) of a named preset, defaulting
+/// to 1 ("Balanced") when unset or out of range. Level 0 ("Off") is
+/// valid — only an absent field or an out-of-range value falls back.
+pub fn effective_reasoning_level(preset: &str) -> Result<i64, String> {
+    let s = read_preset_settings(preset)?;
+    match s.reasoning_level {
+        Some(lvl) if (0..=2).contains(&lvl) => Ok(lvl),
+        _ => Ok(1),
+    }
+}
+
+/// Validate a reasoning level (0|1|2); anything outside the range is rejected.
+pub fn normalize_reasoning_level(raw: i64) -> Result<i64, String> {
+    if (0..=2).contains(&raw) {
+        Ok(raw)
+    } else {
+        Err("Reasoning level must be 0, 1 or 2".to_string())
+    }
+}
+
 /// Read a preset's settings (tool-confirm + builtin-tools normalized,
 /// system-prompt verbatim). `preset` REQUIRED.
 #[tauri::command]
@@ -98,6 +127,7 @@ pub async fn get_global_settings(preset: String) -> Result<serde_json::Value, St
         "tool_confirm": normalized_tc,
         "builtin_tools": normalized_bt,
         "system_prompt": s.system_prompt,
+        "reasoning_level": effective_reasoning_level(&preset)?,
     }))
 }
 
@@ -124,6 +154,10 @@ pub async fn sync_global_settings(config: String, preset: String) -> Result<(), 
     if let Some(v) = value.get("system_prompt").and_then(|v| v.as_str()) {
         settings.system_prompt = v.to_string();
     }
+    if let Some(v) = value.get("reasoning_level") {
+        let raw = v.as_i64().ok_or("Reasoning level must be 0, 1 or 2")?;
+        settings.reasoning_level = Some(normalize_reasoning_level(raw)?);
+    }
 
     let path = config_dir.join("settings.conf");
     let tmp = config_dir.join("settings.conf.tmp");
@@ -132,10 +166,11 @@ pub async fn sync_global_settings(config: String, preset: String) -> Result<(), 
     std::fs::write(&tmp, &text).map_err(|e| format!("Failed to write settings.conf: {e}"))?;
     std::fs::rename(&tmp, &path).map_err(|e| format!("Failed to replace settings.conf: {e}"))?;
     log::info!(
-        "[settings] Wrote tool_confirm={:?} builtin_tools={:?} system_prompt={} chars",
+        "[settings] Wrote tool_confirm={:?} builtin_tools={:?} system_prompt={} chars reasoning_level={:?}",
         settings.tool_confirm,
         settings.builtin_tools,
-        settings.system_prompt.chars().count()
+        settings.system_prompt.chars().count(),
+        settings.reasoning_level
     );
     Ok(())
 }
@@ -169,6 +204,7 @@ mod tests {
             assert_eq!(settings.tool_confirm, "");
             assert_eq!(settings.builtin_tools, "");
             assert!(!settings.system_prompt.is_empty(), "seed system_prompt must not be empty");
+            assert_eq!(settings.reasoning_level, Some(1), "seed reasoning_level must be 1 (Balanced)");
         });
     }
 
@@ -200,6 +236,45 @@ mod tests {
             assert!(ok.is_ok());
             let settings = read_preset_settings("Simple").unwrap();
             assert_eq!(settings.system_prompt, "line1\nline2 with \"quotes\"");
+        });
+    }
+
+    #[test]
+    fn reasoning_level_roundtrips() {
+        crate::dirs::isolated_home(|| {
+            crate::dirs::ensure().unwrap();
+            let rt = tokio::runtime::Runtime::new().unwrap();
+
+            // Seed default is 1 (Balanced).
+            assert_eq!(effective_reasoning_level("Simple").unwrap(), 1);
+            let out = rt.block_on(get_global_settings("Simple".to_string())).unwrap();
+            assert_eq!(out["reasoning_level"], 1);
+
+            // Level 0 ("Off") is a VALID explicit value and must round-trip.
+            rt.block_on(sync_global_settings(r#"{"reasoning_level":0}"#.to_string(), "Simple".to_string()))
+                .unwrap();
+            let settings = read_preset_settings("Simple").unwrap();
+            assert_eq!(settings.reasoning_level, Some(0));
+            assert_eq!(effective_reasoning_level("Simple").unwrap(), 0);
+            let out = rt.block_on(get_global_settings("Simple".to_string())).unwrap();
+            assert_eq!(out["reasoning_level"], 0);
+
+            // Level 2 persists; MERGE keeps unrelated fields intact.
+            rt.block_on(sync_global_settings(r#"{"reasoning_level":2}"#.to_string(), "Simple".to_string()))
+                .unwrap();
+            let settings = read_preset_settings("Simple").unwrap();
+            assert_eq!(settings.reasoning_level, Some(2));
+            assert_eq!(effective_reasoning_level("Simple").unwrap(), 2);
+
+            // Out-of-range / non-number values are rejected and must not
+            // clobber the file.
+            for bad in [r#"{"reasoning_level":3}"#, r#"{"reasoning_level":-1}"#, r#"{"reasoning_level":"1"}"#] {
+                assert!(rt.block_on(sync_global_settings(bad.to_string(), "Simple".to_string())).is_err(), "must reject {bad}");
+            }
+            assert_eq!(effective_reasoning_level("Simple").unwrap(), 2);
+
+            // Unknown preset is rejected (reads through resolve_config_dir).
+            assert!(effective_reasoning_level("nope").is_err());
         });
     }
 
@@ -256,12 +331,16 @@ mod tests {
             tool_confirm: String,
             builtin_tools: String,
             system_prompt: String,
+            #[serde(default)]
+            reasoning_level: Option<i64>,
         }
         #[derive(serde::Deserialize)]
         struct Normalized {
             tool_confirm: String,
             builtin_tools: String,
             system_prompt: String,
+            #[serde(default)]
+            reasoning_level: Option<i64>,
         }
 
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -274,10 +353,19 @@ mod tests {
             let bt = normalize_tool_confirm(&c.input.builtin_tools).unwrap();
             assert_eq!(tc, c.normalized.tool_confirm, "case {}: tool_confirm", c.name);
             assert_eq!(bt, c.normalized.builtin_tools, "case {}: builtin_tools", c.name);
+            let rl = match c.input.reasoning_level {
+                Some(lvl) => {
+                    let n = normalize_reasoning_level(lvl).unwrap();
+                    assert_eq!(Some(n), c.normalized.reasoning_level, "case {}: reasoning_level", c.name);
+                    Some(n)
+                }
+                None => None,
+            };
             let settings = GlobalSettings {
                 tool_confirm: tc,
                 builtin_tools: bt,
                 system_prompt: c.input.system_prompt,
+                reasoning_level: rl,
             };
             let got = serde_json::to_string_pretty(&settings).unwrap();
             assert_eq!(got, c.expected_file, "case {}: file text", c.name);

@@ -12,6 +12,7 @@ use tauri::{AppHandle, State};
 use uuid::Uuid;
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn create_session(
     app: AppHandle,
     binary_path: String,
@@ -20,6 +21,7 @@ pub async fn create_session(
     preset: Option<String>,
     builtin_tools: Option<String>,
     system_prompt: Option<String>,
+    reasoning_level: Option<i64>,
     work_dir: Option<String>,
     plan_id: Option<String>,
     node_id: Option<String>,
@@ -89,6 +91,16 @@ pub async fn create_session(
             String::new()
         }),
     };
+    // Reasoning level: an explicit per-session override wins (validated
+    // 0|1|2); otherwise the preset's reasoning_level (settings.conf) is
+    // used as --reasoning-level; default 1.
+    let rl: i64 = match reasoning_level {
+        Some(v) => crate::commands::normalize_reasoning_level(v)?,
+        None => crate::commands::effective_reasoning_level(&preset_name).unwrap_or_else(|e| {
+            log::warn!("[settings] reasoning-level unavailable, spawning with default: {e}");
+            1
+        }),
+    };
     log::info!("Spawning: {} --rawio --config-path {} --session {}", &bin, &effective_config, &session_file);
     if !tc.is_empty() {
         log::info!("  with --tool-confirm={}", &tc);
@@ -99,6 +111,7 @@ pub async fn create_session(
     if !sp.is_empty() {
         log::info!("  with --system ({} chars)", &sp.len());
     }
+    log::info!("  with --reasoning-level={}", rl);
     if !preset_name.is_empty() {
         log::info!("  preset={}", &preset_name);
     }
@@ -125,6 +138,7 @@ pub async fn create_session(
         tool_confirm: tc.clone(),
         builtin_tools: bt.clone(),
         system_prompt: sp.clone(),
+        reasoning_level: Some(rl),
         work_dir: wd.clone().unwrap_or_default(),
         preset: preset_name.clone(),
     }) {
@@ -143,6 +157,7 @@ pub async fn create_session(
         tool_confirm: &tc,
         builtin_tools: bt.as_deref(),
         system_prompt: &sp,
+        reasoning_level: rl,
         work_dir: wd,
         owner: client_id.as_deref().unwrap_or(""),
     }).await
@@ -246,6 +261,10 @@ pub async fn resume_session(
     };
     log::info!("Resuming {:?} with spawn args {}", sessions_dir, spawn.summary());
 
+    // Re-apply the persisted reasoning level (None = legacy session /
+    // pre-reasoning spawn.json → default 1 "Balanced").
+    let rl = spawn.reasoning_level.unwrap_or(1);
+
     // Resumed sessions get a FRESH id (matching Go) while keeping the
     // original on-disk directory. The client must keep the node bound to
     // the ORIGINAL id (the dir name); the fresh id only identifies the
@@ -263,6 +282,7 @@ pub async fn resume_session(
         tool_confirm: &spawn.tool_confirm,
         builtin_tools: spawn.builtin_tools.as_deref(),
         system_prompt: &spawn.system_prompt,
+        reasoning_level: rl,
         work_dir: wd,
         owner: client_id.as_deref().unwrap_or(""),
     }).await
@@ -398,6 +418,7 @@ pub async fn fork_session(
     preset: Option<String>,
     builtin_tools: Option<String>,
     system_prompt: Option<String>,
+    reasoning_level: Option<i64>,
     work_dir: Option<String>,
     plan_id: Option<String>,
     node_id: Option<String>,
@@ -486,6 +507,17 @@ pub async fn fork_session(
             String::new()
         }),
     };
+    // Reasoning level: an explicit override wins (validated); plain
+    // forks inherit the source session's persisted level; node forks
+    // resolve the node's preset setting (default 1).
+    let rl: i64 = match reasoning_level {
+        Some(v) => crate::commands::normalize_reasoning_level(v)?,
+        _ if is_plain_fork => src_args.reasoning_level.unwrap_or(1),
+        _ => crate::commands::effective_reasoning_level(&preset_name).unwrap_or_else(|e| {
+            log::warn!("[settings] reasoning-level unavailable, spawning with default: {e}");
+            1
+        }),
+    };
     let wd = match &work_dir {
         Some(d) if !d.trim().is_empty() => {
             std::fs::create_dir_all(d)
@@ -505,6 +537,7 @@ pub async fn fork_session(
         tool_confirm: tc.clone(),
         builtin_tools: bt.clone(),
         system_prompt: sp.clone(),
+        reasoning_level: Some(rl),
         work_dir: wd.clone().unwrap_or_default(),
         preset: preset_name.clone(),
     }) {
@@ -522,6 +555,7 @@ pub async fn fork_session(
         tool_confirm: &tc,
         builtin_tools: bt.as_deref(),
         system_prompt: &sp,
+        reasoning_level: rl,
         work_dir: wd,
         owner: &client_id.unwrap_or_default(),
     }).await
@@ -550,6 +584,7 @@ mod tests {
             tool_confirm: "allow".into(),
             builtin_tools: Some("read_file,write_file".into()),
             system_prompt: "planner".into(),
+            reasoning_level: Some(0),
             work_dir: "/tmp/wd".into(),
             preset: "Complex".into(),
         };
@@ -558,6 +593,7 @@ mod tests {
         assert_eq!(got.tool_confirm, "allow");
         assert_eq!(got.builtin_tools.as_deref(), Some("read_file,write_file"));
         assert_eq!(got.system_prompt, "planner");
+        assert_eq!(got.reasoning_level, Some(0));
         assert_eq!(got.work_dir, "/tmp/wd");
         assert_eq!(got.preset, "Complex");
 

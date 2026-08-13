@@ -52,6 +52,70 @@ func TestMissingFileYieldsDefaults(t *testing.T) {
 		if settings.SystemPrompt == "" {
 			t.Error("seed system_prompt must not be empty")
 		}
+		if eff, err := effectiveReasoningLevel("Simple"); err != nil || eff != 1 {
+			t.Errorf("seed reasoning_level = %d, %v; want 1 (Balanced)", eff, err)
+		}
+	})
+}
+
+func TestReasoningLevelRoundtrips(t *testing.T) {
+	isolatedHome(t, func() {
+		if _, err := dirs.Ensure(); err != nil {
+			t.Fatal(err)
+		}
+
+		// Default is 1 (Balanced).
+		rr := call(t, GetGlobalSettings, map[string]any{"preset": "Simple"})
+		var out map[string]any
+		if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		if out["reasoning_level"] != float64(1) {
+			t.Fatalf("default reasoning_level = %v, want 1", out["reasoning_level"])
+		}
+
+		// Sync an explicit level (0 = Off is a VALID value) and read back.
+		call(t, SyncGlobalSettings, map[string]any{
+			"config": `{"reasoning_level":0}`,
+			"preset": "Simple",
+		})
+		rr = call(t, GetGlobalSettings, map[string]any{"preset": "Simple"})
+		if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		if out["reasoning_level"] != float64(0) {
+			t.Fatalf("reasoning_level = %v, want 0 (Off)", out["reasoning_level"])
+		}
+		if eff, err := effectiveReasoningLevel("Simple"); err != nil || eff != 0 {
+			t.Errorf("effectiveReasoningLevel(Simple) = %d, %v; want 0", eff, err)
+		}
+
+		// Level 2 persists; MERGE keeps the earlier 0→2 change isolated
+		// to the field synced.
+		call(t, SyncGlobalSettings, map[string]any{
+			"config": `{"reasoning_level":2}`,
+			"preset": "Simple",
+		})
+		rr = call(t, GetGlobalSettings, map[string]any{"preset": "Simple"})
+		if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		if out["reasoning_level"] != float64(2) {
+			t.Fatalf("reasoning_level = %v, want 2 (Deep)", out["reasoning_level"])
+		}
+
+		// Out-of-range values are rejected and must not clobber the file.
+		for _, bad := range []string{`{"reasoning_level":3}`, `{"reasoning_level":-1}`, `{"reasoning_level":"1"}`} {
+			if err := callErr(t, SyncGlobalSettings, map[string]any{
+				"config": bad,
+				"preset": "Simple",
+			}); err == nil {
+				t.Errorf("expected error for config %s", bad)
+			}
+		}
+		if eff, err := effectiveReasoningLevel("Simple"); err != nil || eff != 2 {
+			t.Errorf("file was clobbered: effectiveReasoningLevel = %d, %v; want 2", eff, err)
+		}
 	})
 }
 
@@ -135,7 +199,7 @@ func TestBuiltinToolsRoundtrips(t *testing.T) {
 		// restriction preset anymore).
 		for _, name := range []string{"Simple", "Complex"} {
 			rr := call(t, GetGlobalSettings, map[string]any{"preset": name})
-			var out map[string]string
+			var out map[string]any
 			if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
 				t.Fatal(err)
 			}
@@ -145,6 +209,9 @@ func TestBuiltinToolsRoundtrips(t *testing.T) {
 			if out["system_prompt"] == "" {
 				t.Fatalf("%s system_prompt missing", name)
 			}
+			if out["reasoning_level"] != float64(1) {
+				t.Fatalf("%s reasoning_level = %v, want 1", name, out["reasoning_level"])
+			}
 		}
 
 		// Sync a subset per-preset and read it back.
@@ -153,7 +220,7 @@ func TestBuiltinToolsRoundtrips(t *testing.T) {
 			"preset": "Complex",
 		})
 		rr := call(t, GetGlobalSettings, map[string]any{"preset": "Complex"})
-		var data map[string]string
+		var data map[string]any
 		if err := json.Unmarshal(rr.Body.Bytes(), &data); err != nil {
 			t.Fatal(err)
 		}

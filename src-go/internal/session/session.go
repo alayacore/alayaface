@@ -209,7 +209,10 @@ type CreateConfig struct {
 	// pointer to a list = those tools only.
 	BuiltinTools *string
 	SystemPrompt string
-	WorkDir      string // child cwd (per-plan isolation; "" = backend cwd)
+	// ReasoningLevel is the session's initial reasoning level (0|1|2),
+	// passed to alayacore as --reasoning-level=<n>.
+	ReasoningLevel int
+	WorkDir        string // child cwd (per-plan isolation; "" = backend cwd)
 	// Owner is the client identity that created the session (empty =
 	// legacy). Used by close_all_sessions to reclaim only one client's
 	// orphaned sessions.
@@ -221,7 +224,7 @@ type CreateConfig struct {
 // Create returns (same ordering as Rust), so onStatus cannot arrive
 // before onSessionCreated on the client.
 func (m *Manager) Create(cfg CreateConfig, h *hub.Hub, cache *ModelCache) (*Session, error) {
-	proc, err := core.Spawn(cfg.Binary, cfg.ConfigPath, cfg.SessionFile, cfg.ToolConfirm, cfg.BuiltinTools, cfg.SystemPrompt, cfg.WorkDir)
+	proc, err := core.Spawn(cfg.Binary, cfg.ConfigPath, cfg.SessionFile, cfg.ToolConfirm, cfg.BuiltinTools, cfg.SystemPrompt, cfg.ReasoningLevel, cfg.WorkDir)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to start alayacore: %w", err)
 	}

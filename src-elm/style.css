@@ -1836,6 +1836,19 @@ body {
 }
 .me-field-input:focus { border-color: #6366f1; }
 
+.me-field-select {
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%23888' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
+  min-width: 180px;
+}
+.me-field-select option { background: #1e1e2e; color: #ddd; }
+.me-field-select:disabled { opacity: 0.5; cursor: not-allowed; }
+
 .me-field-textarea {
   resize: vertical;
   font-family: "Courier New", monospace;
@@ -1883,6 +1896,7 @@ body {
   .me-field-label { color: #666; }
   .me-field-input { background: white; color: #1a1a2e; border-color: #d0d0d8; }
   .me-field-input:focus { border-color: #6366f1; }
+  .me-field-select option { background: #fff; color: #1a1a2e; }
   .me-cancel-btn { border-color: #c0c0cc; color: #555; }
   .me-cancel-btn:hover { border-color: #6366f1; color: #6366f1; }
 }

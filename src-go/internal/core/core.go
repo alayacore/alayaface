@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"time"
 )
 
@@ -31,11 +32,13 @@ type CoreProcess struct {
 // planner physically cannot execute tools).
 // If systemPrompt is non-empty, passes --system=<text> (appended to the
 // default system prompt; used by Plan Sessions).
+// If reasoningLevel is in 0..2, passes --reasoning-level=<n> (AlayaCore's
+// initial reasoning level for the session).
 // If workDir is non-empty, the child's working directory is set to it
 // (per-plan isolation for Plan Mode nodes; empty = inherit the backend's
 // cwd, the pre-isolation behavior).
 // stderr is inherited so alayacore's own logs reach the terminal.
-func Spawn(binaryPath, configPath, sessionPath, toolConfirm string, builtinTools *string, systemPrompt, workDir string) (*CoreProcess, error) {
+func Spawn(binaryPath, configPath, sessionPath, toolConfirm string, builtinTools *string, systemPrompt string, reasoningLevel int, workDir string) (*CoreProcess, error) {
 	args := []string{"--rawio"}
 	if configPath != "" {
 		args = append(args, "--config-path", configPath)
@@ -51,6 +54,9 @@ func Spawn(binaryPath, configPath, sessionPath, toolConfirm string, builtinTools
 	}
 	if systemPrompt != "" {
 		args = append(args, "--system="+systemPrompt)
+	}
+	if reasoningLevel >= 0 && reasoningLevel <= 2 {
+		args = append(args, "--reasoning-level="+strconv.Itoa(reasoningLevel))
 	}
 
 	cmd := exec.Command(binaryPath, args...)

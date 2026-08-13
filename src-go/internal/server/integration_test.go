@@ -659,6 +659,70 @@ func TestIntegrationResumeKeepsSpawnArgs(t *testing.T) {
 	e.rpcOK(t, "close_session", map[string]any{"sessionId": legacyNewID})
 }
 
+// TestIntegrationReasoningLevelSpawn: create_session spawns alayacore
+// with --reasoning-level=<n> — resolved from the preset's settings.conf
+// (default 1) unless an explicit per-session override is passed. The
+// level is persisted in session.spawn.json so resume_session re-applies
+// it (level 0 = "Off" must survive the round-trip).
+func TestIntegrationReasoningLevelSpawn(t *testing.T) {
+	e := newTestEnv(t, "")
+
+	waitBootLevel := func(sid string, want float64) {
+		t.Helper()
+		e.waitEvent(t, "tlv-frame", func(p map[string]any) bool {
+			js, _ := p["json"].(map[string]any)
+			if p["session_id"] != sid || p["tag"] != "SM" || js == nil || js["type"] != "task" {
+				return false
+			}
+			data, _ := js["data"].(map[string]any)
+			return data != nil && data["reasoning_level"] == want
+		})
+	}
+
+	// Default: preset Simple's seed reasoning_level = 1 (Balanced).
+	sid := e.createSession(t)
+	waitBootLevel(sid, 1)
+	e.rpcOK(t, "close_session", map[string]any{"sessionId": sid})
+
+	// Preset setting wins: sync Simple → 2 (Deep), then create.
+	e.rpcOK(t, "sync_global_settings", map[string]any{
+		"config": `{"reasoning_level":2}`,
+		"preset": "Simple",
+	})
+	sid = e.createSession(t)
+	waitBootLevel(sid, 2)
+	e.rpcOK(t, "close_session", map[string]any{"sessionId": sid})
+
+	// An explicit per-session override wins (0 = Off, valid).
+	body := e.rpcOK(t, "create_session", map[string]any{
+		"binaryPath": "", "configPath": "", "toolConfirm": nil,
+		"preset": "Simple", "reasoningLevel": 0,
+	})
+	var sid0 string
+	if err := json.Unmarshal(body, &sid0); err != nil {
+		t.Fatalf("create with reasoningLevel 0: %s", body)
+	}
+	waitBootLevel(sid0, 0)
+	// The override is persisted; resume re-applies 0 (not the preset's 2).
+	e.rpcOK(t, "close_session", map[string]any{"sessionId": sid0})
+	waitSessionFile(t, sid0)
+	resumeBody := e.rpcOK(t, "resume_session", map[string]any{"sessionId": sid0, "binaryPath": ""})
+	var resumedID string
+	if err := json.Unmarshal(resumeBody, &resumedID); err != nil {
+		t.Fatalf("resume: %s", resumeBody)
+	}
+	waitBootLevel(resumedID, 0)
+	e.rpcOK(t, "close_session", map[string]any{"sessionId": resumedID})
+
+	// Out-of-range explicit level is rejected before spawning.
+	if msg := e.rpcErr(t, "create_session", map[string]any{
+		"binaryPath": "", "configPath": "", "toolConfirm": nil,
+		"preset": "Simple", "reasoningLevel": 3,
+	}); msg != "Reasoning level must be 0, 1 or 2" {
+		t.Fatalf("invalid reasoningLevel = %q, want rejection", msg)
+	}
+}
+
 // TestIntegrationCloseAllSessionsReclaimsOnPageLoad: a page refresh
 // leaves the backend holding session handles whose windows are gone —
 // resume then fails with "Session is already active" until the backend

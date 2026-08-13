@@ -133,7 +133,7 @@
 
 - [ ] Normal New Session conversations work (no [Plan] prefix; the preset's system_prompt is the only system prompt)
 - [ ] Session manager / deleting sessions / restoring sessions work
-- [ ] File picker, Settings editor (tool_confirm / builtin_tools / system_prompt) work
+- [ ] File picker, Settings editor (tool_confirm / builtin_tools / reasoning_level / system_prompt) work
 
 ## 8. Session Window Token Readout
 

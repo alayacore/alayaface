@@ -24,11 +24,12 @@ type spawnCase struct {
 }
 
 type spawnInput struct {
-	ToolConfirm  string  `json:"tool_confirm"`
-	BuiltinTools *string `json:"builtin_tools"`
-	SystemPrompt string  `json:"system_prompt"`
-	WorkDir      string  `json:"work_dir"`
-	Preset       string  `json:"preset"`
+	ToolConfirm    string  `json:"tool_confirm"`
+	BuiltinTools   *string `json:"builtin_tools"`
+	SystemPrompt   string  `json:"system_prompt"`
+	ReasoningLevel *int    `json:"reasoning_level"`
+	WorkDir        string  `json:"work_dir"`
+	Preset         string  `json:"preset"`
 }
 
 func loadSpawnFixture(t *testing.T) spawnFixture {
@@ -50,11 +51,12 @@ func TestSpawnArgsSerializationMatchesSharedFixture(t *testing.T) {
 	for _, c := range fx.Cases {
 		t.Run(c.Name, func(t *testing.T) {
 			args := SpawnArgs{
-				ToolConfirm:  c.Input.ToolConfirm,
-				BuiltinTools: c.Input.BuiltinTools,
-				SystemPrompt: c.Input.SystemPrompt,
-				WorkDir:      c.Input.WorkDir,
-				Preset:       c.Input.Preset,
+				ToolConfirm:    c.Input.ToolConfirm,
+				BuiltinTools:   c.Input.BuiltinTools,
+				SystemPrompt:   c.Input.SystemPrompt,
+				ReasoningLevel: c.Input.ReasoningLevel,
+				WorkDir:        c.Input.WorkDir,
+				Preset:         c.Input.Preset,
 			}
 			got, err := json.MarshalIndent(args, "", "  ")
 			if err != nil {

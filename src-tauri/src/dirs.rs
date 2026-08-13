@@ -287,6 +287,7 @@ pub fn create_preset_defaults(dir: &std::path::Path, name: &str) -> Result<(), S
     let settings = serde_json::json!({
         "tool_confirm": "",
         "builtin_tools": "",
+        "reasoning_level": 1,
         "system_prompt": seed_system_prompt(name),
     });
     let text = serde_json::to_string_pretty(&settings)
@@ -351,6 +352,10 @@ pub struct SpawnArgs {
     /// --system text (the preset's system_prompt, or a recursion guard
     /// over the plan depth limit).
     pub system_prompt: String,
+    /// --reasoning-level (0|1|2); None = unset → default 1 on resume.
+    /// Skipped when None so legacy spawn.json keeps its exact bytes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_level: Option<i64>,
     /// Child working directory (per-plan isolation).
     pub work_dir: String,
     /// The preset this session was created under; forks of plain
@@ -366,11 +371,16 @@ impl SpawnArgs {
             Some(v) => v.clone(),
             None => "<unset>".to_string(),
         };
+        let rl = match self.reasoning_level {
+            Some(v) => v.to_string(),
+            None => "<unset>".to_string(),
+        };
         format!(
-            "tool_confirm={:?} builtin_tools={} system_prompt={} chars work_dir={:?}",
+            "tool_confirm={:?} builtin_tools={} system_prompt={} chars reasoning_level={} work_dir={:?}",
             self.tool_confirm,
             bt,
             self.system_prompt.chars().count(),
+            rl,
             self.work_dir
         )
     }
@@ -569,11 +579,12 @@ mod tests {
             std::fs::create_dir_all(&dir).unwrap();
 
             // Full envelope: no-tools restriction + runner tool-confirm +
-            // preset system prompt + work dir + preset name.
+            // preset system prompt + reasoning level + work dir + preset name.
             let full = SpawnArgs {
                 tool_confirm: "allow".into(),
                 builtin_tools: Some(String::new()),
                 system_prompt: "planner-hint".into(),
+                reasoning_level: Some(2),
                 work_dir: "/tmp/plan-work".into(),
                 preset: "Complex".into(),
             };
@@ -581,13 +592,16 @@ mod tests {
             let got = read_spawn_args(&dir);
             assert_eq!(got.tool_confirm, "allow");
             assert_eq!(got.system_prompt, "planner-hint");
+            assert_eq!(got.reasoning_level, Some(2));
             assert_eq!(got.work_dir, "/tmp/plan-work");
             assert_eq!(got.preset, "Complex");
             assert_eq!(got.builtin_tools, Some(String::new()), "explicit empty = NO tools");
 
-            // Nil builtin_tools (don't pass the flag = all tools).
+            // Nil builtin_tools (don't pass the flag = all tools) and
+            // None reasoning level (legacy → default 1 on resume).
             write_spawn_args(&dir, &SpawnArgs::default()).unwrap();
             assert_eq!(read_spawn_args(&dir).builtin_tools, None);
+            assert_eq!(read_spawn_args(&dir).reasoning_level, None);
 
             // A relative work dir is defensively dropped.
             write_spawn_args(&dir, &SpawnArgs { work_dir: "relative/dir".into(), ..SpawnArgs::default() }).unwrap();
@@ -623,6 +637,8 @@ mod tests {
             tool_confirm: String,
             builtin_tools: Option<String>,
             system_prompt: String,
+            #[serde(default)]
+            reasoning_level: Option<i64>,
             work_dir: String,
             preset: String,
         }
@@ -637,6 +653,7 @@ mod tests {
                 tool_confirm: c.input.tool_confirm,
                 builtin_tools: c.input.builtin_tools,
                 system_prompt: c.input.system_prompt,
+                reasoning_level: c.input.reasoning_level,
                 work_dir: c.input.work_dir,
                 preset: c.input.preset,
             };

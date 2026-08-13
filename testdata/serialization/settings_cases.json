@@ -5,14 +5,32 @@
       "input": {
         "tool_confirm": " execute_command , search_files ,",
         "builtin_tools": "read_file,write_file",
-        "system_prompt": "planner-hint"
+        "system_prompt": "planner-hint",
+        "reasoning_level": 2
       },
       "normalized": {
         "tool_confirm": "execute_command,search_files",
         "builtin_tools": "read_file,write_file",
-        "system_prompt": "planner-hint"
+        "system_prompt": "planner-hint",
+        "reasoning_level": 2
       },
-      "expected_file": "{\n  \"tool_confirm\": \"execute_command,search_files\",\n  \"builtin_tools\": \"read_file,write_file\",\n  \"system_prompt\": \"planner-hint\"\n}"
+      "expected_file": "{\n  \"tool_confirm\": \"execute_command,search_files\",\n  \"builtin_tools\": \"read_file,write_file\",\n  \"system_prompt\": \"planner-hint\",\n  \"reasoning_level\": 2\n}"
+    },
+    {
+      "name": "off",
+      "input": {
+        "tool_confirm": "",
+        "builtin_tools": "",
+        "system_prompt": "",
+        "reasoning_level": 0
+      },
+      "normalized": {
+        "tool_confirm": "",
+        "builtin_tools": "",
+        "system_prompt": "",
+        "reasoning_level": 0
+      },
+      "expected_file": "{\n  \"tool_confirm\": \"\",\n  \"builtin_tools\": \"\",\n  \"system_prompt\": \"\",\n  \"reasoning_level\": 0\n}"
     },
     {
       "name": "empty",

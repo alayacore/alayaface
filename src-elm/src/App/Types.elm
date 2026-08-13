@@ -434,6 +434,7 @@ type Msg
     | SetToolConfirm String
     | SetBuiltinTools String
     | SetSystemPrompt String
+    | SetSettingsReasoningLevel Int
     | SettingsSave
     | SettingsListResult E.Value
     | SettingsSyncResult E.Value
@@ -734,6 +735,7 @@ type alias SettingsEditor =
     , toolConfirm : String
     , builtinTools : String
     , systemPrompt : String
+    , reasoningLevel : Int
     , error : Maybe String
     , preset : String
     }
@@ -747,6 +749,7 @@ emptySettingsEditor =
     , toolConfirm = ""
     , builtinTools = ""
     , systemPrompt = ""
+    , reasoningLevel = 1
     , error = Nothing
     , preset = ""
     }

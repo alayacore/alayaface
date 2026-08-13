@@ -32,14 +32,16 @@ func readFixture(t *testing.T, name string) []byte {
 type settingsCase struct {
 	Name     string `json:"name"`
 	Input    struct {
-		ToolConfirm  string `json:"tool_confirm"`
-		BuiltinTools string `json:"builtin_tools"`
-		SystemPrompt string `json:"system_prompt"`
+		ToolConfirm    string `json:"tool_confirm"`
+		BuiltinTools   string `json:"builtin_tools"`
+		SystemPrompt   string `json:"system_prompt"`
+		ReasoningLevel *int   `json:"reasoning_level"`
 	} `json:"input"`
 	Normalized struct {
-		ToolConfirm  string `json:"tool_confirm"`
-		BuiltinTools string `json:"builtin_tools"`
-		SystemPrompt string `json:"system_prompt"`
+		ToolConfirm    string `json:"tool_confirm"`
+		BuiltinTools   string `json:"builtin_tools"`
+		SystemPrompt   string `json:"system_prompt"`
+		ReasoningLevel *int   `json:"reasoning_level"`
 	} `json:"normalized"`
 	ExpectedFile string `json:"expected_file"`
 }
@@ -65,7 +67,18 @@ func TestSettingsSerializationMatchesSharedFixture(t *testing.T) {
 				t.Errorf("normalized mismatch: got (%q, %q), want (%q, %q)",
 					tc, bt, c.Normalized.ToolConfirm, c.Normalized.BuiltinTools)
 			}
-			settings := GlobalSettings{ToolConfirm: tc, BuiltinTools: bt, SystemPrompt: c.Input.SystemPrompt}
+			var rl *int
+			if c.Input.ReasoningLevel != nil {
+				n, err := NormalizeReasoningLevel(*c.Input.ReasoningLevel)
+				if err != nil {
+					t.Fatalf("normalize reasoning_level: %v", err)
+				}
+				if c.Normalized.ReasoningLevel == nil || n != *c.Normalized.ReasoningLevel {
+					t.Errorf("normalized reasoning_level mismatch: got %d, want %v", n, c.Normalized.ReasoningLevel)
+				}
+				rl = &n
+			}
+			settings := GlobalSettings{ToolConfirm: tc, BuiltinTools: bt, SystemPrompt: c.Input.SystemPrompt, ReasoningLevel: rl}
 			got, err := json.MarshalIndent(settings, "", "  ")
 			if err != nil {
 				t.Fatalf("marshal: %v", err)

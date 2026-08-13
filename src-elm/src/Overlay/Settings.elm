@@ -5,16 +5,27 @@ import Html.Attributes as Attr
 import Html.Events as Ev
 
 
+reasoningLevelName : Int -> String
+reasoningLevelName lvl =
+    case lvl of
+        0 -> "Off"
+        1 -> "Balanced"
+        2 -> "Deep"
+        _ -> String.fromInt lvl
+
+
 view :
     { toolConfirm : String
     , builtinTools : String
     , systemPrompt : String
+    , reasoningLevel : Int
     , loading : Bool
     , syncing : Bool
     , error : Maybe String
     , onInput : String -> msg
     , onBuiltinToolsInput : String -> msg
     , onSystemPromptInput : String -> msg
+    , onReasoningLevelInput : Int -> msg
     , onSave : msg
     , onCancel : msg
     }
@@ -65,6 +76,27 @@ view config =
                             []
                         , Html.div [ Attr.class "me-hint" ]
                             [ Html.text "Comma-separated tool IDs (no spaces). Empty = all tools (AlayaCore default). Passed as --builtin-tools=id1,id2 on new sessions." ]
+                        ]
+                    , Html.div [ Attr.class "me-field" ]
+                        [ Html.label [ Attr.class "me-field-label" ] [ Html.text "Reasoning level" ]
+                        , Html.select
+                            [ Attr.class "me-field-input me-field-select"
+                            , Attr.id "settings-reasoning-level"
+                            , Attr.disabled config.syncing
+                            , Ev.onInput (\v -> config.onReasoningLevelInput (Maybe.withDefault 1 (String.toInt v)))
+                            ]
+                            (List.map
+                                (\lvl ->
+                                    Html.option
+                                        [ Attr.value (String.fromInt lvl)
+                                        , Attr.selected (config.reasoningLevel == lvl)
+                                        ]
+                                        [ Html.text (reasoningLevelName lvl) ]
+                                )
+                                [ 0, 1, 2 ]
+                            )
+                        , Html.div [ Attr.class "me-hint" ]
+                            [ Html.text "Initial reasoning level for new sessions of this preset. Passed to AlayaCore as --reasoning-level=0|1|2 (Off / Balanced / Deep). Can be changed per-session from the input bar." ]
                         ]
                     , Html.div [ Attr.class "me-field" ]
                         [ Html.label [ Attr.class "me-field-label" ] [ Html.text "System prompt" ]

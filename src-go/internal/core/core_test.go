@@ -49,7 +49,7 @@ func TestSpawnArgsAndCommunication(t *testing.T) {
 	sessionFile := filepath.Join(dir, "session.alaya")
 	configDir := filepath.Join(dir, "config")
 
-	proc, err := Spawn(fakeCorePath, configDir, sessionFile, "tool1,tool2", nil, "", "")
+	proc, err := Spawn(fakeCorePath, configDir, sessionFile, "tool1,tool2", nil, "", 1, "")
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -86,9 +86,11 @@ func TestSpawnArgsAndCommunication(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Expect: UT echo, Ar delta, At delta(s)…
+	// Expect: UT echo, Ar delta, At delta(s)… (boot SMs — model,
+	// reasoning, ready — plus the task-start SM precede the reply, so
+	// give the loop a generous window).
 	seenEcho, seenAt := false, false
-	for i := 0; i < 6; i++ {
+	for i := 0; i < 10; i++ {
 		frame, err = tlv.ReadFrame(reader)
 		if err != nil || frame == nil {
 			t.Fatalf("read reply frame %d: %v", i, err)
@@ -109,7 +111,7 @@ func TestSpawnArgsAndCommunication(t *testing.T) {
 }
 
 func TestSpawnError(t *testing.T) {
-	if _, err := Spawn("/nonexistent/alayacore", "", "", "", nil, "", ""); err == nil {
+	if _, err := Spawn("/nonexistent/alayacore", "", "", "", nil, "", 1, ""); err == nil {
 		t.Fatal("Spawn with missing binary should error")
 	}
 }
@@ -124,7 +126,7 @@ func TestSpawnWorkDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	proc, err := Spawn(fakeCorePath, filepath.Join(dir, "config"), filepath.Join(dir, "s.alaya"), "", nil, "", workDir)
+	proc, err := Spawn(fakeCorePath, filepath.Join(dir, "config"), filepath.Join(dir, "s.alaya"), "", nil, "", 1, workDir)
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -145,6 +147,51 @@ func TestSpawnWorkDir(t *testing.T) {
 	}
 	if env.Data.Cwd != workDir {
 		t.Errorf("child cwd = %q, want %q", env.Data.Cwd, workDir)
+	}
+}
+
+func TestSpawnReasoningLevelFlag(t *testing.T) {
+	// fakecore echoes the --reasoning-level flag in its boot frame and
+	// emits an SM reasoning frame with the level — level 0 ("Off") must
+	// survive the round trip (it is a valid explicit value).
+	dir := t.TempDir()
+	proc, err := Spawn(fakeCorePath, filepath.Join(dir, "config"), filepath.Join(dir, "s.alaya"), "", nil, "", 0, "")
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	defer KillChild(proc.Cmd)
+
+	reader := bufio.NewReader(proc.Stdout)
+	var bootLevel any
+	var smLevel any
+	for i := 0; i < 8; i++ {
+		frame, err := tlv.ReadFrame(reader)
+		if err != nil || frame == nil || frame.Tag != "SM" {
+			continue
+		}
+		var env map[string]any
+		if err := json.Unmarshal([]byte(frame.Value), &env); err != nil {
+			continue
+		}
+		if env["type"] == "task" {
+			if data, ok := env["data"].(map[string]any); ok {
+				bootLevel = data["reasoning_level"]
+			}
+		}
+		if env["type"] == "reasoning" {
+			if data, ok := env["data"].(map[string]any); ok {
+				smLevel = data["level"]
+			}
+		}
+		if bootLevel != nil && smLevel != nil {
+			break
+		}
+	}
+	if bootLevel != float64(0) {
+		t.Errorf("boot reasoning_level = %v, want 0", bootLevel)
+	}
+	if smLevel != float64(0) {
+		t.Errorf("SM reasoning level = %v, want 0", smLevel)
 	}
 }
 
