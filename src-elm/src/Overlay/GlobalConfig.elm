@@ -30,7 +30,7 @@ view config =
             Html.div [ Attr.class "sel-page-status" ] [ Html.text "Loading…" ]
 
           else
-            Html.div []
+            Html.div [ Attr.class "me-body" ]
                 [ case config.error of
                     Just err ->
                         Html.div [ Attr.class "sel-page-status sel-page-status-error" ]

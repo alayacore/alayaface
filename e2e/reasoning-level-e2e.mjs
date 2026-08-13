@@ -82,6 +82,27 @@ async function main() {
   if (opts.join(",") !== "Off,Balanced,Deep") throw new Error("bad options: " + opts);
   if (val !== "1") throw new Error("default should be 1 (Balanced), got " + val);
 
+  // The page must not clip: me-fields overflows and scrolls inside the
+  // fixed-height overlay, and the Save/Cancel row stays visible.
+  const layout = await page.evaluate(() => {
+    const f = document.querySelector(".me-fields");
+    const a = document.querySelector(".me-actions");
+    const pageEl = document.querySelector(".overlay-page");
+    if (!f || !a || !pageEl) return null;
+    const fRect = f.getBoundingClientRect();
+    const aRect = a.getBoundingClientRect();
+    const pRect = pageEl.getBoundingClientRect();
+    return {
+      fieldsOverflow: f.scrollHeight > f.clientHeight,
+      fieldsScrollable: getComputedStyle(f).overflowY === "auto",
+      actionsInsidePage: aRect.bottom <= pRect.bottom + 1 && aRect.top >= pRect.top - 1,
+    };
+  });
+  console.log("settings layout:", JSON.stringify(layout));
+  if (!layout || !layout.fieldsOverflow || !layout.fieldsScrollable || !layout.actionsInsidePage) {
+    throw new Error("settings page clipped: " + JSON.stringify(layout));
+  }
+
   // Set Deep (2) and save.
   await page.select("#settings-reasoning-level", "2");
   await waitFor(() => page.evaluate(() => document.querySelector("#settings-reasoning-level").value === "2"));
