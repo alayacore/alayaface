@@ -319,7 +319,7 @@ viewGlobalMenu model =
                     , Ev.onClick OpenPresetManager
                     ]
                     [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "◱" ]
-                    , Html.text "Presets"
+                    , Html.text "Preset Manager"
                     ]
                 , Html.div
                     [ Attr.class "global-menu-item"
