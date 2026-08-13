@@ -42,6 +42,25 @@ func ModelSet(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	return writeResult(w, nil)
 }
 
+// Reason sends the "reason" command (reasoning level 0|1|2 as argument).
+func Reason(h *Handler, w http.ResponseWriter, r *http.Request) error {
+	var args struct {
+		SessionID string `json:"sessionId"`
+		Level     uint32 `json:"level"`
+	}
+	if err := decodeArgs(r, &args); err != nil {
+		return err
+	}
+	s, err := h.Sessions.Get(args.SessionID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.SendCmd("reason", fmt.Sprintf("%d", args.Level)); err != nil {
+		return err
+	}
+	return writeResult(w, nil)
+}
+
 // ModelSync sends the "model_sync" command (config JSON as argument).
 func ModelSync(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	var args struct {

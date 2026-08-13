@@ -323,6 +323,7 @@ type Msg
     | SendPrompt
     | CancelTask
     | SetModel Int
+    | SetReasoningLevel Int
     | ConfirmTool String String Bool
     | McpAuthConfirm String String
     | CloseMcpAuthOverlay String

@@ -10,6 +10,7 @@ port module Ports exposing
     , sendPrompt
     , cancelTask
     , setModel
+    , setReasoningLevel
     , modelSync
       -- Default (global) model list editor
     , listDefaultModels
@@ -124,6 +125,7 @@ port closeSession : { sessionId : String } -> Cmd msg
 port sendPrompt : { sessionId : String, text : String, media : List E.Value } -> Cmd msg
 port cancelTask : { sessionId : String } -> Cmd msg
 port setModel : { sessionId : String, modelId : Int } -> Cmd msg
+port setReasoningLevel : { sessionId : String, level : Int } -> Cmd msg
 port modelSync : { sessionId : String, config : String } -> Cmd msg
 port listDefaultModels : { preset : String } -> Cmd msg
 port syncDefaultModels : { preset : String, config : String } -> Cmd msg

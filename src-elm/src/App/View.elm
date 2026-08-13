@@ -17,6 +17,7 @@ import Time
 import Markdown
 import App.Types exposing (..)
 import App.Update exposing (SessionDir, decodeSessionDir, helpItems, nextCopyName)
+import Icons
 import Session.Types as T
 import Session.Selector as Sel exposing (Page(..))
 import Session.FilePicker as FP
@@ -1755,6 +1756,17 @@ viewTextWithPlanLinks model text =
     go text []
 
 
+-- ─── Reasoning Level ────────────────────────────────────────────────
+
+reasoningLevelName : Int -> String
+reasoningLevelName lvl =
+    case lvl of
+        0 -> "Off"
+        1 -> "Balanced"
+        2 -> "Deep"
+        _ -> String.fromInt lvl
+
+
 viewInputBar : Model -> T.SessionState -> Html Msg
 viewInputBar model session =
     let
@@ -1820,20 +1832,40 @@ viewInputBar model session =
                         , Attr.title "Attach media"
                         , Attr.disabled inputDisabled
                         ]
-                        [ Html.text "📎" ]
+                        [ Icons.paperclip ]
                     , Html.button
                         [ Attr.class "footer-btn"
                         , Ev.onClick (ForSession session.id OpenModelSelector)
                         , Attr.title "Select model"
                         , Attr.disabled inputDisabled
                         ]
-                        [ Html.text "🧠" ]
+                        [ Icons.chip ]
                     , Html.button
                         [ Attr.class "footer-btn"
                         , Ev.onClick (ForSession session.id OpenHelpWindow)
                         , Attr.title "Help"
                         ]
-                        [ Html.text "?" ]
+                        [ Icons.help ]
+                    , Html.select
+                        [ Attr.class "footer-btn reasoning-select"
+                        , Attr.title "Reasoning level: Off (0) | Balanced (1) | Deep (2)"
+                        , Attr.disabled inputDisabled
+                        , Ev.onInput
+                            (\v ->
+                                ForSession session.id
+                                    (SetReasoningLevel (Maybe.withDefault 1 (String.toInt v)))
+                            )
+                        ]
+                        (List.map
+                            (\lvl ->
+                                Html.option
+                                    [ Attr.value (String.fromInt lvl)
+                                    , Attr.selected (session.reasoningLevel == lvl)
+                                    ]
+                                    [ Html.text (reasoningLevelName lvl) ]
+                            )
+                            [ 0, 1, 2 ]
+                        )
                     ]
                 , Html.div [ Attr.class "input-footer-right" ]
                     [ Html.button

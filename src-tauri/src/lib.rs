@@ -134,6 +134,7 @@ pub fn run() {
             commands::alayacore_send_prompt,
             commands::alayacore_model_set,
             commands::alayacore_cancel,
+            commands::alayacore_reason,
             commands::alayacore_model_sync,
             commands::alayacore_confirm,
             commands::alayacore_mcp_decline,

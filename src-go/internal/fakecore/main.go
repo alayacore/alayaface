@@ -298,6 +298,9 @@ func handleCmd(raw string) {
 	case "model_load":
 		smModelList()
 		coOk(msg.ID, map[string]any{"ok": true})
+	case "reason":
+		// Mirror real alayacore: accepts a level (0|1|2) and echoes it.
+		coOk(msg.ID, map[string]any{"level": msg.Input})
 	case "model_sync":
 		if strings.Contains(msg.Input, `"invalid"`) {
 			coErr(msg.ID, "invalid config")

@@ -15,6 +15,18 @@ use tauri::State;
 send_cmd!(alayacore_cancel, "cancel");
 
 #[tauri::command]
+pub async fn alayacore_reason(
+    session_id: String,
+    level: u32,
+    sessions: State<'_, SessionMap>,
+) -> Result<(), String> {
+    let map = sessions.0.lock().await;
+    send_cmd(&map, &session_id, "reason", &level.to_string())
+        .await
+        .map(|_| ())
+}
+
+#[tauri::command]
 pub async fn alayacore_model_set(
     session_id: String,
     model_id: u32,

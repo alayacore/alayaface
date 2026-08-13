@@ -345,6 +345,7 @@ handleSystemMsg s env =
         "notify" -> handleSystemNotify s env.data
         "model_list" -> handleSystemModelList s env.data
         "model" -> handleSystemModel s env.data
+        "reasoning" -> handleSystemReasoning s env.data
         "tool_confirm" -> handleSystemToolConfirm s env.data
         "mcp" -> handleSystemMcp s env.data
         "session" -> handleSystemSession s env.data
@@ -506,6 +507,36 @@ handleSystemModel s data =
             }
 
         _ ->
+            s
+
+
+{-| SM {"type":"reasoning",...} — the core's boot frame reporting the
+active reasoning level (0|1|2). Field name is not contractual across
+cores, so accept the common spellings and ignore anything else (the
+level stays at its default / last user selection).
+-}
+handleSystemReasoning : SessionState -> D.Value -> SessionState
+handleSystemReasoning s data =
+    let
+        levelResult =
+            D.decodeValue
+                (D.oneOf
+                    [ D.field "level" D.int
+                    , D.field "active_level" D.int
+                    , D.field "reasoning_level" D.int
+                    ]
+                )
+                data
+    in
+    case levelResult of
+        Ok lvl ->
+            if lvl >= 0 && lvl <= 2 then
+                { s | reasoningLevel = lvl }
+
+            else
+                s
+
+        Err _ ->
             s
 
 

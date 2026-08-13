@@ -264,6 +264,12 @@
       }).catch(function (err) { rpcError("model_set", data.sessionId, err); });
     });
 
+    on("setReasoningLevel", function (data) {
+      transport.invoke("alayacore_reason", {
+        sessionId: data.sessionId, level: data.level,
+      }).catch(function (err) { rpcError("reason", data.sessionId, err); });
+    });
+
     on("modelSync", function (data) {
       transport.invoke("alayacore_model_sync", {
         sessionId: data.sessionId, config: data.config,

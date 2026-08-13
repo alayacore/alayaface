@@ -1333,6 +1333,33 @@ body {
 .footer-btn:hover { background: rgba(255,255,255,0.08); color: #ddd; }
 .footer-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 
+/* SVG icons in the footer buttons (Icons.elm): block layout keeps them
+   vertically centered in the button; size fixed so all three match. */
+.footer-btn svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+}
+
+/* Reasoning level selector (input footer, after model/help). Inherits
+   .footer-btn sizing; kept compact so the footer stays one line. */
+.reasoning-select {
+  background: none;
+  border: none;
+  color: #888;
+  font-size: 0.85rem;
+  padding: 2px 2px;
+  line-height: 1;
+  border-radius: 4px;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  outline: none;
+}
+.reasoning-select:hover { background: rgba(255,255,255,0.08); color: #ddd; }
+.reasoning-select:disabled { opacity: 0.3; cursor: not-allowed; }
+.reasoning-select option { background: #1e1e2e; color: #ddd; }
+
 .input-footer-right {
   display: flex;
   align-items: center;

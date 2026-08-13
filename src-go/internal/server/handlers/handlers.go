@@ -39,6 +39,7 @@ func Registry() map[string]Command {
 		// cmd
 		"alayacore_cancel":      CancelTask,
 		"alayacore_model_set":   ModelSet,
+		"alayacore_reason":      Reason,
 		"alayacore_model_sync":  ModelSync,
 		"alayacore_confirm":     ConfirmTool,
 		"alayacore_mcp_decline": McpDecline,

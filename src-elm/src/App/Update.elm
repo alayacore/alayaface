@@ -1464,6 +1464,25 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
+        SetReasoningLevel level ->
+            case model.activeId of
+                Just id ->
+                    -- Optimistically reflect the new level; the core
+                    -- confirms via the silent `reason` CI/CO roundtrip.
+                    let
+                        m1 =
+                            { model
+                                | sessions =
+                                    Dict.update id
+                                        (Maybe.map (\s -> { s | reasoningLevel = level }))
+                                        model.sessions
+                            }
+                    in
+                    ( m1, Ports.setReasoningLevel { sessionId = PU.workCopyId model id, level = level } )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
         ConfirmTool sid id allowed ->
             case Dict.get sid model.sessions of
                 Just _ ->
@@ -6175,7 +6194,7 @@ helpItems =
     , { id = 4, key = ":mcp_confirm <server> <code> <redirect_uri>", desc = "Confirm OAuth authorization", isSection = False, isCommand = True }
     , { id = 5, key = ":mcp_decline <server>", desc = "Decline OAuth authorization", isSection = False, isCommand = True }
     , { id = 6, key = ":continue", desc = "Retry last prompt", isSection = False, isCommand = True }
-    , { id = 7, key = ":reason <0|1|2>", desc = "Set reasoning level", isSection = False, isCommand = True }
+    , { id = 7, key = ":reason <0|1|2>", desc = "Set reasoning level (0=Off, 1=Balanced, 2=Deep)", isSection = False, isCommand = True }
     , { id = 8, key = ":cancel", desc = "Cancel current task", isSection = False, isCommand = True }
     , { id = 9, key = ":summarize", desc = "Summarize & compress history", isSection = False, isCommand = True }
     , { id = 10, key = ":theme_set <name>", desc = "Switch theme by name", isSection = False, isCommand = True }
