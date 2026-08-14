@@ -1,4 +1,4 @@
-module Icons exposing (paperclip, chip, help, chevron, check, cross, running, send, mic, bulb, stop)
+module Icons exposing (paperclip, chip, chevron, check, cross, running, send, mic, bulb, stop)
 
 {-| Hand-drawn SVG icons for the input-bar footer (replacing the old
 emoji buttons). All icons share a chunky, short-and-fat, near-square
@@ -7,7 +7,6 @@ inherit the button's color (and hover color) automatically.
 
 - paperclip — attachment (vertical orientation, two loops)
 - chip      — model selector (CPU die + pins)
-- help      — question mark inside a rounded square
 
 Rendered with elm/svg: the root `Svg.svg` is the HTML-embedding bridge
 (returns `Html msg`), inner shapes get the proper SVG namespace.
@@ -76,34 +75,6 @@ chip =
             []
         , path
             [ SAttr.d "M9.5 6.5 v-3 M14.5 6.5 v-3 M9.5 17.5 v3 M14.5 17.5 v3 M6.5 9.5 h-3 M6.5 14.5 h-3 M17.5 9.5 h3 M17.5 14.5 h3" ]
-            []
-        ]
-
-
-{-| Help: chunky question mark in a rounded square. The dot is filled
-with the current color (other shapes are strokes).
--}
-help : Html msg
-help =
-    icon []
-        [ rect
-            [ SAttr.x "3.5"
-            , SAttr.y "3.5"
-            , SAttr.width "17"
-            , SAttr.height "17"
-            , SAttr.rx "4"
-            ]
-            []
-        , path
-            [ SAttr.d "M9.5 9.5 a2.5 2.5 0 0 1 5 0 c0 1.7 -2.5 2.2 -2.5 3.8" ]
-            []
-        , circle
-            [ SAttr.cx "12"
-            , SAttr.cy "16.6"
-            , SAttr.r "1.2"
-            , SAttr.fill "currentColor"
-            , SAttr.stroke "none"
-            ]
             []
         ]
 

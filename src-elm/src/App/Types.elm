@@ -337,6 +337,7 @@ type Msg
     | SendPrompt
     | CancelTask
     | VoiceInput
+    | CancelAsr
     | SetModel Int
     | SetReasoningLevel Int
     | ConfirmTool String String Bool
@@ -497,12 +498,6 @@ type Msg
     | PresetCancelDelete
     | PresetsListResult E.Value
     | PresetActionResult E.Value
-      -- Help Window
-    | OpenHelpWindow
-    | CloseHelpWindow
-    | SetHelpFilter String
-    | HelpSelectItem Int
-    | HelpCmdMsg String
     | FillMcpAuthUrl String String
       -- Media preview (click a multimodal chip)
     | OpenMediaPreview T.MediaItem

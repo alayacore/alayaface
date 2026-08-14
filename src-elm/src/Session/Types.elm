@@ -263,15 +263,14 @@ type alias SessionState =
       -- Overlay state (per-session)
     , showModelSelector : Bool
     , modelSelector : Session.Selector.State ModelInfo ModelDraft
-    , showHelpWindow : Bool
-    , helpFilter : String
-    , helpSelected : Int
-    , helpScroll : Int
       -- Voice input (P-series): voiceActive = mic recording in progress
       -- (toggle on the mic button); asrBusy = transcription running
-      -- (waiting for the asr_transcribe result).
+      -- (waiting for the asr_transcribe result — the mic button turns
+      -- into a cancel); asrDiscard = the user cancelled a pending
+      -- transcription, so its result must be dropped when it arrives.
     , voiceActive : Bool
     , asrBusy : Bool
+    , asrDiscard : Bool
     }
 
 
@@ -452,10 +451,7 @@ emptySession id =
     , mcpServers = []
     , showModelSelector = False
     , modelSelector = Session.Selector.empty
-    , showHelpWindow = False
-    , helpFilter = ""
-    , helpSelected = 0
-    , helpScroll = 0
     , voiceActive = False
     , asrBusy = False
+    , asrDiscard = False
     }

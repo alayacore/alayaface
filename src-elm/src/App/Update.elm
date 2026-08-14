@@ -2,7 +2,6 @@ module App.Update exposing
     ( update
     , SessionDir
     , decodeSessionDir
-    , helpItems
     , nextCopyName
     , planFocusAboveSession
     )
@@ -38,7 +37,6 @@ import Plan.Meta as PM
 import Plan.Cascade as PC
 import Plan.Detect
 import Plan.Frames
-import Overlay.HelpWindow exposing (HelpItem, filterHelpItems)
 import Ports
 import Arch.Values as AV
 import Arch.Freeze as Freeze
@@ -1523,12 +1521,14 @@ update msg model =
             -- Toggle voice recording: click starts the mic (recording
             -- state persists), click again stops it and transcribes.
             -- The state is visible on the mic button itself (red pulse
-            -- while recording, spinner while transcribing).
+            -- while recording; while transcribing the button turns into
+            -- a red cancel — see CancelAsr).
             case getActiveSession model of
                 Just s ->
                     if s.asrBusy then
-                        -- A transcription is in flight; ignore further
-                        -- clicks (the mic button is disabled anyway).
+                        -- A transcription is in flight; the mic button
+                        -- is a cancel now (CancelAsr), so VoiceInput
+                        -- only arrives from the other two states.
                         ( model, Cmd.none )
 
                     else if s.voiceActive then
@@ -1559,6 +1559,45 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
+        CancelAsr ->
+            -- Abandon a pending transcription: the input stays locked
+            -- until the ASR result arrives, so the mic button becomes a
+            -- cancel. The backend call cannot be aborted mid-flight, so
+            -- we just mark the session and drop the result when it
+            -- shows up (AsrResult checks asrDiscard).
+            case getActiveSession model of
+                Just s ->
+                    if s.asrBusy then
+                        ( { model
+                            | pendingVoiceInsert =
+                                case model.pendingVoiceInsert of
+                                    Just p ->
+                                        if p.sessionId == s.id then
+                                            Nothing
+
+                                        else
+                                            model.pendingVoiceInsert
+
+                                    Nothing ->
+                                        Nothing
+                            , sessions =
+                                Dict.insert s.id
+                                    { s
+                                        | voiceActive = False
+                                        , asrBusy = False
+                                        , asrDiscard = True
+                                    }
+                                    model.sessions
+                          }
+                        , Cmd.none
+                        )
+
+                    else
+                        ( model, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
         VoiceError raw ->
             -- Mic/recording failure surfaced from the JS bridge
             -- (permission denied, webview unsupported, …). Shown as an
@@ -1574,6 +1613,7 @@ update msg model =
                                             { s
                                                 | voiceActive = False
                                                 , asrBusy = False
+                                                , asrDiscard = False
                                             }
                                             ("Voice input error: " ++ message)
                                         )
@@ -1591,12 +1631,29 @@ update msg model =
         AsrResult raw ->
             -- Transcription finished. On success, read the textarea
             -- caret and insert the text there; failures are appended to
-            -- the message display as error messages.
+            -- the message display as error messages. A result for a
+            -- cancelled session (asrDiscard) is dropped silently.
             case D.decodeValue asrResultDecoder raw of
                 Ok { sessionId, ok, text, error } ->
                     case Dict.get sessionId model.sessions of
                         Just s ->
-                            if ok then
+                            if s.asrDiscard then
+                                -- User cancelled this transcription;
+                                -- ignore the result entirely.
+                                ( { model
+                                    | sessions =
+                                        Dict.insert sessionId
+                                            { s
+                                                | asrDiscard = False
+                                                , asrBusy = False
+                                                , voiceActive = False
+                                            }
+                                            model.sessions
+                                  }
+                                , Cmd.none
+                                )
+
+                            else if ok then
                                 if String.isEmpty text then
                                     ( { model
                                         | sessions =
@@ -1651,7 +1708,7 @@ update msg model =
 
         CursorPosResult raw ->
             -- Caret position for a pending voice transcript: insert the
-            -- text at that position and place the caret after it.
+            -- text at that position and place the caret AFTER it.
             case D.decodeValue cursorPosResultDecoder raw of
                 Ok { sessionId, pos } ->
                     case model.pendingVoiceInsert of
@@ -1673,7 +1730,10 @@ update msg model =
                                             | pendingVoiceInsert = Nothing
                                             , sessions =
                                                 Dict.insert sessionId
-                                                    { s | input = newInput }
+                                                    { s
+                                                        | input = newInput
+                                                        , asrDiscard = False
+                                                    }
                                                     model.sessions
                                           }
                                         , Ports.setCursorPos
@@ -5344,90 +5404,6 @@ update msg model =
                 Err _ ->
                     ( model, Cmd.none )
 
-        -- Help Window
-        OpenHelpWindow ->
-            case getActiveSession model of
-                Just s ->
-                    ( updateActiveSession model (\sess ->
-                        { sess
-                            | showHelpWindow = True
-                            , helpFilter = ""
-                            , helpSelected = 0
-                            , helpScroll = 0
-                        }
-                      )
-                    , Cmd.batch
-                        [ focusAfterDelay ("help-filter-input-" ++ s.id)
-                        , Ports.setCursorPos { id = "help-filter-input-" ++ s.id, pos = Nothing }
-                        ]
-                    )
-
-                Nothing ->
-                    ( model, Cmd.none )
-
-        CloseHelpWindow ->
-            ( updateActiveSession model (\s -> { s | showHelpWindow = False })
-            , focusInput model
-            )
-
-        SetHelpFilter val ->
-            ( updateActiveSession model (\s ->
-                let
-                    filtered =
-                        filterHelpItems val helpItems
-
-                    clampedSelected =
-                        if List.length filtered <= s.helpSelected then
-                            max 0 (List.length filtered - 1)
-                        else
-                            s.helpSelected
-                in
-                { s
-                    | helpFilter = val
-                    , helpSelected = clampedSelected
-                }
-              )
-            , Cmd.none
-            )
-
-        HelpSelectItem idx ->
-            case getActiveSession model of
-                Just s ->
-                    ( updateActiveSession model (\sess -> { sess | helpSelected = idx })
-                    , Ports.scrollIntoView ("help-item-" ++ s.id ++ "-" ++ String.fromInt idx)
-                    )
-
-                Nothing ->
-                    ( model, Cmd.none )
-
-        HelpCmdMsg cmd ->
-            case model.activeId of
-                Just sid ->
-                    let
-                        -- Focus input and insert the command prefix
-                        newSessions =
-                            Dict.update sid
-                                (\maybeS ->
-                                    case maybeS of
-                                        Just s ->
-                                            Just
-                                                { s
-                                                    | showHelpWindow = False
-                                                    , input = cmd ++ " "
-                                                }
-
-                                        Nothing ->
-                                            maybeS
-                                )
-                                model.sessions
-                    in
-                    ( { model | sessions = newSessions }
-                    , Task.attempt (\_ -> NoOp) (Dom.focus ("msg-input-" ++ sid))
-                    )
-
-                Nothing ->
-                    ( model, Cmd.none )
-
         FillMcpAuthUrl server url ->
             case getActiveSession model of
                 Just s ->
@@ -5471,7 +5447,7 @@ update msg model =
             -- Escape or Ctrl+[ closes the TOPMOST open overlay: context
             -- menu → global overlays (session manager, version browsing,
             -- editors…) → the active session's overlays (file picker,
-            -- model selector, help window) → media preview as fallback.
+            -- model selector) → media preview as fallback.
             -- The tool-confirm dialog is intentionally NOT closed by
             -- Escape (it requires an explicit Allow/Deny choice), and
             -- MCP init/auth overlays keep their explicit buttons too.
@@ -5523,9 +5499,6 @@ update msg model =
 
                                     else if sess.showModelSelector then
                                         update (ForSession sid CloseModelSelector) model
-
-                                    else if sess.showHelpWindow then
-                                        update (ForSession sid CloseHelpWindow) model
 
                                     else
                                         ( updateActiveSession model (\s -> { s | mediaPreview = Nothing })
@@ -6784,32 +6757,6 @@ sessionActionResultDecoder =
         (D.field "ok" D.bool)
         (D.field "error" D.string)
         (D.field "kind" D.string)
-
-
--- ─── Help Items ──────────────────────────────────────────────────────
-
-helpItems : List HelpItem
-helpItems =
-    [ { id = 1, key = "Commands", desc = "", isSection = True, isCommand = False }
-    , { id = 2, key = ":tool_confirm <id>", desc = "Confirm pending tool", isSection = False, isCommand = True }
-    , { id = 3, key = ":tool_decline <id>", desc = "Decline pending tool", isSection = False, isCommand = True }
-    , { id = 4, key = ":mcp_confirm <server> <code> <redirect_uri>", desc = "Confirm OAuth authorization", isSection = False, isCommand = True }
-    , { id = 5, key = ":mcp_decline <server>", desc = "Decline OAuth authorization", isSection = False, isCommand = True }
-    , { id = 6, key = ":continue", desc = "Retry last prompt", isSection = False, isCommand = True }
-    , { id = 7, key = ":reason <0|1|2>", desc = "Set reasoning level (0=Off, 1=Balanced, 2=Deep)", isSection = False, isCommand = True }
-    , { id = 8, key = ":cancel", desc = "Cancel current task", isSection = False, isCommand = True }
-    , { id = 9, key = ":summarize", desc = "Summarize & compress history", isSection = False, isCommand = True }
-    , { id = 10, key = ":theme_set <name>", desc = "Switch theme by name", isSection = False, isCommand = True }
-    , { id = 11, key = ":model_set <id>", desc = "Switch model by ID", isSection = False, isCommand = True }
-    , { id = 12, key = ":model_load", desc = "Reload model config", isSection = False, isCommand = True }
-    , { id = 13, key = ":model_sync", desc = "Apply edited model config", isSection = False, isCommand = True }
-    , { id = 14, key = ":save [filename]", desc = "Save session", isSection = False, isCommand = True }
-    , { id = 15, key = ":fork <id> <filename>", desc = "Fork session up to content", isSection = False, isCommand = True }
-    , { id = 16, key = ":video_config <fps> <0|1>", desc = "Set video FPS and resolution", isSection = False, isCommand = True }
-    , { id = 17, key = ":suspend", desc = "Suspend process", isSection = False, isCommand = True }
-    , { id = 18, key = ":quit", desc = "Exit application", isSection = False, isCommand = True }
-    , { id = 19, key = ":help", desc = "Open help window", isSection = False, isCommand = True }
-    ]
 
 
 nextCopyName : String -> List PresetInfo -> String

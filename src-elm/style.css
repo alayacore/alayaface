@@ -1368,6 +1368,13 @@ body {
   color: #666;
 }
 
+/* Disabled input (offline, plan running, voice recording/transcribing):
+   the bubble border greys out and the caret becomes not-allowed, in
+   sync with the disabled footer buttons. */
+.input-bubble.input-disabled { border-color: #5a5f6a; }
+.input-bubble.input-disabled .input-text { cursor: not-allowed; }
+.input-bubble.input-disabled .input-text::placeholder { color: #555; }
+
 .input-footer {
   display: flex;
   align-items: center;
@@ -1395,6 +1402,12 @@ body {
 .footer-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
 .footer-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 
+/* Cancel state (task running / transcription in flight): the red stop
+   icon keeps the "something is running" signal while the button stays
+   otherwise identical to the other footer buttons. */
+.footer-btn.cancel { color: #dc2626; }
+.footer-btn.cancel:hover { background: rgba(220,38,38,0.1); color: #dc2626; }
+
 /* SVG icons in the footer buttons (Icons.elm): block layout keeps them
    vertically centered in the button; size fixed so all three match. */
 .footer-btn svg {
@@ -1417,6 +1430,15 @@ body {
 .reasoning-wrap:hover { background: rgba(255,255,255,0.08); color: #fff; }
 .reasoning-wrap svg { display: block; width: 18px; height: 18px; }
 
+/* Disabled state matches .footer-btn:disabled — the whole control
+   (bulb icon + select) greys out and stops reacting, like the other
+   footer buttons when the session is offline/blocked. */
+.reasoning-wrap.disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 .reasoning-select {
   background: none;
   border: none;
@@ -1433,12 +1455,14 @@ body {
 .reasoning-select option { background: #1e1e2e; color: #ddd; }
 
 /* Light theme: #fff/#ddd would wash out on the near-white app
-   background, so hover uses the brand blue (like .send-btn:hover) and
-   the select dropdown goes light too. */
+   background, so hover uses the brand blue and the select dropdown
+   goes light too. The cancel (running) hover keeps its red tint. */
 @media (prefers-color-scheme: light) {
   .footer-btn:hover { background: rgba(37,99,235,0.08); color: #2563eb; }
+  .footer-btn.cancel:hover { background: rgba(220,38,38,0.08); color: #dc2626; }
   .reasoning-wrap:hover { background: rgba(37,99,235,0.08); color: #2563eb; }
   .reasoning-select option { background: #fff; color: #1a1a2e; }
+  .input-bubble.input-disabled { border-color: #c5c9d0; }
 }
 
 .input-footer-right {
@@ -1447,49 +1471,18 @@ body {
   gap: 2px; /* same as the left cluster: uniform spacing */
 }
 
-.send-btn {
-  background: none;
-  border: none;
-  padding: 2px 6px; /* matches .footer-btn — no min-width: hug the icon */
-  border-radius: 4px;
-  font-size: 0.85rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s;
-  color: #2563eb;
-  text-align: center;
-}
-.send-btn svg {
-  display: block;
-  width: 18px;
-  height: 18px;
-  margin: 0 auto;
-}
-
-.send-btn:hover { background: rgba(37,99,235,0.1); }
-.send-btn.cancel { color: #dc2626; }
-.send-btn.cancel:hover { background: rgba(220,38,38,0.1); }
-.send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-
-/* Voice input (ASR): the mic button pulses red while recording; the
-   running (spinner) icon rotates while a transcription is in flight. */
+/* Voice input (ASR): the mic button pulses red while recording; while
+   a transcription is in flight it turns into a red cancel (the .cancel
+   state above) so the user can abandon the pending result. */
 .mic-btn.recording {
   color: #ef4444;
   background: rgba(239, 68, 68, 0.12);
   animation: mic-pulse 1.4s ease-in-out infinite;
 }
 .mic-btn.recording:hover { color: #ef4444; background: rgba(239, 68, 68, 0.2); }
-.mic-btn .spinning {
-  display: inline-flex;
-  animation: icon-spin 1s linear infinite;
-}
 @keyframes mic-pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.35); }
   50% { box-shadow: 0 0 0 5px rgba(239, 68, 68, 0); }
-}
-@keyframes icon-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
 }
 @media (prefers-color-scheme: light) {
   .mic-btn.recording { color: #dc2626; background: rgba(220, 38, 38, 0.12); }
@@ -2244,74 +2237,6 @@ body {
   .pm-btn-primary:hover:not(:disabled) { background: #6366f1; color: white; }
   .pm-btn-danger { border-color: rgba(239, 68, 68, 0.5); color: #dc2626; }
   .pm-btn-danger:hover:not(:disabled) { background: rgba(239, 68, 68, 0.08); border-color: #dc2626; color: #dc2626; }
-}
-
-/* ─── Help Page ────────────────────────────────────────────────────── */
-
-.help-page {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  flex: 1;
-  min-height: 0;
-  max-width: var(--content-width);
-  width: 100%;
-  align-self: center;
-}
-
-.help-page-section {
-  font-size: 0.72rem;
-  color: #555;
-  padding: 4px 10px;
-  letter-spacing: 0.04em;
-  font-weight: 600;
-  flex-shrink: 0;
-}
-
-.help-page-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 10px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 0.82rem;
-  font-weight: 400;
-}
-.help-page-item:hover { background: rgba(255,255,255,0.04); }
-.help-page-item-selected { background: #6366f1; color: white; }
-.help-page-item-selected:hover { background: #5558e6; }
-
-.help-page-item-key {
-  font-family: "Courier New", monospace;
-  font-size: 0.78rem;
-  font-weight: 400;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  min-width: 160px;
-  flex-shrink: 0;
-  color: #93c5fd;
-}
-.help-page-item-selected .help-page-item-key { color: white; }
-
-.help-page-item-desc {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-  color: #bbb;
-  font-weight: 400;
-}
-.help-page-item-selected .help-page-item-desc { color: rgba(255,255,255,0.85); }
-
-@media (prefers-color-scheme: light) {
-  .help-page-section { color: #aaa; }
-  .help-page-item:hover { background: rgba(0,0,0,0.03); }
-  .help-page-item-selected { background: #6366f1; color: white; }
-  .help-page-item-key { color: #2563eb; }
-  .help-page-item-selected .help-page-item-key { color: white; }
-  .help-page-item-desc { color: #666; }
-  .help-page-item-selected .help-page-item-desc { color: rgba(255,255,255,0.85); }
 }
 
 /* ─── MCP Init Overlay ──────────────────────────────────────────────── */

@@ -7,9 +7,13 @@
 //   2. Chrome → New Session (Simple)
 //   3. system menu → ASR config → set the fake endpoint URL → Save
 //   4. type "hello world" into the input, move the caret to position 5
-//   5. mic start (recording state, "Listening…" in the bar) → stop
+//   5. mic start (recording state, input locked) → stop → the mic
+//      becomes a cancel while transcribing (input still locked)
 //   6. the fake ASR returns "HELLO" → it must be inserted at the caret:
-//      "helloHELLO world" and the caret placed after the insert
+//      "helloHELLO world" and the caret placed after the insert, then
+//      the input unlocks
+//   7. cancel scenario: slow ASR response → click the mic cancel → the
+//      input unlocks and the late result is dropped (no insert, no error)
 //
 // ALL PASS printed on success. Screenshots land in the artifact dir.
 import puppeteer from 'puppeteer-core';
@@ -66,16 +70,23 @@ execSync('go build -o "' + fakecore + '" ./internal/fakecore', { cwd: SRCGO, std
 execSync('go build -o "' + serverBin + '" ./cmd/alayaface-server', { cwd: SRCGO, stdio: 'inherit' });
 
 // ── fake ASR endpoint: OpenAI-compatible /v1/audio/transcriptions ──
-// Records how many calls it got and answers {"text":"HELLO"}.
+// Records how many calls it got and answers {"text":"HELLO"}. When
+// asrSlow is set (the cancel scenario) it delays the response so the
+// test can cancel the transcription mid-flight.
 let asrCalls = 0;
+let asrSlow = false;
 const asrServer = http.createServer((req, res) => {
   if (req.url === '/v1/audio/transcriptions' && req.method === 'POST') {
     asrCalls++;
     const chunks = [];
     req.on('data', c => chunks.push(c));
     req.on('end', () => {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ text: 'HELLO' }));
+      const respond = () => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ text: 'HELLO' }));
+      };
+      if (asrSlow) setTimeout(respond, 4000);
+      else respond();
     });
     return;
   }
@@ -198,24 +209,66 @@ try {
       disabled: btn ? btn.disabled : null,
     };
   });
+  const taState = () => page.$eval(taSel, el => ({ disabled: el.disabled, v: el.value }));
+  // Slow ASR response so the transcribing state is observable.
+  asrSlow = true;
   await page.$eval('.mic-btn', el => el.click());
   await sleep(1500);
   const rec = await micState();
   assert(rec.cls.includes('recording'), 'mic enters recording state: ' + rec.cls);
+  assert(rec.disabled === false, 'mic stays clickable while recording (to stop)');
+  assert((await taState()).disabled === true, 'input disabled while recording');
   await shot('02-recording.png');
 
   await page.$eval('.mic-btn', el => el.click());
-  await sleep(3500);
-  const done = await micState();
-  console.log('after stop:', JSON.stringify(done));
+  await sleep(400);
+  // Transcribing: input stays locked, mic becomes a cancel button.
+  const busy = await micState();
+  assert(busy.cls.includes('cancel'), 'mic becomes cancel while transcribing: ' + busy.cls);
+  assert(busy.cls.includes('recording') === false, 'recording pulse cleared while transcribing');
+  assert(busy.disabled === false, 'mic cancel stays clickable');
+  assert((await taState()).disabled === true, 'input stays disabled while transcribing');
+  await shot('02b-transcribing.png');
 
   // ── 6. insertion at the caret ────────────────────────────────────
+  await sleep(4200); // slow response arrives (~4s after the POST)
   const after = await page.$eval(taSel, el => ({ v: el.value, sel: el.selectionStart }));
   console.log('after insert:', JSON.stringify(after));
   assert(after.v === 'helloHELLO world', 'inserted at caret: ' + after.v);
   assert(after.sel === 10, 'caret after inserted text: ' + after.sel);
+  assert((await taState()).disabled === false, 'input re-enabled after insertion');
   assert(asrCalls >= 1, 'fake ASR endpoint was called (' + asrCalls + ')');
   await shot('03-inserted.png');
+
+  // ── 7. cancel mid-transcription discards the result ──────────────
+  asrSlow = true;
+  await page.$eval(taSel, el => { el.focus(); el.setSelectionRange(0, 0); });
+  await page.$eval('.mic-btn', el => el.click());
+  await sleep(1200);
+  assert((await taState()).disabled === true, 'input disabled while recording (cancel scenario)');
+  await page.$eval('.mic-btn', el => el.click());
+  await sleep(400);
+  const busy2 = await micState();
+  assert(busy2.cls.includes('cancel'), 'mic is cancel while transcribing (cancel scenario): ' + busy2.cls);
+  // Click the cancel button: the pending result must be abandoned.
+  await page.$eval('.mic-btn', el => el.click());
+  await sleep(400);
+  const afterCancel = await micState();
+  assert(!afterCancel.cls.includes('recording') && !afterCancel.cls.includes('cancel'),
+    'mic back to normal after cancel: ' + afterCancel.cls);
+  assert((await taState()).disabled === false, 'input re-enabled after cancel');
+  // The slow ASR response arrives later and must be dropped silently.
+  await sleep(4600);
+  const finalState = await page.$eval(taSel, el => ({ v: el.value, disabled: el.disabled }));
+  assert(finalState.v === 'helloHELLO world', 'cancelled transcript NOT inserted: ' + finalState.v);
+  assert(finalState.disabled === false, 'input stays enabled after dropped result');
+  const errorCount = await page.$$eval('.message-error', els => els.length);
+  assert(errorCount === 0, 'no error message from the dropped result');
+  const finalMic = await micState();
+  assert(!finalMic.cls.includes('cancel') && !finalMic.cls.includes('recording'),
+    'mic idle after dropped result: ' + finalMic.cls);
+  asrSlow = false;
+  await shot('04-cancelled.png');
 
   await browser.close();
   killAll();

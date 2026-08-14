@@ -117,6 +117,79 @@ tests =
                     in
                     Expect.equal True (session m2).asrBusy
             ]
+        , describe "CancelAsr"
+            [ test "cancel while transcribing abandons the pending result" <|
+                \_ ->
+                    let
+                        m1 =
+                            updateSession (\s -> { s | asrBusy = True }) initModelWithSession
+
+                        ( m2, _ ) =
+                            AU.update AT.CancelAsr m1
+                    in
+                    Expect.all
+                        [ \mm -> Expect.equal False (session mm).asrBusy
+                        , \mm -> Expect.equal False (session mm).voiceActive
+                        , \mm -> Expect.equal True (session mm).asrDiscard
+                        ]
+                        m2
+            , test "cancel clears a transcript already parked for insertion" <|
+                \_ ->
+                    let
+                        m1 =
+                            updateSession (\s -> { s | asrBusy = True }) initModelWithSession
+                                |> \mm -> { mm | pendingVoiceInsert = Just { sessionId = "s1", text = "HELLO" } }
+
+                        ( m2, _ ) =
+                            AU.update AT.CancelAsr m1
+                    in
+                    Expect.all
+                        [ \mm -> Expect.equal Nothing mm.pendingVoiceInsert
+                        , \mm -> Expect.equal True (session mm).asrDiscard
+                        ]
+                        m2
+            , test "cancel when idle is a no-op" <|
+                \_ ->
+                    let
+                        m1 =
+                            updateSession (\s -> { s | voiceActive = False, asrBusy = False }) initModelWithSession
+
+                        ( m2, _ ) =
+                            AU.update AT.CancelAsr m1
+                    in
+                    Expect.all
+                        [ \mm -> Expect.equal False (session mm).asrBusy
+                        , \mm -> Expect.equal False (session mm).asrDiscard
+                        ]
+                        m2
+            , test "a result arriving after cancel is dropped silently" <|
+                \_ ->
+                    let
+                        m1 =
+                            updateSession (\s -> { s | asrBusy = True, asrDiscard = True, input = "hello" }) initModelWithSession
+
+                        ( m2, _ ) =
+                            AU.update (AT.AsrResult (voiceResult True "HELLO" "")) m1
+                    in
+                    Expect.all
+                        [ \mm -> Expect.equal False (session mm).asrDiscard
+                        , \mm -> Expect.equal False (session mm).asrBusy
+                        , \mm -> Expect.equal "hello" (session mm).input
+                        , \mm -> Expect.equal Nothing mm.pendingVoiceInsert
+                        , \mm -> Expect.equal "" (lastMsgText mm)
+                        ]
+                        m2
+            , test "the caret result for a cancelled transcript is ignored" <|
+                \_ ->
+                    let
+                        m1 =
+                            updateSession (\s -> { s | input = "hello world" }) initModelWithSession
+
+                        ( m2, _ ) =
+                            AU.update (AT.CursorPosResult (cursorResult "s1" 5)) m1
+                    in
+                    Expect.equal "hello world" (session m2).input
+            ]
         , describe "AsrResult"
             [ test "success with text parks the transcript and asks for the caret" <|
                 \_ ->

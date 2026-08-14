@@ -106,14 +106,6 @@ tests =
                     |> (\m -> Dict.get "s1" m.sessions)
                     |> Maybe.map .showModelSelector
                     |> Expect.equal (Just False)
-        , test "closes the active session's help window" <|
-            \_ ->
-                initModelWithSession
-                    |> setSession (\s -> { s | showHelpWindow = True })
-                    |> escape
-                    |> (\m -> Dict.get "s1" m.sessions)
-                    |> Maybe.map .showHelpWindow
-                    |> Expect.equal (Just False)
         , test "clears the media preview as fallback" <|
             \_ ->
                 initModelWithSession

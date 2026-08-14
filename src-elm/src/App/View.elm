@@ -16,14 +16,13 @@ import Set exposing (Set)
 import Time
 import Markdown
 import App.Types exposing (..)
-import App.Update exposing (SessionDir, decodeSessionDir, helpItems, nextCopyName)
+import App.Update exposing (SessionDir, decodeSessionDir, nextCopyName)
 import Icons
 import Session.Types as T
 import Session.Selector as Sel exposing (Page(..))
 import Session.FilePicker as FP
 import Session.ToolView as ToolView
 import Session.Format as F
-import Fuzzy
 import Plan.Types as PT
 import Plan.Meta as PM
 import Plan.Detect
@@ -41,7 +40,6 @@ import Overlay.Selector
 import Overlay.ModelEditor
 import Overlay.McpEditor
 import Overlay.MediaPreview
-import Overlay.HelpWindow exposing (HelpItem, filterHelpItems, view)
 
 
 -- Shared Markdown render config
@@ -1258,7 +1256,6 @@ viewChatArea model session =
         , viewMcpInitOverlay session.id session
         , viewFilePickerOverlay session.id session
         , viewModelSelectorOverlay session.id session
-        , viewHelpWindowOverlay session.id session
         , viewMediaPreviewOverlay session.id session
         ]
 
@@ -1798,7 +1795,16 @@ viewInputBar model session =
         planBlocking =
             PU.planRunningForSession model session.id
 
+        -- Voice input also locks the textarea: while recording and
+        -- while the ASR result is still in flight (the mic button turns
+        -- into a cancel so the user can abandon the transcription).
         inputDisabled =
+            not session.connected || planBlocking || session.voiceActive || session.asrBusy
+
+        -- The mic button itself must stay clickable whenever the session
+        -- is usable — during recording (to stop) and during transcription
+        -- (to cancel) — so it only follows connection/plan blocking.
+        micLocked =
             not session.connected || planBlocking
 
         inputClass =
@@ -1806,7 +1812,12 @@ viewInputBar model session =
     in
     Html.div [ Attr.class inputClass ]
         [ Html.div [ Attr.class "input-container" ]
-            [ Html.div [ Attr.class "message message-user input-bubble" ]
+            [ Html.div
+                [ Attr.class
+                    ("message message-user input-bubble"
+                        ++ (if inputDisabled then " input-disabled" else "")
+                    )
+                ]
                 [ if hasStaged then
                     Html.div [ Attr.class "hs-staged-row" ]
                         (List.map (viewStagedChip session.id) session.staged)
@@ -1855,14 +1866,11 @@ viewInputBar model session =
                         , Attr.disabled inputDisabled
                         ]
                         [ Icons.chip ]
-                    , Html.button
-                        [ Attr.class "footer-btn"
-                        , Ev.onClick (ForSession session.id OpenHelpWindow)
-                        , Attr.title "Help"
-                        ]
-                        [ Icons.help ]
                     , Html.span
-                        [ Attr.class "reasoning-wrap"
+                        [ Attr.class
+                            ("reasoning-wrap"
+                                ++ (if inputDisabled then " disabled" else "")
+                            )
                         , Attr.title "Reasoning level: Off (0) | Balanced (1) | Deep (2)"
                         ]
                         [ Icons.bulb
@@ -1892,11 +1900,18 @@ viewInputBar model session =
                         [ Attr.class
                             ("footer-btn mic-btn"
                                 ++ (if session.voiceActive then " recording" else "")
+                                ++ (if session.asrBusy then " cancel" else "")
                             )
-                        , Ev.onClick (ForSession session.id VoiceInput)
+                        , Ev.onClick
+                            (if session.asrBusy then
+                                ForSession session.id CancelAsr
+
+                             else
+                                ForSession session.id VoiceInput
+                            )
                         , Attr.title
                             (if session.asrBusy then
-                                "Transcribing…"
+                                "Cancel transcription (discard the result)"
 
                              else if session.voiceActive then
                                 "Stop recording and transcribe"
@@ -1904,16 +1919,19 @@ viewInputBar model session =
                              else
                                 "Voice input (record speech, insert at the cursor)"
                             )
-                        , Attr.disabled (inputDisabled || session.asrBusy)
+                        , Attr.disabled micLocked
                         ]
                         [ if session.asrBusy then
-                            Html.span [ Attr.class "spinning" ] [ Icons.running ]
+                            Icons.stop
 
                           else
                             Icons.mic
                         ]
                     , Html.button
-                        [ Attr.class ("send-btn" ++ (if session.taskRunning then " cancel" else ""))
+                        [ Attr.class
+                            ("footer-btn send-btn"
+                                ++ (if session.taskRunning then " cancel" else "")
+                            )
                         , Ev.onClick
                             (if session.taskRunning then ForSession session.id CancelTask else ForSession session.id SendPrompt)
                         , Attr.title (if session.taskRunning then "Cancel task" else "Send")
@@ -2534,26 +2552,6 @@ viewPresetManagerOverlay model =
                 , onDelete = PresetDelete
                 , onDeleteConfirm = PresetConfirmDelete
                 , onDeleteCancel = PresetCancelDelete
-                }
-            ]
-    else
-        Html.text ""
-
-
--- ─── Help Window Overlay ─────────────────────────────────────────────
-
-viewHelpWindowOverlay : String -> T.SessionState -> Html Msg
-viewHelpWindowOverlay sid session =
-    if session.showHelpWindow then
-        viewOverlay (ForSession sid CloseHelpWindow)
-            [ Overlay.HelpWindow.view
-                { sessionId = sid
-                , items = helpItems
-                , filter = session.helpFilter
-                , selected = session.helpSelected
-                , noOp = NoOp
-                , onFilter = \v -> ForSession sid (SetHelpFilter v)
-                , onCmd = \v -> ForSession sid (HelpCmdMsg v)
                 }
             ]
     else
