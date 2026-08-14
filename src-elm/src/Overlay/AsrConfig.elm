@@ -8,10 +8,11 @@ import Html.Events as Ev
 {-| Voice-input ASR config overlay (~/.alayaface/asr.conf).
 
 ASR is an OpenAI-compatible /audio/transcriptions endpoint — local and
-remote are the same protocol, they only differ by URL
-(http://127.0.0.1:PORT/v1 vs https://…/v1). The model id is passed
-through verbatim; the endpoint decides how to use it. Language "auto"
-means the field is omitted (autodetect).
+remote are the same protocol, they only differ by URL. The user enters
+the FULL endpoint address (including /audio/transcriptions) and it is
+used verbatim; the backend never appends anything. The model id is
+passed through verbatim; the endpoint decides how to use it. Language
+"auto" means the field is omitted (autodetect).
 -}
 view :
     { url : String
@@ -55,12 +56,12 @@ view config =
                             , Attr.id "asr-config-url"
                             , Attr.type_ "text"
                             , Attr.value config.url
-                            , Attr.placeholder "http://127.0.0.1:8080/v1  or  https://api.openai.com/v1"
+                            , Attr.placeholder "http://127.0.0.1:8080/v1/audio/transcriptions  or  https://api.openai.com/v1/audio/transcriptions"
                             , Ev.onInput config.onUrl
                             ]
                             []
                         , Html.div [ Attr.class "me-hint" ]
-                            [ Html.text "OpenAI-compatible API base URL. Local and remote ASR use the same protocol — only the address differs. Transcriptions are POSTed to <url>/audio/transcriptions." ]
+                            [ Html.text "Full OpenAI-compatible transcription endpoint address (including /audio/transcriptions) — used exactly as entered, nothing is appended. Local and remote ASR use the same protocol; only the address differs." ]
                         ]
                     , Html.div [ Attr.class "me-field" ]
                         [ Html.label [ Attr.class "me-field-label" ] [ Html.text "API key" ]

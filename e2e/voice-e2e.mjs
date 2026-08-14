@@ -157,7 +157,7 @@ try {
   await waitFor('.me-page');
   await sleep(300);
   await shot('01-asr-config.png');
-  await page.$eval('#asr-config-url', (el, url) => { el.value = url; el.dispatchEvent(new Event('input', { bubbles: true })); }, `http://127.0.0.1:${asrPort}/v1`);
+  await page.$eval('#asr-config-url', (el, url) => { el.value = url; el.dispatchEvent(new Event('input', { bubbles: true })); }, `http://127.0.0.1:${asrPort}/v1/audio/transcriptions`);
   await sleep(200);
   await page.$eval('.me-save-btn', el => el.click());
   await sleep(800);

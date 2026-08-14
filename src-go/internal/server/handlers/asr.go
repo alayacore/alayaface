@@ -20,8 +20,10 @@ import (
 // remote ASR are the same protocol, they only differ by URL. Like
 // global.conf, this file applies to every preset.
 type AsrConfig struct {
-	// OpenAI-compatible API base URL, e.g. "http://127.0.0.1:8080/v1"
-	// (local) or "https://api.openai.com/v1" (remote).
+	// FULL OpenAI-compatible /audio/transcriptions endpoint address,
+	// e.g. "http://127.0.0.1:8080/v1/audio/transcriptions" (local) or
+	// "https://api.openai.com/v1/audio/transcriptions" (remote). Used
+	// verbatim — nothing is appended.
 	URL string `json:"url"`
 	// API key sent as Authorization: Bearer (empty = no header; local
 	// endpoints usually don't require one).
@@ -155,14 +157,13 @@ func AsrTranscribe(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	return writeResult(w, res)
 }
 
-// asrTranscribe POSTs the WAV as multipart to <url>/audio/transcriptions
-// and parses {"text": ...}.
+// asrTranscribe POSTs the WAV as multipart to the configured endpoint
+// URL (used verbatim) and parses {"text": ...}.
 func asrTranscribe(cfg AsrConfig, wav []byte) AsrTranscribeResult {
-	baseURL := strings.TrimRight(strings.TrimSpace(cfg.URL), "/")
-	if baseURL == "" {
+	url := strings.TrimSpace(cfg.URL)
+	if url == "" {
 		return AsrTranscribeResult{Ok: false, Error: "ASR not configured: set the endpoint URL in the ASR config"}
 	}
-	url := baseURL + "/audio/transcriptions"
 	model := strings.TrimSpace(cfg.Model)
 	if model == "" {
 		model = "whisper-1"

@@ -113,7 +113,7 @@ func TestAsrTranscribeRemoteEndpoint(t *testing.T) {
 		defer srv.Close()
 
 		cfg := AsrConfig{
-			URL:      srv.URL + "/v1",
+			URL:      srv.URL + "/v1/audio/transcriptions",
 			APIKey:   "testkey",
 			Model:    "whisper-1",
 			Language: "zh",
@@ -136,7 +136,7 @@ func TestAsrTranscribeSkipsAutoLanguage(t *testing.T) {
 		srv, _, fields := fakeAsrServer(t)
 		defer srv.Close()
 
-		cfg := AsrConfig{URL: srv.URL + "/v1", APIKey: "testkey", Language: "auto"}
+		cfg := AsrConfig{URL: srv.URL + "/v1/audio/transcriptions", APIKey: "testkey", Language: "auto"}
 		res := asrTranscribe(cfg, []byte("RIFF-fake-wav"))
 		if !res.Ok {
 			t.Errorf("result = %+v", res)
@@ -144,6 +144,27 @@ func TestAsrTranscribeSkipsAutoLanguage(t *testing.T) {
 		// Only the model field is sent; "auto" must be omitted.
 		if len(*fields) != 1 || (*fields)[0] != "whisper-1" {
 			t.Errorf("multipart fields = %v", *fields)
+		}
+	})
+}
+
+func TestAsrTranscribeUsesUrlVerbatim(t *testing.T) {
+	isolatedHome(t, func() {
+		// The configured URL must be used as-is — nothing appended.
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/custom/endpoint" {
+				t.Errorf("path = %s, want /custom/endpoint", r.URL.Path)
+				w.WriteHeader(404)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"text":"ok"}`))
+		}))
+		defer srv.Close()
+
+		res := asrTranscribe(AsrConfig{URL: srv.URL + "/custom/endpoint"}, []byte("RIFF-fake-wav"))
+		if !res.Ok || res.Text != "ok" {
+			t.Errorf("result = %+v", res)
 		}
 	})
 }

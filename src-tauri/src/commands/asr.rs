@@ -10,16 +10,18 @@
 //! global.conf):
 //! ```json
 //! {
-//!   "url": "http://127.0.0.1:8080/v1",
+//!   "url": "http://127.0.0.1:8080/v1/audio/transcriptions",
 //!   "api_key": "",
 //!   "model": "whisper-1",
 //!   "language": "auto"
 //! }
 //! ```
-//! `asr_transcribe` POSTs the WAV as multipart to `<url>/audio/
-//! transcriptions` (Authorization: Bearer when an api_key is set) and
-//! parses `{"text": ...}`. `model` is passed through verbatim (the
-//! endpoint decides how to use it); `language` is omitted when "auto".
+//! `url` is the FULL endpoint address (including the
+//! `/audio/transcriptions` path) and is used verbatim — nothing is
+//! appended. `asr_transcribe` POSTs the WAV as multipart to it
+//! (Authorization: Bearer when an api_key is set) and parses
+//! `{"text": ...}`. `model` is passed through verbatim (the endpoint
+//! decides how to use it); `language` is omitted when "auto".
 
 use base64::Engine;
 use serde::Serialize;
@@ -27,8 +29,10 @@ use serde::Serialize;
 /// Voice-input ASR config (~/.alayaface/asr.conf).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AsrConfig {
-    /// OpenAI-compatible API base URL, e.g.
-    /// "http://127.0.0.1:8080/v1" (local) or "https://api.openai.com/v1".
+    /// FULL OpenAI-compatible /audio/transcriptions endpoint address,
+    /// e.g. "http://127.0.0.1:8080/v1/audio/transcriptions" (local) or
+    /// "https://api.openai.com/v1/audio/transcriptions" (remote). Used
+    /// verbatim — nothing is appended.
     #[serde(default)]
     pub url: String,
     /// API key sent as Authorization: Bearer (empty = no header; local
@@ -142,17 +146,16 @@ pub async fn asr_transcribe(
     transcribe(&cfg, &wav).await
 }
 
-/// Multipart POST to `<url>/audio/transcriptions`.
+/// Multipart POST to the configured endpoint URL (used verbatim).
 async fn transcribe(cfg: &AsrConfig, wav: &[u8]) -> Result<AsrTranscribeResult, String> {
-    let base_url = cfg.url.trim().trim_end_matches('/').to_string();
-    if base_url.is_empty() {
+    let url = cfg.url.trim().to_string();
+    if url.is_empty() {
         return Ok(AsrTranscribeResult {
             ok: false,
             text: String::new(),
             error: "ASR not configured: set the endpoint URL in the ASR config".to_string(),
         });
     }
-    let url = format!("{base_url}/audio/transcriptions");
     let model = cfg.model.trim();
 
     let file = reqwest::multipart::Part::bytes(wav.to_vec())
@@ -243,15 +246,15 @@ mod tests {
             let rt = tokio::runtime::Runtime::new().unwrap();
             let cfg = rt
                 .block_on(sync_asr_config(
-                    r#"{"url":"http://127.0.0.1:8080/v1","api_key":"k","language":"zh","model":""}"#
+                    r#"{"url":"http://127.0.0.1:8080/v1/audio/transcriptions","api_key":"k","language":"zh","model":""}"#
                         .to_string(),
                 ))
                 .unwrap();
-            assert_eq!(cfg.url, "http://127.0.0.1:8080/v1");
+            assert_eq!(cfg.url, "http://127.0.0.1:8080/v1/audio/transcriptions");
             assert_eq!(cfg.language, "zh");
             assert_eq!(cfg.model, "whisper-1");
             let cfg = read_asr_config().unwrap();
-            assert_eq!(cfg.url, "http://127.0.0.1:8080/v1");
+            assert_eq!(cfg.url, "http://127.0.0.1:8080/v1/audio/transcriptions");
             assert_eq!(cfg.api_key, "k");
         });
     }

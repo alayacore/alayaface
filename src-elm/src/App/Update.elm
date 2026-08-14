@@ -4876,7 +4876,7 @@ update msg model =
             if String.isEmpty (String.trim ed.url) then
                 ( { model
                     | asrConfigEditor =
-                        { ed | error = Just "Endpoint URL is required (local: http://127.0.0.1:PORT/v1, remote: https://…/v1)" }
+                        { ed | error = Just "Endpoint URL is required (full address, e.g. http://127.0.0.1:8080/v1/audio/transcriptions)" }
                   }
                 , Cmd.none
                 )

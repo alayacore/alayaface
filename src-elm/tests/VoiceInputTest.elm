@@ -250,7 +250,7 @@ tests =
                         ( m2, _ ) =
                             AU.update AT.AsrConfigSave m1
                     in
-                    Expect.equal (Just "Endpoint URL is required (local: http://127.0.0.1:PORT/v1, remote: https://…/v1)") m2.asrConfigEditor.error
+                    Expect.equal (Just "Endpoint URL is required (full address, e.g. http://127.0.0.1:8080/v1/audio/transcriptions)") m2.asrConfigEditor.error
             , test "save with a URL syncs and marks syncing" <|
                 \_ ->
                     let
