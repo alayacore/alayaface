@@ -162,6 +162,11 @@ try {
   });
   await sleep(4000);
   console.log('AFTER stop:', JSON.stringify(await micState()));
+  const errText = await page.evaluate(() => {
+    const el = document.querySelector('.message-error .msg-body');
+    return el ? el.textContent : null;
+  });
+  console.log('message-error:', errText);
 
   await browser.close();
 } finally {

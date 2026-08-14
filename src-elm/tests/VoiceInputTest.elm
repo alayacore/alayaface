@@ -21,6 +21,16 @@ session model =
     Dict.get "s1" model.sessions |> Maybe.withDefault (T.emptySession "s1")
 
 
+lastMsgText : AT.Model -> String
+lastMsgText model =
+    case List.reverse (session model).messages of
+        msg :: _ ->
+            msg.content
+
+        [] ->
+            ""
+
+
 updateSession : (T.SessionState -> T.SessionState) -> AT.Model -> AT.Model
 updateSession f model =
     { model | sessions = Dict.update "s1" (Maybe.map f) model.sessions }
@@ -60,7 +70,7 @@ tests : Test
 tests =
     describe "voice input"
         [ describe "VoiceInput toggle"
-            [ test "first click starts recording (voiceActive, Listening…)" <|
+            [ test "first click starts recording (voiceActive)" <|
                 \_ ->
                     let
                         ( m, _ ) =
@@ -68,7 +78,6 @@ tests =
                     in
                     Expect.all
                         [ \mm -> Expect.equal True (session mm).voiceActive
-                        , \mm -> Expect.equal "Listening…" (session mm).statusMsg
                         , \mm -> Expect.equal False (session mm).asrBusy
                         ]
                         m
@@ -84,7 +93,6 @@ tests =
                     Expect.all
                         [ \mm -> Expect.equal False (session mm).voiceActive
                         , \mm -> Expect.equal True (session mm).asrBusy
-                        , \mm -> Expect.equal "Transcribing…" (session mm).statusMsg
                         ]
                         m2
             , test "clicks while asrBusy are ignored" <|
@@ -111,10 +119,9 @@ tests =
                     Expect.all
                         [ \mm -> Expect.equal False (session mm).asrBusy
                         , \mm -> Expect.equal (Just { sessionId = "s1", text = "hello" }) mm.pendingVoiceInsert
-                        , \mm -> Expect.equal "" (session mm).statusMsg
                         ]
                         m2
-            , test "success with empty text reports no speech" <|
+            , test "success with empty text appends 'No speech recognized' to the display" <|
                 \_ ->
                     let
                         m1 =
@@ -124,11 +131,11 @@ tests =
                             AU.update (AT.AsrResult (voiceResult True "" "")) m1
                     in
                     Expect.all
-                        [ \mm -> Expect.equal "No speech recognized" (session mm).statusMsg
+                        [ \mm -> Expect.equal "No speech recognized" (lastMsgText mm)
                         , \mm -> Expect.equal Nothing mm.pendingVoiceInsert
                         ]
                         m2
-            , test "failure surfaces the reason and clears busy state" <|
+            , test "failure appends the reason to the display and clears busy state" <|
                 \_ ->
                     let
                         m1 =
@@ -140,7 +147,7 @@ tests =
                     Expect.all
                         [ \mm -> Expect.equal False (session mm).asrBusy
                         , \mm -> Expect.equal False (session mm).voiceActive
-                        , \mm -> Expect.equal "Voice input failed: connection refused" (session mm).statusMsg
+                        , \mm -> Expect.equal "Voice input failed: connection refused" (lastMsgText mm)
                         ]
                         m2
             ]
@@ -191,7 +198,7 @@ tests =
                     Expect.equal Nothing m2.pendingVoiceInsert
             ]
         , describe "VoiceError"
-            [ test "resets recording state and surfaces the mic error" <|
+            [ test "resets recording state and appends the mic error to the display" <|
                 \_ ->
                     let
                         m1 =
@@ -210,7 +217,7 @@ tests =
                     in
                     Expect.all
                         [ \mm -> Expect.equal False (session mm).voiceActive
-                        , \mm -> Expect.equal "Voice input error: permission denied" (session mm).statusMsg
+                        , \mm -> Expect.equal "Voice input error: permission denied" (lastMsgText mm)
                         ]
                         m2
             ]

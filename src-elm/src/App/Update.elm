@@ -203,6 +203,29 @@ setAsrEditorField model updateEditor =
     )
 
 
+{-| Append a local error message to the session's message list (same
+shape as backend Error frames, id = "err-" + message count so it stays
+unique within the session). Used for voice-input failures: the user
+asked for errors to appear in the message display, not in a status line.
+-}
+appendErrorMsg : T.SessionState -> String -> T.SessionState
+appendErrorMsg s text =
+    { s
+        | messages =
+            s.messages
+                ++ [ { id = "err-" ++ String.fromInt (List.length s.messages)
+                     , role = T.Error
+                     , content = text
+                     , toolId = Nothing
+                     , toolName = Nothing
+                     , isError = True
+                     , historyId = Nothing
+                     , media = Nothing
+                     }
+                   ]
+    }
+
+
 -- Buffer an inbound event for a session that has not been registered
 -- yet (e.g. transport events racing session creation). The buffered
 -- events are flushed when the session appears (see SessionCreated).
@@ -1471,6 +1494,8 @@ update msg model =
         VoiceInput ->
             -- Toggle voice recording: click starts the mic (recording
             -- state persists), click again stops it and transcribes.
+            -- The state is visible on the mic button itself (red pulse
+            -- while recording, spinner while transcribing).
             case getActiveSession model of
                 Just s ->
                     if s.asrBusy then
@@ -1485,7 +1510,6 @@ update msg model =
                                     { s
                                         | voiceActive = False
                                         , asrBusy = True
-                                        , statusMsg = "Transcribing…"
                                     }
                                     model.sessions
                           }
@@ -1498,7 +1522,6 @@ update msg model =
                                 Dict.insert s.id
                                     { s
                                         | voiceActive = True
-                                        , statusMsg = "Listening…"
                                     }
                                     model.sessions
                           }
@@ -1510,7 +1533,8 @@ update msg model =
 
         VoiceError raw ->
             -- Mic/recording failure surfaced from the JS bridge
-            -- (permission denied, webview unsupported, …).
+            -- (permission denied, webview unsupported, …). Shown as an
+            -- error message in the session display.
             case D.decodeValue voiceErrorDecoder raw of
                 Ok { sessionId, message } ->
                     case Dict.get sessionId model.sessions of
@@ -1518,11 +1542,13 @@ update msg model =
                             ( { model
                                 | sessions =
                                     Dict.insert sessionId
-                                        { s
-                                            | voiceActive = False
-                                            , asrBusy = False
-                                            , statusMsg = "Voice input error: " ++ message
-                                        }
+                                        (appendErrorMsg
+                                            { s
+                                                | voiceActive = False
+                                                , asrBusy = False
+                                            }
+                                            ("Voice input error: " ++ message)
+                                        )
                                         model.sessions
                               }
                             , Cmd.none
@@ -1536,7 +1562,8 @@ update msg model =
 
         AsrResult raw ->
             -- Transcription finished. On success, read the textarea
-            -- caret and insert the text there; on failure show why.
+            -- caret and insert the text there; failures are appended to
+            -- the message display as error messages.
             case D.decodeValue asrResultDecoder raw of
                 Ok { sessionId, ok, text, error } ->
                     case Dict.get sessionId model.sessions of
@@ -1546,11 +1573,13 @@ update msg model =
                                     ( { model
                                         | sessions =
                                             Dict.insert sessionId
-                                                { s
-                                                    | asrBusy = False
-                                                    , voiceActive = False
-                                                    , statusMsg = "No speech recognized"
-                                                }
+                                                (appendErrorMsg
+                                                    { s
+                                                        | asrBusy = False
+                                                        , voiceActive = False
+                                                    }
+                                                    "No speech recognized"
+                                                )
                                                 model.sessions
                                       }
                                     , Cmd.none
@@ -1564,7 +1593,6 @@ update msg model =
                                                 { s
                                                     | asrBusy = False
                                                     , voiceActive = False
-                                                    , statusMsg = ""
                                                 }
                                                 model.sessions
                                       }
@@ -1575,11 +1603,13 @@ update msg model =
                                 ( { model
                                     | sessions =
                                         Dict.insert sessionId
-                                            { s
-                                                | asrBusy = False
-                                                , voiceActive = False
-                                                , statusMsg = "Voice input failed: " ++ error
-                                            }
+                                            (appendErrorMsg
+                                                { s
+                                                    | asrBusy = False
+                                                    , voiceActive = False
+                                                }
+                                                ("Voice input failed: " ++ error)
+                                            )
                                             model.sessions
                                   }
                                 , Cmd.none

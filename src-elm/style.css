@@ -453,24 +453,6 @@ body {
   letter-spacing: 0.02em;
 }
 
-/* Session status line (statusMsg): Listening… / Transcribing… / voice
-   errors / sending / RPC failures. Amber so it reads as live feedback
-   without fighting the title color. */
-.session-bar-status {
-  flex-shrink: 0;
-  margin-left: 8px;
-  font-size: 0.68rem;
-  color: #fbbf24;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 280px;
-  letter-spacing: 0.02em;
-}
-@media (prefers-color-scheme: light) {
-  .session-bar-status { color: #d97706; }
-}
-
 .session-bar-close {
   flex-shrink: 0;
   background: none;

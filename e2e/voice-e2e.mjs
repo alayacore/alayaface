@@ -177,10 +177,8 @@ try {
   // ── 5. record → stop → transcribe ────────────────────────────────
   const micState = () => page.evaluate(() => {
     const btn = document.querySelector('.mic-btn');
-    const st = document.querySelector('.session-bar-status');
     return {
       cls: btn ? btn.className : '',
-      status: st ? st.textContent : null,
       disabled: btn ? btn.disabled : null,
     };
   });
@@ -188,7 +186,6 @@ try {
   await sleep(1500);
   const rec = await micState();
   assert(rec.cls.includes('recording'), 'mic enters recording state: ' + rec.cls);
-  assert(rec.status === 'Listening…', 'status shows Listening…: ' + rec.status);
   await shot('02-recording.png');
 
   await page.$eval('.mic-btn', el => el.click());
