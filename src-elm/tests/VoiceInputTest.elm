@@ -242,7 +242,7 @@ tests =
                         , \mm -> Expect.equal True (session mm).voiceActive
                         ]
                         m2
-            , test "a recorded clip is staged and sent immediately with the typed text" <|
+            , test "a recorded clip is sent immediately — input box untouched" <|
                 \_ ->
                     let
                         m1 =
@@ -252,19 +252,19 @@ tests =
                             AU.update (AT.RawAudioReady (rawAudioReadyValue "s1" "data:audio/wav;base64,AAAA")) m1
                     in
                     Expect.all
-                        [ \mm -> Expect.equal "" (session mm).input
+                        [ \mm -> Expect.equal "describe this" (session mm).input
                         , \mm -> Expect.equal [] (session mm).staged
-                        , \mm -> Expect.equal True (session mm).sendPending
-                        , \mm -> Expect.equal "Sending…" (session mm).statusMsg
+                        , \mm -> Expect.equal False (session mm).sendPending
+                        , \mm -> Expect.equal False (session mm).rawRecording
                         ]
                         m2
-            , test "a clip alone (no text) still sends" <|
+            , test "a recorded clip sends even with an empty input box" <|
                 \_ ->
                     let
                         ( m, _ ) =
                             AU.update (AT.RawAudioReady (rawAudioReadyValue "s1" "data:audio/wav;base64,AAAA")) initModelWithSession
                     in
-                    Expect.equal True (session m).sendPending
+                    Expect.equal "" (session m).input
             , test "raw mic failure appends an error and clears recording" <|
                 \_ ->
                     let

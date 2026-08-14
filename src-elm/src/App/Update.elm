@@ -1646,22 +1646,26 @@ update msg model =
 
         RawAudioReady raw ->
             -- JS finished encoding the recording as a WAV data URI:
-            -- stage it and send immediately — the audio goes out with
-            -- whatever text the user had typed, as one user message
-            -- (the UA frame carries the data URI).
+            -- send it immediately as a UA (user audio) frame. The
+            -- message carries ONLY the audio — the input box and any
+            -- staged media stay exactly as they are (a later Send
+            -- sends the text/staged separately).
             case D.decodeValue rawAudioReadyDecoder raw of
                 Ok { sessionId, uri } ->
                     case Dict.get sessionId model.sessions of
                         Just s ->
-                            let
-                                item =
-                                    { id = "raw-" ++ String.fromInt (List.length s.staged)
-                                    , mediaType = T.Audio
-                                    , uri = uri
-                                    , name = Just "Recording"
-                                    }
-                            in
-                            doSendPrompt model { s | staged = s.staged ++ [ item ] }
+                            ( model
+                            , Ports.sendPrompt
+                                { sessionId = PU.workCopyId model s.id
+                                , text = ""
+                                , media =
+                                    [ E.object
+                                        [ ( "media_type", E.string (T.mediaTypeToString T.Audio) )
+                                        , ( "uri", E.string uri )
+                                        ]
+                                    ]
+                                }
+                            )
 
                         Nothing ->
                             ( model, Cmd.none )
