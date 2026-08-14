@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Voice input (ASR): WKWebView rejects getUserMedia without this
+	     usage description (wry's media-capture delegate already grants
+	     the request; the OS prompt needs the plist key). -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>AlayaFace uses the microphone for voice input (speech-to-text).</string>
+</dict>
+</plist>

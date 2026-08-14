@@ -17,6 +17,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Used in setup() to enable WebKitGTK media capture (getUserMedia):
+# wry does not set enable-media-stream, so the Tauri mic button would
+# otherwise fail with NotAllowedError on Linux.
+webkit2gtk = "2"
+
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"

@@ -39,6 +39,7 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
+ "webkit2gtk",
 ]
 
 [[package]]

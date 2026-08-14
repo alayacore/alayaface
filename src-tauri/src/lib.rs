@@ -20,6 +20,7 @@ pub mod tlv;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use tauri::Manager;
 
 /// Shared model cache — populated from `model_list` SM messages.
 /// Uses std::sync::Mutex because it's accessed from sync stdout reader
@@ -124,6 +125,26 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(session::SessionMap(Arc::new(tokio::sync::Mutex::new(HashMap::new()))))
         .manage(ModelCache::new())
+        .setup(|app| {
+            // WebKitGTK ships with media capture (getUserMedia) disabled
+            // and wry does not enable it — without this the voice-input
+            // mic button fails on Linux with NotAllowedError ("The
+            // request is not allowed by the user agent or the platform
+            // in the current context").
+            #[cfg(target_os = "linux")]
+            {
+                use webkit2gtk::{SettingsExt, WebViewExt};
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.with_webview(|webview| {
+                        let wv = webview.inner();
+                        if let Some(settings) = wv.settings() {
+                            settings.set_enable_media_stream(true);
+                        }
+                    });
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::create_session,
             commands::resume_session,
