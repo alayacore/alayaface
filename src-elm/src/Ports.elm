@@ -34,6 +34,18 @@ port module Ports exposing
     , syncGlobalConfig
     , onGlobalConfigGet
     , onGlobalConfigSync
+      -- Voice input ASR config overlay (cross-preset)
+    , getAsrConfig
+    , syncAsrConfig
+    , onAsrConfigGet
+    , onAsrConfigSync
+      -- Voice input (recording / transcription / cursor insertion)
+    , voiceStart
+    , voiceStop
+    , onVoiceError
+    , onAsrResult
+    , getCursorPos
+    , onCursorPos
       -- Presets
     , listPresets
     , copyPreset
@@ -144,6 +156,26 @@ port getGlobalConfig : {} -> Cmd msg
 port syncGlobalConfig : { recursionLimit : Int } -> Cmd msg
 port onGlobalConfigGet : (E.Value -> msg) -> Sub msg
 port onGlobalConfigSync : (E.Value -> msg) -> Sub msg
+port getAsrConfig : {} -> Cmd msg
+port syncAsrConfig : { config : String } -> Cmd msg
+port onAsrConfigGet : (E.Value -> msg) -> Sub msg
+port onAsrConfigSync : (E.Value -> msg) -> Sub msg
+
+-- Voice input: the webview records microphone audio (getUserMedia →
+-- 16kHz mono PCM → WAV) while voiceStart..voiceStop is active, then
+-- sends the audio to asr_transcribe. Results and mic errors come back
+-- on onAsrResult / onVoiceError as { sessionId, ok, text, error } /
+-- { sessionId, message }.
+port voiceStart : { sessionId : String } -> Cmd msg
+port voiceStop : { sessionId : String } -> Cmd msg
+port onVoiceError : (E.Value -> msg) -> Sub msg
+port onAsrResult : (E.Value -> msg) -> Sub msg
+
+-- Input cursor: Elm owns session.input but not the textarea caret, so
+-- the voice insert flow reads selectionStart from JS right before
+-- inserting (getCursorPos → onCursorPos { sessionId, pos }).
+port getCursorPos : { sessionId : String } -> Cmd msg
+port onCursorPos : (E.Value -> msg) -> Sub msg
 port listPresets : {} -> Cmd msg
 port copyPreset : { source : String, name : String } -> Cmd msg
 port renamePreset : { oldName : String, newName : String } -> Cmd msg
@@ -251,7 +283,9 @@ port onObjectGet : (E.Value -> msg) -> Sub msg
 -- Focus / Scroll
 
 port scrollToBottom : { sessionId : String } -> Cmd msg
-port setCursorPos : String -> Cmd msg
+-- Move the caret: id = element id, pos = Nothing moves to the end of
+-- the value (legacy behavior), Just pos sets the caret exactly there.
+port setCursorPos : { id : String, pos : Maybe Int } -> Cmd msg
 port scrollIntoView : String -> Cmd msg
 port onScroll : ({ sessionId : String, scrollTop : Float, scrollHeight : Float, clientHeight : Float } -> msg) -> Sub msg
 

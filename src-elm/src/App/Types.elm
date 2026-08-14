@@ -20,6 +20,10 @@ module App.Types exposing
     , emptyGlobalConfig
     , GlobalConfigEditor
     , emptyGlobalConfigEditor
+    , AsrConfig
+    , emptyAsrConfig
+    , AsrConfigEditor
+    , emptyAsrConfigEditor
     , PresetInfo
     , PresetManager
     , emptyPresetManager
@@ -107,6 +111,15 @@ type alias Model =
     -- whose depth exceeds it get no plan system prompt.
     , globalConfig : GlobalConfig
     , globalConfigEditor : GlobalConfigEditor
+    -- Voice-input ASR config overlay (~/.alayaface/asr.conf): an
+    -- OpenAI-compatible /audio/transcriptions endpoint (local or remote
+    -- — the two only differ by URL).
+    , asrConfig : AsrConfig
+    , asrConfigEditor : AsrConfigEditor
+    -- Pending voice transcript waiting for the input cursor position
+    -- (read from the textarea right before inserting, so the text lands
+    -- where the user's caret currently is).
+    , pendingVoiceInsert : Maybe { sessionId : String, text : String }
     , presets : List PresetInfo
     -- Hover flyout state for the global menu's "New Session" item:
     -- True while the pointer is over the item or its preset submenu.
@@ -446,6 +459,20 @@ type Msg
     | GlobalConfigSave
     | GlobalConfigGetResult E.Value
     | GlobalConfigSyncResult E.Value
+      -- Voice input (ASR) overlay (cross-preset)
+    | OpenAsrConfig
+    | CloseAsrConfig
+    | SetAsrUrl String
+    | SetAsrApiKey String
+    | SetAsrModel String
+    | SetAsrLanguage String
+    | AsrConfigSave
+    | AsrConfigGetResult E.Value
+    | AsrConfigSyncResult E.Value
+      -- Voice input (recording / transcription, per-session)
+    | VoiceError E.Value
+    | AsrResult E.Value
+    | CursorPosResult E.Value
       -- Presets
     | OpenPresetManager
     | ClosePresetManager
@@ -784,6 +811,55 @@ emptyGlobalConfigEditor =
     , loading = False
     , syncing = False
     , input = ""
+    , error = Nothing
+    }
+
+
+-- VOICE INPUT ASR CONFIG OVERLAY
+--
+-- ~/.alayaface/asr.conf: an OpenAI-compatible /audio/transcriptions
+-- endpoint. Local and remote ASR are the same protocol — they only
+-- differ by URL (http://127.0.0.1:PORT/v1 vs https://…/v1). The model
+-- id is passed through verbatim; the endpoint decides how to use it.
+
+type alias AsrConfig =
+    { url : String
+    , apiKey : String
+    , model : String
+    , language : String
+    }
+
+
+emptyAsrConfig : AsrConfig
+emptyAsrConfig =
+    { url = ""
+    , apiKey = ""
+    , model = "whisper-1"
+    , language = "auto"
+    }
+
+
+type alias AsrConfigEditor =
+    { show : Bool
+    , loading : Bool
+    , syncing : Bool
+    , url : String
+    , apiKey : String
+    , model : String
+    , language : String
+    , error : Maybe String
+    }
+
+
+emptyAsrConfigEditor : AsrConfigEditor
+emptyAsrConfigEditor =
+    { show = False
+    , loading = False
+    , syncing = False
+    , url = ""
+    , apiKey = ""
+    , model = "whisper-1"
+    , language = "auto"
     , error = Nothing
     }
 

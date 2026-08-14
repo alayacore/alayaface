@@ -62,6 +62,9 @@ init _ =
       , settingsEditor = emptySettingsEditor
       , globalConfig = emptyGlobalConfig
       , globalConfigEditor = emptyGlobalConfigEditor
+      , asrConfig = emptyAsrConfig
+      , asrConfigEditor = emptyAsrConfigEditor
+      , pendingVoiceInsert = Nothing
       , presets = []
       , presetSubmenuOpen = False
       , presetManager = emptyPresetManager
@@ -163,6 +166,11 @@ subscriptions model =
         , Ports.onGlobalSettingsSyncResult (\raw -> SettingsSyncResult raw)
         , Ports.onGlobalConfigGet (\raw -> GlobalConfigGetResult raw)
         , Ports.onGlobalConfigSync (\raw -> GlobalConfigSyncResult raw)
+        , Ports.onAsrConfigGet (\raw -> AsrConfigGetResult raw)
+        , Ports.onAsrConfigSync (\raw -> AsrConfigSyncResult raw)
+        , Ports.onVoiceError (\raw -> VoiceError raw)
+        , Ports.onAsrResult (\raw -> AsrResult raw)
+        , Ports.onCursorPos (\raw -> CursorPosResult raw)
         , Ports.onPresetsList (\raw -> PresetsListResult raw)
         , Ports.onPresetActionResult (\raw -> PresetActionResult raw)
         , Ports.onSessionCreated (\id -> SessionCreated id)

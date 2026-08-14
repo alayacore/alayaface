@@ -11,6 +11,7 @@ pub mod models;
 pub mod presets;
 pub mod settings;
 pub mod global_config;
+pub mod asr;
 pub mod objects;
 
 pub use crate::session::SessionMap;
@@ -23,6 +24,7 @@ pub use models::*;
 pub use presets::*;
 pub use settings::*;
 pub use global_config::*;
+pub use asr::*;
 pub use objects::*;
 
 use crate::alayacore;

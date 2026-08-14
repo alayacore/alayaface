@@ -31,6 +31,10 @@ base64 = "0.22"
 open = "5"
 url = "2"
 urlencoding = "2"
+# Voice input ASR: OpenAI-compatible /audio/transcriptions (local or
+# remote endpoint — the two only differ by URL). Pure-Rust TLS so the
+# desktop build needs no system OpenSSL.
+reqwest = { version = "0.13", default-features = false, features = ["json", "multipart", "rustls"] }
 rand = "0.8"
 sha2 = "0.10"
 hex = "0.4"

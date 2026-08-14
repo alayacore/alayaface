@@ -33,6 +33,7 @@ import Plan.View
 import Overlay.ConfirmTool
 import Overlay.Settings
 import Overlay.GlobalConfig
+import Overlay.AsrConfig
 import Overlay.PresetManager
 import Overlay.McpInit
 import Overlay.FilePicker
@@ -110,6 +111,7 @@ view model =
         , viewMcpEditorOverlay model
         , viewSettingsEditorOverlay model
         , viewGlobalConfigOverlay model
+        , viewAsrConfigOverlay model
         , viewPlanCascadeOverlay model
         ]
 
@@ -324,6 +326,13 @@ viewGlobalMenu model =
                     ]
                     [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "⚙" ]
                     , Html.text "Global config"
+                    ]
+                , Html.div
+                    [ Attr.class "global-menu-item"
+                    , Ev.onClick OpenAsrConfig
+                    ]
+                    [ Html.span [ Attr.class "global-menu-icon" ] [ Icons.mic ]
+                    , Html.text "ASR config"
                     ]
                 , Html.div
                     [ Attr.class "global-menu-item"
@@ -1880,12 +1889,29 @@ viewInputBar model session =
                     ]
                 , Html.div [ Attr.class "input-footer-right" ]
                     [ Html.button
-                        [ Attr.class "footer-btn mic-btn"
+                        [ Attr.class
+                            ("footer-btn mic-btn"
+                                ++ (if session.voiceActive then " recording" else "")
+                            )
                         , Ev.onClick (ForSession session.id VoiceInput)
-                        , Attr.title "Voice input (coming soon)"
-                        , Attr.disabled inputDisabled
+                        , Attr.title
+                            (if session.asrBusy then
+                                "Transcribing…"
+
+                             else if session.voiceActive then
+                                "Stop recording and transcribe"
+
+                             else
+                                "Voice input (record speech, insert at the cursor)"
+                            )
+                        , Attr.disabled (inputDisabled || session.asrBusy)
                         ]
-                        [ Icons.mic ]
+                        [ if session.asrBusy then
+                            Html.span [ Attr.class "spinning" ] [ Icons.running ]
+
+                          else
+                            Icons.mic
+                        ]
                     , Html.button
                         [ Attr.class ("send-btn" ++ (if session.taskRunning then " cancel" else ""))
                         , Ev.onClick
@@ -2419,6 +2445,34 @@ viewGlobalConfigOverlay model =
                 , onInput = SetRecursionLimit
                 , onSave = GlobalConfigSave
                 , onCancel = CloseGlobalConfig
+                }
+            ]
+    else
+        Html.text ""
+
+
+viewAsrConfigOverlay : Model -> Html Msg
+viewAsrConfigOverlay model =
+    let
+        ed =
+            model.asrConfigEditor
+    in
+    if ed.show then
+        viewOverlay CloseAsrConfig
+            [ Overlay.AsrConfig.view
+                { url = ed.url
+                , apiKey = ed.apiKey
+                , model = ed.model
+                , language = ed.language
+                , loading = ed.loading
+                , syncing = ed.syncing
+                , error = ed.error
+                , onUrl = SetAsrUrl
+                , onApiKey = SetAsrApiKey
+                , onModel = SetAsrModel
+                , onLanguage = SetAsrLanguage
+                , onSave = AsrConfigSave
+                , onCancel = CloseAsrConfig
                 }
             ]
     else

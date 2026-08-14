@@ -11,7 +11,7 @@
   "use strict";
 
   window.AlayaOverlay = {
-    init: function (app, root) {
+    init: function (app, root, transport) {
       // Typed subscribe with safety check (mirrors transport.js's on()).
       function on(port, cb) {
         var p = app.ports[port];
@@ -31,11 +31,186 @@
       }
     });
 
-    on("setCursorPos", function (id) {
-      var el = document.getElementById(id);
+    on("setCursorPos", function (data) {
+      var el = document.getElementById(data.id);
       if (!el || !el.setSelectionRange) return;
       el.focus();
-      el.setSelectionRange(el.value.length, el.value.length);
+      // pos: null/undefined → move to the end of the value (legacy);
+      // a number → place the caret exactly there (voice insert).
+      var pos = (data.pos === undefined || data.pos === null)
+        ? el.value.length
+        : Math.max(0, Math.min(data.pos, el.value.length));
+      el.setSelectionRange(pos, pos);
+    });
+
+    // Voice input: read the textarea caret so Elm can insert the ASR
+    // transcript exactly where the user's cursor currently is.
+    on("getCursorPos", function (data) {
+      var el = document.getElementById("msg-input-" + data.sessionId);
+      var pos = 0;
+      if (el && typeof el.selectionStart === "number") {
+        pos = el.selectionStart;
+      }
+      app.ports.onCursorPos.send({ sessionId: data.sessionId, pos: pos });
+    });
+
+    // ─── Voice input recording ─────────────────────────────────────
+    // Web-API mic capture (getUserMedia → AudioContext → ScriptProcessor
+    // → mono Float32 samples). Works identically in the browser (Go
+    // backend host) and the Tauri webview; on stop the samples are
+    // encoded as 16-bit PCM WAV and sent to asr_transcribe on the
+    // backend (local and remote ASR are OpenAI-compatible endpoints —
+    // they only differ by URL). Transcription is per-session (one active
+    // recorder per session id); Elm keeps voiceActive/asrBusy state and
+    // serializes the toggle.
+
+    var voiceRecorders = {}; // sessionId → { ctx, processor, source, samples, stream }
+    // Set when voiceStop arrives while getUserMedia is still pending:
+    // the .then in voiceStart checks it and never starts recording.
+    var voiceCancelled = {};
+
+    function voiceFail(sid, message) {
+      cleanupVoice(sid);
+      delete voiceCancelled[sid];
+      app.ports.onVoiceError.send({ sessionId: sid, message: message });
+    }
+
+    function cleanupVoice(sid) {
+      var rec = voiceRecorders[sid];
+      if (rec) {
+        try {
+          if (rec.processor) { rec.processor.disconnect(); }
+          if (rec.source) { rec.source.disconnect(); }
+        } catch (e) { /* ignore */ }
+        try {
+          if (rec.stream) {
+            rec.stream.getTracks().forEach(function (t) { t.stop(); });
+          }
+        } catch (e) { /* ignore */ }
+        try { if (rec.ctx && rec.ctx.close) { rec.ctx.close(); } } catch (e) { /* ignore */ }
+        delete voiceRecorders[sid];
+      }
+    }
+
+    // Encode mono Float32 samples (any rate) as 16-bit PCM WAV. The
+    // sample rate is taken from the AudioContext actually created, so
+    // the header is truthful even when the browser ignores the 16kHz
+    // request (ASR endpoints resample internally).
+    function wavFromSamples(samples, sampleRate) {
+      var n = samples.length;
+      var buf = new ArrayBuffer(44 + n * 2);
+      var view = new DataView(buf);
+      function writeString(offset, s) {
+        for (var i = 0; i < s.length; i++) view.setUint8(offset + i, s.charCodeAt(i));
+      }
+      writeString(0, "RIFF");
+      view.setUint32(4, 36 + n * 2, true);
+      writeString(8, "WAVE");
+      writeString(12, "fmt ");
+      view.setUint32(16, 16, true);   // fmt chunk size
+      view.setUint16(20, 1, true);    // PCM
+      view.setUint16(22, 1, true);    // mono
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, sampleRate * 2, true); // byte rate
+      view.setUint16(32, 2, true);    // block align
+      view.setUint16(34, 16, true);   // bits per sample
+      writeString(36, "data");
+      view.setUint32(40, n * 2, true);
+      var o = 44;
+      for (var i = 0; i < n; i++) {
+        var s = Math.max(-1, Math.min(1, samples[i]));
+        view.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+        o += 2;
+      }
+      return new Blob([buf], { type: "audio/wav" });
+    }
+
+    function blobToBase64(blob, cb) {
+      var reader = new FileReader();
+      reader.onloadend = function () {
+        var dataUrl = reader.result || "";
+        var idx = dataUrl.indexOf(",");
+        cb(idx >= 0 ? dataUrl.slice(idx + 1) : "");
+      };
+      reader.readAsDataURL(blob);
+    }
+
+    on("voiceStart", function (data) {
+      var sid = data.sessionId;
+      if (voiceRecorders[sid]) return; // already recording this session
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        voiceFail(sid, "Microphone access is not supported in this webview");
+        return;
+      }
+      navigator.mediaDevices.getUserMedia({ audio: true })
+        .then(function (stream) {
+          if (voiceCancelled[sid]) {
+            // The user clicked stop before the mic came up; release
+            // the stream and never start recording.
+            delete voiceCancelled[sid];
+            try { stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { /* ignore */ }
+            return;
+          }
+          var Ctor = window.AudioContext || window.webkitAudioContext;
+          var ctx = new Ctor({ sampleRate: 16000 }); // best effort; header uses the real rate
+          var source = ctx.createMediaStreamSource(stream);
+          // ScriptProcessor is deprecated but universally supported and
+          // needs no separate worklet module (this app has no bundler).
+          var processor = ctx.createScriptProcessor(4096, 1, 1);
+          var samples = [];
+          processor.onaudioprocess = function (e) {
+            var data = e.inputBuffer.getChannelData(0);
+            for (var i = 0; i < data.length; i++) samples.push(data[i]);
+          };
+          source.connect(processor);
+          processor.connect(ctx.destination); // keep the graph running
+          voiceRecorders[sid] = {
+            ctx: ctx, processor: processor, source: source, samples: samples, stream: stream,
+          };
+        })
+        .catch(function (err) {
+          voiceFail(sid, "Microphone error: " + ((err && err.message) ? err.message : err));
+        });
+    });
+
+    on("voiceStop", function (data) {
+      var sid = data.sessionId;
+      var rec = voiceRecorders[sid];
+      if (!rec) {
+        // Stop before the mic finished coming up: mark the pending
+        // start as cancelled (voiceStart's .then releases the stream).
+        if (!voiceCancelled[sid]) {
+          voiceCancelled[sid] = true;
+          app.ports.onAsrResult.send({ sessionId: sid, ok: false, text: "", error: "Not recording" });
+        }
+        return;
+      }
+      delete voiceCancelled[sid];
+      var samples = rec.samples || [];
+      var sampleRate = rec.ctx && rec.ctx.sampleRate ? rec.ctx.sampleRate : 16000;
+      cleanupVoice(sid);
+      var wav = wavFromSamples(samples, sampleRate);
+      if (wav.size < 1000) {
+        app.ports.onAsrResult.send({ sessionId: sid, ok: false, text: "", error: "No speech detected" });
+        return;
+      }
+      blobToBase64(wav, function (b64) {
+        transport.invoke("asr_transcribe", { sessionId: sid, audioBase64: b64 })
+          .then(function (res) {
+            app.ports.onAsrResult.send({
+              sessionId: sid,
+              ok: !!(res && res.ok),
+              text: (res && res.text) || "",
+              error: (res && res.error) || "",
+            });
+          })
+          .catch(function (err) {
+            app.ports.onAsrResult.send({
+              sessionId: sid, ok: false, text: "",
+              error: String((err && err.message) || err),
+            });
+          });
+      });
     });
 
     on("scrollIntoView", function (id) {

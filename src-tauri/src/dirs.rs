@@ -3,6 +3,7 @@
 //! Manages `~/.alayaface/` structure:
 //!   ~/.alayaface/
 //!     global.conf          — cross-preset global config overlay (recursion_limit etc.)
+//!     asr.conf             — voice-input ASR config (OpenAI-compatible endpoint URL)
 //!     presets/
 //!       <name>/            — one config directory per preset
 //!         model.conf       (auto-created by alayacore when missing)

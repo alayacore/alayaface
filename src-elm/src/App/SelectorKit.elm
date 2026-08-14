@@ -90,7 +90,7 @@ focusAndCursor : String -> Cmd Msg
 focusAndCursor id =
     Cmd.batch
         [ focusAfterDelay id
-        , Ports.setCursorPos id
+        , Ports.setCursorPos { id = id, pos = Nothing }
         ]
 
 

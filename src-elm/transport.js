@@ -429,6 +429,48 @@
         });
     });
 
+    on("getAsrConfig", function () {
+      transport.invoke("get_asr_config")
+        .then(function (res) {
+          app.ports.onAsrConfigGet.send({
+            ok: true,
+            url: (res && res.url) || "",
+            api_key: (res && res.api_key) || "",
+            model: (res && res.model) || "whisper-1",
+            language: (res && res.language) || "auto",
+            error: "",
+          });
+        })
+        .catch(function (err) {
+          app.ports.onAsrConfigGet.send({
+            ok: false,
+            url: "", api_key: "", model: "whisper-1", language: "auto",
+            error: String((err && err.message) || err),
+          });
+        });
+    });
+
+    on("syncAsrConfig", function (data) {
+      transport.invoke("sync_asr_config", { config: data.config })
+        .then(function (res) {
+          app.ports.onAsrConfigSync.send({
+            ok: true,
+            url: (res && res.url) || "",
+            api_key: (res && res.api_key) || "",
+            model: (res && res.model) || "whisper-1",
+            language: (res && res.language) || "auto",
+            error: "",
+          });
+        })
+        .catch(function (err) {
+          app.ports.onAsrConfigSync.send({
+            ok: false,
+            url: "", api_key: "", model: "whisper-1", language: "auto",
+            error: String((err && err.message) || err),
+          });
+        });
+    });
+
     on("listPresets", function () {
       transport.invoke("list_presets")
         .then(function (presets) {
@@ -766,7 +808,7 @@
     //   chain.js   — connection-chain SVG overlays (P36)
     //   overlay.js — overlay scrollbar (P37), canvas zoom, cursor/scroll ports
     window.AlayaChain.init(app);
-    window.AlayaOverlay.init(app, root);
+    window.AlayaOverlay.init(app, root, transport);
     installPointerPipe(app);
 
     // 5. Window maximize state

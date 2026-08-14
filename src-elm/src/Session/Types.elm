@@ -258,6 +258,11 @@ type alias SessionState =
     , helpFilter : String
     , helpSelected : Int
     , helpScroll : Int
+      -- Voice input (P-series): voiceActive = mic recording in progress
+      -- (toggle on the mic button); asrBusy = transcription running
+      -- (waiting for the asr_transcribe result).
+    , voiceActive : Bool
+    , asrBusy : Bool
     }
 
 
@@ -442,4 +447,6 @@ emptySession id =
     , helpFilter = ""
     , helpSelected = 0
     , helpScroll = 0
+    , voiceActive = False
+    , asrBusy = False
     }

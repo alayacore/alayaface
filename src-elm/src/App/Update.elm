@@ -191,6 +191,18 @@ getActiveSession model =
             Nothing
 
 
+{-| Update one field of the ASR config editor (the Msg payload already
+carries the new value; only the field selector differs). Clears any
+previous error so the user can fix the field without dismissing the
+message first.
+-}
+setAsrEditorField : Model -> (AsrConfigEditor -> AsrConfigEditor) -> ( Model, Cmd Msg )
+setAsrEditorField model updateEditor =
+    ( { model | asrConfigEditor = updateEditor model.asrConfigEditor }
+    , Cmd.none
+    )
+
+
 -- Buffer an inbound event for a session that has not been registered
 -- yet (e.g. transport events racing session creation). The buffered
 -- events are flushed when the session appears (see SessionCreated).
@@ -1457,20 +1469,173 @@ update msg model =
                     ( model, Cmd.none )
 
         VoiceInput ->
-            -- Placeholder: voice input is not implemented yet. The mic
-            -- button exists in the UI; wire the recording flow here.
+            -- Toggle voice recording: click starts the mic (recording
+            -- state persists), click again stops it and transcribes.
             case getActiveSession model of
                 Just s ->
-                    ( { model
-                        | sessions =
-                            Dict.insert s.id
-                                { s | statusMsg = "Voice input: not implemented yet" }
-                                model.sessions
-                      }
-                    , Cmd.none
-                    )
+                    if s.asrBusy then
+                        -- A transcription is in flight; ignore further
+                        -- clicks (the mic button is disabled anyway).
+                        ( model, Cmd.none )
+
+                    else if s.voiceActive then
+                        ( { model
+                            | sessions =
+                                Dict.insert s.id
+                                    { s
+                                        | voiceActive = False
+                                        , asrBusy = True
+                                        , statusMsg = "Transcribing…"
+                                    }
+                                    model.sessions
+                          }
+                        , Ports.voiceStop { sessionId = s.id }
+                        )
+
+                    else
+                        ( { model
+                            | sessions =
+                                Dict.insert s.id
+                                    { s
+                                        | voiceActive = True
+                                        , statusMsg = "Listening…"
+                                    }
+                                    model.sessions
+                          }
+                        , Ports.voiceStart { sessionId = s.id }
+                        )
 
                 Nothing ->
+                    ( model, Cmd.none )
+
+        VoiceError raw ->
+            -- Mic/recording failure surfaced from the JS bridge
+            -- (permission denied, webview unsupported, …).
+            case D.decodeValue voiceErrorDecoder raw of
+                Ok { sessionId, message } ->
+                    case Dict.get sessionId model.sessions of
+                        Just s ->
+                            ( { model
+                                | sessions =
+                                    Dict.insert sessionId
+                                        { s
+                                            | voiceActive = False
+                                            , asrBusy = False
+                                            , statusMsg = "Voice input error: " ++ message
+                                        }
+                                        model.sessions
+                              }
+                            , Cmd.none
+                            )
+
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        AsrResult raw ->
+            -- Transcription finished. On success, read the textarea
+            -- caret and insert the text there; on failure show why.
+            case D.decodeValue asrResultDecoder raw of
+                Ok { sessionId, ok, text, error } ->
+                    case Dict.get sessionId model.sessions of
+                        Just s ->
+                            if ok then
+                                if String.isEmpty text then
+                                    ( { model
+                                        | sessions =
+                                            Dict.insert sessionId
+                                                { s
+                                                    | asrBusy = False
+                                                    , voiceActive = False
+                                                    , statusMsg = "No speech recognized"
+                                                }
+                                                model.sessions
+                                      }
+                                    , Cmd.none
+                                    )
+
+                                else
+                                    ( { model
+                                        | pendingVoiceInsert = Just { sessionId = sessionId, text = text }
+                                        , sessions =
+                                            Dict.insert sessionId
+                                                { s
+                                                    | asrBusy = False
+                                                    , voiceActive = False
+                                                    , statusMsg = ""
+                                                }
+                                                model.sessions
+                                      }
+                                    , Ports.getCursorPos { sessionId = sessionId }
+                                    )
+
+                            else
+                                ( { model
+                                    | sessions =
+                                        Dict.insert sessionId
+                                            { s
+                                                | asrBusy = False
+                                                , voiceActive = False
+                                                , statusMsg = "Voice input failed: " ++ error
+                                            }
+                                            model.sessions
+                                  }
+                                , Cmd.none
+                                )
+
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        CursorPosResult raw ->
+            -- Caret position for a pending voice transcript: insert the
+            -- text at that position and place the caret after it.
+            case D.decodeValue cursorPosResultDecoder raw of
+                Ok { sessionId, pos } ->
+                    case model.pendingVoiceInsert of
+                        Just pending ->
+                            if pending.sessionId == sessionId then
+                                case Dict.get sessionId model.sessions of
+                                    Just s ->
+                                        let
+                                            before =
+                                                String.left pos s.input
+
+                                            after =
+                                                String.dropLeft pos s.input
+
+                                            newInput =
+                                                before ++ pending.text ++ after
+                                        in
+                                        ( { model
+                                            | pendingVoiceInsert = Nothing
+                                            , sessions =
+                                                Dict.insert sessionId
+                                                    { s | input = newInput }
+                                                    model.sessions
+                                          }
+                                        , Ports.setCursorPos
+                                            { id = "msg-input-" ++ sessionId
+                                            , pos = Just (pos + String.length pending.text)
+                                            }
+                                        )
+
+                                    Nothing ->
+                                        ( model, Cmd.none )
+
+                            else
+                                -- The caret result is for a different
+                                -- session; keep waiting.
+                                ( model, Cmd.none )
+
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                Err _ ->
                     ( model, Cmd.none )
 
         SetModel modelId ->
@@ -1778,7 +1943,7 @@ update msg model =
                     , Cmd.batch
                         [ Ports.fsHomeDir {}
                         , focusAfterDelay ("fp-page-input-" ++ s.id)
-                        , Ports.setCursorPos ("fp-page-input-" ++ s.id)
+                        , Ports.setCursorPos { id = "fp-page-input-" ++ s.id, pos = Nothing }
                         ]
                     )
 
@@ -2054,7 +2219,7 @@ update msg model =
                       )
                     , Cmd.batch
                         [ focusAfterDelay ("fp-page-input-" ++ s.id)
-                        , Ports.setCursorPos ("fp-page-input-" ++ s.id)
+                        , Ports.setCursorPos { id = "fp-page-input-" ++ s.id, pos = Nothing }
                         ]
                     )
 
@@ -2415,7 +2580,7 @@ update msg model =
                                 Just sid ->
                                     Cmd.batch
                                         [ focusAfterDelay ("fp-page-input-" ++ sid)
-                                        , Ports.setCursorPos ("fp-page-input-" ++ sid)
+                                        , Ports.setCursorPos { id = "fp-page-input-" ++ sid, pos = Nothing }
                                         ]
 
                                 Nothing ->
@@ -3934,7 +4099,7 @@ update msg model =
                     ( updateActiveSession model (\sess -> { sess | showModelSelector = True, modelSelector = Sel.open sess.models sess.modelSelector })
                     , Cmd.batch
                         [ focusAfterDelay ("model-selector-input-" ++ s.id)
-                        , Ports.setCursorPos ("model-selector-input-" ++ s.id)
+                        , Ports.setCursorPos { id = "model-selector-input-" ++ s.id, pos = Nothing }
                         ]
                     )
 
@@ -4073,7 +4238,7 @@ update msg model =
                           }
                         , Cmd.batch
                             [ focusAfterDelay "model-selector-input-default"
-                            , Ports.setCursorPos "model-selector-input-default"
+                            , Ports.setCursorPos { id = "model-selector-input-default", pos = Nothing }
                             ]
                         )
 
@@ -4248,7 +4413,7 @@ update msg model =
                           }
                         , Cmd.batch
                             [ focusAfterDelay "mcp-selector-input-default"
-                            , Ports.setCursorPos "mcp-selector-input-default"
+                            , Ports.setCursorPos { id = "mcp-selector-input-default", pos = Nothing }
                             ]
                         )
 
@@ -4446,7 +4611,7 @@ update msg model =
                           }
                         , Cmd.batch
                             [ focusAfterDelay "settings-tool-confirm"
-                            , Ports.setCursorPos "settings-tool-confirm"
+                            , Ports.setCursorPos { id = "settings-tool-confirm", pos = Nothing }
                             ]
                         )
 
@@ -4623,6 +4788,155 @@ update msg model =
                         in
                         ( { model
                             | globalConfigEditor =
+                                { ed
+                                    | syncing = False
+                                    , error = Just res.error
+                                }
+                          }
+                        , Cmd.none
+                        )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        -- Voice input ASR config overlay (cross-preset)
+        OpenAsrConfig ->
+            ( { model
+                | asrConfigEditor =
+                    { emptyAsrConfigEditor
+                        | show = True
+                        , loading = True
+                    }
+                , showGlobalMenu = False
+              }
+            , Ports.getAsrConfig {}
+            )
+
+        CloseAsrConfig ->
+            let
+                ed =
+                    model.asrConfigEditor
+            in
+            if ed.syncing then
+                -- Do not allow closing while a sync is in flight
+                ( model, Cmd.none )
+
+            else
+                ( { model | asrConfigEditor = emptyAsrConfigEditor }
+                , Cmd.none
+                )
+
+        SetAsrUrl val ->
+            setAsrEditorField model (\ed -> { ed | url = val, error = Nothing })
+
+        SetAsrApiKey val ->
+            setAsrEditorField model (\ed -> { ed | apiKey = val, error = Nothing })
+
+        SetAsrModel val ->
+            setAsrEditorField model (\ed -> { ed | model = val, error = Nothing })
+
+        SetAsrLanguage val ->
+            setAsrEditorField model (\ed -> { ed | language = val, error = Nothing })
+
+        AsrConfigSave ->
+            let
+                ed =
+                    model.asrConfigEditor
+            in
+            if String.isEmpty (String.trim ed.url) then
+                ( { model
+                    | asrConfigEditor =
+                        { ed | error = Just "Endpoint URL is required (local: http://127.0.0.1:PORT/v1, remote: https://…/v1)" }
+                  }
+                , Cmd.none
+                )
+
+            else
+                ( { model
+                    | asrConfigEditor =
+                        { ed
+                            | syncing = True
+                            , error = Nothing
+                        }
+                  }
+                , Ports.syncAsrConfig
+                    { config =
+                        E.encode 0
+                            (E.object
+                                [ ( "url", E.string (String.trim ed.url) )
+                                , ( "api_key", E.string (String.trim ed.apiKey) )
+                                , ( "model", E.string (String.trim ed.model) )
+                                , ( "language", E.string (String.trim ed.language) )
+                                ]
+                            )
+                    }
+                )
+
+        AsrConfigGetResult raw ->
+            case D.decodeValue asrConfigGetResultDecoder raw of
+                Ok res ->
+                    let
+                        ed =
+                            model.asrConfigEditor
+                    in
+                    if res.ok then
+                        ( { model
+                            | asrConfig =
+                                { url = res.url
+                                , apiKey = res.apiKey
+                                , model = res.model
+                                , language = res.language
+                                }
+                            , asrConfigEditor =
+                                { ed
+                                    | loading = False
+                                    , url = res.url
+                                    , apiKey = res.apiKey
+                                    , model = res.model
+                                    , language = res.language
+                                    , error = Nothing
+                                }
+                          }
+                        , Cmd.none
+                        )
+
+                    else
+                        ( { model
+                            | asrConfigEditor =
+                                { ed
+                                    | loading = False
+                                    , error = Just res.error
+                                }
+                          }
+                        , Cmd.none
+                        )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        AsrConfigSyncResult raw ->
+            case D.decodeValue asrConfigGetResultDecoder raw of
+                Ok res ->
+                    if res.ok then
+                        ( { model
+                            | asrConfig =
+                                { url = res.url
+                                , apiKey = res.apiKey
+                                , model = res.model
+                                , language = res.language
+                                }
+                            , asrConfigEditor = emptyAsrConfigEditor
+                          }
+                        , Cmd.none
+                        )
+
+                    else
+                        let
+                            ed =
+                                model.asrConfigEditor
+                        in
+                        ( { model
+                            | asrConfigEditor =
                                 { ed
                                     | syncing = False
                                     , error = Just res.error
@@ -4843,7 +5157,7 @@ update msg model =
                       )
                     , Cmd.batch
                         [ focusAfterDelay ("help-filter-input-" ++ s.id)
-                        , Ports.setCursorPos ("help-filter-input-" ++ s.id)
+                        , Ports.setCursorPos { id = "help-filter-input-" ++ s.id, pos = Nothing }
                         ]
                     )
 
@@ -4987,6 +5301,9 @@ update msg model =
 
                 else if model.globalConfigEditor.show then
                     update CloseGlobalConfig model
+
+                else if model.asrConfigEditor.show then
+                    update CloseAsrConfig model
 
                 else if model.planCascadePreview /= Nothing then
                     update PlanCascadeCancel model
@@ -6175,6 +6492,52 @@ globalConfigSyncResultDecoder =
         (D.field "ok" D.bool)
         (D.field "recursion_limit" D.int)
         (D.field "error" D.string)
+
+
+asrConfigGetResultDecoder : D.Decoder { ok : Bool, url : String, apiKey : String, model : String, language : String, error : String }
+asrConfigGetResultDecoder =
+    D.map6
+        (\ok url apiKey model language error ->
+            { ok = ok
+            , url = url
+            , apiKey = apiKey
+            , model = model
+            , language = language
+            , error = error
+            }
+        )
+        (D.field "ok" D.bool)
+        (D.field "url" D.string)
+        (D.field "api_key" D.string)
+        (D.field "model" D.string)
+        (D.field "language" D.string)
+        (D.field "error" D.string)
+
+
+voiceErrorDecoder : D.Decoder { sessionId : String, message : String }
+voiceErrorDecoder =
+    D.map2
+        (\sessionId message -> { sessionId = sessionId, message = message })
+        (D.field "sessionId" D.string)
+        (D.field "message" D.string)
+
+
+asrResultDecoder : D.Decoder { sessionId : String, ok : Bool, text : String, error : String }
+asrResultDecoder =
+    D.map4
+        (\sessionId ok text error -> { sessionId = sessionId, ok = ok, text = text, error = error })
+        (D.field "sessionId" D.string)
+        (D.field "ok" D.bool)
+        (D.field "text" D.string)
+        (D.field "error" D.string)
+
+
+cursorPosResultDecoder : D.Decoder { sessionId : String, pos : Int }
+cursorPosResultDecoder =
+    D.map2
+        (\sessionId pos -> { sessionId = sessionId, pos = pos })
+        (D.field "sessionId" D.string)
+        (D.field "pos" D.int)
 
 
 presetInfoDecoder : D.Decoder PresetInfo

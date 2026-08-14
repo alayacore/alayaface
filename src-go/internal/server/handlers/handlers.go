@@ -58,6 +58,10 @@ func Registry() map[string]Command {
 		// global config overlay (cross-preset)
 		"get_global_config":  GetGlobalConfig,
 		"sync_global_config": SyncGlobalConfig,
+		// voice input ASR (cross-preset)
+		"get_asr_config":  GetAsrConfig,
+		"sync_asr_config": SyncAsrConfig,
+		"asr_transcribe":  AsrTranscribe,
 		// presets
 		"list_presets":  ListPresets,
 		"copy_preset":   CopyPreset,

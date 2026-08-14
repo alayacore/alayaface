@@ -2,6 +2,7 @@
 //
 //	~/.alayaface/
 //	  global.conf          — cross-preset global config overlay (recursion_limit etc.)
+//	  asr.conf             — voice-input ASR config (OpenAI-compatible endpoint URL)
 //	  presets/
 //	    <name>/            — one config directory per preset
 //	      model.conf
@@ -57,6 +58,15 @@ func PresetsRoot() string {
 // this file applies to every preset — the global config overlay.
 func GlobalConfigFile() string {
 	return filepath.Join(AlayafaceDir(), "global.conf")
+}
+
+// AsrConfigFile returns the voice-input ASR config file
+// (~/.alayaface/asr.conf). Like global.conf it is global (cross-preset):
+// an OpenAI-compatible /audio/transcriptions endpoint URL (local or
+// remote — the two only differ by URL), optional API key, model and
+// language hint.
+func AsrConfigFile() string {
+	return filepath.Join(AlayafaceDir(), "asr.conf")
 }
 
 // ValidPresetName reports whether a preset name is a short,
