@@ -33,7 +33,7 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "info_plist": "Info.plist"
+      "infoPlist": "Info.plist"
     }
   }
 }
