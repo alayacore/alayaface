@@ -133,13 +133,27 @@ pub fn run() {
             // in the current context").
             #[cfg(target_os = "linux")]
             {
-                use webkit2gtk::{SettingsExt, WebViewExt};
+                use glib::ObjectExt;
+                use webkit2gtk::{PermissionRequestExt, SettingsExt, UserMediaPermissionRequest, WebViewExt};
                 if let Some(win) = app.get_webview_window("main") {
                     let _ = win.with_webview(|webview| {
                         let wv = webview.inner();
                         if let Some(settings) = wv.settings() {
                             settings.set_enable_media_stream(true);
                         }
+                        // Even with media-stream enabled, WebKitGTK asks
+                        // the host via the permission-request signal
+                        // before granting getUserMedia; wry does not
+                        // handle it and the default is DENY. Allow
+                        // media capture (mic/camera) requests.
+                        wv.connect_permission_request(|_wv, request| {
+                            if request.is::<UserMediaPermissionRequest>() {
+                                request.allow();
+                                true
+                            } else {
+                                false
+                            }
+                        });
                     });
                 }
             }
