@@ -596,7 +596,13 @@ body {
    and reasoning windows start collapsed; user/assistant start expanded. */
 
 .msg-header {
-  position: relative; /* anchors the collapsed chevron at the left edge */
+  position: sticky; /* pinned to the window top while a long body scrolls */
+  /* Sticky pins relative to the scroll container's CONTENT box (i.e.
+     after .messages' 12px padding-top), so top: 0 would leave a 12px
+     gap above the pinned header where body text scrolls through.
+     top: -12px counters the padding and pins flush to the visible top. */
+  top: -12px;
+  z-index: 2;       /* paints above the message body sliding under it */
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -610,6 +616,17 @@ body {
   transition: color 0.12s;
 }
 .msg-header:hover { color: #ccc; }
+
+/* Sticky pinning needs an opaque background: the long message body
+   scrolls underneath the pinned header, so text would bleed through a
+   transparent one. Applied to expanded windows only — collapsed rows
+   are header-only (they never scroll) and keep their clean borderless
+   look. The hairline border doubles as a divider while pinned and as a
+   subtle title-bar line when the message is fully in view. */
+.message:not(.collapsed) .msg-header {
+  background: #0f0f1a; /* opaque app bg */
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
 
 .msg-label {
   font-weight: 600;
@@ -1460,6 +1477,10 @@ body {
   .message-reasoning .msg-body, .message-tool .msg-body { color: #888; }
   .msg-header { color: #999; }
   .msg-header:hover { color: #444; }
+  .message:not(.collapsed) .msg-header {
+    background: #f8f8f8; /* opaque light app bg */
+    border-bottom-color: rgba(0, 0, 0, 0.08);
+  }
   .msg-preview { color: #999; }
   .msg-name { color: #666; }
   .msg-status-icon.icon-check { color: #16a34a; }
