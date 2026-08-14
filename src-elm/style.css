@@ -1989,6 +1989,105 @@ body {
   padding: 4px 0;
 }
 
+/* ─── ASR config profile list ─────────────────────────────────────── */
+
+.asr-list-hint { margin-bottom: 10px; }
+
+.asr-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.asr-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.03);
+}
+@media (prefers-color-scheme: light) {
+  .asr-row { border-color: rgba(0, 0, 0, 0.12); background: rgba(0, 0, 0, 0.02); }
+}
+
+.asr-row-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.asr-row-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: #ddd;
+}
+@media (prefers-color-scheme: light) {
+  .asr-row-name { color: #333; }
+}
+
+.asr-row-active {
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: #4ade80;
+  border: 1px solid rgba(74, 222, 128, 0.4);
+  border-radius: 3px;
+  padding: 0 5px;
+  letter-spacing: 0.04em;
+}
+@media (prefers-color-scheme: light) {
+  .asr-row-active { color: #16a34a; border-color: rgba(22, 163, 74, 0.4); }
+}
+
+.asr-row-meta {
+  font-size: 0.72rem;
+  color: #888;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.asr-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.asr-row-btn {
+  padding: 3px 10px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: transparent;
+  color: #ccc;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.asr-row-btn:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+.asr-row-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+@media (prefers-color-scheme: light) {
+  .asr-row-btn { border-color: rgba(0, 0, 0, 0.15); color: #555; }
+  .asr-row-btn:hover { background: rgba(0, 0, 0, 0.06); color: #000; }
+}
+
+.asr-row-btn-danger { color: #f87171; border-color: rgba(248, 113, 113, 0.35); }
+.asr-row-btn-danger:hover { background: rgba(248, 113, 113, 0.12); color: #f87171; }
+@media (prefers-color-scheme: light) {
+  .asr-row-btn-danger { color: #dc2626; border-color: rgba(220, 38, 38, 0.35); }
+  .asr-row-btn-danger:hover { background: rgba(220, 38, 38, 0.1); color: #dc2626; }
+}
+
+.asr-row-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .me-save-btn {
   padding: 5px 18px;
   border-radius: 4px;

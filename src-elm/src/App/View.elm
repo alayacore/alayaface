@@ -2456,25 +2456,46 @@ viewAsrConfigOverlay model =
     let
         ed =
             model.asrConfigEditor
+
+        row p =
+            { id = p.id
+            , name = p.name
+            , protocol = p.protocol
+            , url = p.url
+            , isActive = p.id == model.asrConfig.active
+            }
     in
     if ed.show then
         viewOverlay CloseAsrConfig
             [ Overlay.AsrConfig.view
-                { protocol = ed.protocol
+                { inForm = ed.inForm
+                , profiles = List.map row model.asrConfig.profiles
+                , loading = ed.loading
+                , syncing = ed.syncing
+                , confirmDelete = ed.confirmDelete
+                , error = ed.error
+                , isNew = ed.editingId == Nothing
+                , name = ed.name
+                , protocol = ed.protocol
                 , url = ed.url
                 , apiKey = ed.apiKey
                 , model = ed.model
                 , language = ed.language
-                , loading = ed.loading
-                , syncing = ed.syncing
-                , error = ed.error
+                , onAdd = AsrConfigAdd
+                , onEdit = AsrConfigEdit
+                , onSetActive = AsrConfigSetActive
+                , onDelete = AsrConfigDelete
+                , onDeleteConfirm = AsrConfigDeleteConfirm
+                , onDeleteCancel = AsrConfigDeleteCancel
+                , onClose = CloseAsrConfig
+                , onName = SetAsrName
                 , onProtocol = SetAsrProtocol
                 , onUrl = SetAsrUrl
                 , onApiKey = SetAsrApiKey
                 , onModel = SetAsrModel
                 , onLanguage = SetAsrLanguage
                 , onSave = AsrConfigSave
-                , onCancel = CloseAsrConfig
+                , onBack = AsrConfigBack
                 }
             ]
     else

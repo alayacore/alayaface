@@ -19,59 +19,80 @@ func TestAsrConfigMissingYieldsDefault(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cfg.Model != "whisper-1" || cfg.Language != "auto" || cfg.URL != "" || cfg.APIKey != "" {
+		if len(cfg.Profiles) != 0 || cfg.Active != "" {
 			t.Errorf("defaults wrong: %+v", cfg)
 		}
 	})
 }
 
-func TestNormalizeAsrConfig(t *testing.T) {
-	cfg := AsrConfig{Model: "  ", Language: ""}
+func TestNormalizeAsrProfile(t *testing.T) {
+	p := AsrProfile{Name: "  ", Protocol: "bogus", Model: "  ", Language: ""}
+	NormalizeAsrProfile(&p)
+	if p.ID == "" || p.Name != "ASR" || p.Protocol != ProtocolTranscriptions || p.Model != "whisper-1" || p.Language != "auto" {
+		t.Errorf("normalize wrong: %+v", p)
+	}
+}
+
+func TestNormalizeAsrConfigActiveFallback(t *testing.T) {
+	cfg := AsrConfig{
+		Active: "missing",
+		Profiles: []AsrProfile{
+			{ID: "", Name: "A", Protocol: ProtocolChatCompletions, URL: "https://x/v1/chat/completions", Model: "m", Language: "zh"},
+			{ID: "p2", Name: "B", URL: "http://y/v1/audio/transcriptions"},
+		},
+	}
 	NormalizeAsrConfig(&cfg)
-	if cfg.Model != "whisper-1" || cfg.Language != "auto" {
-		t.Errorf("normalize wrong: %+v", cfg)
+	if cfg.Profiles[0].ID == "" {
+		t.Error("profile id must be generated")
+	}
+	// Active fell back to the first profile.
+	if cfg.Active != cfg.Profiles[0].ID {
+		t.Errorf("active = %q, want first profile id %q", cfg.Active, cfg.Profiles[0].ID)
+	}
+	if p := activeAsrProfile(&cfg); p == nil || p.ID != cfg.Active {
+		t.Errorf("activeAsrProfile = %+v", p)
+	}
+	// Chat profile keeps its protocol.
+	if cfg.Profiles[0].Protocol != ProtocolChatCompletions {
+		t.Errorf("protocol = %q", cfg.Profiles[0].Protocol)
+	}
+}
+
+func TestNormalizeAsrConfigKeepsValidActive(t *testing.T) {
+	cfg := AsrConfig{
+		Active:   "p1",
+		Profiles: []AsrProfile{{ID: "p1", Name: "A", URL: "http://x"}},
+	}
+	NormalizeAsrConfig(&cfg)
+	if cfg.Active != "p1" {
+		t.Errorf("active = %q, want p1", cfg.Active)
 	}
 }
 
 func TestAsrConfigSyncRoundtrips(t *testing.T) {
 	isolatedHome(t, func() {
 		rr := call(t, SyncAsrConfig, map[string]any{
-			"config": `{"protocol":"chat_completions","url":"https://api.xiaomimimo.com/v1/chat/completions","api_key":"k","language":"zh","model":""}`,
+			"config": `{"profiles":[{"name":"MiMo","protocol":"chat_completions","url":"https://api.xiaomimimo.com/v1/chat/completions","api_key":"k","model":"","language":"zh"}]}`,
 		})
 		if rr.Code != 200 {
 			t.Fatalf("sync status = %d, body %s", rr.Code, rr.Body.String())
 		}
-		var out map[string]any
+		var out AsrConfig
 		if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
 			t.Fatal(err)
 		}
-		if out["protocol"] != ProtocolChatCompletions || out["url"] != "https://api.xiaomimimo.com/v1/chat/completions" || out["language"] != "zh" || out["model"] != "whisper-1" {
-			t.Errorf("sync returned %v", out)
+		if len(out.Profiles) != 1 || out.Profiles[0].ID == "" || out.Profiles[0].Name != "MiMo" || out.Profiles[0].Model != "whisper-1" {
+			t.Errorf("sync returned %+v", out)
+		}
+		if out.Active != out.Profiles[0].ID {
+			t.Errorf("active = %q, want first profile", out.Active)
 		}
 		cfg, err := readAsrConfig()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cfg.Protocol != ProtocolChatCompletions || cfg.URL != "https://api.xiaomimimo.com/v1/chat/completions" || cfg.APIKey != "k" || cfg.Language != "zh" {
+		if len(cfg.Profiles) != 1 || cfg.Profiles[0].APIKey != "k" || cfg.Active != cfg.Profiles[0].ID {
 			t.Errorf("read back %+v", cfg)
-		}
-	})
-}
-
-func TestAsrConfigSyncFallsBackToTranscriptionsProtocol(t *testing.T) {
-	isolatedHome(t, func() {
-		rr := call(t, SyncAsrConfig, map[string]any{
-			"config": `{"protocol":"bogus","url":"http://127.0.0.1:8080/v1/audio/transcriptions"}`,
-		})
-		if rr.Code != 200 {
-			t.Fatalf("sync status = %d, body %s", rr.Code, rr.Body.String())
-		}
-		cfg, err := readAsrConfig()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if cfg.Protocol != ProtocolTranscriptions {
-			t.Errorf("protocol = %q, want transcriptions", cfg.Protocol)
 		}
 	})
 }
@@ -131,13 +152,16 @@ func TestAsrTranscribeRemoteEndpoint(t *testing.T) {
 		srv, audio, fields := fakeAsrServer(t)
 		defer srv.Close()
 
-		cfg := AsrConfig{
+		p := AsrProfile{
+			ID:       "p1",
+			Name:     "test",
+			Protocol: ProtocolTranscriptions,
 			URL:      srv.URL + "/v1/audio/transcriptions",
 			APIKey:   "testkey",
 			Model:    "whisper-1",
 			Language: "zh",
 		}
-		res := asrTranscribeMultipart(cfg, []byte("RIFF-fake-wav"))
+		res := asrTranscribeMultipart(p, []byte("RIFF-fake-wav"))
 		if !res.Ok || res.Text != "hello world" || res.Error != "" {
 			t.Errorf("result = %+v", res)
 		}
@@ -155,8 +179,8 @@ func TestAsrTranscribeSkipsAutoLanguage(t *testing.T) {
 		srv, _, fields := fakeAsrServer(t)
 		defer srv.Close()
 
-		cfg := AsrConfig{URL: srv.URL + "/v1/audio/transcriptions", APIKey: "testkey", Language: "auto"}
-		res := asrTranscribeMultipart(cfg, []byte("RIFF-fake-wav"))
+		p := AsrProfile{ID: "p1", Protocol: ProtocolTranscriptions, URL: srv.URL + "/v1/audio/transcriptions", APIKey: "testkey", Language: "auto"}
+		res := asrTranscribeMultipart(p, []byte("RIFF-fake-wav"))
 		if !res.Ok {
 			t.Errorf("result = %+v", res)
 		}
@@ -181,7 +205,7 @@ func TestAsrTranscribeUsesUrlVerbatim(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		res := asrTranscribeMultipart(AsrConfig{URL: srv.URL + "/custom/endpoint"}, []byte("RIFF-fake-wav"))
+		res := asrTranscribeMultipart(AsrProfile{Protocol: ProtocolTranscriptions, URL: srv.URL + "/custom/endpoint"}, []byte("RIFF-fake-wav"))
 		if !res.Ok || res.Text != "ok" {
 			t.Errorf("result = %+v", res)
 		}
@@ -190,7 +214,7 @@ func TestAsrTranscribeUsesUrlVerbatim(t *testing.T) {
 
 func TestAsrTranscribeUnconfigured(t *testing.T) {
 	isolatedHome(t, func() {
-		res := asrTranscribeMultipart(AsrConfig{}, []byte("RIFF-fake-wav"))
+		res := asrTranscribeMultipart(AsrProfile{Protocol: ProtocolTranscriptions}, []byte("RIFF-fake-wav"))
 		if res.Ok || !strings.Contains(res.Error, "not configured") {
 			t.Errorf("result = %+v", res)
 		}
@@ -205,7 +229,7 @@ func TestAsrTranscribeHTTPError(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		res := asrTranscribeMultipart(AsrConfig{URL: srv.URL, APIKey: "bad"}, []byte("RIFF-fake-wav"))
+		res := asrTranscribeMultipart(AsrProfile{Protocol: ProtocolTranscriptions, URL: srv.URL, APIKey: "bad"}, []byte("RIFF-fake-wav"))
 		if res.Ok || !strings.Contains(res.Error, "401") {
 			t.Errorf("result = %+v", res)
 		}
@@ -275,14 +299,15 @@ func TestAsrTranscribeChatSSE(t *testing.T) {
 		srv, audioBase64 := fakeChatAsrServer(t)
 		defer srv.Close()
 
-		cfg := AsrConfig{
+		p := AsrProfile{
+			ID:       "p1",
 			Protocol: ProtocolChatCompletions,
 			URL:      srv.URL + "/v1/chat/completions",
 			APIKey:   "testkey",
 			Model:    "mimo-v2.5-asr",
 			Language: "zh",
 		}
-		res := asrTranscribeChat(cfg, base64.StdEncoding.EncodeToString([]byte("RIFF-fake-wav")), []byte("RIFF-fake-wav"))
+		res := asrTranscribeChat(p, base64.StdEncoding.EncodeToString([]byte("RIFF-fake-wav")), []byte("RIFF-fake-wav"))
 		if !res.Ok || res.Text != "hello" {
 			t.Errorf("result = %+v", res)
 		}
@@ -301,7 +326,7 @@ func TestAsrTranscribeChatPlainJsonFallback(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		res := asrTranscribeChat(AsrConfig{Protocol: ProtocolChatCompletions, URL: srv.URL}, "QUk=", []byte("RIFF-fake-wav"))
+		res := asrTranscribeChat(AsrProfile{Protocol: ProtocolChatCompletions, URL: srv.URL}, "QUk=", []byte("RIFF-fake-wav"))
 		if !res.Ok || res.Text != "plain hello" {
 			t.Errorf("result = %+v", res)
 		}
@@ -316,7 +341,7 @@ func TestAsrTranscribeChatHTTPError(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		res := asrTranscribeChat(AsrConfig{Protocol: ProtocolChatCompletions, URL: srv.URL}, "QUk=", []byte("RIFF-fake-wav"))
+		res := asrTranscribeChat(AsrProfile{Protocol: ProtocolChatCompletions, URL: srv.URL}, "QUk=", []byte("RIFF-fake-wav"))
 		if res.Ok || !strings.Contains(res.Error, "400") {
 			t.Errorf("result = %+v", res)
 		}

@@ -22,6 +22,7 @@ module App.Types exposing
     , emptyGlobalConfigEditor
     , AsrConfig
     , emptyAsrConfig
+    , AsrProfile
     , AsrConfigEditor
     , emptyAsrConfigEditor
     , PresetInfo
@@ -459,9 +460,17 @@ type Msg
     | GlobalConfigSave
     | GlobalConfigGetResult E.Value
     | GlobalConfigSyncResult E.Value
-      -- Voice input (ASR) overlay (cross-preset)
+      -- Voice input (ASR) overlay (cross-preset): profile list + form
     | OpenAsrConfig
     | CloseAsrConfig
+    | AsrConfigAdd
+    | AsrConfigEdit String
+    | AsrConfigBack
+    | AsrConfigSetActive String
+    | AsrConfigDelete String
+    | AsrConfigDeleteConfirm
+    | AsrConfigDeleteCancel
+    | SetAsrName String
     | SetAsrProtocol String
     | SetAsrUrl String
     | SetAsrApiKey String
@@ -818,7 +827,8 @@ emptyGlobalConfigEditor =
 
 -- VOICE INPUT ASR CONFIG OVERLAY
 --
--- ~/.alayaface/asr.conf: an ASR endpoint. Two wire protocols:
+-- ~/.alayaface/asr.conf: a LIST of ASR endpoint profiles; one is
+-- active and used by asr_transcribe. Two wire protocols per profile:
 --   "transcriptions"    — OpenAI-compatible /audio/transcriptions
 --                         (multipart file upload); local and remote
 --                         differ only by URL (default)
@@ -826,8 +836,10 @@ emptyGlobalConfigEditor =
 --                         body with input_audio base64, api-key header
 -- The endpoint URL is the FULL address and is used verbatim.
 
-type alias AsrConfig =
-    { protocol : String
+type alias AsrProfile =
+    { id : String
+    , name : String
+    , protocol : String
     , url : String
     , apiKey : String
     , model : String
@@ -835,20 +847,31 @@ type alias AsrConfig =
     }
 
 
-emptyAsrConfig : AsrConfig
-emptyAsrConfig =
-    { protocol = "transcriptions"
-    , url = ""
-    , apiKey = ""
-    , model = "whisper-1"
-    , language = "auto"
+type alias AsrConfig =
+    { active : String
+    , profiles : List AsrProfile
     }
 
 
+emptyAsrConfig : AsrConfig
+emptyAsrConfig =
+    { active = ""
+    , profiles = []
+    }
+
+
+{-| Editor state: the overlay has two views — a profile LIST (the entry
+point from the system menu) and the FORM (add/edit, the same page as
+before). editingId = Nothing means a new profile.
+-}
 type alias AsrConfigEditor =
     { show : Bool
     , loading : Bool
     , syncing : Bool
+    , inForm : Bool
+    , editingId : Maybe String
+    , confirmDelete : Maybe String
+    , name : String
     , protocol : String
     , url : String
     , apiKey : String
@@ -863,6 +886,10 @@ emptyAsrConfigEditor =
     { show = False
     , loading = False
     , syncing = False
+    , inForm = False
+    , editingId = Nothing
+    , confirmDelete = Nothing
+    , name = ""
     , protocol = "transcriptions"
     , url = ""
     , apiKey = ""

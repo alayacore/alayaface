@@ -434,19 +434,14 @@
         .then(function (res) {
           app.ports.onAsrConfigGet.send({
             ok: true,
-            protocol: (res && res.protocol) || "transcriptions",
-            url: (res && res.url) || "",
-            api_key: (res && res.api_key) || "",
-            model: (res && res.model) || "whisper-1",
-            language: (res && res.language) || "auto",
+            active: (res && res.active) || "",
+            profiles: (res && res.profiles) || [],
             error: "",
           });
         })
         .catch(function (err) {
           app.ports.onAsrConfigGet.send({
-            ok: false,
-            protocol: "transcriptions",
-            url: "", api_key: "", model: "whisper-1", language: "auto",
+            ok: false, active: "", profiles: [],
             error: String((err && err.message) || err),
           });
         });
@@ -457,19 +452,14 @@
         .then(function (res) {
           app.ports.onAsrConfigSync.send({
             ok: true,
-            protocol: (res && res.protocol) || "transcriptions",
-            url: (res && res.url) || "",
-            api_key: (res && res.api_key) || "",
-            model: (res && res.model) || "whisper-1",
-            language: (res && res.language) || "auto",
+            active: (res && res.active) || "",
+            profiles: (res && res.profiles) || [],
             error: "",
           });
         })
         .catch(function (err) {
           app.ports.onAsrConfigSync.send({
-            ok: false,
-            protocol: "transcriptions",
-            url: "", api_key: "", model: "whisper-1", language: "auto",
+            ok: false, active: "", profiles: [],
             error: String((err && err.message) || err),
           });
         });

@@ -151,19 +151,35 @@ try {
   await waitFor('.session-panel');
   await sleep(800);
 
-  // ── 3. ASR config overlay ────────────────────────────────────────
+  // ── 3. ASR config overlay: add a profile via the list → form ─────
   await openGlobalMenu();
   assert(await clickMenuItem('ASR config'), 'menu: ASR config');
   await waitFor('.me-page');
-  await sleep(300);
-  await shot('01-asr-config.png');
+  // Wait for the list (loading finishes) before clicking Add.
+  await page.waitForSelector('.me-save-btn', { timeout: 10000 });
+  await shot('01-asr-list-empty.png');
+  // Empty list → Add endpoint enters the form.
+  await page.$eval('.me-save-btn', el => el.click());
+  await waitFor('#asr-config-url');
+  await sleep(200);
+  await page.$eval('#asr-config-name', (el, v) => { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); }, 'Local whisper');
   await page.$eval('#asr-config-url', (el, url) => { el.value = url; el.dispatchEvent(new Event('input', { bubbles: true })); }, `http://127.0.0.1:${asrPort}/v1/audio/transcriptions`);
   await sleep(200);
   await page.$eval('.me-save-btn', el => el.click());
   await sleep(800);
-  const overlayGone = await page.$('.me-page') === null;
-  assert(overlayGone, 'ASR config overlay closed after save');
-  console.log('ASR config saved');
+  // Back on the list; the new profile is active (first one).
+  const rowCount = await page.$$eval('.asr-row', els => els.length);
+  assert(rowCount === 1, 'profile list shows one row, got ' + rowCount);
+  const rowMeta = await page.$eval('.asr-row-meta', el => el.textContent || '');
+  assert(rowMeta.includes('/audio/transcriptions'), 'row shows the URL: ' + rowMeta);
+  const activeBadge = await page.$('.asr-row-active');
+  assert(!!activeBadge, 'first profile is marked active');
+  await shot('02-asr-list-one.png');
+  // Close the overlay.
+  await page.$eval('.overlay-close', el => el.click());
+  await sleep(300);
+  assert(await page.$('.me-page') === null, 'ASR overlay closed');
+  console.log('ASR profile added');
 
   // ── 4. caret position ────────────────────────────────────────────
   const taSel = 'textarea.input-text';

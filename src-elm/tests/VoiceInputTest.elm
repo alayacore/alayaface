@@ -54,16 +54,26 @@ cursorResult sid pos =
         ]
 
 
-asrConfigValue : Bool -> String -> String -> String -> String -> String -> String -> E.Value
-asrConfigValue ok protocol url apiKey model language error =
+asrConfigValue : Bool -> String -> List E.Value -> String -> E.Value
+asrConfigValue ok active profiles error =
     E.object
         [ ( "ok", E.bool ok )
+        , ( "active", E.string active )
+        , ( "profiles", E.list identity profiles )
+        , ( "error", E.string error )
+        ]
+
+
+asrProfileValue : String -> String -> String -> String -> String -> String -> String -> E.Value
+asrProfileValue id name protocol url apiKey model language =
+    E.object
+        [ ( "id", E.string id )
+        , ( "name", E.string name )
         , ( "protocol", E.string protocol )
         , ( "url", E.string url )
         , ( "api_key", E.string apiKey )
         , ( "model", E.string model )
         , ( "language", E.string language )
-        , ( "error", E.string error )
         ]
 
 
@@ -222,8 +232,8 @@ tests =
                         ]
                         m2
             ]
-        , describe "ASR config overlay"
-            [ test "open loads the config" <|
+        , describe "ASR config overlay (profile list + form)"
+            [ test "open loads the config list" <|
                 \_ ->
                     let
                         ( m, _ ) =
@@ -232,44 +242,11 @@ tests =
                     Expect.all
                         [ \mm -> Expect.equal True mm.asrConfigEditor.show
                         , \mm -> Expect.equal True mm.asrConfigEditor.loading
+                        , \mm -> Expect.equal False mm.asrConfigEditor.inForm
                         , \mm -> Expect.equal False mm.showGlobalMenu
                         ]
                         m
-            , test "save without a URL is rejected" <|
-                \_ ->
-                    let
-                        ed =
-                            let
-                                base =
-                                    AT.emptyAsrConfigEditor
-                            in
-                            { base | show = True, url = "" }
-
-                        m1 =
-                            { initModelWithSession | asrConfigEditor = ed }
-
-                        ( m2, _ ) =
-                            AU.update AT.AsrConfigSave m1
-                    in
-                    Expect.equal (Just "Endpoint URL is required (full address, e.g. http://127.0.0.1:8080/v1/audio/transcriptions)") m2.asrConfigEditor.error
-            , test "save with a URL syncs and marks syncing" <|
-                \_ ->
-                    let
-                        ed =
-                            let
-                                base =
-                                    AT.emptyAsrConfigEditor
-                            in
-                            { base | show = True, url = "http://127.0.0.1:8080/v1" }
-
-                        m1 =
-                            { initModelWithSession | asrConfigEditor = ed }
-
-                        ( m2, _ ) =
-                            AU.update AT.AsrConfigSave m1
-                    in
-                    Expect.equal True m2.asrConfigEditor.syncing
-            , test "get result fills the editor" <|
+            , test "get result fills the profile list" <|
                 \_ ->
                     let
                         ed =
@@ -285,19 +262,56 @@ tests =
                         ( m2, _ ) =
                             AU.update
                                 (AT.AsrConfigGetResult
-                                    (asrConfigValue True "chat_completions" "https://api.xiaomimimo.com/v1/chat/completions" "k" "mimo-v2.5-asr" "zh" "")
+                                    (asrConfigValue True "p2"
+                                        [ asrProfileValue "p1" "Local whisper" "transcriptions" "http://127.0.0.1:8080/v1/audio/transcriptions" "" "whisper-1" "auto"
+                                        , asrProfileValue "p2" "MiMo" "chat_completions" "https://api.xiaomimimo.com/v1/chat/completions" "k" "mimo-v2.5-asr" "zh"
+                                        ]
+                                        ""
+                                    )
                                 )
                                 m1
                     in
                     Expect.all
-                        [ \mm -> Expect.equal "chat_completions" mm.asrConfigEditor.protocol
-                        , \mm -> Expect.equal "https://api.xiaomimimo.com/v1/chat/completions" mm.asrConfigEditor.url
-                        , \mm -> Expect.equal "zh" mm.asrConfigEditor.language
+                        [ \mm -> Expect.equal "p2" mm.asrConfig.active
+                        , \mm -> Expect.equal 2 (List.length mm.asrConfig.profiles)
                         , \mm -> Expect.equal False mm.asrConfigEditor.loading
-                        , \mm -> Expect.equal "chat_completions" mm.asrConfig.protocol
                         ]
                         m2
-            , test "sync result closes the editor on success" <|
+            , test "Add enters the form for a new profile" <|
+                \_ ->
+                    let
+                        ( m, _ ) =
+                            AU.update AT.AsrConfigAdd initModelWithSession
+                    in
+                    Expect.all
+                        [ \mm -> Expect.equal True mm.asrConfigEditor.inForm
+                        , \mm -> Expect.equal Nothing mm.asrConfigEditor.editingId
+                        ]
+                        m
+            , test "Edit enters the form pre-filled from the profile" <|
+                \_ ->
+                    let
+                        m1 =
+                            { initModelWithSession
+                                | asrConfig =
+                                    { active = "p1"
+                                    , profiles =
+                                        [ { id = "p1", name = "MiMo", protocol = "chat_completions", url = "https://api.xiaomimimo.com/v1/chat/completions", apiKey = "k", model = "mimo-v2.5-asr", language = "zh" } ]
+                                    }
+                            }
+
+                        ( m2, _ ) =
+                            AU.update (AT.AsrConfigEdit "p1") m1
+                    in
+                    Expect.all
+                        [ \mm -> Expect.equal True mm.asrConfigEditor.inForm
+                        , \mm -> Expect.equal (Just "p1") mm.asrConfigEditor.editingId
+                        , \mm -> Expect.equal "MiMo" mm.asrConfigEditor.name
+                        , \mm -> Expect.equal "chat_completions" mm.asrConfigEditor.protocol
+                        , \mm -> Expect.equal "zh" mm.asrConfigEditor.language
+                        ]
+                        m2
+            , test "Back returns from the form to the list" <|
                 \_ ->
                     let
                         ed =
@@ -305,7 +319,104 @@ tests =
                                 base =
                                     AT.emptyAsrConfigEditor
                             in
-                            { base | show = True, syncing = True }
+                            { base | show = True, inForm = True, url = "http://x" }
+
+                        m1 =
+                            { initModelWithSession | asrConfigEditor = ed }
+
+                        ( m2, _ ) =
+                            AU.update AT.AsrConfigBack m1
+                    in
+                    Expect.all
+                        [ \mm -> Expect.equal True mm.asrConfigEditor.show
+                        , \mm -> Expect.equal False mm.asrConfigEditor.inForm
+                        ]
+                        m2
+            , test "close is blocked while in the form" <|
+                \_ ->
+                    let
+                        ed =
+                            let
+                                base =
+                                    AT.emptyAsrConfigEditor
+                            in
+                            { base | show = True, inForm = True }
+
+                        m1 =
+                            { initModelWithSession | asrConfigEditor = ed }
+
+                        ( m2, _ ) =
+                            AU.update AT.CloseAsrConfig m1
+                    in
+                    Expect.equal True m2.asrConfigEditor.show
+            , test "save without a URL is rejected" <|
+                \_ ->
+                    let
+                        ed =
+                            let
+                                base =
+                                    AT.emptyAsrConfigEditor
+                            in
+                            { base | show = True, inForm = True, url = "" }
+
+                        m1 =
+                            { initModelWithSession | asrConfigEditor = ed }
+
+                        ( m2, _ ) =
+                            AU.update AT.AsrConfigSave m1
+                    in
+                    Expect.equal (Just "Endpoint URL is required (full address, e.g. http://127.0.0.1:8080/v1/audio/transcriptions)") m2.asrConfigEditor.error
+            , test "save marks syncing" <|
+                \_ ->
+                    let
+                        ed =
+                            let
+                                base =
+                                    AT.emptyAsrConfigEditor
+                            in
+                            { base | show = True, inForm = True, name = "Local", url = "http://127.0.0.1:8080/v1/audio/transcriptions" }
+
+                        m1 =
+                            { initModelWithSession | asrConfigEditor = ed }
+
+                        ( m2, _ ) =
+                            AU.update AT.AsrConfigSave m1
+                    in
+                    Expect.equal True m2.asrConfigEditor.syncing
+            , test "delete arms confirm then deletes" <|
+                \_ ->
+                    let
+                        m1 =
+                            { initModelWithSession
+                                | asrConfig =
+                                    { active = "p1"
+                                    , profiles =
+                                        [ { id = "p1", name = "A", protocol = "transcriptions", url = "http://a", apiKey = "", model = "whisper-1", language = "auto" }
+                                        , { id = "p2", name = "B", protocol = "transcriptions", url = "http://b", apiKey = "", model = "whisper-1", language = "auto" }
+                                        ]
+                                    }
+                            }
+
+                        ( m2, _ ) =
+                            AU.update (AT.AsrConfigDelete "p2") m1
+
+                        ( m3, _ ) =
+                            AU.update AT.AsrConfigDeleteConfirm m2
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal (Just "p2") m2.asrConfigEditor.confirmDelete
+                        , \mm -> Expect.equal True m3.asrConfigEditor.syncing
+                        ]
+                        m3
+            , test "sync result returns to the list with the new profiles" <|
+                \_ ->
+                    let
+                        ed =
+                            let
+                                base =
+                                    AT.emptyAsrConfigEditor
+                            in
+                            { base | show = True, inForm = True, syncing = True }
 
                         m1 =
                             { initModelWithSession | asrConfigEditor = ed }
@@ -313,10 +424,19 @@ tests =
                         ( m2, _ ) =
                             AU.update
                                 (AT.AsrConfigSyncResult
-                                    (asrConfigValue True "transcriptions" "http://127.0.0.1:8080/v1/audio/transcriptions" "k" "whisper-1" "auto" "")
+                                    (asrConfigValue True "p1"
+                                        [ asrProfileValue "p1" "MiMo" "chat_completions" "https://api.xiaomimimo.com/v1/chat/completions" "k" "mimo-v2.5-asr" "zh" ]
+                                        ""
+                                    )
                                 )
                                 m1
                     in
-                    Expect.equal False m2.asrConfigEditor.show
+                    Expect.all
+                        [ \mm -> Expect.equal True mm.asrConfigEditor.show
+                        , \mm -> Expect.equal False mm.asrConfigEditor.inForm
+                        , \mm -> Expect.equal "p1" mm.asrConfig.active
+                        , \mm -> Expect.equal 1 (List.length mm.asrConfig.profiles)
+                        ]
+                        m2
             ]
         ]
