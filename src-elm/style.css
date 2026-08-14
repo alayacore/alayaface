@@ -845,6 +845,13 @@ body {
   color: #fde68a;
 }
 
+.message-error {
+  align-self: flex-start;
+  background: rgba(239, 68, 68, 0.12);
+  border: 2px solid rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+}
+
 .message-content {
   line-height: 1.5;
 }

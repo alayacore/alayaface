@@ -31,10 +31,10 @@ tests =
                 \_ -> Expect.equal False (defaultCollapsed User)
             , test "assistant messages are expanded by default" <|
                 \_ -> Expect.equal False (defaultCollapsed Assistant)
-            , test "system/notify/error messages are expanded by default" <|
+            , test "system is expanded by default; notify/error frames are collapsed" <|
                 \_ ->
                     Expect.equal
-                        [ False, False, False ]
+                        [ False, True, True ]
                         [ defaultCollapsed System
                         , defaultCollapsed Notify
                         , defaultCollapsed Error

@@ -159,6 +159,15 @@ defaultCollapsed role =
         Reasoning ->
             True
 
+        -- Error/Notify frames (incl. local voice-input errors) are
+        -- collapsed by default too: they are transient status rows, not
+        -- conversation content — expand to read the details.
+        Error ->
+            True
+
+        Notify ->
+            True
+
         _ ->
             False
 
