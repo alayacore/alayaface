@@ -46,6 +46,12 @@ port module Ports exposing
     , onAsrResult
     , getCursorPos
     , onCursorPos
+      -- Raw audio input (record → send WAV as a UA frame)
+    , rawAudioStart
+    , rawAudioStop
+    , onRawAudioReady
+    , onRawAudioError
+    , onCaptureAutoStop
       -- Presets
     , listPresets
     , copyPreset
@@ -170,6 +176,22 @@ port voiceStart : { sessionId : String } -> Cmd msg
 port voiceStop : { sessionId : String } -> Cmd msg
 port onVoiceError : (E.Value -> msg) -> Sub msg
 port onAsrResult : (E.Value -> msg) -> Sub msg
+
+-- Raw audio input: same capture, but the WAV is sent straight to
+-- AlayaCore as a UA (user audio) frame — JS emits onRawAudioReady
+-- { sessionId, uri } (data:audio/wav;base64,…) and Elm stages it and
+-- sends immediately. Mic errors come back on onRawAudioError
+-- { sessionId, message }.
+port rawAudioStart : { sessionId : String } -> Cmd msg
+port rawAudioStop : { sessionId : String } -> Cmd msg
+port onRawAudioReady : (E.Value -> msg) -> Sub msg
+port onRawAudioError : (E.Value -> msg) -> Sub msg
+
+-- Both recorders auto-stop after 60s (the JS capture timer); the
+-- bridge notifies Elm so the button/input states reset — after which
+-- the same finish path runs as a manual stop (ASR → transcribe,
+-- raw → encode + onRawAudioReady).
+port onCaptureAutoStop : (E.Value -> msg) -> Sub msg
 
 -- Input cursor: Elm owns session.input but not the textarea caret, so
 -- the voice insert flow reads selectionStart from JS right before

@@ -72,30 +72,42 @@
       app.ports.onCursorPos.send({ sessionId: data.sessionId, pos: pos });
     });
 
-    // ─── Voice input recording ─────────────────────────────────────
+    // ─── Voice input recording (ASR + raw audio) ───────────────────
     // Web-API mic capture (getUserMedia → AudioContext → ScriptProcessor
     // → mono Float32 samples). Works identically in the browser (Go
-    // backend host) and the Tauri webview; on stop the samples are
-    // encoded as 16-bit PCM WAV and sent to asr_transcribe on the
-    // backend (local and remote ASR are OpenAI-compatible endpoints —
-    // they only differ by URL). Transcription is per-session (one active
-    // recorder per session id); Elm keeps voiceActive/asrBusy state and
-    // serializes the toggle.
+    // backend host) and the Tauri webview. Two consumers share one
+    // capture pipeline, distinguished by `kind`:
+    //   - "asr": on stop the samples are encoded as 16-bit PCM WAV and
+    //     sent to asr_transcribe on the backend (local and remote ASR
+    //     are OpenAI-compatible endpoints — they only differ by URL).
+    //   - "raw": on stop the WAV is sent straight to AlayaCore as a UA
+    //     (user audio) frame — JS emits onRawAudioReady with the data
+    //     URI and Elm stages + sends it as a user message.
+    // Recording is per-session (one active recorder per session id) and
+    // both kinds auto-stop after MAX_RECORD_MS (60s) — the bridge tells
+    // Elm via onCaptureAutoStop so the button/input states reset, then
+    // the same finish path runs as a manual stop.
 
-    var voiceRecorders = {}; // sessionId → { ctx, processor, source, samples, stream }
-    // Set when voiceStop arrives while getUserMedia is still pending:
-    // the .then in voiceStart checks it and never starts recording.
-    var voiceCancelled = {};
+    var MAX_RECORD_MS = 60000;
+    var recorders = {}; // sessionId → { ctx, processor, source, samples, stream, kind, timer }
+    // Set when a stop arrives while getUserMedia is still pending: the
+    // .then in beginCapture checks it and never starts recording.
+    var stopCancelled = {};
 
-    function voiceFail(sid, message) {
-      cleanupVoice(sid);
-      delete voiceCancelled[sid];
-      app.ports.onVoiceError.send({ sessionId: sid, message: message });
+    function recorderFail(sid, kind, message) {
+      cleanupRecorder(sid);
+      delete stopCancelled[sid];
+      if (kind === "asr") {
+        app.ports.onVoiceError.send({ sessionId: sid, message: message });
+      } else {
+        app.ports.onRawAudioError.send({ sessionId: sid, message: message });
+      }
     }
 
-    function cleanupVoice(sid) {
-      var rec = voiceRecorders[sid];
+    function cleanupRecorder(sid) {
+      var rec = recorders[sid];
       if (rec) {
+        if (rec.timer) { clearTimeout(rec.timer); }
         try {
           if (rec.processor) { rec.processor.disconnect(); }
           if (rec.source) { rec.source.disconnect(); }
@@ -106,7 +118,7 @@
           }
         } catch (e) { /* ignore */ }
         try { if (rec.ctx && rec.ctx.close) { rec.ctx.close(); } } catch (e) { /* ignore */ }
-        delete voiceRecorders[sid];
+        delete recorders[sid];
       }
     }
 
@@ -153,27 +165,26 @@
       reader.readAsDataURL(blob);
     }
 
-    on("voiceStart", function (data) {
-      var sid = data.sessionId;
-      if (voiceRecorders[sid]) return; // already recording this session
+    function beginCapture(sid, kind) {
+      if (recorders[sid]) return; // already recording this session
       if (!window.isSecureContext) {
         // navigator.mediaDevices only exists on HTTPS or localhost. The
         // Go backend is often reached over a LAN IP (http://192.168.x.x)
         // — that page is NOT a secure context, so the mic is unavailable.
-        console.warn("[voice] insecure context: " + window.location.href);
-        voiceFail(sid, "Microphone access requires a secure context — open the app via http://localhost:PORT or https:// (LAN IP pages cannot use the mic)");
+        console.warn("[capture] insecure context: " + window.location.href);
+        recorderFail(sid, kind, "Microphone access requires a secure context — open the app via http://localhost:PORT or https:// (LAN IP pages cannot use the mic)");
         return;
       }
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        voiceFail(sid, "Microphone access is not supported in this browser/webview");
+        recorderFail(sid, kind, "Microphone access is not supported in this browser/webview");
         return;
       }
       navigator.mediaDevices.getUserMedia({ audio: true })
         .then(function (stream) {
-          if (voiceCancelled[sid]) {
-            // The user clicked stop before the mic came up; release
-            // the stream and never start recording.
-            delete voiceCancelled[sid];
+          if (stopCancelled[sid]) {
+            // The user stopped before the mic came up; release the
+            // stream and never start recording.
+            delete stopCancelled[sid];
             try { stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { /* ignore */ }
             return;
           }
@@ -196,39 +207,55 @@
           };
           source.connect(processor);
           processor.connect(ctx.destination); // keep the graph running
-          voiceRecorders[sid] = {
-            ctx: ctx, processor: processor, source: source, samples: samples, stream: stream,
+          recorders[sid] = {
+            ctx: ctx, processor: processor, source: source, samples: samples, stream: stream, kind: kind,
           };
+          // 60s cap: auto-stop behaves exactly like a manual stop. Elm
+          // must reset its recording state first (onCaptureAutoStop),
+          // then the regular finish path reports the result.
+          recorders[sid].timer = setTimeout(function () {
+            app.ports.onCaptureAutoStop.send({ sessionId: sid, kind: kind });
+            finishCapture(sid, kind);
+          }, MAX_RECORD_MS);
         })
         .catch(function (err) {
-          voiceFail(sid, "Microphone error: " + ((err && err.message) ? err.message : err));
+          recorderFail(sid, kind, "Microphone error: " + ((err && err.message) ? err.message : err));
         });
-    });
+    }
 
-    on("voiceStop", function (data) {
-      var sid = data.sessionId;
-      var rec = voiceRecorders[sid];
+    function finishCapture(sid, kind) {
+      var rec = recorders[sid];
       if (!rec) {
         // Stop before the mic finished coming up: mark the pending
-        // start as cancelled (voiceStart's .then releases the stream).
-        if (!voiceCancelled[sid]) {
-          voiceCancelled[sid] = true;
-          app.ports.onAsrResult.send({ sessionId: sid, ok: false, text: "", error: "Not recording" });
+        // start as cancelled (beginCapture's .then releases the stream).
+        if (!stopCancelled[sid]) {
+          stopCancelled[sid] = true;
+          if (kind === "asr") {
+            app.ports.onAsrResult.send({ sessionId: sid, ok: false, text: "", error: "Not recording" });
+          } else {
+            app.ports.onRawAudioError.send({ sessionId: sid, message: "Not recording" });
+          }
         }
         return;
       }
-      delete voiceCancelled[sid];
+      delete stopCancelled[sid];
       var samples = rec.samples || [];
       var sampleRate = rec.ctx && rec.ctx.sampleRate ? rec.ctx.sampleRate : 16000;
-      console.log("[voice] stop sid=" + sid + " samples=" + samples.length +
+      console.log("[capture] stop sid=" + sid + " kind=" + kind + " samples=" + samples.length +
         " rate=" + sampleRate + " ctxState=" + (rec.ctx ? rec.ctx.state : "n/a"));
-      cleanupVoice(sid);
+      cleanupRecorder(sid);
       var wav = wavFromSamples(samples, sampleRate);
       if (wav.size < 1000) {
-        app.ports.onAsrResult.send({ sessionId: sid, ok: false, text: "", error: "No speech detected" });
+        recorderFail(sid, kind, kind === "asr" ? "No speech detected" : "No audio detected");
         return;
       }
       blobToBase64(wav, function (b64) {
+        if (kind === "raw") {
+          // Raw audio input: hand the WAV data URI to Elm, which stages
+          // it and sends it immediately as a UA frame (send_prompt).
+          app.ports.onRawAudioReady.send({ sessionId: sid, uri: "data:audio/wav;base64," + b64 });
+          return;
+        }
         transport.invoke("asr_transcribe", { sessionId: sid, audioBase64: b64 })
           .then(function (res) {
             app.ports.onAsrResult.send({
@@ -245,7 +272,12 @@
             });
           });
       });
-    });
+    }
+
+    on("voiceStart", function (data) { beginCapture(data.sessionId, "asr"); });
+    on("voiceStop", function (data) { finishCapture(data.sessionId, "asr"); });
+    on("rawAudioStart", function (data) { beginCapture(data.sessionId, "raw"); });
+    on("rawAudioStop", function (data) { finishCapture(data.sessionId, "raw"); });
 
     on("scrollIntoView", function (id) {
       var el = document.getElementById(id);

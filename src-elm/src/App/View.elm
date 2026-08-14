@@ -1795,17 +1795,22 @@ viewInputBar model session =
         planBlocking =
             PU.planRunningForSession model session.id
 
-        -- Voice input also locks the textarea: while recording and
-        -- while the ASR result is still in flight (the mic button turns
-        -- into a cancel so the user can abandon the transcription).
+        -- Voice input also locks the textarea: while recording (ASR or
+        -- raw audio) and while the ASR result is still in flight (the
+        -- mic button turns into a cancel so the user can abandon the
+        -- transcription).
         inputDisabled =
-            not session.connected || planBlocking || session.voiceActive || session.asrBusy
+            not session.connected || planBlocking || session.voiceActive || session.asrBusy || session.rawRecording
 
-        -- The mic button itself must stay clickable whenever the session
-        -- is usable — during recording (to stop) and during transcription
-        -- (to cancel) — so it only follows connection/plan blocking.
+        -- The capture buttons must stay clickable whenever the session
+        -- is usable — during their own recording (to stop) and during
+        -- transcription (to cancel) — but raw recording locks the ASR
+        -- mic (mutual exclusion) and vice versa.
         micLocked =
-            not session.connected || planBlocking
+            not session.connected || planBlocking || session.rawRecording
+
+        rawLocked =
+            not session.connected || planBlocking || session.voiceActive || session.asrBusy
 
         inputClass =
             "session-input-bar" ++ (if not hasMessages then " session-input-bar-centered" else "")
@@ -1927,6 +1932,22 @@ viewInputBar model session =
                           else
                             Icons.mic
                         ]
+                    , Html.button
+                        [ Attr.class
+                            ("footer-btn raw-btn"
+                                ++ (if session.rawRecording then " recording" else "")
+                            )
+                        , Ev.onClick (ForSession session.id RawAudioInput)
+                        , Attr.title
+                            (if session.rawRecording then
+                                "Stop recording and send as audio"
+
+                             else
+                                "Record audio and send it to the model"
+                            )
+                        , Attr.disabled rawLocked
+                        ]
+                        [ Icons.audio ]
                     , Html.button
                         [ Attr.class
                             ("footer-btn send-btn"

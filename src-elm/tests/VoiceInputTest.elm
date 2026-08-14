@@ -54,6 +54,22 @@ cursorResult sid pos =
         ]
 
 
+rawAudioReadyValue : String -> String -> E.Value
+rawAudioReadyValue sid uri =
+    E.object
+        [ ( "sessionId", E.string sid )
+        , ( "uri", E.string uri )
+        ]
+
+
+captureAutoStopValue : String -> String -> E.Value
+captureAutoStopValue sid kind =
+    E.object
+        [ ( "sessionId", E.string sid )
+        , ( "kind", E.string kind )
+        ]
+
+
 asrConfigValue : Bool -> String -> List E.Value -> String -> E.Value
 asrConfigValue ok active profiles error =
     E.object
@@ -189,6 +205,116 @@ tests =
                             AU.update (AT.CursorPosResult (cursorResult "s1" 5)) m1
                     in
                     Expect.equal "hello world" (session m2).input
+            ]
+        , describe "RawAudioInput (raw audio → UA frame)"
+            [ test "first click starts raw recording (rawRecording)" <|
+                \_ ->
+                    let
+                        ( m, _ ) =
+                            AU.update AT.RawAudioInput initModelWithSession
+                    in
+                    Expect.all
+                        [ \mm -> Expect.equal True (session mm).rawRecording
+                        , \mm -> Expect.equal False (session mm).voiceActive
+                        ]
+                        m
+            , test "second click stops raw recording" <|
+                \_ ->
+                    let
+                        m1 =
+                            updateSession (\s -> { s | rawRecording = True }) initModelWithSession
+
+                        ( m2, _ ) =
+                            AU.update AT.RawAudioInput m1
+                    in
+                    Expect.equal False (session m2).rawRecording
+            , test "raw input ignored while ASR is recording or transcribing" <|
+                \_ ->
+                    let
+                        m1 =
+                            updateSession (\s -> { s | voiceActive = True }) initModelWithSession
+
+                        ( m2, _ ) =
+                            AU.update AT.RawAudioInput m1
+                    in
+                    Expect.all
+                        [ \mm -> Expect.equal False (session mm).rawRecording
+                        , \mm -> Expect.equal True (session mm).voiceActive
+                        ]
+                        m2
+            , test "a recorded clip is staged and sent immediately with the typed text" <|
+                \_ ->
+                    let
+                        m1 =
+                            updateSession (\s -> { s | input = "describe this" }) initModelWithSession
+
+                        ( m2, _ ) =
+                            AU.update (AT.RawAudioReady (rawAudioReadyValue "s1" "data:audio/wav;base64,AAAA")) m1
+                    in
+                    Expect.all
+                        [ \mm -> Expect.equal "" (session mm).input
+                        , \mm -> Expect.equal [] (session mm).staged
+                        , \mm -> Expect.equal True (session mm).sendPending
+                        , \mm -> Expect.equal "Sending…" (session mm).statusMsg
+                        ]
+                        m2
+            , test "a clip alone (no text) still sends" <|
+                \_ ->
+                    let
+                        ( m, _ ) =
+                            AU.update (AT.RawAudioReady (rawAudioReadyValue "s1" "data:audio/wav;base64,AAAA")) initModelWithSession
+                    in
+                    Expect.equal True (session m).sendPending
+            , test "raw mic failure appends an error and clears recording" <|
+                \_ ->
+                    let
+                        m1 =
+                            updateSession (\s -> { s | rawRecording = True }) initModelWithSession
+
+                        ( m2, _ ) =
+                            AU.update
+                                (AT.RawAudioError
+                                    (E.object
+                                        [ ( "sessionId", E.string "s1" )
+                                        , ( "message", E.string "permission denied" )
+                                        ]
+                                    )
+                                )
+                                m1
+                    in
+                    Expect.all
+                        [ \mm -> Expect.equal False (session mm).rawRecording
+                        , \mm -> Expect.equal "Audio input error: permission denied" (lastMsgText mm)
+                        ]
+                        m2
+            , test "auto-stop (60s) for ASR moves to transcribing" <|
+                \_ ->
+                    let
+                        m1 =
+                            updateSession (\s -> { s | voiceActive = True }) initModelWithSession
+
+                        ( m2, _ ) =
+                            AU.update (AT.CaptureAutoStop (captureAutoStopValue "s1" "asr")) m1
+                    in
+                    Expect.all
+                        [ \mm -> Expect.equal False (session mm).voiceActive
+                        , \mm -> Expect.equal True (session mm).asrBusy
+                        ]
+                        m2
+            , test "auto-stop (60s) for raw clears rawRecording" <|
+                \_ ->
+                    let
+                        m1 =
+                            updateSession (\s -> { s | rawRecording = True }) initModelWithSession
+
+                        ( m2, _ ) =
+                            AU.update (AT.CaptureAutoStop (captureAutoStopValue "s1" "raw")) m1
+                    in
+                    Expect.all
+                        [ \mm -> Expect.equal False (session mm).rawRecording
+                        , \mm -> Expect.equal False (session mm).asrBusy
+                        ]
+                        m2
             ]
         , describe "AsrResult"
             [ test "success with text parks the transcript and asks for the caret" <|

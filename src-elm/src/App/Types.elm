@@ -338,6 +338,10 @@ type Msg
     | CancelTask
     | VoiceInput
     | CancelAsr
+    | RawAudioInput
+    | RawAudioReady E.Value
+    | RawAudioError E.Value
+    | CaptureAutoStop E.Value
     | SetModel Int
     | SetReasoningLevel Int
     | ConfirmTool String String Bool

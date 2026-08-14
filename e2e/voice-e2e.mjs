@@ -14,6 +14,9 @@
 //      the input unlocks
 //   7. cancel scenario: slow ASR response → click the mic cancel → the
 //      input unlocks and the late result is dropped (no insert, no error)
+//   8. raw audio: type text, record with the raw button (input/send/ASR
+//      locked) → stop → the WAV data URI is sent as a UA frame with the
+//      text; fakecore echoes it back as an audio chip
 //
 // ALL PASS printed on success. Screenshots land in the artifact dir.
 import puppeteer from 'puppeteer-core';
@@ -269,6 +272,39 @@ try {
     'mic idle after dropped result: ' + finalMic.cls);
   asrSlow = false;
   await shot('04-cancelled.png');
+
+  // ── 8. raw audio → UA frame ─────────────────────────────────────
+  // Type some text, record raw audio (input/send/ASR locked), stop →
+  // the WAV data URI is sent as a UA frame together with the text;
+  // fakecore echoes it back and the session shows an audio chip.
+  const btnState = (sel) => page.evaluate((s) => {
+    const btn = document.querySelector(s);
+    return { cls: btn ? btn.className : '', disabled: btn ? btn.disabled : null };
+  }, sel);
+  await page.type(taSel, 'describe this audio');
+  await sleep(200);
+  await page.$eval('.raw-btn', el => el.click());
+  await sleep(1200);
+  const rawRec = await btnState('.raw-btn');
+  assert(rawRec.cls.includes('recording'), 'raw button enters recording state: ' + rawRec.cls);
+  assert(rawRec.disabled === false, 'raw button stays clickable while recording (to stop)');
+  assert((await taState()).disabled === true, 'input disabled while raw recording');
+  assert((await btnState('.send-btn')).disabled === true, 'send disabled while raw recording');
+  assert((await btnState('.mic-btn')).disabled === true, 'ASR mic disabled while raw recording');
+  await shot('05-raw-recording.png');
+
+  await page.$eval('.raw-btn', el => el.click());
+  await sleep(3000); // encode → send_prompt → UA echo → message render
+  const rawDone = await btnState('.raw-btn');
+  assert(!rawDone.cls.includes('recording'), 'raw button back to normal: ' + rawDone.cls);
+  assert((await taState()).disabled === false, 'input re-enabled after raw send');
+  const afterRaw = await page.$eval(taSel, el => ({ v: el.value }));
+  assert(afterRaw.v === '', 'input cleared after raw send: ' + afterRaw.v);
+  const audioChip = await page.$('.message-media-chip');
+  assert(!!audioChip, 'UA echo rendered an audio chip');
+  const bodyText = await page.evaluate(() => document.body.textContent || '');
+  assert(bodyText.includes('describe this audio'), 'typed text went along with the audio');
+  await shot('06-raw-sent.png');
 
   await browser.close();
   killAll();

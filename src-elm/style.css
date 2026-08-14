@@ -1471,22 +1471,27 @@ body {
   gap: 2px; /* same as the left cluster: uniform spacing */
 }
 
-/* Voice input (ASR): the mic button pulses red while recording; while
-   a transcription is in flight it turns into a red cancel (the .cancel
-   state above) so the user can abandon the pending result. */
-.mic-btn.recording {
+/* Voice input (ASR) + raw audio input: the capture buttons pulse red
+   while recording; while an ASR transcription is in flight the mic
+   turns into a red cancel (the .cancel state above) so the user can
+   abandon the pending result. */
+.mic-btn.recording,
+.raw-btn.recording {
   color: #ef4444;
   background: rgba(239, 68, 68, 0.12);
   animation: mic-pulse 1.4s ease-in-out infinite;
 }
-.mic-btn.recording:hover { color: #ef4444; background: rgba(239, 68, 68, 0.2); }
+.mic-btn.recording:hover,
+.raw-btn.recording:hover { color: #ef4444; background: rgba(239, 68, 68, 0.2); }
 @keyframes mic-pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.35); }
   50% { box-shadow: 0 0 0 5px rgba(239, 68, 68, 0); }
 }
 @media (prefers-color-scheme: light) {
-  .mic-btn.recording { color: #dc2626; background: rgba(220, 38, 38, 0.12); }
-  .mic-btn.recording:hover { color: #dc2626; background: rgba(220, 38, 38, 0.2); }
+  .mic-btn.recording,
+  .raw-btn.recording { color: #dc2626; background: rgba(220, 38, 38, 0.12); }
+  .mic-btn.recording:hover,
+  .raw-btn.recording:hover { color: #dc2626; background: rgba(220, 38, 38, 0.2); }
 }
 
 @media (prefers-color-scheme: light) {

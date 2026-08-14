@@ -1,4 +1,4 @@
-module Icons exposing (paperclip, chip, chevron, check, cross, running, send, mic, bulb, stop)
+module Icons exposing (paperclip, chip, chevron, check, cross, running, send, mic, bulb, stop, audio)
 
 {-| Hand-drawn SVG icons for the input-bar footer (replacing the old
 emoji buttons). All icons share a chunky, short-and-fat, near-square
@@ -7,6 +7,7 @@ inherit the button's color (and hover color) automatically.
 
 - paperclip — attachment (vertical orientation, two loops)
 - chip      — model selector (CPU die + pins)
+- audio     — sound-wave bars (raw audio input: record and send as UA)
 
 Rendered with elm/svg: the root `Svg.svg` is the HTML-embedding bridge
 (returns `Html msg`), inner shapes get the proper SVG namespace.
@@ -200,4 +201,18 @@ stop =
             , SAttr.stroke "none"
             ]
             []
+        ]
+
+
+{-| Audio: five sound-wave bars of increasing/decreasing height — the
+raw audio input button (record the mic and send the WAV as a UA frame).
+-}
+audio : Html msg
+audio =
+    icon []
+        [ path [ SAttr.d "M4 10 v4" ] []
+        , path [ SAttr.d "M8 6.5 v11" ] []
+        , path [ SAttr.d "M12 3.5 v17" ] []
+        , path [ SAttr.d "M16 6.5 v11" ] []
+        , path [ SAttr.d "M20 10 v4" ] []
         ]

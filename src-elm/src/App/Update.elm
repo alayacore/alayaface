@@ -189,6 +189,50 @@ getActiveSession model =
             Nothing
 
 
+{-| Shared send path for SendPrompt and the raw-audio flow: builds the
+media list from the session's staged items, clears the input, marks the
+prompt pending, and fires the sendPrompt port (the backend packs the
+staged URIs into UA/UI/UV/UD frames + UE).
+-}
+doSendPrompt : Model -> T.SessionState -> ( Model, Cmd Msg )
+doSendPrompt model s =
+    let
+        text =
+            String.trim s.input
+
+        mediaItems =
+            List.map
+                (\m ->
+                    E.object
+                        [ ( "media_type", E.string (T.mediaTypeToString m.mediaType) )
+                        , ( "uri", E.string m.uri )
+                        ]
+                )
+                s.staged
+    in
+    if text == "" && List.isEmpty s.staged then
+        ( model, Cmd.none )
+
+    else
+        ( { model
+            | inputRows = 1
+            , sessions = Dict.insert s.id
+                { s
+                    | input = ""
+                    , staged = []
+                    , statusMsg = "Sending…"
+                    , sendPending = True
+                }
+                model.sessions
+          }
+        , Ports.sendPrompt
+            { sessionId = PU.workCopyId model s.id
+            , text = text
+            , media = mediaItems
+            }
+        )
+
+
 {-| Update one field of the ASR config editor (the Msg payload already
 carries the new value; only the field selector differs). Clears any
 previous error so the user can fix the field without dismissing the
@@ -1468,41 +1512,7 @@ update msg model =
         SendPrompt ->
             case getActiveSession model of
                 Just s ->
-                    let
-                        text =
-                            String.trim s.input
-
-                        mediaItems =
-                            List.map
-                                (\m ->
-                                    E.object
-                                        [ ( "media_type", E.string (T.mediaTypeToString m.mediaType) )
-                                        , ( "uri", E.string m.uri )
-                                        ]
-                                )
-                                s.staged
-                    in
-                    if text == "" && List.isEmpty s.staged then
-                        ( model, Cmd.none )
-
-                    else
-                        ( { model
-                            | inputRows = 1
-                            , sessions = Dict.insert s.id
-                                { s
-                                    | input = ""
-                                    , staged = []
-                                    , statusMsg = "Sending…"
-                                    , sendPending = True
-                                }
-                                model.sessions
-                          }
-                        , Ports.sendPrompt
-                            { sessionId = PU.workCopyId model s.id
-                            , text = text
-                            , media = mediaItems
-                            }
-                        )
+                    doSendPrompt model s
 
                 Nothing ->
                     ( model, Cmd.none )
@@ -1596,6 +1606,119 @@ update msg model =
                         ( model, Cmd.none )
 
                 Nothing ->
+                    ( model, Cmd.none )
+
+        RawAudioInput ->
+            -- Toggle raw audio recording: click records the mic, click
+            -- again stops and sends the audio to AlayaCore as a UA
+            -- (user audio) frame. While recording, the input box, the
+            -- send button and the ASR mic button are disabled (the raw
+            -- button itself stays clickable to stop).
+            case getActiveSession model of
+                Just s ->
+                    if s.asrBusy || s.voiceActive then
+                        -- ASR is recording/transcribing; the raw button
+                        -- is disabled in that state (mutual exclusion).
+                        ( model, Cmd.none )
+
+                    else if s.rawRecording then
+                        ( { model
+                            | sessions =
+                                Dict.insert s.id
+                                    { s | rawRecording = False }
+                                    model.sessions
+                          }
+                        , Ports.rawAudioStop { sessionId = s.id }
+                        )
+
+                    else
+                        ( { model
+                            | sessions =
+                                Dict.insert s.id
+                                    { s | rawRecording = True }
+                                    model.sessions
+                          }
+                        , Ports.rawAudioStart { sessionId = s.id }
+                        )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        RawAudioReady raw ->
+            -- JS finished encoding the recording as a WAV data URI:
+            -- stage it and send immediately — the audio goes out with
+            -- whatever text the user had typed, as one user message
+            -- (the UA frame carries the data URI).
+            case D.decodeValue rawAudioReadyDecoder raw of
+                Ok { sessionId, uri } ->
+                    case Dict.get sessionId model.sessions of
+                        Just s ->
+                            let
+                                item =
+                                    { id = "raw-" ++ String.fromInt (List.length s.staged)
+                                    , mediaType = T.Audio
+                                    , uri = uri
+                                    , name = Just "Recording"
+                                    }
+                            in
+                            doSendPrompt model { s | staged = s.staged ++ [ item ] }
+
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        RawAudioError raw ->
+            -- Mic/recording failure from the raw-audio bridge; surfaced
+            -- as an error message like the ASR mic errors.
+            case D.decodeValue voiceErrorDecoder raw of
+                Ok { sessionId, message } ->
+                    case Dict.get sessionId model.sessions of
+                        Just s ->
+                            ( { model
+                                | sessions =
+                                    Dict.insert sessionId
+                                        (appendErrorMsg
+                                            { s | rawRecording = False }
+                                            ("Audio input error: " ++ message)
+                                        )
+                                        model.sessions
+                              }
+                            , Cmd.none
+                            )
+
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        CaptureAutoStop raw ->
+            -- The JS capture timer hit the 60s cap and auto-stopped a
+            -- recorder. Sync Elm's state so the buttons/input unlock;
+            -- the finish path (ASR transcribe / raw encode+send) runs
+            -- on the JS side and reports back through the usual ports.
+            case D.decodeValue captureAutoStopDecoder raw of
+                Ok { sessionId, kind } ->
+                    case Dict.get sessionId model.sessions of
+                        Just s ->
+                            let
+                                s1 =
+                                    if kind == "asr" then
+                                        { s | voiceActive = False, asrBusy = True }
+
+                                    else
+                                        { s | rawRecording = False }
+                            in
+                            ( { model | sessions = Dict.insert sessionId s1 model.sessions }
+                            , Cmd.none
+                            )
+
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                Err _ ->
                     ( model, Cmd.none )
 
         VoiceError raw ->
@@ -6706,6 +6829,22 @@ voiceErrorDecoder =
         (\sessionId message -> { sessionId = sessionId, message = message })
         (D.field "sessionId" D.string)
         (D.field "message" D.string)
+
+
+rawAudioReadyDecoder : D.Decoder { sessionId : String, uri : String }
+rawAudioReadyDecoder =
+    D.map2
+        (\sessionId uri -> { sessionId = sessionId, uri = uri })
+        (D.field "sessionId" D.string)
+        (D.field "uri" D.string)
+
+
+captureAutoStopDecoder : D.Decoder { sessionId : String, kind : String }
+captureAutoStopDecoder =
+    D.map2
+        (\sessionId kind -> { sessionId = sessionId, kind = kind })
+        (D.field "sessionId" D.string)
+        (D.field "kind" D.string)
 
 
 asrResultDecoder : D.Decoder { sessionId : String, ok : Bool, text : String, error : String }

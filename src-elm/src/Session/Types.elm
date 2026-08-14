@@ -268,9 +268,13 @@ type alias SessionState =
       -- (waiting for the asr_transcribe result — the mic button turns
       -- into a cancel); asrDiscard = the user cancelled a pending
       -- transcription, so its result must be dropped when it arrives.
+      -- rawRecording = the raw-audio button is recording the mic; on
+      -- stop the WAV data URI is sent straight to AlayaCore as a UA
+      -- (user audio) frame.
     , voiceActive : Bool
     , asrBusy : Bool
     , asrDiscard : Bool
+    , rawRecording : Bool
     }
 
 
@@ -454,4 +458,5 @@ emptySession id =
     , voiceActive = False
     , asrBusy = False
     , asrDiscard = False
+    , rawRecording = False
     }
