@@ -156,8 +156,16 @@
     on("voiceStart", function (data) {
       var sid = data.sessionId;
       if (voiceRecorders[sid]) return; // already recording this session
+      if (!window.isSecureContext) {
+        // navigator.mediaDevices only exists on HTTPS or localhost. The
+        // Go backend is often reached over a LAN IP (http://192.168.x.x)
+        // — that page is NOT a secure context, so the mic is unavailable.
+        console.warn("[voice] insecure context: " + window.location.href);
+        voiceFail(sid, "Microphone access requires a secure context — open the app via http://localhost:PORT or https:// (LAN IP pages cannot use the mic)");
+        return;
+      }
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        voiceFail(sid, "Microphone access is not supported in this webview");
+        voiceFail(sid, "Microphone access is not supported in this browser/webview");
         return;
       }
       navigator.mediaDevices.getUserMedia({ audio: true })
