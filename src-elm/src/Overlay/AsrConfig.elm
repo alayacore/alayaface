@@ -71,6 +71,9 @@ protocolLabel protocol =
     if protocol == "chat_completions" then
         "chat completions"
 
+    else if protocol == "step_audio" then
+        "step audio"
+
     else
         "transcriptions"
 
@@ -223,9 +226,11 @@ formView cfg =
                             [ Html.text "OpenAI /audio/transcriptions (multipart upload)" ]
                         , Html.option [ Attr.value "chat_completions", Attr.selected (cfg.protocol == "chat_completions") ]
                             [ Html.text "Chat completions (MiMo-style, JSON + api-key)" ]
+                        , Html.option [ Attr.value "step_audio", Attr.selected (cfg.protocol == "step_audio") ]
+                            [ Html.text "StepAudio (StepFun, SSE + Bearer auth)" ]
                         ]
                     , Html.div [ Attr.class "me-hint" ]
-                        [ Html.text "\"transcriptions\": OpenAI-compatible multipart upload (most local whisper servers). \"chat_completions\": JSON body with input_audio base64 and api-key header (e.g. MiMo)." ]
+                        [ Html.text "\"transcriptions\": OpenAI-compatible multipart upload (most local whisper servers). \"chat_completions\": JSON body with input_audio base64 and api-key header (e.g. MiMo). \"step_audio\": StepFun realtime ASR — JSON with raw PCM audio, Accept: text/event-stream, Authorization: Bearer." ]
                     ]
                 , Html.div [ Attr.class "me-field" ]
                     [ Html.label [ Attr.class "me-field-label" ] [ Html.text "Endpoint URL" ]
@@ -253,7 +258,7 @@ formView cfg =
                         ]
                         []
                     , Html.div [ Attr.class "me-hint" ]
-                        [ Html.text "transcriptions → Authorization: Bearer; chat_completions → api-key header. Leave empty for local servers that don't require it." ]
+                        [ Html.text "transcriptions → Authorization: Bearer; chat_completions → api-key header; step_audio → Authorization: Bearer. Leave empty for local servers that don't require it." ]
                     ]
                 , Html.div [ Attr.class "me-field" ]
                     [ Html.label [ Attr.class "me-field-label" ] [ Html.text "Model" ]

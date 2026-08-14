@@ -347,3 +347,124 @@ func TestAsrTranscribeChatHTTPError(t *testing.T) {
 		}
 	})
 }
+
+// makeWav builds a minimal 16-bit mono PCM WAV with the given sample
+// rate and payload.
+func makeWav(rate uint32, payload []byte) []byte {
+	wav := make([]byte, 0, 44+len(payload))
+	wav = append(wav, []byte("RIFF")...)
+	size := 36 + uint32(len(payload))
+	wav = append(wav, byte(size), byte(size>>8), byte(size>>16), byte(size>>24))
+	wav = append(wav, []byte("WAVE")...)
+	wav = append(wav, []byte("fmt ")...)
+	wav = append(wav, 16, 0, 0, 0) // fmt size
+	wav = append(wav, 1, 0)        // PCM
+	wav = append(wav, 1, 0)        // mono
+	wav = append(wav, byte(rate), byte(rate>>8), byte(rate>>16), byte(rate>>24))
+	byteRate := rate * 2
+	wav = append(wav, byte(byteRate), byte(byteRate>>8), byte(byteRate>>16), byte(byteRate>>24))
+	wav = append(wav, 2, 0)  // block align
+	wav = append(wav, 16, 0) // bits
+	wav = append(wav, []byte("data")...)
+	dataSize := uint32(len(payload))
+	wav = append(wav, byte(dataSize), byte(dataSize>>8), byte(dataSize>>16), byte(dataSize>>24))
+	wav = append(wav, payload...)
+	return wav
+}
+
+// fakeStepAudioServer serves a StepFun StepAudio endpoint: asserts the
+// headers (Content-Type/Accept/Authorization), the JSON body shape
+// (format from the WAV header, raw PCM base64 in audio.data), and
+// answers an SSE stream with delta/done events.
+func fakeStepAudioServer(t *testing.T) (*httptest.Server, *string) {
+	t.Helper()
+	var audioBase64 string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+			t.Errorf("Content-Type = %q", ct)
+		}
+		if got := r.Header.Get("Accept"); got != "text/event-stream" {
+			t.Errorf("Accept = %q, want text/event-stream", got)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer stepkey" {
+			t.Errorf("Authorization = %q, want Bearer stepkey", got)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("bad JSON body: %v", err)
+			w.WriteHeader(400)
+			return
+		}
+		audio, _ := body["audio"].(map[string]any)
+		audioBase64, _ = audio["data"].(string)
+		input, _ := audio["input"].(map[string]any)
+		tr, _ := input["transcription"].(map[string]any)
+		if tr["model"] != "stepaudio-2.5-asr" || tr["language"] != "zh" {
+			t.Errorf("transcription = %v", tr)
+		}
+		if tr["enable_itn"] != true || tr["enable_timestamp"] != true {
+			t.Errorf("enable flags = %v", tr)
+		}
+		f, _ := input["format"].(map[string]any)
+		if f["type"] != "pcm" || f["codec"] != "pcm_s16le" || f["rate"] != float64(16000) || f["bits"] != float64(16) || f["channel"] != float64(1) {
+			t.Errorf("format = %v", f)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte("data: {\"type\":\"transcript.text.delta\",\"delta\":\"识别\"}\n\n" +
+			"data: {\"type\":\"transcript.text.delta\",\"delta\":\"的文字\"}\n\n" +
+			"data: {\"type\":\"transcript.text.done\",\"text\":\"识别的完整文字\"}\n\n"))
+	}))
+	return srv, &audioBase64
+}
+
+func TestAsrTranscribeStepAudio(t *testing.T) {
+	isolatedHome(t, func() {
+		srv, audioBase64 := fakeStepAudioServer(t)
+		defer srv.Close()
+
+		payload := []byte{0, 0, 1, 0, 2, 0, 3, 0}
+		wav := makeWav(16000, payload)
+		p := AsrProfile{
+			ID:       "p1",
+			Name:     "step",
+			Protocol: ProtocolStepAudio,
+			URL:      srv.URL,
+			APIKey:   "stepkey",
+			Model:    "",
+			Language: "zh",
+		}
+		res := asrTranscribeStepAudio(p, wav)
+		if !res.Ok || res.Text != "识别的完整文字" {
+			t.Errorf("result = %+v", res)
+		}
+		// The payload is RAW PCM: the WAV header is stripped.
+		decoded, err := base64.StdEncoding.DecodeString(*audioBase64)
+		if err != nil || string(decoded) != string(payload) {
+			t.Errorf("pcm roundtrip failed: %q err=%v", *audioBase64, err)
+		}
+	})
+}
+
+func TestAsrTranscribeStepAudioErrorEvent(t *testing.T) {
+	isolatedHome(t, func() {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Write([]byte("data: {\"type\":\"error\",\"message\":\"invalid audio\"}\n\n"))
+		}))
+		defer srv.Close()
+
+		res := asrTranscribeStepAudio(AsrProfile{Protocol: ProtocolStepAudio, URL: srv.URL}, makeWav(16000, []byte{0, 1, 2, 3}))
+		if res.Ok || !strings.Contains(res.Error, "invalid audio") {
+			t.Errorf("result = %+v", res)
+		}
+	})
+}
+
+func TestAsrTranscribeStepAudioRejectsNonPcmWav(t *testing.T) {
+	isolatedHome(t, func() {
+		res := asrTranscribeStepAudio(AsrProfile{Protocol: ProtocolStepAudio, URL: "http://x"}, []byte("not a wav"))
+		if res.Ok || !strings.Contains(res.Error, "Invalid WAV") {
+			t.Errorf("result = %+v", res)
+		}
+	})
+}

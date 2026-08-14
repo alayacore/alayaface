@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,6 +22,7 @@ import (
 const (
 	ProtocolTranscriptions = "transcriptions"
 	ProtocolChatCompletions = "chat_completions"
+	ProtocolStepAudio       = "step_audio"
 )
 
 // AsrProfile is one ASR endpoint configuration (a named profile).
@@ -85,7 +87,7 @@ func NormalizeAsrProfile(p *AsrProfile) {
 			p.Name = strings.TrimSpace(p.URL)
 		}
 	}
-	if p.Protocol != ProtocolChatCompletions {
+	if p.Protocol != ProtocolChatCompletions && p.Protocol != ProtocolStepAudio {
 		p.Protocol = ProtocolTranscriptions
 	}
 	if strings.TrimSpace(p.Model) == "" {
@@ -247,6 +249,8 @@ func AsrTranscribe(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	var res AsrTranscribeResult
 	if p.Protocol == ProtocolChatCompletions {
 		res = asrTranscribeChat(*p, args.AudioBase64, wav)
+	} else if p.Protocol == ProtocolStepAudio {
+		res = asrTranscribeStepAudio(*p, wav)
 	} else {
 		res = asrTranscribeMultipart(*p, wav)
 	}
@@ -381,6 +385,154 @@ func asrTranscribeChat(p AsrProfile, audioBase64 string, wav []byte) AsrTranscri
 		return res
 	}
 	return AsrTranscribeResult{Ok: true, Text: extractChatText(res.Text), Error: ""}
+}
+
+// asrTranscribeStepAudio POSTs a StepFun StepAudio realtime ASR request:
+// JSON body with audio.data = RAW PCM base64 (the WAV container from the
+// webview is stripped here; the format fields are read from the WAV
+// header so they always match the actual audio), Accept:
+// text/event-stream, Authorization: Bearer. SSE events:
+// transcript.text.delta accumulates, transcript.text.done carries the
+// final text (fallback to accumulated deltas), error aborts.
+func asrTranscribeStepAudio(p AsrProfile, wav []byte) AsrTranscribeResult {
+	url := strings.TrimSpace(p.URL)
+	if url == "" {
+		return AsrTranscribeResult{Ok: false, Error: "ASR not configured: set the endpoint URL in the ASR config"}
+	}
+	rate, channels, bits, dataOffset, ok := wavParams(wav)
+	if !ok {
+		return AsrTranscribeResult{Ok: false, Error: "Invalid WAV audio: expected 16-bit PCM mono (RIFF/WAVE)"}
+	}
+	if bits != 16 || channels != 1 {
+		return AsrTranscribeResult{Ok: false, Error: fmt.Sprintf("StepAudio needs 16-bit mono PCM, got %d-bit x %d ch", bits, channels)}
+	}
+	pcm := wav[dataOffset:]
+	pcmBase64 := base64.StdEncoding.EncodeToString(pcm)
+	model := strings.TrimSpace(p.Model)
+	if model == "" {
+		model = "stepaudio-2.5-asr"
+	}
+	lang := strings.TrimSpace(p.Language)
+	if lang == "" {
+		lang = "auto"
+	}
+
+	body, err := json.Marshal(map[string]any{
+		"audio": map[string]any{
+			"data": pcmBase64,
+			"input": map[string]any{
+				"transcription": map[string]any{
+					"language":          lang,
+					"hotwords":          []string{},
+					"model":             model,
+					"enable_itn":        true,
+					"enable_timestamp":  true,
+				},
+				"format": map[string]any{
+					"type":    "pcm",
+					"codec":   "pcm_s16le",
+					"rate":    rate,
+					"bits":    bits,
+					"channel": channels,
+				},
+			},
+		},
+	})
+	if err != nil {
+		return AsrTranscribeResult{Ok: false, Error: err.Error()}
+	}
+
+	log.Printf("[asr] POST %s profile=%s protocol=step_audio model=%s lang=%s pcm=%db rate=%d bits=%d ch=%d", url, p.Name, model, lang, len(pcm), rate, bits, channels)
+
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return AsrTranscribeResult{Ok: false, Error: err.Error()}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	if key := strings.TrimSpace(p.APIKey); key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	res := doAsrRequest(req, "step_audio")
+	if !res.Ok || res.Error != "" {
+		return res
+	}
+	transcript, err := extractStepAudioText(res.Text)
+	if err != nil {
+		return AsrTranscribeResult{Ok: false, Error: "StepAudio error: " + err.Error()}
+	}
+	return AsrTranscribeResult{Ok: true, Text: transcript, Error: ""}
+}
+
+// wavParams parses a standard PCM WAV header: (sample rate, channels,
+// bits per sample, offset of the PCM data). Only uncompressed PCM
+// (audio format 1) is accepted. Chunks are scanned so fmt extensions
+// are handled.
+func wavParams(wav []byte) (rate uint32, channels uint16, bits uint16, dataOffset int, ok bool) {
+	if len(wav) < 12 || string(wav[0:4]) != "RIFF" || string(wav[8:12]) != "WAVE" {
+		return 0, 0, 0, 0, false
+	}
+	pos := 12
+	for pos+8 <= len(wav) {
+		id := string(wav[pos : pos+4])
+		size := int(binary.LittleEndian.Uint32(wav[pos+4 : pos+8]))
+		if id == "fmt " && size >= 16 && pos+8+24 <= len(wav) {
+			if binary.LittleEndian.Uint16(wav[pos+8:pos+10]) != 1 {
+				return 0, 0, 0, 0, false
+			}
+			channels = binary.LittleEndian.Uint16(wav[pos+10 : pos+12])
+			rate = binary.LittleEndian.Uint32(wav[pos+12 : pos+16])
+			bits = binary.LittleEndian.Uint16(wav[pos+22 : pos+24])
+		} else if id == "data" {
+			return rate, channels, bits, pos + 8, true
+		}
+		pos += 8 + size + (size % 2)
+	}
+	return 0, 0, 0, 0, false
+}
+
+// extractStepAudioText extracts the transcript from a StepAudio SSE
+// response:
+//   - transcript.text.delta → accumulate `delta`
+//   - transcript.text.done → return its `text` (fallback: accumulated)
+//   - error → non-nil error with its message
+func extractStepAudioText(body string) (string, error) {
+	var text strings.Builder
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		payload, ok := strings.CutPrefix(line, "data:")
+		if !ok {
+			continue
+		}
+		payload = strings.TrimSpace(payload)
+		if payload == "" {
+			continue
+		}
+		var v struct {
+			Type    string `json:"type"`
+			Delta   string `json:"delta"`
+			Text    string `json:"text"`
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(payload), &v); err != nil {
+			continue
+		}
+		switch v.Type {
+		case "transcript.text.delta":
+			text.WriteString(v.Delta)
+		case "transcript.text.done":
+			if strings.TrimSpace(v.Text) != "" {
+				return strings.TrimSpace(v.Text), nil
+			}
+			return strings.TrimSpace(text.String()), nil
+		case "error":
+			if v.Message == "" {
+				v.Message = "unknown error"
+			}
+			return "", fmt.Errorf("%s", v.Message)
+		}
+	}
+	return strings.TrimSpace(text.String()), nil
 }
 
 // doAsrRequest runs the request, logs the response, and returns either

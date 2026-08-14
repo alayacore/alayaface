@@ -28,6 +28,11 @@
 //!   JSON body with `messages[].content[].input_audio` base64, `api-key`
 //!   header, `stream: true`; the transcript is read from the SSE delta
 //!   stream (plain JSON is also accepted).
+//! - "step_audio" — StepFun StepAudio realtime ASR: JSON body with
+//!   `audio.data` (RAW PCM base64 — the WAV container is stripped
+//!   server-side, format fields read from the WAV header), `Accept:
+//!   text/event-stream`, `Authorization: Bearer`; SSE events
+//!   transcript.text.delta / transcript.text.done / error.
 //!
 //! `url` is the FULL endpoint address and is used verbatim — nothing is
 //! appended. `model` is passed through verbatim (the endpoint decides
@@ -37,10 +42,11 @@ use base64::Engine;
 use serde::Serialize;
 
 /// Wire protocol: "transcriptions" (multipart /audio/transcriptions,
-/// default) or "chat_completions" (JSON chat-completions ASR, MiMo
-/// style).
+/// default), "chat_completions" (JSON chat-completions ASR, MiMo style)
+/// or "step_audio" (StepFun StepAudio SSE ASR).
 pub const PROTOCOL_TRANSCRIPTIONS: &str = "transcriptions";
 pub const PROTOCOL_CHAT_COMPLETIONS: &str = "chat_completions";
+pub const PROTOCOL_STEP_AUDIO: &str = "step_audio";
 
 /// One ASR endpoint configuration (a named profile).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -108,7 +114,7 @@ fn normalize_profile(p: &mut AsrProfile) {
             p.url.trim().to_string()
         };
     }
-    if p.protocol != PROTOCOL_CHAT_COMPLETIONS {
+    if p.protocol != PROTOCOL_CHAT_COMPLETIONS && p.protocol != PROTOCOL_STEP_AUDIO {
         p.protocol = PROTOCOL_TRANSCRIPTIONS.to_string();
     }
     if p.model.trim().is_empty() {
@@ -234,6 +240,8 @@ pub async fn asr_transcribe(
     }
     if profile.protocol == PROTOCOL_CHAT_COMPLETIONS {
         transcribe_chat(profile, &audio_base64, &wav).await
+    } else if profile.protocol == PROTOCOL_STEP_AUDIO {
+        transcribe_step_audio(profile, &wav).await
     } else {
         transcribe_multipart(profile, &wav).await
     }
@@ -402,6 +410,195 @@ async fn transcribe_chat(
     })
 }
 
+/// StepFun StepAudio realtime ASR: JSON body with `audio.data` = RAW
+/// PCM base64 (the WAV container from the webview is stripped here; the
+/// format fields are read from the WAV header so they always match the
+/// actual audio), `Accept: text/event-stream`, `Authorization: Bearer`.
+/// SSE events: transcript.text.delta accumulates, transcript.text.done
+/// carries the final text (fallback to the accumulated deltas),
+/// error aborts with its message.
+async fn transcribe_step_audio(
+    profile: &AsrProfile,
+    wav: &[u8],
+) -> Result<AsrTranscribeResult, String> {
+    let url = profile.url.trim().to_string();
+    if url.is_empty() {
+        return Ok(AsrTranscribeResult {
+            ok: false,
+            text: String::new(),
+            error: "ASR not configured: set the endpoint URL in the ASR config".to_string(),
+        });
+    }
+    let (rate, channels, bits, data_offset) = wav_params(wav)
+        .ok_or_else(|| "Invalid WAV audio: expected 16-bit PCM mono (RIFF/WAVE)".to_string())?;
+    if bits != 16 || channels != 1 {
+        return Ok(AsrTranscribeResult {
+            ok: false,
+            text: String::new(),
+            error: format!("StepAudio needs 16-bit mono PCM, got {bits}-bit x {channels} ch"),
+        });
+    }
+    let pcm = &wav[data_offset..];
+    let pcm_b64 = base64::engine::general_purpose::STANDARD.encode(pcm);
+    let model = if profile.model.trim().is_empty() {
+        "stepaudio-2.5-asr"
+    } else {
+        profile.model.trim()
+    };
+    let lang = if profile.language.trim().is_empty() {
+        "auto"
+    } else {
+        profile.language.trim()
+    };
+    let body = serde_json::json!({
+        "audio": {
+            "data": pcm_b64,
+            "input": {
+                "transcription": {
+                    "language": lang,
+                    "hotwords": [],
+                    "model": model,
+                    "enable_itn": true,
+                    "enable_timestamp": true
+                },
+                "format": {
+                    "type": "pcm",
+                    "codec": "pcm_s16le",
+                    "rate": rate,
+                    "bits": bits,
+                    "channel": channels
+                }
+            }
+        }
+    });
+    log::info!(
+        "[asr] POST {url} profile={} protocol=step_audio model={model} lang={lang} pcm={}b rate={rate} bits={bits} ch={channels}",
+        profile.name,
+        pcm.len()
+    );
+
+    let mut req = reqwest::Client::builder()
+        .build()
+        .map_err(|e| format!("HTTP client error: {e}"))?
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "text/event-stream")
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(120));
+    let key = profile.api_key.trim();
+    if !key.is_empty() {
+        req = req.header("Authorization", format!("Bearer {key}"));
+    }
+
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("ASR request failed: {e}"))?;
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("ASR response read failed: {e}"))?;
+    let body_preview: String = text.chars().take(300).collect();
+    log::info!("[asr] response {status} body={body_preview}");
+    if !status.is_success() {
+        return Ok(AsrTranscribeResult {
+            ok: false,
+            text: String::new(),
+            error: format!("ASR API returned {status}: {body_preview}"),
+        });
+    }
+    match extract_step_audio_text(&text) {
+        Ok(transcript) => Ok(AsrTranscribeResult {
+            ok: true,
+            text: transcript,
+            error: String::new(),
+        }),
+        Err(msg) => Ok(AsrTranscribeResult {
+            ok: false,
+            text: String::new(),
+            error: format!("StepAudio error: {msg}"),
+        }),
+    }
+}
+
+/// Parse a standard PCM WAV header: returns (sample rate, channels,
+/// bits per sample, offset of the PCM data). Only uncompressed PCM
+/// (audio format 1) is accepted. Scans chunks so fmt extensions are
+/// handled.
+fn wav_params(wav: &[u8]) -> Option<(u32, u16, u16, usize)> {
+    if wav.len() < 12 || &wav[0..4] != b"RIFF" || &wav[8..12] != b"WAVE" {
+        return None;
+    }
+    let mut pos = 12usize;
+    let mut rate = 0u32;
+    let mut channels = 0u16;
+    let mut bits = 0u16;
+    while pos + 8 <= wav.len() {
+        let id = &wav[pos..pos + 4];
+        let size = u32::from_le_bytes(wav[pos + 4..pos + 8].try_into().ok()?) as usize;
+        if id == b"fmt " && size >= 16 && pos + 8 + 24 <= wav.len() {
+            let audio_format = u16::from_le_bytes(wav[pos + 8..pos + 10].try_into().ok()?);
+            if audio_format != 1 {
+                return None;
+            }
+            channels = u16::from_le_bytes(wav[pos + 10..pos + 12].try_into().ok()?);
+            rate = u32::from_le_bytes(wav[pos + 12..pos + 16].try_into().ok()?);
+            bits = u16::from_le_bytes(wav[pos + 22..pos + 24].try_into().ok()?);
+        } else if id == b"data" {
+            return Some((rate, channels, bits, pos + 8));
+        }
+        pos += 8 + size + (size % 2);
+    }
+    None
+}
+
+/// Extract the transcript from a StepAudio SSE response.
+/// - transcript.text.delta → accumulate `delta`
+/// - transcript.text.done → return its `text` (fallback: accumulated)
+/// - error → Err(message)
+fn extract_step_audio_text(body: &str) -> Result<String, String> {
+    let mut text = String::new();
+    for line in body.lines() {
+        let line = line.trim();
+        let Some(payload) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let payload = payload.trim();
+        if payload.is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) else {
+            continue;
+        };
+        match v.get("type").and_then(|t| t.as_str()) {
+            Some("transcript.text.delta") => {
+                if let Some(d) = v.get("delta").and_then(|d| d.as_str()) {
+                    text.push_str(d);
+                }
+            }
+            Some("transcript.text.done") => {
+                if let Some(t) = v.get("text").and_then(|t| t.as_str()) {
+                    if !t.trim().is_empty() {
+                        return Ok(t.trim().to_string());
+                    }
+                }
+                return Ok(text.trim().to_string());
+            }
+            Some("error") => {
+                let msg = v
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("unknown error")
+                    .to_string();
+                return Err(msg);
+            }
+            _ => {}
+        }
+    }
+    Ok(text.trim().to_string())
+}
+
 /// Extract the transcript from a chat-completions response: SSE
 /// `data:` lines (delta/message content, stopped by `data: [DONE]`),
 /// falling back to a plain JSON body.
@@ -554,5 +751,54 @@ mod tests {
     fn extract_chat_text_empty_on_no_content() {
         assert_eq!(extract_chat_text("data: [DONE]\n\n"), "");
         assert_eq!(extract_chat_text(""), "");
+    }
+
+    #[test]
+    fn wav_params_reads_header_and_data_offset() {
+        // Minimal valid 16-bit mono 16000 Hz WAV (44-byte header).
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&36u32.to_le_bytes());
+        wav.extend_from_slice(b"WAVE");
+        wav.extend_from_slice(b"fmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+        wav.extend_from_slice(&16000u32.to_le_bytes());
+        wav.extend_from_slice(&32000u32.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&0u32.to_le_bytes());
+        assert_eq!(wav_params(&wav), Some((16000, 1, 16, 44)));
+
+        // Non-WAV data is rejected.
+        assert_eq!(wav_params(b"not a wav file at all"), None);
+    }
+
+    #[test]
+    fn extract_step_audio_text_accumulates_deltas_and_uses_done_text() {
+        let body = "data: {\"type\":\"transcript.text.delta\",\"delta\":\"识别\"}\n\n\
+                    data: {\"type\":\"transcript.text.delta\",\"delta\":\"的文字\"}\n\n\
+                    data: {\"type\":\"transcript.text.done\",\"text\":\"识别的完整文字\"}\n\n";
+        assert_eq!(extract_step_audio_text(body).unwrap(), "识别的完整文字");
+    }
+
+    #[test]
+    fn extract_step_audio_text_falls_back_to_deltas_without_done_text() {
+        let body = "data: {\"type\":\"transcript.text.delta\",\"delta\":\"he\"}\n\n\
+                    data: {\"type\":\"transcript.text.delta\",\"delta\":\"llo\"}\n\n\
+                    data: {\"type\":\"transcript.text.done\"}\n\n";
+        assert_eq!(extract_step_audio_text(body).unwrap(), "hello");
+    }
+
+    #[test]
+    fn extract_step_audio_text_error_event_aborts() {
+        let body = "data: {\"type\":\"transcript.text.delta\",\"delta\":\"partial\"}\n\n\
+                    data: {\"type\":\"error\",\"message\":\"invalid audio\"}\n\n";
+        assert_eq!(
+            extract_step_audio_text(body).unwrap_err(),
+            "invalid audio"
+        );
     }
 }
