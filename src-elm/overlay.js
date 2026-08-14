@@ -32,15 +32,33 @@
     });
 
     on("setCursorPos", function (data) {
-      var el = document.getElementById(data.id);
-      if (!el || !el.setSelectionRange) return;
-      el.focus();
-      // pos: null/undefined → move to the end of the value (legacy);
-      // a number → place the caret exactly there (voice insert).
-      var pos = (data.pos === undefined || data.pos === null)
-        ? el.value.length
-        : Math.max(0, Math.min(data.pos, el.value.length));
-      el.setSelectionRange(pos, pos);
+      // The port command is delivered BEFORE Elm paints the new model,
+      // so an immediate setSelectionRange is clobbered whenever the
+      // textarea value changes in that same update (caret jumps to the
+      // end). Apply immediately (legacy behavior) and re-apply when the
+      // value settles to a new one (voice insert at the caret).
+      setTimeout(function () {
+        var el = document.getElementById(data.id);
+        if (!el || !el.setSelectionRange) return;
+        el.focus();
+        // pos: null/undefined → move to the end of the value (legacy);
+        // a number → place the caret exactly there (voice insert).
+        var pos = (data.pos === undefined || data.pos === null)
+          ? el.value.length
+          : Math.max(0, Math.min(data.pos, el.value.length));
+        el.setSelectionRange(pos, pos);
+        var oldValue = el.value;
+        var deadline = Date.now() + 400;
+        (function reapply() {
+          if (el.value !== oldValue) {
+            // Elm re-rendered with the new value → caret was reset;
+            // restore the requested position.
+            el.setSelectionRange(pos, pos);
+          } else if (Date.now() <= deadline) {
+            setTimeout(reapply, 5);
+          }
+        })();
+      }, 0);
     });
 
     // Voice input: read the textarea caret so Elm can insert the ASR
@@ -153,6 +171,12 @@
           }
           var Ctor = window.AudioContext || window.webkitAudioContext;
           var ctx = new Ctor({ sampleRate: 16000 }); // best effort; header uses the real rate
+          // A context created outside a user gesture (port callback)
+          // starts SUSPENDED in Chrome — onaudioprocess never fires and
+          // no samples are collected. Resume it explicitly.
+          if (ctx.state === "suspended") {
+            ctx.resume().catch(function () { /* autoplay policy may reject; the error surfaces at stop */ });
+          }
           var source = ctx.createMediaStreamSource(stream);
           // ScriptProcessor is deprecated but universally supported and
           // needs no separate worklet module (this app has no bundler).
@@ -188,6 +212,8 @@
       delete voiceCancelled[sid];
       var samples = rec.samples || [];
       var sampleRate = rec.ctx && rec.ctx.sampleRate ? rec.ctx.sampleRate : 16000;
+      console.log("[voice] stop sid=" + sid + " samples=" + samples.length +
+        " rate=" + sampleRate + " ctxState=" + (rec.ctx ? rec.ctx.state : "n/a"));
       cleanupVoice(sid);
       var wav = wavFromSamples(samples, sampleRate);
       if (wav.size < 1000) {

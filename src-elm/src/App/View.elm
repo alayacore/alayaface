@@ -231,6 +231,15 @@ viewSessionPanel model id =
                                 )
                             ]
                             [ Html.text tokenLabel ]
+                    , if session.statusMsg == "" then
+                        Html.text ""
+
+                      else
+                        Html.span
+                            [ Attr.class "session-bar-status"
+                            , Attr.title session.statusMsg
+                            ]
+                            [ Html.text session.statusMsg ]
                     , Html.button
                         [ Attr.class "session-bar-close"
                         , Ev.stopPropagationOn "mousedown" (D.succeed ( NoOp, True ))
