@@ -16,29 +16,46 @@ import (
 	"alayaface/src-go/internal/dirs"
 )
 
-// AsrConfig is the voice-input ASR config (~/.alayaface/asr.conf).
-// ASR is an OpenAI-compatible /audio/transcriptions endpoint — local and
-// remote ASR are the same protocol, they only differ by URL. Like
-// global.conf, this file applies to every preset.
+// AsrConfig is the voice-input ASR config (~/.alayaface/asr.conf). Like
+// global.conf, this file applies to every preset. Two wire protocols are
+// supported (Protocol):
+//   - "transcriptions" — OpenAI-compatible /audio/transcriptions
+//     (multipart/form-data with file+model+language). Default; local
+//     and remote ASR using it only differ by URL.
+//   - "chat_completions" — chat-completions style ASR (e.g. MiMo): JSON
+//     body with messages[].content[].input_audio base64, api-key header,
+//     stream: true; the transcript is read from the SSE delta stream
+//     (plain JSON is also accepted).
 type AsrConfig struct {
-	// FULL OpenAI-compatible /audio/transcriptions endpoint address,
-	// e.g. "http://127.0.0.1:8080/v1/audio/transcriptions" (local) or
-	// "https://api.openai.com/v1/audio/transcriptions" (remote). Used
+	// Wire protocol: "transcriptions" (default) or "chat_completions".
+	Protocol string `json:"protocol"`
+	// FULL endpoint address, e.g.
+	// "http://127.0.0.1:8080/v1/audio/transcriptions" (local) or
+	// "https://api.openai.com/v1/audio/transcriptions" /
+	// "https://api.xiaomimimo.com/v1/chat/completions" (remote). Used
 	// verbatim — nothing is appended.
 	URL string `json:"url"`
-	// API key sent as Authorization: Bearer (empty = no header; local
-	// endpoints usually don't require one).
+	// API key. transcriptions: Authorization: Bearer; chat_completions:
+	// api-key header. Empty = no header (local endpoints usually don't
+	// require one).
 	APIKey string `json:"api_key"`
 	// Model id passed through to the endpoint (default "whisper-1").
 	Model string `json:"model"`
-	// Language hint; "auto" (default) = omit the field / autodetect.
+	// Language hint; "auto" (default) = autodetect.
 	Language string `json:"language"`
 }
+
+// Wire protocol constants.
+const (
+	ProtocolTranscriptions = "transcriptions"
+	ProtocolChatCompletions = "chat_completions"
+)
 
 // DefaultAsrConfig is used when asr.conf is missing or the value is
 // absent/out of range.
 func DefaultAsrConfig() AsrConfig {
 	return AsrConfig{
+		Protocol: ProtocolTranscriptions,
 		URL:      "",
 		APIKey:   "",
 		Model:    "whisper-1",
@@ -46,9 +63,13 @@ func DefaultAsrConfig() AsrConfig {
 	}
 }
 
-// NormalizeAsrConfig fixes a config: empty model becomes "whisper-1",
-// empty language becomes "auto".
+// NormalizeAsrConfig fixes a config: unknown protocols fall back to
+// "transcriptions", empty model becomes "whisper-1", empty language
+// becomes "auto".
 func NormalizeAsrConfig(cfg *AsrConfig) {
+	if cfg.Protocol != ProtocolChatCompletions {
+		cfg.Protocol = ProtocolTranscriptions
+	}
 	if strings.TrimSpace(cfg.Model) == "" {
 		cfg.Model = "whisper-1"
 	}
@@ -161,13 +182,18 @@ func AsrTranscribe(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	res := asrTranscribe(cfg, wav)
+	var res AsrTranscribeResult
+	if cfg.Protocol == ProtocolChatCompletions {
+		res = asrTranscribeChat(cfg, args.AudioBase64, wav)
+	} else {
+		res = asrTranscribeMultipart(cfg, wav)
+	}
 	return writeResult(w, res)
 }
 
-// asrTranscribe POSTs the WAV as multipart to the configured endpoint
-// URL (used verbatim) and parses {"text": ...}.
-func asrTranscribe(cfg AsrConfig, wav []byte) AsrTranscribeResult {
+// asrTranscribeMultipart POSTs the WAV as multipart to the configured
+// endpoint URL (used verbatim) and parses {"text": ...}.
+func asrTranscribeMultipart(cfg AsrConfig, wav []byte) AsrTranscribeResult {
 	url := strings.TrimSpace(cfg.URL)
 	if url == "" {
 		return AsrTranscribeResult{Ok: false, Error: "ASR not configured: set the endpoint URL in the ASR config"}
@@ -218,17 +244,97 @@ func asrTranscribe(cfg AsrConfig, wav []byte) AsrTranscribeResult {
 	if key := strings.TrimSpace(cfg.APIKey); key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
+	res := doAsrRequest(req, "multipart")
+	if !res.Ok || res.Error != "" {
+		return res
+	}
+	var out struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal([]byte(res.Text), &out); err != nil {
+		return AsrTranscribeResult{Ok: false, Error: "Bad ASR response: " + err.Error()}
+	}
+	return AsrTranscribeResult{Ok: true, Text: strings.TrimSpace(out.Text)}
+}
+
+// asrTranscribeChat POSTs a chat-completions style ASR request (e.g.
+// MiMo): JSON body carrying the audio base64 as an input_audio content
+// part, api-key header, streamed response. The transcript is read from
+// the SSE delta stream; a plain JSON response is accepted as a fallback.
+func asrTranscribeChat(cfg AsrConfig, audioBase64 string, wav []byte) AsrTranscribeResult {
+	url := strings.TrimSpace(cfg.URL)
+	if url == "" {
+		return AsrTranscribeResult{Ok: false, Error: "ASR not configured: set the endpoint URL in the ASR config"}
+	}
+	model := strings.TrimSpace(cfg.Model)
+	if model == "" {
+		model = "whisper-1"
+	}
+	lang := strings.TrimSpace(cfg.Language)
+	if lang == "" {
+		lang = "auto"
+	}
+
+	body, err := json.Marshal(map[string]any{
+		"model": model,
+		"messages": []map[string]any{
+			{
+				"role": "user",
+				"content": []map[string]any{
+					{
+						"type": "input_audio",
+						"input_audio": map[string]any{
+							"data":   audioBase64,
+							"format": "wav",
+						},
+					},
+				},
+			},
+		},
+		"asr_options": map[string]any{"language": lang},
+		"stream":      true,
+	})
+	if err != nil {
+		return AsrTranscribeResult{Ok: false, Error: err.Error()}
+	}
+
+	wavHead := ""
+	if len(wav) > 16 {
+		wavHead = fmt.Sprintf("%x", wav[:16])
+	} else {
+		wavHead = fmt.Sprintf("%x", wav)
+	}
+	log.Printf("[asr] POST %s protocol=chat_completions model=%s lang=%s wav=%db head=%s", url, model, lang, len(wav), wavHead)
+
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return AsrTranscribeResult{Ok: false, Error: err.Error()}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if key := strings.TrimSpace(cfg.APIKey); key != "" {
+		req.Header.Set("api-key", key)
+	}
+	res := doAsrRequest(req, "chat_completions")
+	if !res.Ok || res.Error != "" {
+		return res
+	}
+	return AsrTranscribeResult{Ok: true, Text: extractChatText(res.Text), Error: ""}
+}
+
+// doAsrRequest runs the request, logs the response, and returns either
+// an error result (non-2xx / read failure) or the raw body in Text.
+func doAsrRequest(req *http.Request, proto string) AsrTranscribeResult {
 	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return AsrTranscribeResult{Ok: false, Error: "ASR request failed: " + err.Error()}
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return AsrTranscribeResult{Ok: false, Error: "ASR response read failed: " + err.Error()}
 	}
-	preview := string(body)
+	preview := string(raw)
 	if len(preview) > 300 {
 		preview = preview[:300]
 	}
@@ -236,11 +342,55 @@ func asrTranscribe(cfg AsrConfig, wav []byte) AsrTranscribeResult {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return AsrTranscribeResult{Ok: false, Error: fmt.Sprintf("ASR API returned %s: %s", resp.Status, preview)}
 	}
-	var out struct {
-		Text string `json:"text"`
+	return AsrTranscribeResult{Ok: true, Text: string(raw), Error: ""}
+}
+
+// extractChatText extracts the transcript from a chat-completions
+// response: SSE `data:` lines (delta/message content, stopped by
+// `data: [DONE]`), falling back to a plain JSON body.
+func extractChatText(body string) string {
+	var text strings.Builder
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		payload, ok := strings.CutPrefix(line, "data:")
+		if !ok {
+			continue
+		}
+		payload = strings.TrimSpace(payload)
+		if payload == "[DONE]" {
+			break
+		}
+		var v struct {
+			Choices []struct {
+				Delta   map[string]any `json:"delta"`
+				Message map[string]any `json:"message"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal([]byte(payload), &v); err != nil {
+			continue
+		}
+		for _, c := range v.Choices {
+			if s, _ := c.Delta["content"].(string); s != "" {
+				text.WriteString(s)
+			} else if s, _ := c.Message["content"].(string); s != "" {
+				text.WriteString(s)
+			}
+		}
 	}
-	if err := json.Unmarshal(body, &out); err != nil {
-		return AsrTranscribeResult{Ok: false, Error: "Bad ASR response: " + err.Error()}
+	if text.Len() == 0 {
+		// Not an SSE stream (some servers ignore `stream`): plain JSON.
+		var v struct {
+			Choices []struct {
+				Message map[string]any `json:"message"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal([]byte(body), &v); err == nil {
+			for _, c := range v.Choices {
+				if s, _ := c.Message["content"].(string); s != "" {
+					text.WriteString(s)
+				}
+			}
+		}
 	}
-	return AsrTranscribeResult{Ok: true, Text: strings.TrimSpace(out.Text)}
+	return strings.TrimSpace(text.String())
 }

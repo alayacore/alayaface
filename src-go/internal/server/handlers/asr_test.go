@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -35,7 +36,7 @@ func TestNormalizeAsrConfig(t *testing.T) {
 func TestAsrConfigSyncRoundtrips(t *testing.T) {
 	isolatedHome(t, func() {
 		rr := call(t, SyncAsrConfig, map[string]any{
-			"config": `{"url":"http://127.0.0.1:8080/v1","api_key":"k","language":"zh","model":""}`,
+			"config": `{"protocol":"chat_completions","url":"https://api.xiaomimimo.com/v1/chat/completions","api_key":"k","language":"zh","model":""}`,
 		})
 		if rr.Code != 200 {
 			t.Fatalf("sync status = %d, body %s", rr.Code, rr.Body.String())
@@ -44,15 +45,33 @@ func TestAsrConfigSyncRoundtrips(t *testing.T) {
 		if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
 			t.Fatal(err)
 		}
-		if out["url"] != "http://127.0.0.1:8080/v1" || out["language"] != "zh" || out["model"] != "whisper-1" {
+		if out["protocol"] != ProtocolChatCompletions || out["url"] != "https://api.xiaomimimo.com/v1/chat/completions" || out["language"] != "zh" || out["model"] != "whisper-1" {
 			t.Errorf("sync returned %v", out)
 		}
 		cfg, err := readAsrConfig()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cfg.URL != "http://127.0.0.1:8080/v1" || cfg.APIKey != "k" || cfg.Language != "zh" {
+		if cfg.Protocol != ProtocolChatCompletions || cfg.URL != "https://api.xiaomimimo.com/v1/chat/completions" || cfg.APIKey != "k" || cfg.Language != "zh" {
 			t.Errorf("read back %+v", cfg)
+		}
+	})
+}
+
+func TestAsrConfigSyncFallsBackToTranscriptionsProtocol(t *testing.T) {
+	isolatedHome(t, func() {
+		rr := call(t, SyncAsrConfig, map[string]any{
+			"config": `{"protocol":"bogus","url":"http://127.0.0.1:8080/v1/audio/transcriptions"}`,
+		})
+		if rr.Code != 200 {
+			t.Fatalf("sync status = %d, body %s", rr.Code, rr.Body.String())
+		}
+		cfg, err := readAsrConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Protocol != ProtocolTranscriptions {
+			t.Errorf("protocol = %q, want transcriptions", cfg.Protocol)
 		}
 	})
 }
@@ -118,7 +137,7 @@ func TestAsrTranscribeRemoteEndpoint(t *testing.T) {
 			Model:    "whisper-1",
 			Language: "zh",
 		}
-		res := asrTranscribe(cfg, []byte("RIFF-fake-wav"))
+		res := asrTranscribeMultipart(cfg, []byte("RIFF-fake-wav"))
 		if !res.Ok || res.Text != "hello world" || res.Error != "" {
 			t.Errorf("result = %+v", res)
 		}
@@ -137,7 +156,7 @@ func TestAsrTranscribeSkipsAutoLanguage(t *testing.T) {
 		defer srv.Close()
 
 		cfg := AsrConfig{URL: srv.URL + "/v1/audio/transcriptions", APIKey: "testkey", Language: "auto"}
-		res := asrTranscribe(cfg, []byte("RIFF-fake-wav"))
+		res := asrTranscribeMultipart(cfg, []byte("RIFF-fake-wav"))
 		if !res.Ok {
 			t.Errorf("result = %+v", res)
 		}
@@ -162,7 +181,7 @@ func TestAsrTranscribeUsesUrlVerbatim(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		res := asrTranscribe(AsrConfig{URL: srv.URL + "/custom/endpoint"}, []byte("RIFF-fake-wav"))
+		res := asrTranscribeMultipart(AsrConfig{URL: srv.URL + "/custom/endpoint"}, []byte("RIFF-fake-wav"))
 		if !res.Ok || res.Text != "ok" {
 			t.Errorf("result = %+v", res)
 		}
@@ -171,7 +190,7 @@ func TestAsrTranscribeUsesUrlVerbatim(t *testing.T) {
 
 func TestAsrTranscribeUnconfigured(t *testing.T) {
 	isolatedHome(t, func() {
-		res := asrTranscribe(AsrConfig{}, []byte("RIFF-fake-wav"))
+		res := asrTranscribeMultipart(AsrConfig{}, []byte("RIFF-fake-wav"))
 		if res.Ok || !strings.Contains(res.Error, "not configured") {
 			t.Errorf("result = %+v", res)
 		}
@@ -186,8 +205,119 @@ func TestAsrTranscribeHTTPError(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		res := asrTranscribe(AsrConfig{URL: srv.URL, APIKey: "bad"}, []byte("RIFF-fake-wav"))
+		res := asrTranscribeMultipart(AsrConfig{URL: srv.URL, APIKey: "bad"}, []byte("RIFF-fake-wav"))
 		if res.Ok || !strings.Contains(res.Error, "401") {
+			t.Errorf("result = %+v", res)
+		}
+	})
+}
+
+// fakeChatAsrServer serves a chat-completions style ASR endpoint (MiMo):
+// asserts the api-key header and JSON body shape, records the audio
+// base64, and answers an SSE stream.
+func fakeChatAsrServer(t *testing.T) (*httptest.Server, *string) {
+	t.Helper()
+	var audioBase64 string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+			w.WriteHeader(404)
+			return
+		}
+		if got := r.Header.Get("api-key"); got != "testkey" {
+			t.Errorf("api-key header = %q, want testkey", got)
+		}
+		if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+			t.Errorf("Content-Type = %q, want application/json", ct)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("bad JSON body: %v", err)
+			w.WriteHeader(400)
+			return
+		}
+		if body["model"] != "mimo-v2.5-asr" {
+			t.Errorf("model = %v", body["model"])
+		}
+		if body["stream"] != true {
+			t.Errorf("stream = %v, want true", body["stream"])
+		}
+		messages, _ := body["messages"].([]any)
+		if len(messages) != 1 {
+			t.Errorf("messages = %v", body["messages"])
+		}
+		content, _ := messages[0].(map[string]any)["content"].([]any)
+		if len(content) != 1 {
+			t.Errorf("content = %v", content)
+		}
+		part := content[0].(map[string]any)
+		if part["type"] != "input_audio" {
+			t.Errorf("part type = %v", part["type"])
+		}
+		ia, _ := part["input_audio"].(map[string]any)
+		audioBase64, _ = ia["data"].(string)
+		if ia["format"] != "wav" {
+			t.Errorf("format = %v", ia["format"])
+		}
+		if ao, _ := body["asr_options"].(map[string]any); ao["language"] != "zh" {
+			t.Errorf("asr_options = %v", body["asr_options"])
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}}]}\n\n" +
+			"data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n" +
+			"data: [DONE]\n\n"))
+	}))
+	return srv, &audioBase64
+}
+
+func TestAsrTranscribeChatSSE(t *testing.T) {
+	isolatedHome(t, func() {
+		srv, audioBase64 := fakeChatAsrServer(t)
+		defer srv.Close()
+
+		cfg := AsrConfig{
+			Protocol: ProtocolChatCompletions,
+			URL:      srv.URL + "/v1/chat/completions",
+			APIKey:   "testkey",
+			Model:    "mimo-v2.5-asr",
+			Language: "zh",
+		}
+		res := asrTranscribeChat(cfg, base64.StdEncoding.EncodeToString([]byte("RIFF-fake-wav")), []byte("RIFF-fake-wav"))
+		if !res.Ok || res.Text != "hello" {
+			t.Errorf("result = %+v", res)
+		}
+		decoded, err := base64.StdEncoding.DecodeString(*audioBase64)
+		if err != nil || string(decoded) != "RIFF-fake-wav" {
+			t.Errorf("audio base64 roundtrip failed: %q err=%v", *audioBase64, err)
+		}
+	})
+}
+
+func TestAsrTranscribeChatPlainJsonFallback(t *testing.T) {
+	isolatedHome(t, func() {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"choices":[{"message":{"content":"plain hello"}}]}`))
+		}))
+		defer srv.Close()
+
+		res := asrTranscribeChat(AsrConfig{Protocol: ProtocolChatCompletions, URL: srv.URL}, "QUk=", []byte("RIFF-fake-wav"))
+		if !res.Ok || res.Text != "plain hello" {
+			t.Errorf("result = %+v", res)
+		}
+	})
+}
+
+func TestAsrTranscribeChatHTTPError(t *testing.T) {
+	isolatedHome(t, func() {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(400)
+			w.Write([]byte(`{"error":{"message":"Invalid JSON in request body"}}`))
+		}))
+		defer srv.Close()
+
+		res := asrTranscribeChat(AsrConfig{Protocol: ProtocolChatCompletions, URL: srv.URL}, "QUk=", []byte("RIFF-fake-wav"))
+		if res.Ok || !strings.Contains(res.Error, "400") {
 			t.Errorf("result = %+v", res)
 		}
 	})

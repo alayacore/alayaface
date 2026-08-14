@@ -462,6 +462,7 @@ type Msg
       -- Voice input (ASR) overlay (cross-preset)
     | OpenAsrConfig
     | CloseAsrConfig
+    | SetAsrProtocol String
     | SetAsrUrl String
     | SetAsrApiKey String
     | SetAsrModel String
@@ -817,13 +818,17 @@ emptyGlobalConfigEditor =
 
 -- VOICE INPUT ASR CONFIG OVERLAY
 --
--- ~/.alayaface/asr.conf: an OpenAI-compatible /audio/transcriptions
--- endpoint. Local and remote ASR are the same protocol — they only
--- differ by URL (http://127.0.0.1:PORT/v1 vs https://…/v1). The model
--- id is passed through verbatim; the endpoint decides how to use it.
+-- ~/.alayaface/asr.conf: an ASR endpoint. Two wire protocols:
+--   "transcriptions"    — OpenAI-compatible /audio/transcriptions
+--                         (multipart file upload); local and remote
+--                         differ only by URL (default)
+--   "chat_completions"  — chat-completions style ASR (e.g. MiMo): JSON
+--                         body with input_audio base64, api-key header
+-- The endpoint URL is the FULL address and is used verbatim.
 
 type alias AsrConfig =
-    { url : String
+    { protocol : String
+    , url : String
     , apiKey : String
     , model : String
     , language : String
@@ -832,7 +837,8 @@ type alias AsrConfig =
 
 emptyAsrConfig : AsrConfig
 emptyAsrConfig =
-    { url = ""
+    { protocol = "transcriptions"
+    , url = ""
     , apiKey = ""
     , model = "whisper-1"
     , language = "auto"
@@ -843,6 +849,7 @@ type alias AsrConfigEditor =
     { show : Bool
     , loading : Bool
     , syncing : Bool
+    , protocol : String
     , url : String
     , apiKey : String
     , model : String
@@ -856,6 +863,7 @@ emptyAsrConfigEditor =
     { show = False
     , loading = False
     , syncing = False
+    , protocol = "transcriptions"
     , url = ""
     , apiKey = ""
     , model = "whisper-1"

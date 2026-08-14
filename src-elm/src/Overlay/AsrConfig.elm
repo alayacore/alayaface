@@ -7,21 +7,25 @@ import Html.Events as Ev
 
 {-| Voice-input ASR config overlay (~/.alayaface/asr.conf).
 
-ASR is an OpenAI-compatible /audio/transcriptions endpoint — local and
-remote are the same protocol, they only differ by URL. The user enters
-the FULL endpoint address (including /audio/transcriptions) and it is
+Two wire protocols: "transcriptions" (OpenAI-compatible multipart
+upload, default — local and remote differ only by URL) and
+"chat_completions" (MiMo-style JSON body + api-key header). The user
+enters the FULL endpoint address (including the method path) and it is
 used verbatim; the backend never appends anything. The model id is
 passed through verbatim; the endpoint decides how to use it. Language
-"auto" means the field is omitted (autodetect).
+"auto" means the field is omitted (transcriptions) / autodetect
+(chat_completions).
 -}
 view :
-    { url : String
+    { protocol : String
+    , url : String
     , apiKey : String
     , model : String
     , language : String
     , loading : Bool
     , syncing : Bool
     , error : Maybe String
+    , onProtocol : String -> msg
     , onUrl : String -> msg
     , onApiKey : String -> msg
     , onModel : String -> msg
@@ -50,18 +54,33 @@ view config =
                         Html.text ""
                 , Html.div [ Attr.class "me-fields" ]
                     [ Html.div [ Attr.class "me-field" ]
+                        [ Html.label [ Attr.class "me-field-label" ] [ Html.text "Protocol" ]
+                        , Html.select
+                            [ Attr.class "me-field-input me-field-select"
+                            , Attr.id "asr-config-protocol"
+                            , Ev.onInput config.onProtocol
+                            ]
+                            [ Html.option [ Attr.value "transcriptions", Attr.selected (config.protocol == "transcriptions") ]
+                                [ Html.text "OpenAI /audio/transcriptions (multipart upload)" ]
+                            , Html.option [ Attr.value "chat_completions", Attr.selected (config.protocol == "chat_completions") ]
+                                [ Html.text "Chat completions (MiMo-style, JSON + api-key)" ]
+                            ]
+                        , Html.div [ Attr.class "me-hint" ]
+                            [ Html.text "\"transcriptions\": OpenAI-compatible multipart upload (most local whisper servers). \"chat_completions\": JSON body with input_audio base64 and api-key header (e.g. MiMo)." ]
+                        ]
+                    , Html.div [ Attr.class "me-field" ]
                         [ Html.label [ Attr.class "me-field-label" ] [ Html.text "Endpoint URL" ]
                         , Html.input
                             [ Attr.class "me-field-input"
                             , Attr.id "asr-config-url"
                             , Attr.type_ "text"
                             , Attr.value config.url
-                            , Attr.placeholder "http://127.0.0.1:8080/v1/audio/transcriptions  or  https://api.openai.com/v1/audio/transcriptions"
+                            , Attr.placeholder "http://127.0.0.1:8080/v1/audio/transcriptions  or  https://api.xiaomimimo.com/v1/chat/completions"
                             , Ev.onInput config.onUrl
                             ]
                             []
                         , Html.div [ Attr.class "me-hint" ]
-                            [ Html.text "Full OpenAI-compatible transcription endpoint address (including /audio/transcriptions) — used exactly as entered, nothing is appended. Local and remote ASR use the same protocol; only the address differs." ]
+                            [ Html.text "Full endpoint address (including the method path) — used exactly as entered, nothing is appended. Local and remote ASR use the same protocol; only the address differs." ]
                         ]
                     , Html.div [ Attr.class "me-field" ]
                         [ Html.label [ Attr.class "me-field-label" ] [ Html.text "API key" ]

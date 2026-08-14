@@ -2460,13 +2460,15 @@ viewAsrConfigOverlay model =
     if ed.show then
         viewOverlay CloseAsrConfig
             [ Overlay.AsrConfig.view
-                { url = ed.url
+                { protocol = ed.protocol
+                , url = ed.url
                 , apiKey = ed.apiKey
                 , model = ed.model
                 , language = ed.language
                 , loading = ed.loading
                 , syncing = ed.syncing
                 , error = ed.error
+                , onProtocol = SetAsrProtocol
                 , onUrl = SetAsrUrl
                 , onApiKey = SetAsrApiKey
                 , onModel = SetAsrModel

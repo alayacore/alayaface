@@ -54,10 +54,11 @@ cursorResult sid pos =
         ]
 
 
-asrConfigValue : Bool -> String -> String -> String -> String -> String -> E.Value
-asrConfigValue ok url apiKey model language error =
+asrConfigValue : Bool -> String -> String -> String -> String -> String -> String -> E.Value
+asrConfigValue ok protocol url apiKey model language error =
     E.object
         [ ( "ok", E.bool ok )
+        , ( "protocol", E.string protocol )
         , ( "url", E.string url )
         , ( "api_key", E.string apiKey )
         , ( "model", E.string model )
@@ -284,15 +285,16 @@ tests =
                         ( m2, _ ) =
                             AU.update
                                 (AT.AsrConfigGetResult
-                                    (asrConfigValue True "http://127.0.0.1:8080/v1" "k" "whisper-1" "zh" "")
+                                    (asrConfigValue True "chat_completions" "https://api.xiaomimimo.com/v1/chat/completions" "k" "mimo-v2.5-asr" "zh" "")
                                 )
                                 m1
                     in
                     Expect.all
-                        [ \mm -> Expect.equal "http://127.0.0.1:8080/v1" mm.asrConfigEditor.url
+                        [ \mm -> Expect.equal "chat_completions" mm.asrConfigEditor.protocol
+                        , \mm -> Expect.equal "https://api.xiaomimimo.com/v1/chat/completions" mm.asrConfigEditor.url
                         , \mm -> Expect.equal "zh" mm.asrConfigEditor.language
                         , \mm -> Expect.equal False mm.asrConfigEditor.loading
-                        , \mm -> Expect.equal "http://127.0.0.1:8080/v1" mm.asrConfig.url
+                        , \mm -> Expect.equal "chat_completions" mm.asrConfig.protocol
                         ]
                         m2
             , test "sync result closes the editor on success" <|
@@ -311,7 +313,7 @@ tests =
                         ( m2, _ ) =
                             AU.update
                                 (AT.AsrConfigSyncResult
-                                    (asrConfigValue True "http://127.0.0.1:8080/v1" "k" "whisper-1" "auto" "")
+                                    (asrConfigValue True "transcriptions" "http://127.0.0.1:8080/v1/audio/transcriptions" "k" "whisper-1" "auto" "")
                                 )
                                 m1
                     in

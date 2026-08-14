@@ -4856,6 +4856,9 @@ update msg model =
                 , Cmd.none
                 )
 
+        SetAsrProtocol val ->
+            setAsrEditorField model (\ed -> { ed | protocol = val, error = Nothing })
+
         SetAsrUrl val ->
             setAsrEditorField model (\ed -> { ed | url = val, error = Nothing })
 
@@ -4893,7 +4896,8 @@ update msg model =
                     { config =
                         E.encode 0
                             (E.object
-                                [ ( "url", E.string (String.trim ed.url) )
+                                [ ( "protocol", E.string (String.trim ed.protocol) )
+                                , ( "url", E.string (String.trim ed.url) )
                                 , ( "api_key", E.string (String.trim ed.apiKey) )
                                 , ( "model", E.string (String.trim ed.model) )
                                 , ( "language", E.string (String.trim ed.language) )
@@ -4912,7 +4916,8 @@ update msg model =
                     if res.ok then
                         ( { model
                             | asrConfig =
-                                { url = res.url
+                                { protocol = res.protocol
+                                , url = res.url
                                 , apiKey = res.apiKey
                                 , model = res.model
                                 , language = res.language
@@ -4920,6 +4925,7 @@ update msg model =
                             , asrConfigEditor =
                                 { ed
                                     | loading = False
+                                    , protocol = res.protocol
                                     , url = res.url
                                     , apiKey = res.apiKey
                                     , model = res.model
@@ -4950,7 +4956,8 @@ update msg model =
                     if res.ok then
                         ( { model
                             | asrConfig =
-                                { url = res.url
+                                { protocol = res.protocol
+                                , url = res.url
                                 , apiKey = res.apiKey
                                 , model = res.model
                                 , language = res.language
@@ -6524,11 +6531,12 @@ globalConfigSyncResultDecoder =
         (D.field "error" D.string)
 
 
-asrConfigGetResultDecoder : D.Decoder { ok : Bool, url : String, apiKey : String, model : String, language : String, error : String }
+asrConfigGetResultDecoder : D.Decoder { ok : Bool, protocol : String, url : String, apiKey : String, model : String, language : String, error : String }
 asrConfigGetResultDecoder =
-    D.map6
-        (\ok url apiKey model language error ->
+    D.map7
+        (\ok protocol url apiKey model language error ->
             { ok = ok
+            , protocol = protocol
             , url = url
             , apiKey = apiKey
             , model = model
@@ -6537,6 +6545,7 @@ asrConfigGetResultDecoder =
             }
         )
         (D.field "ok" D.bool)
+        (D.field "protocol" D.string)
         (D.field "url" D.string)
         (D.field "api_key" D.string)
         (D.field "model" D.string)
