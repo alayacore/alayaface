@@ -322,6 +322,7 @@ type Msg
       -- User actions
     | SendPrompt
     | CancelTask
+    | VoiceInput
     | SetModel Int
     | SetReasoningLevel Int
     | ConfirmTool String String Bool

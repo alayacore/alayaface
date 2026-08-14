@@ -1456,6 +1456,23 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
+        VoiceInput ->
+            -- Placeholder: voice input is not implemented yet. The mic
+            -- button exists in the UI; wire the recording flow here.
+            case getActiveSession model of
+                Just s ->
+                    ( { model
+                        | sessions =
+                            Dict.insert s.id
+                                { s | statusMsg = "Voice input: not implemented yet" }
+                                model.sessions
+                      }
+                    , Cmd.none
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
         SetModel modelId ->
             case model.activeId of
                 Just id ->

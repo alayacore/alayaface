@@ -1545,7 +1545,9 @@ runStatusView st =
 -- one-line preview when collapsed. The whole row toggles on click.
 viewMsgHeader : T.SessionState -> T.Message -> Bool -> List (Html Msg)
 viewMsgHeader session msg collapsed =
-    [ Html.span [ Attr.class "msg-label" ]
+    [ Html.span [ Attr.class "msg-chevron" ]
+        [ Icons.chevron ]
+    , Html.span [ Attr.class "msg-label" ]
         [ Html.text (String.toUpper (T.roleToString msg.role)) ]
     , case msg.role of
         T.Tool ->
@@ -1553,7 +1555,7 @@ viewMsgHeader session msg collapsed =
                 [ Html.span [ Attr.class "msg-name" ]
                     [ Html.text (Maybe.withDefault "" msg.toolName) ]
                 , Html.span [ Attr.class "msg-status" ]
-                    [ Html.text (toolStatus session msg) ]
+                    [ toolStatus session msg ]
                 ]
 
         _ ->
@@ -1587,24 +1589,31 @@ previewHtml msg =
         [ Html.text (if String.isEmpty p then "\u{00A0}" else p) ]
 
 
--- Tool state icon derived from the tool call lifecycle:
--- ❌ error (UF error), ⏳ running (input streaming / preview), ✅ done.
-toolStatus : T.SessionState -> T.Message -> String
+-- Tool state icon derived from the tool call lifecycle: ✓ done,
+-- ⟳ running (input streaming / preview), ✗ error (UF error).
+-- Chunky SVG icons (Icons.check / Icons.running / Icons.cross) in the
+-- same style as the other UI icons; the semantic color comes from the
+-- CSS classes (msg-status-icon icon-*).
+toolStatus : T.SessionState -> T.Message -> Html Msg
 toolStatus session msg =
     if msg.isError then
-        "❌"
+        Html.span [ Attr.class "msg-status-icon icon-cross" ]
+            [ Icons.cross ]
 
     else
         case Dict.get (Maybe.withDefault "" msg.toolId) session.toolCalls of
             Just tc ->
                 if tc.output /= Nothing || tc.accumulatedDelta /= Nothing || tc.inputReceived then
-                    "⏳"
+                    Html.span [ Attr.class "msg-status-icon icon-running" ]
+                        [ Icons.running ]
 
                 else
-                    "✅"
+                    Html.span [ Attr.class "msg-status-icon icon-check" ]
+                        [ Icons.check ]
 
             Nothing ->
-                "✅"
+                Html.span [ Attr.class "msg-status-icon icon-check" ]
+                    [ Icons.check ]
 
 
 -- One-line preview used by the collapsed header. Collapsed and expanded
@@ -1843,35 +1852,53 @@ viewInputBar model session =
                         , Attr.title "Help"
                         ]
                         [ Icons.help ]
-                    , Html.select
-                        [ Attr.class "footer-btn reasoning-select"
+                    , Html.span
+                        [ Attr.class "reasoning-wrap"
                         , Attr.title "Reasoning level: Off (0) | Balanced (1) | Deep (2)"
-                        , Attr.disabled inputDisabled
-                        , Ev.onInput
-                            (\v ->
-                                ForSession session.id
-                                    (SetReasoningLevel (Maybe.withDefault 1 (String.toInt v)))
+                        ]
+                        [ Icons.bulb
+                        , Html.select
+                            [ Attr.class "reasoning-select"
+                            , Attr.disabled inputDisabled
+                            , Ev.onInput
+                                (\v ->
+                                    ForSession session.id
+                                        (SetReasoningLevel (Maybe.withDefault 1 (String.toInt v)))
+                                )
+                            ]
+                            (List.map
+                                (\lvl ->
+                                    Html.option
+                                        [ Attr.value (String.fromInt lvl)
+                                        , Attr.selected (session.reasoningLevel == lvl)
+                                        ]
+                                        [ Html.text (reasoningLevelName lvl) ]
+                                )
+                                [ 0, 1, 2 ]
                             )
                         ]
-                        (List.map
-                            (\lvl ->
-                                Html.option
-                                    [ Attr.value (String.fromInt lvl)
-                                    , Attr.selected (session.reasoningLevel == lvl)
-                                    ]
-                                    [ Html.text (reasoningLevelName lvl) ]
-                            )
-                            [ 0, 1, 2 ]
-                        )
                     ]
                 , Html.div [ Attr.class "input-footer-right" ]
                     [ Html.button
+                        [ Attr.class "footer-btn mic-btn"
+                        , Ev.onClick (ForSession session.id VoiceInput)
+                        , Attr.title "Voice input (coming soon)"
+                        , Attr.disabled inputDisabled
+                        ]
+                        [ Icons.mic ]
+                    , Html.button
                         [ Attr.class ("send-btn" ++ (if session.taskRunning then " cancel" else ""))
                         , Ev.onClick
                             (if session.taskRunning then ForSession session.id CancelTask else ForSession session.id SendPrompt)
+                        , Attr.title (if session.taskRunning then "Cancel task" else "Send")
                         , Attr.disabled inputDisabled
                         ]
-                        [ if session.taskRunning then Html.text "Cancel" else Html.text "Send" ]
+                        [ if session.taskRunning then
+                            Icons.stop
+
+                          else
+                            Icons.send
+                        ]
                     ]
                 ]
             ]

@@ -1,4 +1,4 @@
-module Icons exposing (paperclip, chip, help)
+module Icons exposing (paperclip, chip, help, chevron, check, cross, running, send, mic, bulb, stop)
 
 {-| Hand-drawn SVG icons for the input-bar footer (replacing the old
 emoji buttons). All icons share a chunky, short-and-fat, near-square
@@ -101,6 +101,130 @@ help =
             [ SAttr.cx "12"
             , SAttr.cy "16.6"
             , SAttr.r "1.2"
+            , SAttr.fill "currentColor"
+            , SAttr.stroke "none"
+            ]
+            []
+        ]
+
+
+{-| Right-pointing chevron for the collapsible message windows. Only
+shown while the window is collapsed: it sits at the left edge where the
+message border used to be (the border is dropped when collapsed), so the
+label's x-position matches the expanded state. Expanded windows hide it
+entirely and go back to their normal border. Same chunky, short-and-fat
+stroke style as the other icons.
+-}
+chevron : Html msg
+chevron =
+    icon [ SAttr.strokeWidth "2.8" ]
+        [ path
+            [ SAttr.d "M9 5.5 L16.5 12 L9 18.5" ]
+            []
+        ]
+
+
+{-| Check mark for the tool status (call finished / done). Same chunky
+stroke family as the other icons; color comes from the CSS class.
+-}
+check : Html msg
+check =
+    icon [ SAttr.strokeWidth "2.8" ]
+        [ path
+            [ SAttr.d "M5 12.5 L10 17.5 L19 7" ]
+            []
+        ]
+
+
+{-| Cross for the tool status (tool call errored). Two chunky strokes.
+-}
+cross : Html msg
+cross =
+    icon [ SAttr.strokeWidth "2.8" ]
+        [ path
+            [ SAttr.d "M7 7 L17 17 M17 7 L7 17" ]
+            []
+        ]
+
+
+{-| Spinner arc for the tool status (input streaming / running): a
+nearly-full circle with a gap, the standard "in progress" glyph.
+-}
+running : Html msg
+running =
+    icon [ SAttr.strokeWidth "2.8" ]
+        [ path
+            [ SAttr.d "M12 4 a8 8 0 1 1 -8 8" ]
+            []
+        ]
+
+
+{-| Paper plane for the send button: body outline plus the fold line.
+Chunky strokes, same family as the other icons.
+-}
+send : Html msg
+send =
+    icon [ SAttr.strokeWidth "2.6" ]
+        [ path
+            [ SAttr.d "M22 2 L11 13" ]
+            []
+        , path
+            [ SAttr.d "M22 2 L15 22 L11 13 L2 9 Z" ]
+            []
+        ]
+
+
+{-| Microphone for the voice input button (not wired up yet): rounded
+capsule, sound cup, stand and base. Same chunky stroke family.
+-}
+mic : Html msg
+mic =
+    icon [ SAttr.strokeWidth "2.6" ]
+        [ path
+            [ SAttr.d "M12 2 a3 3 0 0 1 3 3 v6 a3 3 0 0 1 -6 0 V5 a3 3 0 0 1 3 -3 Z" ]
+            []
+        , path
+            [ SAttr.d "M19 9.5 V11 a7 7 0 0 1 -14 0 V9.5" ]
+            []
+        , path
+            [ SAttr.d "M12 18.5 V22" ]
+            []
+        , path
+            [ SAttr.d "M8.5 22 h7" ]
+            []
+        ]
+
+
+{-| Lightbulb for the reasoning-level selector: the classic
+"thinking / idea" glyph — bulb, screw base and stand lines.
+-}
+bulb : Html msg
+bulb =
+    icon [ SAttr.strokeWidth "2.4" ]
+        [ path
+            [ SAttr.d "M12 2 a7 7 0 0 0 -4 12.7 c0.6 0.5 1 1.2 1 2 h6 c0 -0.8 0.4 -1.5 1 -2 A7 7 0 0 0 12 2 Z" ]
+            []
+        , path
+            [ SAttr.d "M9 18 h6" ]
+            []
+        , path
+            [ SAttr.d "M10 22 h4" ]
+            []
+        ]
+
+
+{-| Stop square for the send button's cancel state (task running):
+filled rounded square, the classic media-stop glyph. Red via CSS.
+-}
+stop : Html msg
+stop =
+    icon []
+        [ rect
+            [ SAttr.x "6.5"
+            , SAttr.y "6.5"
+            , SAttr.width "11"
+            , SAttr.height "11"
+            , SAttr.rx "2.5"
             , SAttr.fill "currentColor"
             , SAttr.stroke "none"
             ]

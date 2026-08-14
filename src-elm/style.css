@@ -596,6 +596,7 @@ body {
    and reasoning windows start collapsed; user/assistant start expanded. */
 
 .msg-header {
+  position: relative; /* anchors the collapsed chevron at the left edge */
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -613,6 +614,32 @@ body {
 .msg-label {
   font-weight: 600;
   flex-shrink: 0;
+}
+
+/* Collapse chevron: only visible while collapsed. Absolutely positioned
+   at the left edge — in the exact spot the message border occupied
+   before it was removed — so the label keeps the same x-position as in
+   the expanded state (see the padding-left compensation below). */
+.msg-chevron {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  display: none; /* expanded: no triangle, normal border */
+  width: 14px;
+  height: 14px;
+  align-items: center;
+  justify-content: center;
+}
+.msg-chevron svg { display: block; width: 14px; height: 14px; }
+.message.collapsed .msg-chevron {
+  display: inline-flex;
+}
+/* Border width (2px) + original padding (14px): collapsed keeps the
+   same 16px inset as the expanded layout, with the chevron filling the
+   reclaimed border space — the title never shifts. */
+.message.collapsed .msg-header {
+  padding-left: 16px;
 }
 
 .msg-preview {
@@ -646,17 +673,29 @@ body {
 }
 
 .msg-status {
-  font-size: 0.8rem;
+  display: inline-flex;
+  align-items: center;
+  align-self: center; /* tool-info row is baseline-aligned; center the icon */
   letter-spacing: 0;
 }
+.msg-status svg { display: block; width: 14px; height: 14px; }
+
+/* Tool status icons: chunky SVG (Icons.check / running / cross),
+   colored by state — green done, amber running, red error. */
+.msg-status-icon { display: inline-flex; }
+.msg-status-icon.icon-check { color: #4ade80; }
+.msg-status-icon.icon-running { color: #fbbf24; }
+.msg-status-icon.icon-cross { color: #fca5a5; }
 
 .msg-body {
   padding: 4px 14px 10px;
 }
 
-/* Collapsed: header-only summary row, visually lighter */
+/* Collapsed: header-only single-line row, visually lighter and
+   borderless — the box frame only makes sense for the expanded body. */
 .message.collapsed {
   opacity: 0.8;
+  border: none;
 }
 
 .message-reasoning {
@@ -1340,22 +1379,32 @@ body {
   height: 18px;
 }
 
-/* Reasoning level selector (input footer, after model/help). Inherits
-   .footer-btn sizing; kept compact so the footer stays one line. */
+/* Reasoning level selector: icon + <select> wrapped in one button so
+   the whole thing shares the .footer-btn padding/margin/hover look. */
+.reasoning-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 6px; /* matches .footer-btn */
+  border-radius: 4px;
+  color: #888;
+  transition: background 0.12s, color 0.12s;
+}
+.reasoning-wrap:hover { background: rgba(255,255,255,0.08); color: #fff; }
+.reasoning-wrap svg { display: block; width: 18px; height: 18px; }
+
 .reasoning-select {
   background: none;
   border: none;
-  color: #888;
+  color: inherit;
   font-size: 0.85rem;
-  padding: 2px 2px;
   line-height: 1;
-  border-radius: 4px;
   cursor: pointer;
   appearance: none;
   -webkit-appearance: none;
   outline: none;
+  padding: 0;
 }
-.reasoning-select:hover { background: rgba(255,255,255,0.08); color: #fff; }
 .reasoning-select:disabled { opacity: 0.3; cursor: not-allowed; }
 .reasoning-select option { background: #1e1e2e; color: #ddd; }
 
@@ -1364,32 +1413,37 @@ body {
    the select dropdown goes light too. */
 @media (prefers-color-scheme: light) {
   .footer-btn:hover { background: rgba(37,99,235,0.08); color: #2563eb; }
-  .reasoning-select:hover { background: rgba(37,99,235,0.08); color: #2563eb; }
+  .reasoning-wrap:hover { background: rgba(37,99,235,0.08); color: #2563eb; }
   .reasoning-select option { background: #fff; color: #1a1a2e; }
 }
 
 .input-footer-right {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 2px; /* same as the left cluster: uniform spacing */
 }
 
 .send-btn {
-  padding: 5px 16px;
-  width: 80px;
-  border: 1px solid #2563eb;
+  background: none;
+  border: none;
+  padding: 2px 6px; /* matches .footer-btn — no min-width: hug the icon */
   border-radius: 4px;
   font-size: 0.85rem;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.15s;
-  background: transparent;
+  transition: background 0.12s, color 0.12s;
   color: #2563eb;
   text-align: center;
 }
+.send-btn svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+  margin: 0 auto;
+}
 
 .send-btn:hover { background: rgba(37,99,235,0.1); }
-.send-btn.cancel { border-color: #dc2626; color: #dc2626; }
+.send-btn.cancel { color: #dc2626; }
 .send-btn.cancel:hover { background: rgba(220,38,38,0.1); }
 .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
@@ -1408,6 +1462,9 @@ body {
   .msg-header:hover { color: #444; }
   .msg-preview { color: #999; }
   .msg-name { color: #666; }
+  .msg-status-icon.icon-check { color: #16a34a; }
+  .msg-status-icon.icon-running { color: #d97706; }
+  .msg-status-icon.icon-cross { color: #dc2626; }
   .tool-input { border-color: rgba(0, 0, 0, 0.15); }
   .tool-input-head { background: rgba(0, 0, 0, 0.04); color: #666; }
   .tool-path, .tool-pattern { color: #444; }
