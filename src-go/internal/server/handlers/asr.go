@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -142,6 +143,13 @@ func AsrTranscribe(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	if err := decodeArgs(r, &args); err != nil {
 		return err
 	}
+	// Log the outgoing request (audio base64 truncated to a short
+	// preview) so ASR endpoint issues are diagnosable from the backend.
+	head := args.AudioBase64
+	if len(head) > 120 {
+		head = head[:120]
+	}
+	log.Printf("[asr] transcribe session=%s payload=%db head=%s…", args.SessionID, len(args.AudioBase64), head)
 	wav, err := base64.StdEncoding.DecodeString(args.AudioBase64)
 	if err != nil {
 		return fmt.Errorf("Invalid audio payload: %w", err)
@@ -168,6 +176,18 @@ func asrTranscribe(cfg AsrConfig, wav []byte) AsrTranscribeResult {
 	if model == "" {
 		model = "whisper-1"
 	}
+	lang := strings.TrimSpace(cfg.Language)
+
+	// The wire format is multipart/form-data; the hex head shows the WAV
+	// begins with "RIFF" (52 49 46 46) when the encoder produced a valid
+	// file.
+	wavHead := ""
+	if len(wav) > 16 {
+		wavHead = fmt.Sprintf("%x", wav[:16])
+	} else {
+		wavHead = fmt.Sprintf("%x", wav)
+	}
+	log.Printf("[asr] POST %s model=%s lang=%s wav=%db head=%s", url, model, lang, len(wav), wavHead)
 
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
@@ -181,7 +201,6 @@ func asrTranscribe(cfg AsrConfig, wav []byte) AsrTranscribeResult {
 	if err := mw.WriteField("model", model); err != nil {
 		return AsrTranscribeResult{Ok: false, Error: err.Error()}
 	}
-	lang := strings.TrimSpace(cfg.Language)
 	if lang != "" && lang != "auto" {
 		if err := mw.WriteField("language", lang); err != nil {
 			return AsrTranscribeResult{Ok: false, Error: err.Error()}
@@ -209,11 +228,12 @@ func asrTranscribe(cfg AsrConfig, wav []byte) AsrTranscribeResult {
 	if err != nil {
 		return AsrTranscribeResult{Ok: false, Error: "ASR response read failed: " + err.Error()}
 	}
+	preview := string(body)
+	if len(preview) > 300 {
+		preview = preview[:300]
+	}
+	log.Printf("[asr] response %s body=%s", resp.Status, preview)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		preview := string(body)
-		if len(preview) > 300 {
-			preview = preview[:300]
-		}
 		return AsrTranscribeResult{Ok: false, Error: fmt.Sprintf("ASR API returned %s: %s", resp.Status, preview)}
 	}
 	var out struct {

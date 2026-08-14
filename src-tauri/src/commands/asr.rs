@@ -128,8 +128,11 @@ pub async fn asr_transcribe(
     audio_base64: String,
     session_id: String,
 ) -> Result<AsrTranscribeResult, String> {
+    // Log the outgoing request (audio base64 truncated to a short
+    // preview) so ASR endpoint issues are diagnosable from the backend.
+    let head: String = audio_base64.chars().take(120).collect();
     log::info!(
-        "[asr] transcribe session={session_id} payload={}b",
+        "[asr] transcribe session={session_id} payload={}b head={head}…",
         audio_base64.len()
     );
     let wav = base64::engine::general_purpose::STANDARD
@@ -157,6 +160,7 @@ async fn transcribe(cfg: &AsrConfig, wav: &[u8]) -> Result<AsrTranscribeResult, 
         });
     }
     let model = cfg.model.trim();
+    let lang = cfg.language.trim();
 
     let file = reqwest::multipart::Part::bytes(wav.to_vec())
         .file_name("audio.wav")
@@ -165,10 +169,21 @@ async fn transcribe(cfg: &AsrConfig, wav: &[u8]) -> Result<AsrTranscribeResult, 
     let mut form = reqwest::multipart::Form::new()
         .part("file", file)
         .text("model", model.to_string());
-    let lang = cfg.language.trim();
     if !lang.is_empty() && lang != "auto" {
         form = form.text("language", lang.to_string());
     }
+
+    // The wire format is multipart/form-data; the base64 head shows the
+    // WAV begins with "RIFF" when the encoder produced a valid file.
+    let wav_head: String = wav
+        .iter()
+        .take(16)
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    log::info!(
+        "[asr] POST {url} model={model} lang={lang} wav={}b head={wav_head}",
+        wav.len()
+    );
 
     let mut req = reqwest::Client::builder()
         .build()
@@ -190,12 +205,13 @@ async fn transcribe(cfg: &AsrConfig, wav: &[u8]) -> Result<AsrTranscribeResult, 
         .text()
         .await
         .map_err(|e| format!("ASR response read failed: {e}"))?;
+    let body_preview: String = body.chars().take(300).collect();
+    log::info!("[asr] response {status} body={body_preview}");
     if !status.is_success() {
-        let preview: String = body.chars().take(300).collect();
         return Ok(AsrTranscribeResult {
             ok: false,
             text: String::new(),
-            error: format!("ASR API returned {status}: {preview}"),
+            error: format!("ASR API returned {status}: {body_preview}"),
         });
     }
     let v: serde_json::Value =
