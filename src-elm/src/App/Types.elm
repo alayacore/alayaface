@@ -502,6 +502,13 @@ type Msg
     | PresetCancelDelete
     | PresetsListResult E.Value
     | PresetActionResult E.Value
+    -- Preset Manager drag-to-reorder: HTML5 DnD on the row drag
+    -- handles. Indices are PRESET indices (a preset may render extra
+    -- edit rows below its main row).
+    | PresetDragStart Int
+    | PresetDragOver Int
+    | PresetDragEnd
+    | PresetDrop Int
     | FillMcpAuthUrl String String
       -- Media preview (click a multimodal chip)
     | OpenMediaPreview T.MediaItem
@@ -921,6 +928,10 @@ type alias PresetManager =
     , editing : Maybe String
     , confirmDelete : Maybe String
     , error : Maybe String
+    -- Drag-to-reorder: preset indices of the row being dragged
+    -- (dragFrom) and the row currently under the pointer (dragOver).
+    , dragFrom : Maybe Int
+    , dragOver : Maybe Int
     }
 
 
@@ -934,6 +945,8 @@ emptyPresetManager =
     , editing = Nothing
     , confirmDelete = Nothing
     , error = Nothing
+    , dragFrom = Nothing
+    , dragOver = Nothing
     }
 
 

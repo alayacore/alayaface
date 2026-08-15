@@ -3,6 +3,7 @@ module Overlay.PresetManager exposing (view)
 import Html exposing (Html)
 import Html.Attributes as Attr
 import Html.Events as Ev
+import Json.Decode as D
 
 
 type alias PresetInfo =
@@ -20,6 +21,8 @@ view :
     , editing : Maybe String
     , confirmDelete : Maybe String
     , error : Maybe String
+    , dragFrom : Maybe Int
+    , dragOver : Maybe Int
     , onCopy : String -> msg
     , onRenameStart : String -> msg
     , onRenameInput : String -> msg
@@ -32,13 +35,17 @@ view :
     , onDelete : String -> msg
     , onDeleteConfirm : String -> msg
     , onDeleteCancel : msg
+    , onDragStart : Int -> msg
+    , onDragOver : Int -> msg
+    , onDragEnd : msg
+    , onDrop : Int -> msg
     }
     -> Html msg
 view config =
     Html.div [ Attr.class "sel-page" ]
         [ Html.div [ Attr.class "sel-page-title" ] [ Html.text "Preset Manager" ]
         , Html.div [ Attr.class "me-hint" ]
-            [ Html.text "Each preset is a full config set (models, MCP servers, tool settings and its own system prompt). New sessions pick a preset from the global menu; Copy duplicates it; Edit opens its config — you can edit any preset without switching. Built-in presets (Simple/Complex) cannot be renamed or deleted — copy one to customize." ]
+            [ Html.text "Each preset is a full config set (models, MCP servers, tool settings and its own system prompt). New sessions pick a preset from the global menu; Copy duplicates it; Edit opens its config — you can edit any preset without switching. Built-in presets (Simple/Complex) cannot be renamed or deleted — copy one to customize. Drag a row by its ⠿ handle to reorder the list." ]
         , case config.error of
             Just err ->
                 Html.div [ Attr.class "sel-page-status sel-page-status-error" ]
@@ -54,7 +61,9 @@ view config =
 
           else
             Html.div [ Attr.class "pm-list" ]
-                (List.concatMap (viewRow config) config.presets)
+                (List.indexedMap (\idx p -> viewRow config idx p) config.presets
+                    |> List.concat
+                )
         ]
 
 
@@ -74,6 +83,33 @@ nameLabel p =
         ]
 
 
+{-| The drag handle ("⠿") — the only draggable part of a row, so
+clicking Copy/Edit/Rename/Delete is never swallowed by a drag gesture.
+-}
+dragHandle : Int -> PresetInfo -> (Int -> msg) -> msg -> Html msg
+dragHandle idx p onDragStart onDragEnd =
+    Html.span
+        [ Attr.class "pm-drag-handle"
+        , Attr.draggable "true"
+        , Attr.attribute "data-preset" p.name
+        , Attr.title "Drag to reorder"
+        , Ev.on "dragstart" (D.succeed (onDragStart idx))
+        , Ev.on "dragend" (D.succeed onDragEnd)
+        ]
+        [ Html.text "⠿" ]
+
+
+{-| Drop zone of a row: dragover must preventDefault or the browser
+won't fire drop. The row is the drop target (not the handle) so a drop
+anywhere on the row works; events bubble from the handle.
+-}
+dropAttrs : Int -> (Int -> msg) -> (Int -> msg) -> List (Html.Attribute msg)
+dropAttrs idx onDragOver onDrop =
+    [ Ev.preventDefaultOn "dragover" (D.succeed ( onDragOver idx, True ))
+    , Ev.on "drop" (D.succeed (onDrop idx))
+    ]
+
+
 viewRow :
     { a
         | renaming : Maybe String
@@ -81,6 +117,8 @@ viewRow :
         , editing : Maybe String
         , busy : Bool
         , confirmDelete : Maybe String
+        , dragFrom : Maybe Int
+        , dragOver : Maybe Int
         , onCopy : String -> msg
         , onRenameStart : String -> msg
         , onRenameInput : String -> msg
@@ -93,10 +131,27 @@ viewRow :
         , onDelete : String -> msg
         , onDeleteConfirm : String -> msg
         , onDeleteCancel : msg
+        , onDragStart : Int -> msg
+        , onDragOver : Int -> msg
+        , onDragEnd : msg
+        , onDrop : Int -> msg
     }
+    -> Int
     -> PresetInfo
     -> List (Html msg)
-viewRow config p =
+viewRow config idx p =
+    let
+        rowClass base =
+            base
+                ++ (if config.dragFrom == Just idx then
+                        " pm-row-drag-from"
+
+                    else if config.dragOver == Just idx then
+                        " pm-row-drag-over"
+
+                    else
+                        "")
+    in
     case config.confirmDelete of
         Just name ->
             if name == p.name then
@@ -119,8 +174,9 @@ viewRow config p =
                 ]
 
             else
-                [ Html.div [ Attr.class "pm-row" ]
-                    [ nameLabel p
+                [ Html.div (Attr.class (rowClass "pm-row") :: dropAttrs idx config.onDragOver config.onDrop)
+                    [ dragHandle idx p config.onDragStart config.onDragEnd
+                    , nameLabel p
                     , if p.isSeed then
                         Html.text ""
 
@@ -163,8 +219,9 @@ viewRow config p =
                         ]
 
                     else
-                        [ Html.div [ Attr.class "pm-row" ]
-                            [ nameLabel p
+                        [ Html.div (Attr.class (rowClass "pm-row") :: dropAttrs idx config.onDragOver config.onDrop)
+                            [ dragHandle idx p config.onDragStart config.onDragEnd
+                            , nameLabel p
                             , if p.isSeed then
                                 Html.text ""
 
@@ -184,8 +241,9 @@ viewRow config p =
                             config.editing == Just p.name
 
                         mainRow =
-                            Html.div [ Attr.class "pm-row" ]
-                                [ nameLabel p
+                            Html.div (Attr.class (rowClass "pm-row") :: dropAttrs idx config.onDragOver config.onDrop)
+                                [ dragHandle idx p config.onDragStart config.onDragEnd
+                                , nameLabel p
                                 , Html.button
                                     [ Attr.class "pm-btn"
                                     , Attr.disabled config.busy

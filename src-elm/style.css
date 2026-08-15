@@ -2143,6 +2143,28 @@ body {
 .pm-row-renaming, .pm-row-confirm { border-color: #6366f1; }
 .pm-row-confirm { border-color: rgba(248, 113, 113, 0.5); }
 
+/* Drag-to-reorder (HTML5 DnD): the ⠿ handle is the only draggable
+   part of a row (buttons must keep click semantics); the whole row is
+   the drop target. */
+.pm-drag-handle {
+  flex-shrink: 0;
+  cursor: grab;
+  color: #666;
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 2px 4px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.pm-drag-handle:hover { color: #a5b4fc; }
+.pm-drag-handle:active { cursor: grabbing; }
+.pm-row-drag-from { opacity: 0.45; border-style: dashed; }
+.pm-row-drag-over {
+  border-color: #6366f1;
+  background: rgba(99, 102, 241, 0.08);
+  box-shadow: inset 0 2px 0 #6366f1;
+}
+
 .pm-name {
   flex: 1;
   font-size: 0.85rem;
@@ -2236,6 +2258,13 @@ body {
   .pm-row { border-color: #d8d8e0; background: rgba(0,0,0,0.02); }
   .pm-row-active { border-color: rgba(22, 163, 74, 0.4); background: rgba(34, 197, 94, 0.07); }
   .pm-name { color: #1a1a2e; }
+  .pm-drag-handle { color: #9a9aad; }
+  .pm-drag-handle:hover { color: #4f46e5; }
+  .pm-row-drag-over {
+    border-color: #6366f1;
+    background: rgba(99, 102, 241, 0.08);
+    box-shadow: inset 0 2px 0 #6366f1;
+  }
   .pm-btn { border-color: #c0c0cc; color: #555; }
   .pm-btn:hover:not(:disabled) { border-color: #6366f1; color: #4f46e5; }
   .pm-btn-primary { border-color: #6366f1; background: rgba(99, 102, 241, 0.08); color: #4f46e5; }

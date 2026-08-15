@@ -66,7 +66,7 @@ test-go:
 # Chrome). Requires node + puppeteer-core (npm install once in e2e/) and
 # google-chrome on PATH. No real model needed.
 e2e: elm
-	cd e2e && $(NPM) install && node plan-e2e.mjs && node restart-e2e.mjs && node fork-e2e.mjs && node two-plans-e2e.mjs && node reasoning-level-e2e.mjs
+	cd e2e && $(NPM) install && node plan-e2e.mjs && node restart-e2e.mjs && node fork-e2e.mjs && node two-plans-e2e.mjs && node reasoning-level-e2e.mjs && node preset-reorder-e2e.mjs
 
 # Clean Go build artifacts
 clean-go:

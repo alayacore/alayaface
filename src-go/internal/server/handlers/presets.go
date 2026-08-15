@@ -146,6 +146,48 @@ func RenamePreset(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	return writeResult(w, nil)
 }
 
+// ReorderPresets persists a user-defined preset display order (used by
+// the Preset Manager's drag-to-reorder). Accepts the full ordered name
+// list; unknown names are ignored and presets missing from the list are
+// appended in sorted order, so the file can never hide a preset.
+func ReorderPresets(h *Handler, w http.ResponseWriter, r *http.Request) error {
+	var args struct {
+		Names []string `json:"names"`
+	}
+	if err := decodeArgs(r, &args); err != nil {
+		return err
+	}
+	if _, err := dirs.Ensure(); err != nil {
+		return err
+	}
+	names, err := dirs.ListPresetNames()
+	if err != nil {
+		return err
+	}
+	existing := make(map[string]bool, len(names))
+	for _, n := range names {
+		existing[n] = true
+	}
+	ordered := make([]string, 0, len(names))
+	seen := make(map[string]bool, len(names))
+	for _, raw := range args.Names {
+		n := strings.TrimSpace(raw)
+		if existing[n] && !seen[n] {
+			ordered = append(ordered, n)
+			seen[n] = true
+		}
+	}
+	for _, n := range names {
+		if !seen[n] {
+			ordered = append(ordered, n)
+		}
+	}
+	if err := dirs.WritePresetOrder(ordered); err != nil {
+		return err
+	}
+	return writeResult(w, nil)
+}
+
 func validatePresetName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if !dirs.ValidPresetName(name) {

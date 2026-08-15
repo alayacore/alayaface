@@ -2573,6 +2573,12 @@ viewPresetManagerOverlay model =
                 , onDelete = PresetDelete
                 , onDeleteConfirm = PresetConfirmDelete
                 , onDeleteCancel = PresetCancelDelete
+                , dragFrom = pm.dragFrom
+                , dragOver = pm.dragOver
+                , onDragStart = PresetDragStart
+                , onDragOver = PresetDragOver
+                , onDragEnd = PresetDragEnd
+                , onDrop = PresetDrop
                 }
             ]
     else

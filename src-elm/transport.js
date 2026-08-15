@@ -503,6 +503,18 @@
         });
     });
 
+    // Preset Manager drag-to-reorder: the full ordered name list is
+    // persisted by the backend (preset_order.conf).
+    on("reorderPresets", function (data) {
+      transport.invoke("reorder_presets", { names: (data && data.names) || [] })
+        .then(function () { app.ports.onPresetActionResult.send({ ok: true, error: "" }); })
+        .catch(function (err) {
+          app.ports.onPresetActionResult.send({
+            ok: false, error: String((err && err.message) || err),
+          });
+        });
+    });
+
     on("confirmTool", function (data) {
       transport.invoke("alayacore_confirm", {
         sessionId: data.sessionId, id: data.id, allowed: data.allowed,
@@ -911,6 +923,19 @@
   // Wait for DOM + backend to be ready. __TAURI__ may be injected after
   // this script runs (Tauri webview), but in a plain browser it never
   // appears — so bound the wait, then fall back to the HTTP transport.
+  // Preset Manager drag-to-reorder (HTML5 DnD): Firefox only starts a
+  // drag when dragstart populates dataTransfer; Chromium/WebKit don't
+  // require it. The handle carries the preset name so this stays
+  // decoupled from Elm — Elm's own dragstart handler drives the state.
+  document.addEventListener("dragstart", function (e) {
+    var handle = e.target && e.target.closest && e.target.closest(".pm-drag-handle");
+    if (!handle || !e.dataTransfer) return;
+    try {
+      e.dataTransfer.setData("text/plain", handle.getAttribute("data-preset") || "");
+      e.dataTransfer.effectAllowed = "move";
+    } catch (err) { /* ignore */ }
+  });
+
   function waitForBackend(cb, attempts) {
     if (window.__TAURI__ && window.__TAURI__.core) {
       transport = tauriTransport();

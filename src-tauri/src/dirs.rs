@@ -4,6 +4,7 @@
 //!   ~/.alayaface/
 //!     global.conf          — cross-preset global config overlay (recursion_limit etc.)
 //!     asr.conf             — voice-input ASR config (OpenAI-compatible endpoint URL)
+//!     preset_order.conf    — user-defined preset display order (JSON array of names)
 //!     presets/
 //!       <name>/            — one config directory per preset
 //!         model.conf       (auto-created by alayacore when missing)
@@ -72,7 +73,48 @@ pub fn resolve_config_dir(preset: &str) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-/// List preset names (sorted). Missing presets root yields an empty list.
+/// File recording the user's custom preset display order
+/// (~/.alayaface/preset_order.conf). The file is a JSON array of preset
+/// names; a missing file means alphabetical order.
+pub fn preset_order_file() -> PathBuf {
+    alayaface_dir().join("preset_order.conf")
+}
+
+/// Read the saved preset display order (names in order). A missing or
+/// corrupt file yields an empty vec (fall back to alphabetical);
+/// invalid/duplicate names are dropped.
+pub fn read_preset_order() -> Vec<String> {
+    let Ok(data) = std::fs::read_to_string(preset_order_file()) else {
+        return Vec::new();
+    };
+    let Ok(raw): Result<Vec<String>, _> = serde_json::from_str(&data) else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(raw.len());
+    let mut seen = std::collections::HashSet::new();
+    for n in raw {
+        if valid_preset_name(&n) && seen.insert(n.clone()) {
+            out.push(n);
+        }
+    }
+    out
+}
+
+/// Atomically persist the custom preset display order.
+pub fn write_preset_order(names: &[String]) -> Result<(), String> {
+    let text = serde_json::to_string_pretty(names)
+        .map_err(|e| format!("Serialize preset order: {e}"))?;
+    let path = preset_order_file();
+    let tmp = PathBuf::from(format!("{}.tmp", path.to_string_lossy()));
+    std::fs::write(&tmp, text).map_err(|e| format!("Write preset order: {e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("Commit preset order: {e}"))
+}
+
+/// List preset names. The user's custom order (preset_order.conf) is
+/// applied when present: saved names that still exist come first (in
+/// saved order), followed by any remaining presets in sorted order — so
+/// a preset added later is never hidden. Missing presets root yields an
+/// empty list.
 pub fn list_preset_names() -> Result<Vec<String>, String> {
     let presets = presets_root();
     if !presets.exists() {
@@ -92,7 +134,25 @@ pub fn list_preset_names() -> Result<Vec<String>, String> {
         }
     }
     names.sort();
-    Ok(names)
+
+    let ordered = read_preset_order();
+    if ordered.is_empty() {
+        return Ok(names);
+    }
+    let existing: std::collections::HashSet<&String> = names.iter().collect();
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(names.len());
+    for n in ordered {
+        if existing.contains(&n) && seen.insert(n.clone()) {
+            out.push(n);
+        }
+    }
+    for n in names {
+        if !seen.contains(&n) {
+            out.push(n);
+        }
+    }
+    Ok(out)
 }
 
 /// Ensure `~/.alayaface/` exists with the preset structure.

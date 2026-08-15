@@ -196,6 +196,7 @@ pub fn run() {
             commands::copy_preset,
             commands::rename_preset,
             commands::delete_preset,
+            commands::reorder_presets,
             commands::get_global_settings,
             commands::sync_global_settings,
             commands::get_global_config,

@@ -148,6 +148,10 @@ for you:
   servers (`mcp.conf`) and AlayaFace-owned `settings.conf`
   (`tool_confirm`, `builtin_tools`, `reasoning_level` 0|1|2,
   `system_prompt`) — edit via **Preset Manager** → Edit → Settings.
+- `~/.alayaface/preset_order.conf` records the **display order** of the
+  preset list (a JSON array of names) — reorder presets by dragging the
+  ⠿ handle in **Preset Manager**; presets missing from the file are
+  appended alphabetically, so nothing is ever hidden.
 - `~/.alayaface/global.conf` is the **cross-preset global config overlay**
   (applies to every preset): currently `recursion_limit` (default 8) —
   edit via ⚙ → **Global config**. Plan Mode recursion is bounded by it:

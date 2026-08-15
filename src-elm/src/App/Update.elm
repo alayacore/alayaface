@@ -3,6 +3,7 @@ module App.Update exposing
     , SessionDir
     , decodeSessionDir
     , nextCopyName
+    , movePreset
     , planFocusAboveSession
     )
 
@@ -5491,6 +5492,59 @@ update msg model =
             , Cmd.none
             )
 
+        PresetDragStart idx ->
+            let
+                pm =
+                    model.presetManager
+            in
+            ( { model
+                | presetManager = { pm | dragFrom = Just idx, dragOver = Just idx }
+              }
+            , Cmd.none
+            )
+
+        PresetDragOver idx ->
+            let
+                pm =
+                    model.presetManager
+            in
+            ( { model
+                | presetManager = { pm | dragOver = Just idx }
+              }
+            , Cmd.none
+            )
+
+        PresetDragEnd ->
+            let
+                pm =
+                    model.presetManager
+            in
+            ( { model
+                | presetManager = { pm | dragFrom = Nothing, dragOver = Nothing }
+              }
+            , Cmd.none
+            )
+
+        PresetDrop idx ->
+            case model.presetManager.dragFrom of
+                Just from ->
+                    let
+                        reordered =
+                            movePreset from idx model.presets
+
+                        pm =
+                            model.presetManager
+                    in
+                    ( { model
+                        | presets = reordered
+                        , presetManager = { pm | dragFrom = Nothing, dragOver = Nothing }
+                      }
+                    , Ports.reorderPresets { names = List.map .name reordered }
+                    )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
         PresetsListResult raw ->
             case D.decodeValue presetsListResultDecoder raw of
                 Ok res ->
@@ -6946,6 +7000,40 @@ nextCopyName source presets =
 
     else
         base
+
+
+{-| Move the item at index `from` to index `to` (0-based, clamped to the
+list bounds). Used by the Preset Manager's drag-to-reorder — indices
+are PRESET indices, not rendered row indices (a preset may show extra
+edit rows below its main row).
+-}
+movePreset : Int -> Int -> List a -> List a
+movePreset from to list =
+    let
+        len =
+            List.length list
+
+        f =
+            clamp 0 (len - 1) from
+
+        t =
+            clamp 0 (len - 1) to
+    in
+    if len <= 1 || f == t then
+        list
+
+    else
+        case List.drop f list of
+            item :: rest ->
+                let
+                    withoutItem =
+                        List.take f list ++ rest
+                in
+                List.take t withoutItem
+                    ++ (item :: List.drop t withoutItem)
+
+            [] ->
+                list
 
 
 -- ─── Selector kits ──────────────────────────────────────────────────

@@ -63,10 +63,11 @@ func Registry() map[string]Command {
 		"sync_asr_config": SyncAsrConfig,
 		"asr_transcribe":  AsrTranscribe,
 		// presets
-		"list_presets":  ListPresets,
-		"copy_preset":   CopyPreset,
-		"rename_preset": RenamePreset,
-		"delete_preset": DeletePreset,
+		"list_presets":     ListPresets,
+		"copy_preset":      CopyPreset,
+		"rename_preset":    RenamePreset,
+		"delete_preset":    DeletePreset,
+		"reorder_presets":  ReorderPresets,
 		// fs
 		"fs_list_dir":           FsListDir,
 		"fs_home_dir":           FsHomeDir,

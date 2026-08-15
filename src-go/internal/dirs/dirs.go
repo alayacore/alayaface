@@ -3,6 +3,7 @@
 //	~/.alayaface/
 //	  global.conf          — cross-preset global config overlay (recursion_limit etc.)
 //	  asr.conf             — voice-input ASR config (OpenAI-compatible endpoint URL)
+//	  preset_order.conf    — user-defined preset display order (JSON array of names)
 //	  presets/
 //	    <name>/            — one config directory per preset
 //	      model.conf
@@ -106,8 +107,56 @@ func ResolveConfigDir(preset string) (string, error) {
 	return dir, nil
 }
 
-// ListPresetNames returns preset names (sorted). A missing presets root
-// yields an empty list.
+// PresetOrderFile returns the file recording the user's custom preset
+// display order (~/.alayaface/preset_order.conf). The file is a JSON
+// array of preset names; a missing file means alphabetical order.
+func PresetOrderFile() string {
+	return filepath.Join(AlayafaceDir(), "preset_order.conf")
+}
+
+// ReadPresetOrder returns the saved preset display order (names in
+// order). A missing or corrupt file yields nil (fall back to
+// alphabetical); invalid/duplicate names are dropped.
+func ReadPresetOrder() []string {
+	data, err := os.ReadFile(PresetOrderFile())
+	if err != nil {
+		return nil
+	}
+	var raw []string
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	seen := make(map[string]bool, len(raw))
+	for _, n := range raw {
+		if ValidPresetName(n) && !seen[n] {
+			out = append(out, n)
+			seen[n] = true
+		}
+	}
+	return out
+}
+
+// WritePresetOrder atomically persists the custom preset display order.
+func WritePresetOrder(names []string) error {
+	text, err := json.MarshalIndent(names, "", "  ")
+	if err != nil {
+		return err
+	}
+	path := PresetOrderFile()
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, text, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// ListPresetNames returns preset names. The user's custom order
+// (preset_order.conf) is applied when present: saved names that still
+// exist come first (in saved order), followed by any remaining presets
+// in sorted order — so a preset added later (or created before the
+// order file) is never hidden. A missing presets root yields an empty
+// list.
 func ListPresetNames() ([]string, error) {
 	entries, err := os.ReadDir(PresetsRoot())
 	if err != nil {
@@ -123,7 +172,29 @@ func ListPresetNames() ([]string, error) {
 		}
 	}
 	sort.Strings(names)
-	return names, nil
+
+	ordered := ReadPresetOrder()
+	if len(ordered) == 0 {
+		return names, nil
+	}
+	existing := make(map[string]bool, len(names))
+	for _, n := range names {
+		existing[n] = true
+	}
+	out := make([]string, 0, len(names))
+	seen := make(map[string]bool, len(names))
+	for _, n := range ordered {
+		if existing[n] && !seen[n] {
+			out = append(out, n)
+			seen[n] = true
+		}
+	}
+	for _, n := range names {
+		if !seen[n] {
+			out = append(out, n)
+		}
+	}
+	return out, nil
 }
 
 // Ensure guarantees ~/.alayaface/ exists with the preset structure.

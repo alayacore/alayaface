@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -92,6 +93,53 @@ func TestInvalidNamesRejected(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestReorderPresets(t *testing.T) {
+	isolatedHome(t, func() {
+		// Seeds: Simple, Complex (alphabetical by default).
+		call(t, CopyPreset, map[string]any{"source": "Simple", "name": "work"})
+		list := mustListPresets(t)
+		if got := presetNames(list); got != "Complex Simple work" {
+			t.Fatalf("default order = %q, want alphabetical", got)
+		}
+
+		// Drag-to-reorder: full ordered list persisted.
+		call(t, ReorderPresets, map[string]any{"names": []string{"work", "Simple", "Complex"}})
+		list = mustListPresets(t)
+		if got := presetNames(list); got != "work Simple Complex" {
+			t.Fatalf("order after reorder = %q, want work Simple Complex", got)
+		}
+
+		// Unknown names are ignored, missing presets appended in sorted
+		// order — the file can never hide a preset.
+		call(t, ReorderPresets, map[string]any{"names": []string{"nope", "Complex", "work"}})
+		list = mustListPresets(t)
+		if got := presetNames(list); got != "Complex work Simple" {
+			t.Fatalf("order after partial reorder = %q, want Complex work Simple", got)
+		}
+
+		// Order survives a later list call (persisted to disk).
+		list = mustListPresets(t)
+		if got := presetNames(list); got != "Complex work Simple" {
+			t.Fatalf("persisted order = %q, want Complex work Simple", got)
+		}
+
+		// A new preset lands at the end (not hidden).
+		call(t, CopyPreset, map[string]any{"source": "Simple", "name": "aaa"})
+		list = mustListPresets(t)
+		if got := presetNames(list); got != "Complex work Simple aaa" {
+			t.Fatalf("order with new preset = %q, want Complex work Simple aaa", got)
+		}
+	})
+}
+
+func presetNames(list []PresetInfo) string {
+	names := make([]string, 0, len(list))
+	for _, p := range list {
+		names = append(names, p.Name)
+	}
+	return strings.Join(names, " ")
 }
 
 func mustListPresets(t *testing.T) []PresetInfo {

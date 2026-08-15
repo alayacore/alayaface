@@ -105,6 +105,7 @@ Plan 模式把一个大任务变成依赖图，由 AlayaFace 替你执行：
 ### 预设与工具集
 
 - `~/.alayaface/presets/<name>/` 打包了模型列表（`model.conf`）、MCP 服务器（`mcp.conf`）和 AlayaFace 自有的 `settings.conf`（`tool_confirm`、`builtin_tools`、`reasoning_level` 0|1|2、`system_prompt`）——通过 **预设管理器（Preset Manager）** → 编辑 → 设置修改。
+- `~/.alayaface/preset_order.conf` 记录预设列表的**显示顺序**（JSON 名称数组）——在 **预设管理器** 中按住 ⠿ 手柄拖动即可排序；文件里没有的预设会按字母序追加，因此永远不会被隐藏。
 - `~/.alayaface/global.conf` 是**跨预设的全局配置覆盖层**（对每个预设生效）：目前只有 `recursion_limit`（默认 8）——通过 ⚙ → **全局配置（Global config）** 编辑。Plan 模式的递归受它约束：计划节点的会话深度（顶层 = 1，每层子计划 +1，持久化在计划的 `meta.json` 中）超过该限制时，节点会话**不再获得 plan 系统提示**，模型因此停止创建子计划。
 - 内置工具通过 `--builtin-tools=id1,id2,...` 在会话启动时传给 AlayaCore（空 = 全部工具）。可按预设（设置编辑器）或按计划节点（`tools` 字段）配置。
 - 首次运行会创建种子预设：`Default`、`Fast`、`Deep`、`Data` 和 `Safe`（无 `execute_command`）。可在预设管理器中复制/重命名；计划节点通过 `"preset": "Name"` 选择预设。

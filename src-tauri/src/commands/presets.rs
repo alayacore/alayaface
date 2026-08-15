@@ -111,6 +111,33 @@ pub async fn rename_preset(old_name: String, new_name: String) -> Result<(), Str
     Ok(())
 }
 
+/// Persist a user-defined preset display order (Preset Manager
+/// drag-to-reorder). Accepts the full ordered name list; unknown names
+/// are ignored and presets missing from the list are appended in sorted
+/// order, so the file can never hide a preset.
+#[tauri::command]
+pub async fn reorder_presets(names: Vec<String>) -> Result<(), String> {
+    dirs::ensure()?;
+    let existing = dirs::list_preset_names()?;
+    let existing_set: std::collections::HashSet<&String> = existing.iter().collect();
+    let mut seen = std::collections::HashSet::new();
+    let mut ordered = Vec::with_capacity(existing.len());
+    for raw in names {
+        let n = raw.trim().to_string();
+        if existing_set.contains(&n) && seen.insert(n.clone()) {
+            ordered.push(n);
+        }
+    }
+    for n in existing {
+        if !seen.contains(&n) {
+            ordered.push(n);
+        }
+    }
+    dirs::write_preset_order(&ordered)?;
+    log::info!("[presets] Reordered preset list");
+    Ok(())
+}
+
 fn validate_name(name: &str) -> Result<String, String> {
     let name = name.trim();
     if !dirs::valid_preset_name(name) {
@@ -176,6 +203,50 @@ mod tests {
             // contract references the names).
             assert!(rt.block_on(delete_preset("Simple".to_string())).is_err());
             assert!(rt.block_on(delete_preset("Complex".to_string())).is_err());
+        });
+    }
+
+    #[test]
+    fn reorder_presets_roundtrip() {
+        crate::dirs::isolated_home(|| {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(copy_preset("Simple".to_string(), "work".to_string()))
+                .unwrap();
+
+            // Default order is alphabetical: Complex Simple work.
+            let list = rt.block_on(list_presets()).unwrap();
+            let names: Vec<&str> = list.iter().map(|p| p.name.as_str()).collect();
+            assert_eq!(names, vec!["Complex", "Simple", "work"]);
+
+            // Full reorder is persisted.
+            rt.block_on(reorder_presets(vec![
+                "work".to_string(),
+                "Simple".to_string(),
+                "Complex".to_string(),
+            ]))
+            .unwrap();
+            let list = rt.block_on(list_presets()).unwrap();
+            let names: Vec<&str> = list.iter().map(|p| p.name.as_str()).collect();
+            assert_eq!(names, vec!["work", "Simple", "Complex"]);
+
+            // Unknown names are dropped, missing presets appended
+            // (sorted) — the file never hides a preset.
+            rt.block_on(reorder_presets(vec![
+                "nope".to_string(),
+                "Complex".to_string(),
+                "work".to_string(),
+            ]))
+            .unwrap();
+            let list = rt.block_on(list_presets()).unwrap();
+            let names: Vec<&str> = list.iter().map(|p| p.name.as_str()).collect();
+            assert_eq!(names, vec!["Complex", "work", "Simple"]);
+
+            // A new preset lands at the end.
+            rt.block_on(copy_preset("Simple".to_string(), "aaa".to_string()))
+                .unwrap();
+            let list = rt.block_on(list_presets()).unwrap();
+            let names: Vec<&str> = list.iter().map(|p| p.name.as_str()).collect();
+            assert_eq!(names, vec!["Complex", "work", "Simple", "aaa"]);
         });
     }
 

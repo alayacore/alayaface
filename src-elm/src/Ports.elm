@@ -57,6 +57,7 @@ port module Ports exposing
     , copyPreset
     , renamePreset
     , deletePreset
+    , reorderPresets
     , onPresetsList
     , onPresetActionResult
       -- Session
@@ -202,6 +203,9 @@ port listPresets : {} -> Cmd msg
 port copyPreset : { source : String, name : String } -> Cmd msg
 port renamePreset : { oldName : String, newName : String } -> Cmd msg
 port deletePreset : { name : String } -> Cmd msg
+-- Preset Manager drag-to-reorder: full ordered name list persisted by
+-- the backend (preset_order.conf).
+port reorderPresets : { names : List String } -> Cmd msg
 port onPresetsList : (E.Value -> msg) -> Sub msg
 port onPresetActionResult : (E.Value -> msg) -> Sub msg
 port confirmTool : { sessionId : String, id : String, allowed : Bool } -> Cmd msg
