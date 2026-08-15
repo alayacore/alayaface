@@ -1007,31 +1007,50 @@ update msg model =
             -- queues behind it and the run deadlocks (e.g. invalid node
             -- preset). Fail the pending node so retry/backoff applies,
             -- then drain the queue.
-            case model.planCreating of
+            --
+            -- Also drop the buffered early frames of the failed create:
+            -- the backend broadcasts core-status connected:true BEFORE
+            -- the RPC reply, so a create whose response was lost buffers
+            -- that frame keyed by the never-registered core id — no
+            -- SessionCreated will ever arrive to flush it, and it would
+            -- leak in pendingEvents forever. With the serialized create
+            -- queue every buffered entry belongs to the failed create,
+            -- so the whole buffer can go; a concurrent resume or
+            -- cascade-fork (rare, and its live id is unknown to us) is
+            -- the only case where the buffer is left alone.
+            let
+                m0 =
+                    if model.planResumeFrom == Nothing && model.planCascadeFork == Nothing then
+                        { model | pendingEvents = Dict.empty }
+
+                    else
+                        model
+            in
+            case m0.planCreating of
                 Just (RunnerCreate planId nodeId) ->
                     let
-                        m0 =
-                            { model | planCreating = Nothing }
-
-                        ( m1, c1 ) =
-                            runStepIn update planId 0 (R.SessionCreateFailed nodeId text) m0
+                        m1 =
+                            { m0 | planCreating = Nothing }
 
                         ( m2, c2 ) =
-                            startNextCreateIn m1
+                            runStepIn update planId 0 (R.SessionCreateFailed nodeId text) m1
+
+                        ( m3, c3 ) =
+                            startNextCreateIn m2
                     in
-                    ( m2, c2 )
+                    ( m3, c3 )
 
                 Just (UserCreate _) ->
                     -- A user-initiated create failed: clear the marker and
                     -- continue with the next queued create.
                     let
-                        m0 =
-                            { model | planCreating = Nothing }
+                        m1 =
+                            { m0 | planCreating = Nothing }
                     in
-                    startNextCreateIn m0
+                    startNextCreateIn m1
 
                 Nothing ->
-                    ( model, Cmd.none )
+                    ( m0, Cmd.none )
 
         CloseSession id ->
             -- P39/D1: ownership-graph close. The FIRST close of a

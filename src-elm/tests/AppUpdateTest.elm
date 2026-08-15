@@ -3,6 +3,9 @@ module AppUpdateTest exposing (tests)
 import Dict
 import Set
 import Expect
+import Json.Encode as E
+import App.Types as AT
+import App.Update
 import Plan.Update as PU
 import Test exposing (Test, describe, test)
 import TestHelpers exposing (initModelWithSession)
@@ -91,5 +94,41 @@ tests =
                         PU.persistableWorkCopy m "s1"
                             |> Expect.equal Nothing
                 ]
+            ]
+        , describe "SessionCreateError buffer cleanup"
+            [ test "a failed create drops the buffered events of the never-registered core id" <|
+                \_ ->
+                    -- The backend broadcasts connected:true before the
+                    -- RPC reply, so a create whose response was lost
+                    -- leaves that frame buffered forever (no
+                    -- SessionCreated flushes it). The error must drop it.
+                    let
+                        m =
+                            { initModelWithSession
+                                | pendingEvents = Dict.fromList [ ( "core-x", [ E.null ] ) ]
+                                , planCreating = Nothing
+                            }
+
+                        ( m1, _ ) =
+                            App.Update.update (AT.SessionCreateError "boom") m
+                    in
+                    Expect.equal (Dict.size m1.pendingEvents) 0
+            , test "a failed create keeps the buffer while a resume is in flight" <|
+                \_ ->
+                    -- A concurrent resume's live id is unknown to us, so
+                    -- its buffered frames must NOT be swept by an
+                    -- unrelated create failure.
+                    let
+                        m =
+                            { initModelWithSession
+                                | pendingEvents = Dict.fromList [ ( "live-7", [ E.null ] ) ]
+                                , planCreating = Nothing
+                                , planResumeFrom = Just "s1"
+                            }
+
+                        ( m1, _ ) =
+                            App.Update.update (AT.SessionCreateError "boom") m
+                    in
+                    Expect.equal (Dict.size m1.pendingEvents) 1
             ]
         ]
