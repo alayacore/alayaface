@@ -1,4 +1,4 @@
-module Overlay.Settings exposing (view)
+module Overlay.Settings exposing (systemPromptRows, view)
 
 import Html exposing (Html)
 import Html.Attributes as Attr
@@ -12,6 +12,26 @@ reasoningLevelName lvl =
         1 -> "Balanced"
         2 -> "Deep"
         _ -> String.fromInt lvl
+
+
+{-| The System prompt textarea's row count follows its content
+(auto-grow), capped at maxSystemPromptRows: a short prompt stays small
+and a long one (e.g. the seeded plan-mode contract) scrolls instead of
+taking over the page — the field has a MAXIMUM height, not a fixed one.
+The +1 row leaves room for wrapped long lines (a long line wraps
+visually but still counts as one line).
+-}
+systemPromptRows : String -> Int
+systemPromptRows text =
+    clamp 4 maxSystemPromptRows (List.length (String.lines text) + 1)
+
+
+{-| Upper bound (rows) for the System prompt textarea: beyond this the
+field scrolls internally.
+-}
+maxSystemPromptRows : Int
+maxSystemPromptRows =
+    20
 
 
 view :
@@ -103,7 +123,7 @@ view config =
                         , Html.textarea
                             [ Attr.class "me-field-input me-field-textarea"
                             , Attr.id "settings-system-prompt"
-                            , Attr.rows 12
+                            , Attr.rows (systemPromptRows config.systemPrompt)
                             , Attr.value config.systemPrompt
                             , Attr.placeholder "System prompt passed to AlayaCore as --system on every new session of this preset."
                             , Ev.onInput config.onSystemPromptInput
