@@ -20,7 +20,7 @@ import (
 
 // Wire protocol constants.
 const (
-	ProtocolTranscriptions = "transcriptions"
+	ProtocolTranscriptions  = "transcriptions"
 	ProtocolChatCompletions = "chat_completions"
 	ProtocolStepAudio       = "step_audio"
 )
@@ -399,14 +399,22 @@ func asrTranscribeStepAudio(p AsrProfile, wav []byte) AsrTranscribeResult {
 	if url == "" {
 		return AsrTranscribeResult{Ok: false, Error: "ASR not configured: set the endpoint URL in the ASR config"}
 	}
-	rate, channels, bits, dataOffset, ok := wavParams(wav)
+	rate, channels, bits, dataOffset, dataSize, ok := wavParams(wav)
 	if !ok {
 		return AsrTranscribeResult{Ok: false, Error: "Invalid WAV audio: expected 16-bit PCM mono (RIFF/WAVE)"}
 	}
 	if bits != 16 || channels != 1 {
 		return AsrTranscribeResult{Ok: false, Error: fmt.Sprintf("StepAudio needs 16-bit mono PCM, got %d-bit x %d ch", bits, channels)}
 	}
-	pcm := wav[dataOffset:]
+	// Slice exactly the `data` chunk's payload — NOT everything after
+	// the header: a WAV may carry trailing chunks (LIST/ID3 metadata)
+	// past the audio, and shipping those as PCM corrupts the stream.
+	if dataOffset+dataSize > len(wav) {
+		// Truncated file: the declared size overruns the buffer. Clamp
+		// rather than reject so a short-but-real recording still works.
+		dataSize = len(wav) - dataOffset
+	}
+	pcm := wav[dataOffset : dataOffset+dataSize]
 	pcmBase64 := base64.StdEncoding.EncodeToString(pcm)
 	model := strings.TrimSpace(p.Model)
 	if model == "" {
@@ -422,11 +430,11 @@ func asrTranscribeStepAudio(p AsrProfile, wav []byte) AsrTranscribeResult {
 			"data": pcmBase64,
 			"input": map[string]any{
 				"transcription": map[string]any{
-					"language":          lang,
-					"hotwords":          []string{},
-					"model":             model,
-					"enable_itn":        true,
-					"enable_timestamp":  true,
+					"language":         lang,
+					"hotwords":         []string{},
+					"model":            model,
+					"enable_itn":       true,
+					"enable_timestamp": true,
 				},
 				"format": map[string]any{
 					"type":    "pcm",
@@ -465,30 +473,39 @@ func asrTranscribeStepAudio(p AsrProfile, wav []byte) AsrTranscribeResult {
 }
 
 // wavParams parses a standard PCM WAV header: (sample rate, channels,
-// bits per sample, offset of the PCM data). Only uncompressed PCM
-// (audio format 1) is accepted. Chunks are scanned so fmt extensions
-// are handled.
-func wavParams(wav []byte) (rate uint32, channels uint16, bits uint16, dataOffset int, ok bool) {
+// bits per sample, offset of the PCM data, size of the PCM data). Only
+// uncompressed PCM (audio format 1) is accepted, and the `fmt ` chunk
+// must precede the `data` chunk. Chunks are scanned so fmt extensions
+// are handled; the data chunk's size is returned so callers can slice
+// exactly the audio and skip any trailing metadata chunks.
+func wavParams(wav []byte) (rate uint32, channels uint16, bits uint16, dataOffset int, dataSize int, ok bool) {
 	if len(wav) < 12 || string(wav[0:4]) != "RIFF" || string(wav[8:12]) != "WAVE" {
-		return 0, 0, 0, 0, false
+		return 0, 0, 0, 0, 0, false
 	}
 	pos := 12
+	haveFmt := false
 	for pos+8 <= len(wav) {
 		id := string(wav[pos : pos+4])
 		size := int(binary.LittleEndian.Uint32(wav[pos+4 : pos+8]))
 		if id == "fmt " && size >= 16 && pos+8+24 <= len(wav) {
 			if binary.LittleEndian.Uint16(wav[pos+8:pos+10]) != 1 {
-				return 0, 0, 0, 0, false
+				return 0, 0, 0, 0, 0, false
 			}
 			channels = binary.LittleEndian.Uint16(wav[pos+10 : pos+12])
 			rate = binary.LittleEndian.Uint32(wav[pos+12 : pos+16])
 			bits = binary.LittleEndian.Uint16(wav[pos+22 : pos+24])
+			haveFmt = true
 		} else if id == "data" {
-			return rate, channels, bits, pos + 8, true
+			// A data chunk before fmt means the header is malformed —
+			// the format fields would all be zero.
+			if !haveFmt {
+				return 0, 0, 0, 0, 0, false
+			}
+			return rate, channels, bits, pos + 8, size, true
 		}
 		pos += 8 + size + (size % 2)
 	}
-	return 0, 0, 0, 0, false
+	return 0, 0, 0, 0, 0, false
 }
 
 // extractStepAudioText extracts the transcript from a StepAudio SSE

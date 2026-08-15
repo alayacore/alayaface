@@ -468,3 +468,129 @@ func TestAsrTranscribeStepAudioRejectsNonPcmWav(t *testing.T) {
 		}
 	})
 }
+
+func TestWavParamsStripsTrailingChunks(t *testing.T) {
+	// A WAV with a LIST metadata chunk AFTER the data chunk: the data
+	// chunk's own size (not "everything after the header") defines the
+	// PCM payload.
+	payload := []byte{1, 0, 2, 0, 3, 0}
+	wav := makeWav(16000, payload)
+	wav = append(wav, []byte("LIST")...)
+	wav = append(wav, 4, 0, 0, 0) // chunk size = 4
+	wav = append(wav, []byte("INFO")...)
+
+	rate, channels, bits, offset, size, ok := wavParams(wav)
+	if !ok || rate != 16000 || channels != 1 || bits != 16 {
+		t.Fatalf("wavParams = %d/%d/%d/%d/%d/%v", rate, channels, bits, offset, size, ok)
+	}
+	if offset != 44 {
+		t.Errorf("data offset = %d, want 44", offset)
+	}
+	if size != len(payload) {
+		t.Errorf("data size = %d, want %d (trailing chunk must not be included)", size, len(payload))
+	}
+	if string(wav[offset:offset+size]) != string(payload) {
+		t.Errorf("sliced payload = %q, want %q", wav[offset:offset+size], payload)
+	}
+}
+
+func TestWavParamsRejectsDataBeforeFmt(t *testing.T) {
+	// A malformed WAV with the data chunk BEFORE fmt: the format fields
+	// would be zero, so it must be rejected instead of accepted with
+	// bogus metadata.
+	wav := []byte("RIFF")
+	wav = append(wav, 44, 0, 0, 0)
+	wav = append(wav, []byte("WAVE")...)
+	wav = append(wav, []byte("data")...)
+	wav = append(wav, 4, 0, 0, 0)
+	wav = append(wav, 1, 0, 2, 0)
+
+	if _, _, _, _, _, ok := wavParams(wav); ok {
+		t.Error("wavParams accepted a data-before-fmt WAV")
+	}
+}
+
+func TestWavParamsTruncatedDataChunk(t *testing.T) {
+	// The declared data size overruns the buffer (truncated file):
+	// parsing reports the declared size; the CALLER clamps the slice.
+	payload := []byte{1, 0, 2, 0}
+	wav := makeWav(16000, payload)
+	// Shrink the buffer so the declared data size (4) exceeds the
+	// remaining bytes.
+	wav = wav[:len(wav)-2]
+
+	rate, channels, bits, offset, size, ok := wavParams(wav)
+	if !ok || rate != 16000 || channels != 1 || bits != 16 {
+		t.Fatalf("wavParams = %d/%d/%d/%d/%d/%v", rate, channels, bits, offset, size, ok)
+	}
+	if size != 4 {
+		t.Errorf("data size = %d, want declared 4", size)
+	}
+}
+
+func TestAsrTranscribeStepAudioClampsTruncatedData(t *testing.T) {
+	isolatedHome(t, func() {
+		srv, audioBase64 := fakeStepAudioServer(t)
+		defer srv.Close()
+
+		payload := []byte{5, 0, 6, 0, 7, 0}
+		wav := makeWav(16000, payload)
+		// Declared data size (6) overruns the buffer by 2 bytes.
+		wav = wav[:len(wav)-2]
+
+		p := AsrProfile{
+			ID:       "p1",
+			Name:     "step",
+			Protocol: ProtocolStepAudio,
+			URL:      srv.URL,
+			APIKey:   "stepkey",
+			Language: "zh",
+		}
+		res := asrTranscribeStepAudio(p, wav)
+		if !res.Ok {
+			t.Fatalf("result = %+v", res)
+		}
+		decoded, err := base64.StdEncoding.DecodeString(*audioBase64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := string(payload[:len(payload)-2])
+		if string(decoded) != want {
+			t.Errorf("pcm roundtrip = %q, want %q (truncated file must clamp, not overrun)", decoded, want)
+		}
+	})
+}
+
+func TestAsrTranscribeStepAudioStripsTrailingChunks(t *testing.T) {
+	isolatedHome(t, func() {
+		srv, audioBase64 := fakeStepAudioServer(t)
+		defer srv.Close()
+
+		payload := []byte{9, 0, 8, 0, 7, 0}
+		wav := makeWav(16000, payload)
+		// Trailing LIST metadata after the audio: must NOT be sent as PCM.
+		wav = append(wav, []byte("LIST")...)
+		wav = append(wav, 4, 0, 0, 0)
+		wav = append(wav, []byte("INFO")...)
+
+		p := AsrProfile{
+			ID:       "p1",
+			Name:     "step",
+			Protocol: ProtocolStepAudio,
+			URL:      srv.URL,
+			APIKey:   "stepkey",
+			Language: "zh",
+		}
+		res := asrTranscribeStepAudio(p, wav)
+		if !res.Ok {
+			t.Fatalf("result = %+v", res)
+		}
+		decoded, err := base64.StdEncoding.DecodeString(*audioBase64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(decoded) != string(payload) {
+			t.Errorf("pcm roundtrip = %q, want %q (trailing chunk leaked into the stream)", decoded, payload)
+		}
+	})
+}
