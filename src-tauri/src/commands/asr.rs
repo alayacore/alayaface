@@ -24,10 +24,10 @@
 //! - "transcriptions" — OpenAI-compatible `/audio/transcriptions`
 //!   (multipart/form-data with file+model+language). Default; local and
 //!   remote ASR using this protocol only differ by URL.
-//! - "chat_completions" — OpenAI chat-completions style ASR (e.g. MiMo):
-//!   JSON body with `messages[].content[].input_audio` base64, `api-key`
-//!   header, `stream: true`; the transcript is read from the SSE delta
-//!   stream (plain JSON is also accepted).
+//! - "chat_completions" — OpenAI standard chat completions (ASR via
+//!   `input_audio`): JSON body with `messages[].content[].input_audio`
+//!   base64, `api-key` header, `stream: true`; the transcript is read
+//!   from the SSE delta stream (plain JSON is also accepted).
 //! - "step_audio" — StepFun StepAudio realtime ASR: JSON body with
 //!   `audio.data` (RAW PCM base64 — the WAV container is stripped
 //!   server-side, format fields read from the WAV header), `Accept:
@@ -42,8 +42,8 @@ use base64::Engine;
 use serde::Serialize;
 
 /// Wire protocol: "transcriptions" (multipart /audio/transcriptions,
-/// default), "chat_completions" (JSON chat-completions ASR, MiMo style)
-/// or "step_audio" (StepFun StepAudio SSE ASR).
+/// default), "chat_completions" (OpenAI standard chat completions, ASR
+/// via input_audio) or "step_audio" (StepFun StepAudio SSE ASR).
 pub const PROTOCOL_TRANSCRIPTIONS: &str = "transcriptions";
 pub const PROTOCOL_CHAT_COMPLETIONS: &str = "chat_completions";
 pub const PROTOCOL_STEP_AUDIO: &str = "step_audio";
@@ -59,14 +59,14 @@ pub struct AsrProfile {
     pub name: String,
     /// Wire protocol: "transcriptions" (default, OpenAI-compatible
     /// /audio/transcriptions multipart upload), "chat_completions"
-    /// (chat-completions style ASR, e.g. MiMo) or "step_audio"
-    /// (StepFun StepAudio realtime ASR).
+    /// (OpenAI standard chat completions, ASR via input_audio) or
+    /// "step_audio" (StepFun StepAudio realtime ASR).
     #[serde(default)]
     pub protocol: String,
     /// FULL endpoint address, e.g.
     /// "http://127.0.0.1:8080/v1/audio/transcriptions" (local) or
     /// "https://api.openai.com/v1/audio/transcriptions" /
-    /// "https://api.xiaomimimo.com/v1/chat/completions" (remote). Used
+    /// "https://api.openai.com/v1/chat/completions" (remote). Used
     /// verbatim — nothing is appended.
     #[serde(default)]
     pub url: String,
@@ -327,10 +327,10 @@ async fn transcribe_multipart(
     })
 }
 
-/// Chat-completions style ASR (e.g. MiMo): JSON body carrying the audio
-/// base64 as an `input_audio` content part, `api-key` header, streamed
-/// response. The transcript is read from the SSE delta stream; a plain
-/// JSON response is accepted as a fallback.
+/// OpenAI standard chat completions (ASR via `input_audio`): JSON body
+/// carrying the audio base64 as an `input_audio` content part, `api-key`
+/// header, streamed response. The transcript is read from the SSE delta
+/// stream; a plain JSON response is accepted as a fallback.
 async fn transcribe_chat(
     profile: &AsrProfile,
     audio_base64: &str,

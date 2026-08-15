@@ -831,8 +831,8 @@ emptyGlobalConfigEditor =
 --   "transcriptions"    — OpenAI-compatible /audio/transcriptions
 --                         (multipart file upload); local and remote
 --                         differ only by URL (default)
---   "chat_completions"  — chat-completions style ASR (e.g. MiMo): JSON
---                         body with input_audio base64, api-key header
+--   "chat_completions"  — OpenAI standard chat completions: JSON body
+--                         with input_audio base64, api-key header
 --   "step_audio"        — StepFun StepAudio realtime ASR: JSON with raw
 --                         PCM audio, Accept: text/event-stream,
 --                         Authorization: Bearer

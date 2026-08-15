@@ -9,10 +9,10 @@ import Html.Events as Ev
 ASR endpoint profiles with one active profile, plus the add/edit FORM
 (the original single-endpoint page). Three wire protocols per profile:
 "transcriptions" (OpenAI-compatible multipart upload, default),
-"chat_completions" (MiMo-style JSON body + api-key header) and
-"step_audio" (StepFun StepAudio realtime ASR). The user enters the
-FULL endpoint address (including the method path); the backend uses it
-verbatim.
+"chat_completions" (OpenAI standard chat completions JSON body +
+api-key header) and "step_audio" (StepFun StepAudio realtime ASR). The
+user enters the FULL endpoint address (including the method path); the
+backend uses it verbatim.
 -}
 
 
@@ -76,7 +76,7 @@ protocolDisplayName : String -> String
 protocolDisplayName protocol =
     case protocol of
         "chat_completions" ->
-            "Chat completions (MiMo-style, JSON + api-key)"
+            "OpenAI /chat/completions (JSON + api-key)"
 
         "step_audio" ->
             "StepAudio (StepFun, raw PCM + SSE)"
@@ -109,7 +109,7 @@ listView cfg =
                     Nothing ->
                         Html.text ""
                 , Html.div [ Attr.class "me-hint asr-list-hint" ]
-                    [ Html.text "Voice input uses the ACTIVE endpoint. Add as many ASR endpoints as you like (local whisper, MiMo, …) and switch between them — Edit opens the endpoint form." ]
+                    [ Html.text "Voice input uses the ACTIVE endpoint. Add as many ASR endpoints as you like (local whisper, OpenAI-compatible, …) and switch between them — Edit opens the endpoint form." ]
                 , if List.isEmpty cfg.profiles then
                     Html.div [ Attr.class "sel-page-status" ]
                         [ Html.text "No ASR endpoints yet — add one to enable voice input." ]
@@ -218,7 +218,7 @@ formView cfg =
                         , Attr.id "asr-config-name"
                         , Attr.type_ "text"
                         , Attr.value cfg.name
-                        , Attr.placeholder "Local whisper, MiMo, …"
+                        , Attr.placeholder "Local whisper, OpenAI, …"
                         , Ev.onInput cfg.onName
                         ]
                         []
@@ -240,7 +240,7 @@ formView cfg =
                             [ Html.text (protocolDisplayName "step_audio") ]
                         ]
                     , Html.div [ Attr.class "me-hint" ]
-                        [ Html.text "\"transcriptions\": OpenAI-compatible multipart upload (most local whisper servers). \"chat_completions\": JSON body with input_audio base64 and api-key header (e.g. MiMo). \"step_audio\": StepFun realtime ASR — JSON with raw PCM audio, Accept: text/event-stream, Authorization: Bearer." ]
+                        [ Html.text "\"transcriptions\": OpenAI-compatible multipart upload (most local whisper servers). \"chat_completions\": OpenAI standard chat completions — JSON body with input_audio base64 and api-key header. \"step_audio\": StepFun realtime ASR — JSON with raw PCM audio, Accept: text/event-stream, Authorization: Bearer." ]
                     ]
                 , Html.div [ Attr.class "me-field" ]
                     [ Html.label [ Attr.class "me-field-label" ] [ Html.text "Endpoint URL" ]
@@ -249,7 +249,7 @@ formView cfg =
                         , Attr.id "asr-config-url"
                         , Attr.type_ "text"
                         , Attr.value cfg.url
-                        , Attr.placeholder "http://127.0.0.1:8080/v1/audio/transcriptions  or  https://api.xiaomimimo.com/v1/chat/completions"
+                        , Attr.placeholder "http://127.0.0.1:8080/v1/audio/transcriptions  or  https://api.openai.com/v1/chat/completions"
                         , Ev.onInput cfg.onUrl
                         ]
                         []

@@ -33,13 +33,13 @@ type AsrProfile struct {
 	Name string `json:"name"`
 	// Wire protocol: "transcriptions" (default, OpenAI-compatible
 	// /audio/transcriptions multipart upload), "chat_completions"
-	// (chat-completions style ASR, e.g. MiMo) or "step_audio"
-	// (StepFun StepAudio realtime ASR).
+	// (OpenAI standard chat completions, ASR via input_audio) or
+	// "step_audio" (StepFun StepAudio realtime ASR).
 	Protocol string `json:"protocol"`
 	// FULL endpoint address, e.g.
 	// "http://127.0.0.1:8080/v1/audio/transcriptions" (local) or
 	// "https://api.openai.com/v1/audio/transcriptions" /
-	// "https://api.xiaomimimo.com/v1/chat/completions" (remote). Used
+	// "https://api.openai.com/v1/chat/completions" (remote). Used
 	// verbatim — nothing is appended.
 	URL string `json:"url"`
 	// API key. transcriptions: Authorization: Bearer; chat_completions:
@@ -326,8 +326,8 @@ func asrTranscribeMultipart(p AsrProfile, wav []byte) AsrTranscribeResult {
 	return AsrTranscribeResult{Ok: true, Text: strings.TrimSpace(out.Text)}
 }
 
-// asrTranscribeChat POSTs a chat-completions style ASR request (e.g.
-// MiMo): JSON body carrying the audio base64 as an input_audio content
+// asrTranscribeChat POSTs an OpenAI standard chat completions style ASR
+// request: JSON body carrying the audio base64 as an input_audio content
 // part, api-key header, streamed response. The transcript is read from
 // the SSE delta stream; a plain JSON response is accepted as a fallback.
 func asrTranscribeChat(p AsrProfile, audioBase64 string, wav []byte) AsrTranscribeResult {

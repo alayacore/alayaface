@@ -18,10 +18,10 @@ tests =
             \_ ->
                 AC.protocolDisplayName "transcriptions"
                     |> Expect.equal "OpenAI /audio/transcriptions (multipart upload)"
-        , test "chat_completions → MiMo-style JSON + api-key" <|
+        , test "chat_completions → OpenAI standard chat completions" <|
             \_ ->
                 AC.protocolDisplayName "chat_completions"
-                    |> Expect.equal "Chat completions (MiMo-style, JSON + api-key)"
+                    |> Expect.equal "OpenAI /chat/completions (JSON + api-key)"
         , test "step_audio → StepFun StepAudio raw PCM + SSE" <|
             \_ ->
                 AC.protocolDisplayName "step_audio"
