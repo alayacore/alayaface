@@ -204,6 +204,12 @@
           processor.onaudioprocess = function (e) {
             var data = e.inputBuffer.getChannelData(0);
             for (var i = 0; i < data.length; i++) samples.push(data[i]);
+            // A ScriptProcessor's output buffer defaults to a pass-through
+            // of its input — connected to ctx.destination, that would
+            // monitor the live mic through the speakers (audible
+            // self-monitoring, feedback risk). Zero it: the node stays
+            // active (onaudioprocess keeps firing), only the audio is muted.
+            e.outputBuffer.getChannelData(0).fill(0);
           };
           source.connect(processor);
           processor.connect(ctx.destination); // keep the graph running
