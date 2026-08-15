@@ -89,6 +89,9 @@ port module Ports exposing
     , onFsReadFileDataUri
     , onFsWriteResult
     , onFsReadResult
+      -- Attachment drag-drop onto the prompt input (JS reads files to
+      -- data URIs; Elm stages them)
+    , onDroppedFiles
       -- Content-addressed object store (C architecture)
     , objectPut
     , objectGet
@@ -296,6 +299,10 @@ port onFsHomeDir : (E.Value -> msg) -> Sub msg
 port onFsResolvePath : (E.Value -> msg) -> Sub msg
 -- { ok, uri, error }
 port onFsReadFileDataUri : (E.Value -> msg) -> Sub msg
+-- Attachment drag-drop: { sessionId, files: [{ name, uri }], errors }
+-- — files dropped onto a session's prompt input, read to data URIs by
+-- transport.js (64 MiB cap, matching fs_read_file_data_uri).
+port onDroppedFiles : (E.Value -> msg) -> Sub msg
 port onFsWriteResult : (E.Value -> msg) -> Sub msg
 -- { reqId, ok, content, error } — reqId matches the fsReadFileText
 -- request (meta scan / plan open / run load share the same port).

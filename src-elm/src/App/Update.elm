@@ -2108,6 +2108,53 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
+        DroppedFiles raw ->
+            case D.decodeValue droppedFilesDecoder raw of
+                Ok res ->
+                    case Dict.get res.sessionId model.sessions of
+                        Just s ->
+                            let
+                                count =
+                                    List.length s.staged
+
+                                newItems =
+                                    List.indexedMap
+                                        (\i f ->
+                                            { id = "drop-" ++ String.fromInt (count + i)
+                                            , mediaType = FP.detectMediaType f.name
+                                            , uri = f.uri
+                                            , name = Just f.name
+                                            }
+                                        )
+                                        res.files
+
+                                s1 =
+                                    { s | staged = s.staged ++ newItems }
+                            in
+                            ( { model
+                                | sessions =
+                                    Dict.insert res.sessionId
+                                        (if List.isEmpty res.errors then
+                                            s1
+
+                                         else
+                                            -- Surface rejected files (oversized /
+                                            -- unreadable) as an error message in
+                                            -- the session display.
+                                            appendErrorMsg s1
+                                                ("Drop failed: " ++ String.join "; " res.errors)
+                                        )
+                                        model.sessions
+                              }
+                            , Cmd.none
+                            )
+
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
         ConfirmFilePickerUrl ->
             case getActiveSession model of
                 Just s ->
@@ -6499,6 +6546,24 @@ fsReadFileUriDecoder =
         (D.field "ok" D.bool)
         (D.field "uri" D.string)
         (D.field "error" D.string)
+
+
+-- { sessionId, files: [{ name, uri }], errors } — files dropped onto
+-- the prompt input, read to data URIs by transport.js.
+droppedFilesDecoder : D.Decoder { sessionId : String, files : List { name : String, uri : String }, errors : List String }
+droppedFilesDecoder =
+    D.map3
+        (\sid files errors -> { sessionId = sid, files = files, errors = errors })
+        (D.field "sessionId" D.string)
+        (D.field "files"
+            (D.list
+                (D.map2 (\name uri -> { name = name, uri = uri })
+                    (D.field "name" D.string)
+                    (D.field "uri" D.string)
+                )
+            )
+        )
+        (D.field "errors" (D.list D.string))
 
 
 -- { ok, dirs, error } — list_session_dirs response.

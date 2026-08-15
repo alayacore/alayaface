@@ -11,10 +11,10 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 const CHROME = process.env.CHROME || "/usr/bin/google-chrome";
-const GO_DIR = join(process.cwd(), "src-go");
+const GO_DIR = join(process.cwd(), "..", "src-go");
 const FAKECORE = join(GO_DIR, "bin", "fakecore");
 const SERVER = join(GO_DIR, "bin", "alayaface-server");
-const STATIC = join(process.cwd(), "src-elm");
+const STATIC = join(process.cwd(), "..", "src-elm");
 
 const home = mkdtempSync(join(tmpdir(), "alayaface-dr-"));
 const port = 9101 + Math.floor(Math.random() * 200);
@@ -61,6 +61,7 @@ async function main() {
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 860 });
   page.on("pageerror", (e) => console.log("[pageerror]", String(e).slice(0, 300)));
+  page.on("console", (m) => { if (m.type() === "error" || m.type() === "warn") console.log("[console." + m.type() + "]", m.text().slice(0, 300)); });
   await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "networkidle0", timeout: 20000 });
 
   // Open Preset Manager (right-click canvas → menu item).

@@ -356,6 +356,9 @@ type Msg
     | ConfirmFilePickerUrl
     | SetInput String
     | SwitchSession String
+    -- Attachment drag-drop: files dropped onto the prompt input are
+    -- read to data URIs by transport.js and staged here.
+    | DroppedFiles E.Value
       -- File picker
     | OpenFilePicker
     | CloseFilePicker

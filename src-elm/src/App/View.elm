@@ -1837,7 +1837,7 @@ viewInputBar model session =
                             "Plan is running — input disabled until it completes…"
 
                          else
-                            "Type a message…"
+                            "Type a message… (drop files to attach)"
                         )
                     , Attr.value session.input
                     , Ev.onInput (\v -> ForSession session.id (SetInput v))
@@ -1860,7 +1860,7 @@ viewInputBar model session =
                     [ Html.button
                         [ Attr.class "footer-btn"
                         , Ev.onClick (ForSession session.id OpenFilePicker)
-                        , Attr.title "Attach media"
+                        , Attr.title "Attach media (or drop files onto the input)"
                         , Attr.disabled inputDisabled
                         ]
                         [ Icons.paperclip ]

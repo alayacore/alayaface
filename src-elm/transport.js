@@ -808,6 +808,7 @@
     window.AlayaChain.init(app);
     window.AlayaOverlay.init(app, root, transport);
     installPointerPipe(app);
+    installAttachmentDrop(app);
 
     // 5. Window maximize state
     transport.isMaximized().then(function (v) {
@@ -917,6 +918,115 @@
     }, true);
     document.addEventListener("pointercancel", function (e) {
       app.ports.onPointerCancel.send(pointerPayload(e, pointerTargetKind(e)));
+    }, true);
+  }
+
+  // ─── Attachment drag-drop (prompt input) ───────────────────────────
+  //
+  // Dropping files from the OS onto a session's input container stages
+  // them as media attachments (same data-URI + 64 MiB cap as the file
+  // picker's fs_read_file_data_uri). Drag events are captured at the
+  // document level so the drop works even over the textarea (whose own
+  // default would insert text). Only file drags (dataTransfer.types
+  // contains "Files") are intercepted — plain text drops keep their
+  // default textarea behavior, and disabled inputs ignore drops.
+  var ATTACH_MAX = 64 * 1024 * 1024; // 64 MiB — matches the backend cap
+
+  function installAttachmentDrop(app) {
+    function zoneOf(e) {
+      var t = e.target;
+      if (!t || typeof t.closest !== "function") return null;
+      if (t.closest(".input-disabled")) return null;
+      var container = t.closest(".input-container");
+      if (!container) return null;
+      var panel = t.closest(".session-panel");
+      if (!panel || !panel.dataset || !panel.dataset.session) return null;
+      return { container: container, sessionId: panel.dataset.session };
+    }
+
+    function hasFiles(e) {
+      var dt = e.dataTransfer;
+      if (!dt) return false;
+      if (dt.types) {
+        for (var i = 0; i < dt.types.length; i++) {
+          if (dt.types[i] === "Files") return true;
+        }
+        return false;
+      }
+      return !!(dt.files && dt.files.length);
+    }
+
+    document.addEventListener("dragenter", function (e) {
+      var zone = zoneOf(e);
+      if (!zone || !hasFiles(e)) return;
+      e.preventDefault();
+      var c = zone.container;
+      c._dropDepth = (c._dropDepth || 0) + 1;
+      c.classList.add("input-drop-active");
+    }, true);
+
+    document.addEventListener("dragover", function (e) {
+      var zone = zoneOf(e);
+      if (!zone || !hasFiles(e)) return;
+      // Required: without preventDefault the browser won't allow drop.
+      e.preventDefault();
+    }, true);
+
+    document.addEventListener("dragleave", function (e) {
+      var zone = zoneOf(e);
+      if (!zone) return;
+      var c = zone.container;
+      if (!c._dropDepth) return;
+      c._dropDepth = Math.max(0, c._dropDepth - 1);
+      if (c._dropDepth === 0) c.classList.remove("input-drop-active");
+    }, true);
+
+    document.addEventListener("drop", function (e) {
+      var zone = zoneOf(e);
+      if (!zone || !hasFiles(e)) return;
+      e.preventDefault();
+      var c = zone.container;
+      c._dropDepth = 0;
+      c.classList.remove("input-drop-active");
+
+      var files = Array.prototype.slice.call(e.dataTransfer.files || []);
+      if (files.length === 0) return;
+
+      var accepted = [];
+      var errors = [];
+      var pending = files.length;
+      function finish() {
+        pending--;
+        if (pending > 0) return;
+        app.ports.onDroppedFiles.send({
+          sessionId: zone.sessionId,
+          files: accepted,
+          errors: errors,
+        });
+      }
+
+      files.forEach(function (file) {
+        if (file.size > ATTACH_MAX) {
+          var mb = Math.ceil(file.size / 1048576);
+          errors.push(file.name + " (" + mb + " MiB) exceeds the 64 MiB limit");
+          finish();
+          return;
+        }
+        var reader = new FileReader();
+        reader.onerror = function () {
+          errors.push(file.name + ": could not be read");
+          finish();
+        };
+        reader.onload = function () {
+          if (typeof reader.result === "string") {
+            accepted.push({ name: file.name, uri: reader.result });
+          } else {
+            errors.push(file.name + ": could not be read");
+          }
+          finish();
+        };
+        reader.readAsDataURL(file);
+      });
     }, true);
   }
 

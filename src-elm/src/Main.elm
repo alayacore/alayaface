@@ -184,6 +184,7 @@ subscriptions model =
         , Ports.onFsListDir (\raw -> FsListDirResult raw)
         , Ports.onFsHomeDir (\raw -> FsHomeDirResult raw)
         , Ports.onFsReadFileDataUri (\raw -> FsReadFileResult raw)
+        , Ports.onDroppedFiles (\raw -> DroppedFiles raw)
         , Ports.onFsWriteResult (\raw -> FsWriteResult raw)
         , Ports.onFsReadResult (\raw -> FsReadResult raw)
         , Ports.onObjectPut (\raw -> ObjectPutResult raw)
