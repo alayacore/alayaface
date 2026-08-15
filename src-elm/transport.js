@@ -67,7 +67,9 @@
 
   // ─── Transport ────────────────────────────────────────────────────
   // interface:
-  //   invoke(cmd, args) → Promise<result>          (Tauri invoke parity)
+  //   invoke(cmd, args, timeoutMs?) → Promise<result>
+  //       (Tauri invoke parity; timeoutMs bounds the HTTP fetch only —
+  //        the Tauri transport has no client-side abort)
   //   onEvent(name, cb) → unlisten | Promise<unlisten>
   //   isMaximized()     → Promise<boolean>
   //   onWindowEvent(cb) → void
@@ -134,11 +136,14 @@
     connect();
 
     return {
-      invoke: function (cmd, args) {
-        // Abort long-hanging requests (60s) so the UI never waits
-        // forever on a stalled backend.
+      invoke: function (cmd, args, timeoutMs) {
+        // Abort long-hanging requests so the UI never waits forever on a
+        // stalled backend. The default (60s) covers normal RPCs; callers
+        // with a longer backend budget (asr_transcribe allows 120s) pass
+        // an explicit timeout. The Tauri transport has no abort at all.
+        var limit = (typeof timeoutMs === "number" && timeoutMs > 0) ? timeoutMs : 60000;
         var controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
-        var timer = controller ? setTimeout(function () { controller.abort(); }, 60000) : null;
+        var timer = controller ? setTimeout(function () { controller.abort(); }, limit) : null;
         var headers = { "Content-Type": "application/json" };
         if (backendToken) {
           headers["Authorization"] = "Bearer " + backendToken;

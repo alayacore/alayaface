@@ -262,7 +262,7 @@
           app.ports.onRawAudioReady.send({ sessionId: sid, uri: "data:audio/wav;base64," + b64 });
           return;
         }
-        transport.invoke("asr_transcribe", { sessionId: sid, audioBase64: b64 })
+        transport.invoke("asr_transcribe", { sessionId: sid, audioBase64: b64 }, 120000)
           .then(function (res) {
             app.ports.onAsrResult.send({
               sessionId: sid,
