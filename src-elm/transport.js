@@ -15,19 +15,6 @@
 // (connection-chain SVG overlays) — M4/D5 split of the former
 // bridge.js. The Elm port wiring is identical for both backends.
 
-// ─── Elm Backend Bridge ──────────────────────────────────────────────
-//
-// Plain JS bridge (no npm, no modules). Two backends, one bridge:
-//
-//   Tauri (Rust)   → window.__TAURI__ present → tauriTransport()
-//                    invoke = __TAURI__.core.invoke
-//                    onEvent = __TAURI__.event.listen
-//   Go (HTTP/WS)   → no __TAURI__ → httpTransport()
-//                    invoke = fetch POST /rpc/{cmd}
-//                    onEvent = WebSocket /ws ({type, payload} messages)
-//
-// The Elm port wiring below is identical for both backends.
-
 (function () {
   "use strict";
 
