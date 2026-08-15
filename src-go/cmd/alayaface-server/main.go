@@ -47,16 +47,21 @@ func main() {
 	}()
 
 	<-ctx.Done()
-	log.Println("shutting down: closing sessions…")
-	// Cancel-first graceful close (cancel → save → EOF, SIGKILL only
-	// after the grace period) so in-flight tasks are aborted cleanly and
-	// their history is persisted — a hard kill would lose the partial
-	// conversation. Runs in parallel, bounded by one grace period.
-	srv.Sessions.CloseAllGracefully()
+	// Stop accepting requests FIRST so no new session can be created
+	// after the close sweep starts — the previous order (close sessions,
+	// then shutdown) let a create_session racing shutdown slip past the
+	// sweep and orphan its alayacore child when the process exited.
+	log.Println("shutting down: stopping HTTP…")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("shutdown error: %v", err)
 	}
+	// Cancel-first graceful close (cancel → save → EOF, SIGKILL only
+	// after the grace period) so in-flight tasks are aborted cleanly and
+	// their history is persisted — a hard kill would lose the partial
+	// conversation. Runs in parallel, bounded by one grace period.
+	log.Println("closing sessions…")
+	srv.Sessions.CloseAllGracefully()
 	log.Println("bye")
 }
