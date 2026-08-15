@@ -22,10 +22,10 @@ tests =
             \_ ->
                 AC.protocolDisplayName "chat_completions"
                     |> Expect.equal "Chat completions (MiMo-style, JSON + api-key)"
-        , test "step_audio → StepFun StepAudio SSE + Bearer" <|
+        , test "step_audio → StepFun StepAudio raw PCM + SSE" <|
             \_ ->
                 AC.protocolDisplayName "step_audio"
-                    |> Expect.equal "StepAudio (StepFun, SSE + Bearer auth)"
+                    |> Expect.equal "StepAudio (StepFun, raw PCM + SSE)"
         , test "unknown protocol value is shown verbatim, not as transcriptions" <|
             \_ ->
                 AC.protocolDisplayName "typo_protocol"

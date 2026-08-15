@@ -79,7 +79,7 @@ protocolDisplayName protocol =
             "Chat completions (MiMo-style, JSON + api-key)"
 
         "step_audio" ->
-            "StepAudio (StepFun, SSE + Bearer auth)"
+            "StepAudio (StepFun, raw PCM + SSE)"
 
         "transcriptions" ->
             "OpenAI /audio/transcriptions (multipart upload)"
