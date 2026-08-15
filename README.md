@@ -7,69 +7,15 @@ Built with **Elm** for the frontend and **Rust** for the Tauri backend.
 
 ## Architecture
 
-```
-src-elm/              ← Elm frontend (no npm, no bundler)
-├── src/
-│   ├── Main.elm       — Thin app shell: main/init/subscriptions
-│   ├── App/
-│   │   ├── Types.elm  — App-level Model, Msg, editor/window types
-│   │   ├── Update.elm — Message dispatch + session/overlay handling;
-│   │   │                delegates to Plan/Update and App/Windows
-│   │   ├── Windows.elm— Window/canvas placement, zoom/pan, resize,
-│   │   │                z-index & connection-chain helpers (pure)
-│   │   └── View.elm   — All view functions
-│   ├── Plan/
-│   │   ├── Update.elm — Plan Mode update logic (auto-create, feedback,
-│   │   │                restart cascade, meta scan, runner wiring) —
-│   │   │                pure, directly unit-tested
-│   │   ├── Runner.elm — Plan state machine (pure)
-│   │   ├── Types.elm  — Plan schema, run state, JSON codecs
-│   │   ├── Meta.elm   — Plan meta.json model
-│   │   ├── Detect.elm — Plan-message detection in session history
-│   │   ├── Layout.elm — DAG node layout (pure)
-│   │   ├── View.elm   — Plan window / DAG rendering
-│   │   └── Frames.elm — SM task-frame state machine (pure)
-│   ├── Ports.elm      — All Tauri IPC ports (inbound + outbound)
-│   ├── Fuzzy.elm      — Fuzzy string matching
-│   └── Session/
-│       ├── Types.elm    — SessionState, Message, ToolCall, etc.
-│       ├── Protocol.elm — TLV tag constants, event decoders
-│       ├── Selector.elm — Shared list-selector state machine (pure)
-│       └── Handlers.elm — Pure event handlers (no side effects)
-├── transport.js        — JS bridge: Elm ports ↔ Tauri/HTTP transports
-│                         (RPC wiring + backend event listeners)
-├── chain.js            — connection-chain SVG overlays (P36)
-├── overlay.js          — overlay scrollbar, canvas zoom, cursor/scroll ports
-├── index.html         — Entry point (loaded by Tauri webview)
-├── style.css          — Application styles
-├── homescreen.css     — Home screen / welcome styles
-└── tests/             — Elm unit tests (elm-test)
-
-src-tauri/            ← Rust Tauri backend
-├── src/
-│   ├── main.rs
-│   ├── lib.rs          — App entry, Tauri builder
-│   ├── commands.rs     — All IPC commands
-│   ├── reader.rs       — stdout/stderr readers, TLV frame dispatch
-│   ├── session.rs      — Session lifecycle (create, close, fork)
-│   ├── tlv.rs          — TLV wire protocol encode/decode
-│   ├── alayacore.rs    — Subprocess spawn & binary discovery
-│   ├── dirs.rs         — Directory structure (~/.alayaface/)
-│   └── event.rs        — Tauri event payload types
-└── tauri.conf.json
-
-src-go/          ← Go backend (HTTP + WebSocket, same Elm client)
-├── cmd/alayaface-server/main.go — entry: flags, graceful shutdown
-└── internal/
-    ├── tlv/           — TLV wire protocol (port of tlv.rs)
-    ├── core/          — Subprocess spawn & binary discovery (alayacore.rs)
-    ├── dirs/          — Directory structure (dirs.rs)
-    ├── session/       — Session lifecycle + stdout reader (session.rs/reader.rs)
-    ├── probe/         — Throwaway alayacore probes for model queries (models.rs)
-    ├── mcp/           — MCP OAuth callback flow (mcp.rs)
-    ├── hub/           — WebSocket event bus (Tauri event system equivalent)
-    └── server/        — HTTP server, RPC dispatcher, WS, static hosting, handlers
-```
+The codebase is three parallel source trees: **src-elm/** — a pure Elm
+frontend (no npm, no bundler), with domain modules (App, Plan, Session,
+Overlay) and a thin JS bridge (`transport.js`) that abstracts the backend
+transport (Tauri IPC or HTTP/WebSocket); **src-tauri/** — the Rust Tauri
+backend (IPC commands, session lifecycle, TLV protocol); and **src-go/** —
+a Go backend (HTTP + WebSocket) that serves the same Elm client and is a
+port of the Rust backend, so either backend can run the app. Both backends
+speak the TLV wire protocol to an AlayaCore subprocess over stdin/stdout;
+the Elm core has no Tauri dependencies and is platform-agnostic.
 
 ### Data Flow
 
@@ -77,10 +23,10 @@ src-go/          ← Go backend (HTTP + WebSocket, same Elm client)
 AlayaCore (subprocess)
     │  stdout: TLV frames
     ▼
-reader.rs → dispatch_frame() → app.emit("tlv-frame", ...)
-    │
-    ▼  Tauri event system
-bridge.js → listen("tlv-frame") → app.ports.onFrame.send(payload)
+backend reader (reader.rs / internal/session/reader.go)
+    │  app.emit("tlv-frame") 或 hub.Broadcast("tlv-frame")
+    ▼
+transport.js → listen("tlv-frame")   ← Tauri event 或 WS /ws 推送
     │
     ▼  Elm port
 Main.elm → subscriptions → Ports.onFrame → FrameEvent raw
