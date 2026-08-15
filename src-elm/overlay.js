@@ -90,6 +90,11 @@
 
     var MAX_RECORD_MS = 60000;
     var recorders = {}; // sessionId → { ctx, processor, source, samples, stream, kind, timer }
+    // Set while getUserMedia is still pending: beginCapture returns
+    // early for a session that is already starting, so a double-tap
+    // while the mic is coming up cannot leak a second stream/context
+    // (recorders[sid] is only set AFTER getUserMedia resolves).
+    var starting = {};
     // Set when a stop arrives while getUserMedia is still pending: the
     // .then in beginCapture checks it and never starts recording.
     var stopCancelled = {};
@@ -166,7 +171,7 @@
     }
 
     function beginCapture(sid, kind) {
-      if (recorders[sid]) return; // already recording this session
+      if (recorders[sid] || starting[sid]) return; // already recording / mic coming up
       if (!window.isSecureContext) {
         // navigator.mediaDevices only exists on HTTPS or localhost. The
         // Go backend is often reached over a LAN IP (http://192.168.x.x)
@@ -179,8 +184,10 @@
         recorderFail(sid, kind, "Microphone access is not supported in this browser/webview");
         return;
       }
+      starting[sid] = true;
       navigator.mediaDevices.getUserMedia({ audio: true })
         .then(function (stream) {
+          delete starting[sid];
           if (stopCancelled[sid]) {
             // The user stopped before the mic came up; release the
             // stream and never start recording.
@@ -225,6 +232,7 @@
           }, MAX_RECORD_MS);
         })
         .catch(function (err) {
+          delete starting[sid];
           recorderFail(sid, kind, "Microphone error: " + ((err && err.message) ? err.message : err));
         });
     }
