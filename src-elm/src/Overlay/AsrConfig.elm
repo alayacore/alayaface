@@ -1,4 +1,4 @@
-module Overlay.AsrConfig exposing (ProfileRow, view)
+module Overlay.AsrConfig exposing (ProfileRow, protocolDisplayName, view)
 
 import Html exposing (Html)
 import Html.Attributes as Attr
@@ -67,16 +67,25 @@ view cfg =
         listView cfg
 
 
-protocolLabel : String -> String
-protocolLabel protocol =
-    if protocol == "chat_completions" then
-        "chat completions"
+{-| Human-readable protocol name, shared by the profile list rows and
+the edit-form dropdown (one source of truth). Unknown values (e.g. a
+hand-edited asr.conf) are shown verbatim instead of being silently
+mislabeled as "transcriptions".
+-}
+protocolDisplayName : String -> String
+protocolDisplayName protocol =
+    case protocol of
+        "chat_completions" ->
+            "Chat completions (MiMo-style, JSON + api-key)"
 
-    else if protocol == "step_audio" then
-        "step audio"
+        "step_audio" ->
+            "StepAudio (StepFun, SSE + Bearer auth)"
 
-    else
-        "transcriptions"
+        "transcriptions" ->
+            "OpenAI /audio/transcriptions (multipart upload)"
+
+        other ->
+            other ++ " (unknown protocol)"
 
 
 -- ─── List view (entry point from the system menu) ──────────────────
@@ -137,7 +146,7 @@ profileRow cfg p =
                     Html.text ""
                 ]
             , Html.div [ Attr.class "asr-row-meta" ]
-                [ Html.text (protocolLabel p.protocol ++ " · " ++ p.url) ]
+                [ Html.text (protocolDisplayName p.protocol ++ " · " ++ p.url) ]
             ]
         , Html.div [ Attr.class "asr-row-actions" ]
             [ if p.isActive then
@@ -224,11 +233,11 @@ formView cfg =
                         , Ev.onInput cfg.onProtocol
                         ]
                         [ Html.option [ Attr.value "transcriptions", Attr.selected (cfg.protocol == "transcriptions") ]
-                            [ Html.text "OpenAI /audio/transcriptions (multipart upload)" ]
+                            [ Html.text (protocolDisplayName "transcriptions") ]
                         , Html.option [ Attr.value "chat_completions", Attr.selected (cfg.protocol == "chat_completions") ]
-                            [ Html.text "Chat completions (MiMo-style, JSON + api-key)" ]
+                            [ Html.text (protocolDisplayName "chat_completions") ]
                         , Html.option [ Attr.value "step_audio", Attr.selected (cfg.protocol == "step_audio") ]
-                            [ Html.text "StepAudio (StepFun, SSE + Bearer auth)" ]
+                            [ Html.text (protocolDisplayName "step_audio") ]
                         ]
                     , Html.div [ Attr.class "me-hint" ]
                         [ Html.text "\"transcriptions\": OpenAI-compatible multipart upload (most local whisper servers). \"chat_completions\": JSON body with input_audio base64 and api-key header (e.g. MiMo). \"step_audio\": StepFun realtime ASR — JSON with raw PCM audio, Accept: text/event-stream, Authorization: Bearer." ]
