@@ -74,3 +74,36 @@ func TestRPCPanicAfterWriteKeepsFirstResponse(t *testing.T) {
 		t.Fatalf("body = %q, want 'partial'", b)
 	}
 }
+
+// TestRPCErrorAfterWriteKeepsFirstResponse: a handler that writes a
+// response and THEN returns an error must not append a second JSON
+// error body — the client receives the handler's response as-is (the
+// error path mirrors the panic path's first-write-wins rule).
+func TestRPCErrorAfterWriteKeepsFirstResponse(t *testing.T) {
+	s := New("", "")
+	rpcHandlers["__test_err_after__"] = func(h *handlers.Handler, w http.ResponseWriter, r *http.Request) error {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "done")
+		return &rpcError{status: http.StatusInternalServerError, msg: "late failure"}
+	}
+	defer delete(rpcHandlers, "__test_err_after__")
+
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/rpc/__test_err_after__", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (first write wins)", resp.StatusCode)
+	}
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != "done" {
+		t.Fatalf("body = %q, want 'done' (no error body appended)", b)
+	}
+}

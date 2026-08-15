@@ -68,6 +68,14 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	if err := fn(s.Handler, recorder, r); err != nil {
+		if recorder.wrote {
+			// The handler already wrote a response before failing. A
+			// second write would be a superfluous WriteHeader + a second
+			// JSON body appended to the first (net/http would log the
+			// duplicate and the client would see a mangled payload).
+			// Keep the first response — same rule as the panic path.
+			return
+		}
 		writeRPCError(recorder, err)
 	}
 }
