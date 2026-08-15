@@ -30,8 +30,8 @@ func readFixture(t *testing.T, name string) []byte {
 // ─── settings.conf (GlobalSettings) ────────────────────────────────
 
 type settingsCase struct {
-	Name     string `json:"name"`
-	Input    struct {
+	Name  string `json:"name"`
+	Input struct {
 		ToolConfirm    string `json:"tool_confirm"`
 		BuiltinTools   string `json:"builtin_tools"`
 		SystemPrompt   string `json:"system_prompt"`
@@ -93,8 +93,8 @@ func TestSettingsSerializationMatchesSharedFixture(t *testing.T) {
 // ─── global.conf (GlobalConfig) ────────────────────────────────────
 
 type globalCase struct {
-	Name     string `json:"name"`
-	Input    struct {
+	Name  string `json:"name"`
+	Input struct {
 		RecursionLimit int `json:"recursion_limit"`
 	} `json:"input"`
 	Normalized struct {
@@ -137,9 +137,9 @@ type mcpParseCase struct {
 }
 
 type mcpWriteCase struct {
-	Name          string `json:"name"`
-	InputServers  string `json:"input_servers"`
-	ExpectedText  string `json:"expected_text"`
+	Name         string `json:"name"`
+	InputServers string `json:"input_servers"`
+	ExpectedText string `json:"expected_text"`
 }
 
 func TestMcpParseMatchesSharedFixture(t *testing.T) {

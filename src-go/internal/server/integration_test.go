@@ -602,7 +602,7 @@ func TestIntegrationResumeKeepsSpawnArgs(t *testing.T) {
 		"binaryPath":   "",
 		"configPath":   "",
 		"toolConfirm":  "allow",
-		"preset": "Simple",
+		"preset":       "Simple",
 		"builtinTools": "", // explicitly NO builtin tools (Plan Session)
 		"systemPrompt": "planner-hint",
 		"workDir":      workDir,

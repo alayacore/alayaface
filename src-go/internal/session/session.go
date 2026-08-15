@@ -198,12 +198,12 @@ func (m *Manager) CloseAllGracefullyFor(owner string) {
 
 // CreateConfig configures a new session.
 type CreateConfig struct {
-	ID           string // also names the session dir
-	Binary       string
-	ConfigPath   string
-	SessionFile  string
-	SessionDir   string
-	ToolConfirm  string
+	ID          string // also names the session dir
+	Binary      string
+	ConfigPath  string
+	SessionFile string
+	SessionDir  string
+	ToolConfirm string
 	// BuiltinTools: nil = don't pass --builtin-tools (all tools);
 	// pointer to "" = explicitly no builtin tools (Plan Sessions);
 	// pointer to a list = those tools only.

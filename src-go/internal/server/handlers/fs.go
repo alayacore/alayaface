@@ -1,9 +1,9 @@
 package handlers
 
 import (
-	"log"
 	"encoding/base64"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"

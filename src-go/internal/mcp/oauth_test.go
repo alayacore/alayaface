@@ -107,9 +107,9 @@ func TestCallbackStrayBeforeCallbackDoesNotDecline(t *testing.T) {
 
 	// Strays first (all accepted at the TCP level; none is a callback).
 	hit(t, cb+"/favicon.ico", true)
-	hit(t, cb+"/callback", true)          // manual visit: no code/error/state
-	hit(t, cb+"/other/path", true)        // unrelated path
-	hit(t, cb+"/callback?foo=bar", true)  // params but no code/error/state
+	hit(t, cb+"/callback", true)         // manual visit: no code/error/state
+	hit(t, cb+"/other/path", true)       // unrelated path
+	hit(t, cb+"/callback?foo=bar", true) // params but no code/error/state
 
 	// The real callback arrives and must CONFIRM (Code != nil).
 	hit(t, cb+"/callback?state="+stateOf(t, url)+"&code=real-code", true)

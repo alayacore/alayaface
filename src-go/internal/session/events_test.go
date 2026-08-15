@@ -37,9 +37,9 @@ type frameInput struct {
 }
 
 type deltaCase struct {
-	Name     string      `json:"name"`
-	Input    deltaInput  `json:"input"`
-	Expected string      `json:"expected"`
+	Name     string     `json:"name"`
+	Input    deltaInput `json:"input"`
+	Expected string     `json:"expected"`
 }
 
 type deltaInput struct {
@@ -50,9 +50,9 @@ type deltaInput struct {
 }
 
 type statusCase struct {
-	Name     string       `json:"name"`
-	Input    statusInput  `json:"input"`
-	Expected string       `json:"expected"`
+	Name     string      `json:"name"`
+	Input    statusInput `json:"input"`
+	Expected string      `json:"expected"`
 }
 
 type statusInput struct {
