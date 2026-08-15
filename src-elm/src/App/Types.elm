@@ -827,12 +827,15 @@ emptyGlobalConfigEditor =
 -- VOICE INPUT ASR CONFIG OVERLAY
 --
 -- ~/.alayaface/asr.conf: a LIST of ASR endpoint profiles; one is
--- active and used by asr_transcribe. Two wire protocols per profile:
+-- active and used by asr_transcribe. Three wire protocols per profile:
 --   "transcriptions"    — OpenAI-compatible /audio/transcriptions
 --                         (multipart file upload); local and remote
 --                         differ only by URL (default)
 --   "chat_completions"  — chat-completions style ASR (e.g. MiMo): JSON
 --                         body with input_audio base64, api-key header
+--   "step_audio"        — StepFun StepAudio realtime ASR: JSON with raw
+--                         PCM audio, Accept: text/event-stream,
+--                         Authorization: Bearer
 -- The endpoint URL is the FULL address and is used verbatim.
 
 type alias AsrProfile =

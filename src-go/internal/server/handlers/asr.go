@@ -31,7 +31,10 @@ type AsrProfile struct {
 	ID string `json:"id"`
 	// Display name shown in the ASR config list.
 	Name string `json:"name"`
-	// Wire protocol: "transcriptions" (default) or "chat_completions".
+	// Wire protocol: "transcriptions" (default, OpenAI-compatible
+	// /audio/transcriptions multipart upload), "chat_completions"
+	// (chat-completions style ASR, e.g. MiMo) or "step_audio"
+	// (StepFun StepAudio realtime ASR).
 	Protocol string `json:"protocol"`
 	// FULL endpoint address, e.g.
 	// "http://127.0.0.1:8080/v1/audio/transcriptions" (local) or
@@ -40,8 +43,8 @@ type AsrProfile struct {
 	// verbatim — nothing is appended.
 	URL string `json:"url"`
 	// API key. transcriptions: Authorization: Bearer; chat_completions:
-	// api-key header. Empty = no header (local endpoints usually don't
-	// require one).
+	// api-key header; step_audio: Authorization: Bearer. Empty = no
+	// header (local endpoints usually don't require one).
 	APIKey string `json:"api_key"`
 	// Model id passed through to the endpoint (default "whisper-1").
 	Model string `json:"model"`

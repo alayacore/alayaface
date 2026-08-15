@@ -20,7 +20,7 @@
 //!   ]
 //! }
 //! ```
-//! Two wire protocols are supported (`protocol`):
+//! Three wire protocols are supported (`protocol`):
 //! - "transcriptions" — OpenAI-compatible `/audio/transcriptions`
 //!   (multipart/form-data with file+model+language). Default; local and
 //!   remote ASR using this protocol only differ by URL.
@@ -57,7 +57,10 @@ pub struct AsrProfile {
     /// Display name shown in the ASR config list.
     #[serde(default)]
     pub name: String,
-    /// Wire protocol: "transcriptions" (default) or "chat_completions".
+    /// Wire protocol: "transcriptions" (default, OpenAI-compatible
+    /// /audio/transcriptions multipart upload), "chat_completions"
+    /// (chat-completions style ASR, e.g. MiMo) or "step_audio"
+    /// (StepFun StepAudio realtime ASR).
     #[serde(default)]
     pub protocol: String,
     /// FULL endpoint address, e.g.
@@ -68,8 +71,8 @@ pub struct AsrProfile {
     #[serde(default)]
     pub url: String,
     /// API key. transcriptions: Authorization: Bearer; chat_completions:
-    /// api-key header. Empty = no header (local endpoints usually don't
-    /// require one).
+    /// api-key header; step_audio: Authorization: Bearer. Empty = no
+    /// header (local endpoints usually don't require one).
     #[serde(default)]
     pub api_key: String,
     /// Model id passed through to the endpoint (default "whisper-1").

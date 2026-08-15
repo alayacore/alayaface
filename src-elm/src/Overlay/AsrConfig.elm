@@ -7,11 +7,12 @@ import Html.Events as Ev
 
 {-| Voice-input ASR config overlay (~/.alayaface/asr.conf): a LIST of
 ASR endpoint profiles with one active profile, plus the add/edit FORM
-(the original single-endpoint page). Two wire protocols per profile:
-"transcriptions" (OpenAI-compatible multipart upload, default) and
-"chat_completions" (MiMo-style JSON body + api-key header). The user
-enters the FULL endpoint address (including the method path); the
-backend uses it verbatim.
+(the original single-endpoint page). Three wire protocols per profile:
+"transcriptions" (OpenAI-compatible multipart upload, default),
+"chat_completions" (MiMo-style JSON body + api-key header) and
+"step_audio" (StepFun StepAudio realtime ASR). The user enters the
+FULL endpoint address (including the method path); the backend uses it
+verbatim.
 -}
 
 
