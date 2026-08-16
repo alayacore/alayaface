@@ -324,6 +324,10 @@ type alias Model =
     , ptCreatePending : Bool
     , ptSessionId : Maybe String
     , ptTranscribing : Bool
+    -- Close-session confirmation: the Session.id awaiting the user's
+    -- choice when they clicked a window's ✕ or pressed Ctrl+W (Close /
+    -- Close and Delete / Cancel). Nothing = no confirmation pending.
+    , closeConfirm : Maybe String
     }
 
 
@@ -355,6 +359,14 @@ type Msg
     -- overlay.js). Hold opens a new session under the built-in "Talk"
     -- preset and starts ASR recording; release stops it (transcribes).
     | PushToTalk Bool
+    -- Close-session confirmation: RequestCloseSession opens the confirm
+    -- overlay instead of closing (window ✕ / Ctrl+W); ConfirmCloseSession
+    -- and ConfirmDeleteSession execute the choice; DismissCloseConfirm
+    -- cancels (Escape or the Cancel button).
+    | RequestCloseSession String
+    | ConfirmCloseSession String
+    | ConfirmDeleteSession String
+    | DismissCloseConfirm
     | RawAudioReady E.Value
     | RawAudioError E.Value
     | CaptureAutoStop E.Value

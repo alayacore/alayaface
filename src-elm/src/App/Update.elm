@@ -1147,6 +1147,29 @@ update msg model =
                 Nothing ->
                     ( m0b, Cmd.none )
 
+        RequestCloseSession id ->
+            -- User-initiated close (window ✕ or Ctrl+W): show the
+            -- confirm overlay instead of closing — Close (keep the
+            -- conversation on disk) / Close and Delete (remove files) /
+            -- Cancel. Internal closes (plans, runners) still call
+            -- CloseSession directly and never prompt.
+            -- Focus the "Close" button (the default): autofocus alone
+            -- is blocked when the prompt input already holds focus, so
+            -- the Dom.focus command forces it — Enter then confirms the
+            -- default instead of sending a message.
+            ( { model | closeConfirm = Just id }
+            , Task.attempt (\_ -> NoOp) (Dom.focus "close-confirm-close")
+            )
+
+        ConfirmCloseSession id ->
+            update (CloseSession id) { model | closeConfirm = Nothing }
+
+        ConfirmDeleteSession id ->
+            update (DeleteSession id) { model | closeConfirm = Nothing }
+
+        DismissCloseConfirm ->
+            ( { model | closeConfirm = Nothing }, Cmd.none )
+
         CloseSession id ->
             -- P39/D1: ownership-graph close. The FIRST close of a
             -- session collects the WHOLE owned set (this session's plans
@@ -5937,8 +5960,13 @@ update msg model =
             -- The tool-confirm dialog is intentionally NOT closed by
             -- Escape (it requires an explicit Allow/Deny choice), and
             -- MCP init/auth overlays keep their explicit buttons too.
+            -- The close-session confirmation DOES respond to Escape
+            -- (= Cancel).
             else if key == "Escape" || (key == "[" && ctrl) then
-                if model.ctxVisible then
+                if model.closeConfirm /= Nothing then
+                    update DismissCloseConfirm model
+
+                else if model.ctxVisible then
                     ( { model | ctxVisible = False }, Cmd.none )
 
                 else if model.showSessionManager then
@@ -6012,7 +6040,9 @@ update msg model =
                     Nothing ->
                         case model.activeId of
                             Just sid ->
-                                update (CloseSession sid) model
+                                -- User-initiated close: confirm first
+                                -- (Close / Close and Delete / Cancel).
+                                update (RequestCloseSession sid) model
 
                             Nothing ->
                                 case model.planActiveId of

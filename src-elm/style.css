@@ -1096,6 +1096,26 @@ body {
 
 .confirm-page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
+/* Close-session confirmation overlay (Close / Close and Delete / Cancel) */
+.close-confirm-text {
+  color: #aaa;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin-bottom: 20px;
+}
+
+.close-confirm-cancel {
+  background: #333;
+  color: #ddd;
+}
+.close-confirm-cancel:hover { background: #444; }
+
+@media (prefers-color-scheme: light) {
+  .close-confirm-text { color: #555; }
+  .close-confirm-cancel { background: #e2e2e8; color: #333; }
+  .close-confirm-cancel:hover { background: #d4d4dc; }
+}
+
 /* ─── File Picker Page (inside Overlay) ──────────────────────────────── */
 
 .fp-page {

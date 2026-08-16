@@ -102,6 +102,7 @@ view model =
             )
         , viewGlobalMenu model
         , viewContextMenu model
+        , viewCloseConfirmOverlay model
         , viewSessionManagerOverlay model
         , viewVersionOverlays model
         , viewPresetManagerOverlay model
@@ -232,7 +233,7 @@ viewSessionPanel model id =
                     , Html.button
                         [ Attr.class "session-bar-close"
                         , Ev.stopPropagationOn "mousedown" (D.succeed ( NoOp, True ))
-                        , Ev.stopPropagationOn "click" (D.succeed ( CloseSession id, True ))
+                        , Ev.stopPropagationOn "click" (D.succeed ( RequestCloseSession id, True ))
                         , Attr.title "Close session"
                         ]
                         [ Html.text "✕" ]
@@ -378,6 +379,53 @@ viewContextMenu model =
 
     else
         Html.text ""
+
+
+{-| Close-session confirmation overlay: shown when the user clicks a
+session window's ✕ or presses Ctrl+W. Three choices — Close (stop the
+window/process, keep the conversation on disk, resumable later),
+Close and Delete (also remove the session's files), Cancel. "Close" is
+the default (autofocused, so Enter confirms it); Escape cancels.
+-}
+viewCloseConfirmOverlay : Model -> Html Msg
+viewCloseConfirmOverlay model =
+    case model.closeConfirm of
+        Just sid ->
+            case Dict.get sid model.sessions of
+                Just _ ->
+                    viewOverlay DismissCloseConfirm
+                        [ Html.div [ Attr.class "confirm-page" ]
+                            [ Html.div [ Attr.class "confirm-page-title" ]
+                                [ Html.text "Close session?" ]
+                            , Html.div [ Attr.class "close-confirm-text" ]
+                                [ Html.text "The session window and its process will be closed. \"Close\" keeps your conversation on disk (it can be resumed later); \"Close and Delete\" also removes the session's files permanently." ]
+                            , Html.div [ Attr.class "confirm-page-buttons" ]
+                                [ Html.button
+                                    [ Attr.class "confirm-page-btn confirm-page-btn-allow"
+                                    , Attr.id "close-confirm-close"
+                                    , Attr.autofocus True
+                                    , Ev.onClick (ConfirmCloseSession sid)
+                                    ]
+                                    [ Html.text "Close" ]
+                                , Html.button
+                                    [ Attr.class "confirm-page-btn confirm-page-btn-deny"
+                                    , Ev.onClick (ConfirmDeleteSession sid)
+                                    ]
+                                    [ Html.text "Close and Delete" ]
+                                , Html.button
+                                    [ Attr.class "confirm-page-btn close-confirm-cancel"
+                                    , Ev.onClick DismissCloseConfirm
+                                    ]
+                                    [ Html.text "Cancel" ]
+                                ]
+                            ]
+                        ]
+
+                Nothing ->
+                    Html.text ""
+
+        Nothing ->
+            Html.text ""
 
 
 viewSessionManagerOverlay : Model -> Html Msg

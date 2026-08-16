@@ -45,6 +45,7 @@ init _ =
       , ptCreatePending = False
       , ptSessionId = Nothing
       , ptTranscribing = False
+      , closeConfirm = Nothing
       , inputRows = 1
       , cursorMsgId = Nothing
       , pendingEvents = Dict.empty
