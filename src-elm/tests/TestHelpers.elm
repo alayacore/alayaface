@@ -108,5 +108,4 @@ initModelWithSession =
     , ptHeld = False
     , ptCreatePending = False
     , ptSessionId = Nothing
-    , closeConfirm = Nothing
     }

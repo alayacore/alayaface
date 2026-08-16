@@ -129,6 +129,8 @@ try {
   await page.$eval('.session-bar-close', el => el.click());
   await waitFor('.overlay .confirm-page-title');
   await sleep(200);
+  const inPanel = await page.$eval('.overlay', el => !!el.closest('.session-panel'));
+  assert(inPanel, 'confirm overlay renders INSIDE the session panel (per-session)');
   const btns = await overlayButtons();
   assert(btns.length === 3, 'three buttons, got ' + JSON.stringify(btns));
   assert(btns[0].includes('Close'), 'button 1 is Close: ' + JSON.stringify(btns));

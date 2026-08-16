@@ -175,6 +175,62 @@ focusInput =
     Kit.focusPrompt
 
 
+{-| Close this session's close-confirmation overlay (per-session state).
+Used by the confirm choice (before closing/deleting) and by Cancel.
+-}
+clearCloseConfirm : String -> Model -> Model
+clearCloseConfirm id model =
+    { model
+        | sessions =
+            Dict.update id
+                (Maybe.map (\s -> { s | closeConfirm = False }))
+                model.sessions
+    }
+
+
+{-| The session whose close-confirmation overlay Escape should dismiss:
+the ACTIVE session if its overlay is open, otherwise any session with
+one open (a per-session overlay may linger after the user switched to
+another window).
+-}
+pendingCloseConfirmId : Model -> Maybe String
+pendingCloseConfirmId model =
+    case model.activeId of
+        Just sid ->
+            case Dict.get sid model.sessions of
+                Just s ->
+                    if s.closeConfirm then
+                        Just sid
+
+                    else
+                        firstCloseConfirm model
+
+                Nothing ->
+                    firstCloseConfirm model
+
+        Nothing ->
+            firstCloseConfirm model
+
+
+firstCloseConfirm : Model -> Maybe String
+firstCloseConfirm model =
+    Dict.foldl
+        (\sid s acc ->
+            case acc of
+                Just _ ->
+                    acc
+
+                Nothing ->
+                    if s.closeConfirm then
+                        Just sid
+
+                    else
+                        Nothing
+        )
+        Nothing
+        model.sessions
+
+
 focusAfterDelay : String -> Cmd Msg
 focusAfterDelay =
     Kit.focusAfterDelay
@@ -1148,27 +1204,34 @@ update msg model =
                     ( m0b, Cmd.none )
 
         RequestCloseSession id ->
-            -- User-initiated close (window ✕ or Ctrl+W): show the
-            -- confirm overlay instead of closing — Close (keep the
-            -- conversation on disk) / Close and Delete (remove files) /
-            -- Cancel. Internal closes (plans, runners) still call
-            -- CloseSession directly and never prompt.
+            -- User-initiated close (window ✕ or Ctrl+W): show THIS
+            -- session's confirm overlay instead of closing — Close
+            -- (keep the conversation on disk) / Close and Delete
+            -- (remove files) / Cancel. The pending state lives on the
+            -- SessionState (per-session overlay, like pendingConfirm);
+            -- internal closes (plans, runners) still call CloseSession
+            -- directly and never prompt.
             -- Focus the "Close" button (the default): autofocus alone
             -- is blocked when the prompt input already holds focus, so
             -- the Dom.focus command forces it — Enter then confirms the
             -- default instead of sending a message.
-            ( { model | closeConfirm = Just id }
+            ( { model
+                | sessions =
+                    Dict.update id
+                        (Maybe.map (\s -> { s | closeConfirm = True }))
+                        model.sessions
+              }
             , Task.attempt (\_ -> NoOp) (Dom.focus "close-confirm-close")
             )
 
         ConfirmCloseSession id ->
-            update (CloseSession id) { model | closeConfirm = Nothing }
+            update (CloseSession id) (clearCloseConfirm id model)
 
         ConfirmDeleteSession id ->
-            update (DeleteSession id) { model | closeConfirm = Nothing }
+            update (DeleteSession id) (clearCloseConfirm id model)
 
-        DismissCloseConfirm ->
-            ( { model | closeConfirm = Nothing }, Cmd.none )
+        DismissCloseConfirm sid ->
+            ( clearCloseConfirm sid model, focusInput model )
 
         CloseSession id ->
             -- P39/D1: ownership-graph close. The FIRST close of a
@@ -5948,67 +6011,71 @@ update msg model =
             -- The close-session confirmation DOES respond to Escape
             -- (= Cancel).
             else if key == "Escape" || (key == "[" && ctrl) then
-                if model.closeConfirm /= Nothing then
-                    update DismissCloseConfirm model
+                case pendingCloseConfirmId model of
+                    Just sid ->
+                        -- Escape cancels a per-session close
+                        -- confirmation (the active one first).
+                        update (DismissCloseConfirm sid) model
 
-                else if model.ctxVisible then
-                    ( { model | ctxVisible = False }, Cmd.none )
+                    Nothing ->
+                        if model.ctxVisible then
+                            ( { model | ctxVisible = False }, Cmd.none )
 
-                else if model.showSessionManager then
-                    update CloseSessionManager model
+                        else if model.showSessionManager then
+                            update CloseSessionManager model
 
-                else if model.versionListFor /= Nothing then
-                    update CloseVersionList model
+                        else if model.versionListFor /= Nothing then
+                            update CloseVersionList model
 
-                else if model.versionViewFor /= Nothing then
-                    update CloseVersionView model
+                        else if model.versionViewFor /= Nothing then
+                            update CloseVersionView model
 
-                else if model.presetManager.show then
-                    update ClosePresetManager model
+                        else if model.presetManager.show then
+                            update ClosePresetManager model
 
-                else if model.defaultModelsEditor.show then
-                    update CloseDefaultModelsEditor model
+                        else if model.defaultModelsEditor.show then
+                            update CloseDefaultModelsEditor model
 
-                else if model.mcpEditor.show then
-                    update CloseMcpEditor model
+                        else if model.mcpEditor.show then
+                            update CloseMcpEditor model
 
-                else if model.settingsEditor.show then
-                    update CloseSettingsEditor model
+                        else if model.settingsEditor.show then
+                            update CloseSettingsEditor model
 
-                else if model.globalConfigEditor.show then
-                    update CloseGlobalConfig model
+                        else if model.globalConfigEditor.show then
+                            update CloseGlobalConfig model
 
-                else if model.asrConfigEditor.show then
-                    if model.asrConfigEditor.inForm then
-                        update AsrConfigBack model
+                        else if model.asrConfigEditor.show then
+                            if model.asrConfigEditor.inForm then
+                                update AsrConfigBack model
 
-                    else
-                        update CloseAsrConfig model
+                            else
+                                update CloseAsrConfig model
 
-                else if model.planCascadePreview /= Nothing then
-                    update PlanCascadeCancel model
+                        else if model.planCascadePreview /= Nothing then
+                            update PlanCascadeCancel model
 
-                else
-                    case model.activeId of
-                        Just sid ->
-                            case Dict.get sid model.sessions of
-                                Just sess ->
-                                    if sess.filePicker.show then
-                                        update (ForSession sid CloseFilePicker) model
+                        else
+                            case model.activeId of
+                                Just sid ->
+                                    case Dict.get sid model.sessions of
+                                        Just sess ->
+                                            if sess.filePicker.show then
+                                                update (ForSession sid CloseFilePicker) model
 
-                                    else if sess.showModelSelector then
-                                        update (ForSession sid CloseModelSelector) model
+                                            else if sess.showModelSelector then
+                                                update (ForSession sid CloseModelSelector) model
 
-                                    else
-                                        ( updateActiveSession model (\s -> { s | mediaPreview = Nothing })
-                                        , Cmd.none
-                                        )
+                                            else
+                                                ( updateActiveSession model (\s -> { s | mediaPreview = Nothing })
+                                                , Cmd.none
+                                                )
+
+                                        Nothing ->
+                                            ( model, Cmd.none )
 
                                 Nothing ->
                                     ( model, Cmd.none )
-
-                        Nothing ->
-                            ( model, Cmd.none )
 
             -- Ctrl+W closes the FOCUSED window. Both a session
             -- (activeId) and a plan (planActiveId) can be "active" at

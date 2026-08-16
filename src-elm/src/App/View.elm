@@ -102,7 +102,6 @@ view model =
             )
         , viewGlobalMenu model
         , viewContextMenu model
-        , viewCloseConfirmOverlay model
         , viewSessionManagerOverlay model
         , viewVersionOverlays model
         , viewPresetManagerOverlay model
@@ -381,51 +380,47 @@ viewContextMenu model =
         Html.text ""
 
 
-{-| Close-session confirmation overlay: shown when the user clicks a
-session window's ✕ or presses Ctrl+W. Three choices — Close (stop the
-window/process, keep the conversation on disk, resumable later),
-Close and Delete (also remove the session's files), Cancel. "Close" is
-the default (autofocused, so Enter confirms it); Escape cancels.
+{-| Close-session confirmation overlay — PER-SESSION (like the tool
+confirm overlay): rendered inside the session's panel, state lives on
+SessionState.closeConfirm. Shown when the user clicks this window's ✕
+or presses Ctrl+W. Three choices — Close (stop the window/process,
+keep the conversation on disk, resumable later), Close and Delete
+(also remove the session's files), Cancel. "Close" is the default
+(autofocused, so Enter confirms it); Escape cancels.
 -}
-viewCloseConfirmOverlay : Model -> Html Msg
-viewCloseConfirmOverlay model =
-    case model.closeConfirm of
-        Just sid ->
-            case Dict.get sid model.sessions of
-                Just _ ->
-                    viewOverlay DismissCloseConfirm
-                        [ Html.div [ Attr.class "confirm-page" ]
-                            [ Html.div [ Attr.class "confirm-page-title" ]
-                                [ Html.text "Close session?" ]
-                            , Html.div [ Attr.class "close-confirm-text" ]
-                                [ Html.text "The session window and its process will be closed. \"Close\" keeps your conversation on disk (it can be resumed later); \"Close and Delete\" also removes the session's files permanently." ]
-                            , Html.div [ Attr.class "confirm-page-buttons" ]
-                                [ Html.button
-                                    [ Attr.class "confirm-page-btn confirm-page-btn-allow"
-                                    , Attr.id "close-confirm-close"
-                                    , Attr.autofocus True
-                                    , Ev.onClick (ConfirmCloseSession sid)
-                                    ]
-                                    [ Html.text "Close" ]
-                                , Html.button
-                                    [ Attr.class "confirm-page-btn confirm-page-btn-deny"
-                                    , Ev.onClick (ConfirmDeleteSession sid)
-                                    ]
-                                    [ Html.text "Close and Delete" ]
-                                , Html.button
-                                    [ Attr.class "confirm-page-btn close-confirm-cancel"
-                                    , Ev.onClick DismissCloseConfirm
-                                    ]
-                                    [ Html.text "Cancel" ]
-                                ]
-                            ]
+viewCloseConfirmOverlay : T.SessionState -> Html Msg
+viewCloseConfirmOverlay session =
+    if session.closeConfirm then
+        viewOverlay (DismissCloseConfirm session.id)
+            [ Html.div [ Attr.class "confirm-page" ]
+                [ Html.div [ Attr.class "confirm-page-title" ]
+                    [ Html.text "Close session?" ]
+                , Html.div [ Attr.class "close-confirm-text" ]
+                    [ Html.text "The session window and its process will be closed. \"Close\" keeps your conversation on disk (it can be resumed later); \"Close and Delete\" also removes the session's files permanently." ]
+                , Html.div [ Attr.class "confirm-page-buttons" ]
+                    [ Html.button
+                        [ Attr.class "confirm-page-btn confirm-page-btn-allow"
+                        , Attr.id "close-confirm-close"
+                        , Attr.autofocus True
+                        , Ev.onClick (ConfirmCloseSession session.id)
                         ]
+                        [ Html.text "Close" ]
+                    , Html.button
+                        [ Attr.class "confirm-page-btn confirm-page-btn-deny"
+                        , Ev.onClick (ConfirmDeleteSession session.id)
+                        ]
+                        [ Html.text "Close and Delete" ]
+                    , Html.button
+                        [ Attr.class "confirm-page-btn close-confirm-cancel"
+                        , Ev.onClick (DismissCloseConfirm session.id)
+                        ]
+                        [ Html.text "Cancel" ]
+                    ]
+                ]
+            ]
 
-                Nothing ->
-                    Html.text ""
-
-        Nothing ->
-            Html.text ""
+    else
+        Html.text ""
 
 
 viewSessionManagerOverlay : Model -> Html Msg
@@ -1300,6 +1295,7 @@ viewChatArea model session =
           else
             Html.text ""
         , viewInputBar model session
+        , viewCloseConfirmOverlay session
         , viewConfirmOverlay session.id session
         , viewMcpInitOverlay session.id session
         , viewFilePickerOverlay session.id session

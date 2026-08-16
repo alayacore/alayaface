@@ -253,6 +253,10 @@ type alias SessionState =
     , processedEchoIds : Set.Set String
     , msgCollapsed : Dict.Dict String Bool
     , pendingConfirm : List PendingConfirm
+    -- Close-session confirmation overlay (per-session, like
+    -- pendingConfirm): True while the user is choosing between Close /
+    -- Close and Delete / Cancel for THIS session (window ✕ or Ctrl+W).
+    , closeConfirm : Bool
     , pendingMcpAuths : List McpAuth
     , mcpAuthRunning : Maybe String
     , filePicker : FilePickerState
@@ -445,6 +449,7 @@ emptySession id =
     , processedEchoIds = Set.empty
     , msgCollapsed = Dict.empty
     , pendingConfirm = []
+    , closeConfirm = False
     , pendingMcpAuths = []
     , mcpAuthRunning = Nothing
     , filePicker = emptyFilePicker
