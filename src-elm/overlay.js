@@ -21,14 +21,26 @@
       }
 
     on("scrollToBottom", function (data) {
-      var el = document.querySelector("#msg-input-" + data.sessionId);
-      if (el) {
-        var panel = el.closest(".session-panel") || el.closest(".chat-area");
-        if (panel) {
-          var container = panel.querySelector(".messages");
-          if (container) { container.scrollTop = container.scrollHeight; }
+      // Elm 0.19 renders on the NEXT animation frame (Browser stepper),
+      // but ports are delivered synchronously BEFORE that draw. Measuring
+      // scrollHeight here would see the PREVIOUS content: scrollTop would
+      // be set to the old bottom, the new message would render below the
+      // fold, and (scrollTop unchanged) no scroll event would ever fire —
+      // the page stays stuck until a LATER event re-runs this handler
+      // with the now-updated DOM (e.g. a user echo only scrolls when the
+      // next tool/reasoning frame arrives). Deferring to a rAF makes the
+      // scroll run AFTER Elm's draw: Elm's draw rAF is registered first
+      // within this task, so it fires first in the next frame.
+      requestAnimationFrame(function () {
+        var el = document.querySelector("#msg-input-" + data.sessionId);
+        if (el) {
+          var panel = el.closest(".session-panel") || el.closest(".chat-area");
+          if (panel) {
+            var container = panel.querySelector(".messages");
+            if (container) { container.scrollTop = container.scrollHeight; }
+          }
         }
-      }
+      });
     });
 
     on("setCursorPos", function (data) {
@@ -294,8 +306,13 @@
     on("rawAudioStop", function (data) { finishCapture(data.sessionId, "raw"); });
 
     on("scrollIntoView", function (id) {
-      var el = document.getElementById(id);
-      if (el) { el.scrollIntoView({ block: "nearest" }); }
+      // Same stale-DOM deferral as scrollToBottom: the target element is
+      // usually rendered by the SAME update that fired this port, so it
+      // does not exist in the DOM yet — wait for Elm's rAF draw first.
+      requestAnimationFrame(function () {
+        var el = document.getElementById(id);
+        if (el) { el.scrollIntoView({ block: "nearest" }); }
+      });
     });
 
     // 4. Scroll tracking: send scroll data from each messages container,

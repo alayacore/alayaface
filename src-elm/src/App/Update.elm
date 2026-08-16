@@ -1211,8 +1211,16 @@ update msg model =
                                     newSession =
                                         H.handleFrameEvent session ev
     
-                                    msgCountChanged =
-                                        List.length newSession.messages /= session.prevMsgCount
+                                    -- A user echo (UT/UI/UV/UA/UD) is the
+                                    -- user's OWN action — sent from the
+                                    -- always-visible input bar, possibly
+                                    -- while scrolled up reading history.
+                                    -- Always bring it into view: chat UX
+                                    -- requires the new user message to be
+                                    -- visible regardless of auto-follow
+                                    -- state (atBottom).
+                                    userEchoNow =
+                                        P.isUserEchoTag ev.tag
     
                                     mcpJustCompleted =
                                         session.mcpStatus /= Nothing && newSession.mcpStatus == Nothing
@@ -1235,22 +1243,37 @@ update msg model =
                                     -- scrollToBottom is frontend DOM scrolling:
                                     -- elements are named by window key
                                     -- (Session.id), so pass sid.
+                                    --
+                                    -- Auto-follow re-pins on EVERY frame, not
+                                    -- just message-count changes: frames that
+                                    -- only grow an EXISTING message's content
+                                    -- (Af tool-arg deltas, UF tool results, Uf
+                                    -- previews, complete AT/AR replacements,
+                                    -- media appended to a user echo) also push
+                                    -- content below the fold. Gating on
+                                    -- msgCountChanged left the viewport stuck
+                                    -- until the next assistant-text delta
+                                    -- created a new message. State-only frames
+                                    -- (SM status, model sync…) are a harmless
+                                    -- no-op: at the bottom, scrollTop =
+                                    -- scrollHeight changes nothing.
+                                    --
+                                    -- User echoes are the exception to the
+                                    -- atBottom gate: they are the user's own
+                                    -- send, so the page always follows them
+                                    -- (see userEchoNow above).
                                     cmds =
                                         Cmd.batch
-                                            (flushPendingCmd
-                                                :: List.filterMap identity
-                                                    [ if msgCountChanged && session.atBottom then
-                                                        Just (Ports.scrollToBottom { sessionId = sid })
-    
-                                                      else
-                                                        Nothing
-                                                    , Nothing
-                                                    ]
-                                            )
+                                            [ flushPendingCmd
+                                            , if session.atBottom || userEchoNow then
+                                                Ports.scrollToBottom { sessionId = sid }
+                                              else
+                                                Cmd.none
+                                            ]
     
                                     updatedModel =
                                         { model
-                                            | sessions = Dict.insert sid { newSession | ready = newSession.ready || readyNow, prevMsgCount = List.length newSession.messages } model.sessions
+                                            | sessions = Dict.insert sid { newSession | ready = newSession.ready || readyNow } model.sessions
                                             , pendingNodePrompts =
                                                 if readyNow then
                                                     Dict.remove sid model.pendingNodePrompts

@@ -250,7 +250,6 @@ type alias SessionState =
     , input : String
     , sendPending : Bool
     , atBottom : Bool
-    , prevMsgCount : Int
     , processedEchoIds : Set.Set String
     , msgCollapsed : Dict.Dict String Bool
     , pendingConfirm : List PendingConfirm
@@ -443,7 +442,6 @@ emptySession id =
     , input = ""
     , sendPending = False
     , atBottom = True
-    , prevMsgCount = 0
     , processedEchoIds = Set.empty
     , msgCollapsed = Dict.empty
     , pendingConfirm = []
