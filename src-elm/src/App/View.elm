@@ -1353,8 +1353,14 @@ viewMessage model session planIndex msg =
             Html.text ""
 
           else
-            viewMsgBody model session.id msg
-        , viewPlanStatusBar model session.id planIndex
+            -- The body box lives UNDER the title row: the header is a
+            -- standalone row above the bordered window, not a title bar
+            -- embedded in it. The plan status bar stays inside the box,
+            -- directly below the body (same position as before).
+            Html.div [ Attr.class "msg-window" ]
+                [ viewMsgBody model session.id msg
+                , viewPlanStatusBar model session.id planIndex
+                ]
         ]
 
 
@@ -1547,8 +1553,11 @@ runStatusView st =
         PT.Stopped -> ( "Stopped", "stopped", True )
 
 
--- Header row of a message window: role label, optional tool info, and a
--- one-line preview when collapsed. The whole row toggles on click.
+-- Header row of a message: chevron + role label, optional tool info, and
+-- a one-line preview when collapsed. Renders ABOVE the body box (see
+-- viewMessage). The whole row toggles on click. The chevron shows both
+-- states — right (>) while collapsed, rotated 90° (down, V) while
+-- expanded — via CSS (.message:not(.collapsed) .msg-chevron).
 viewMsgHeader : T.SessionState -> T.Message -> Bool -> List (Html Msg)
 viewMsgHeader session msg collapsed =
     [ Html.span [ Attr.class "msg-chevron" ]

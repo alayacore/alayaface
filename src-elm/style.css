@@ -563,7 +563,6 @@ body {
 /* ─── Messages ─────────────────────────────────────────────────────── */
 
 .message {
-  border-radius: 4px;
   max-width: var(--content-width);
   width: 100%;
   word-wrap: break-word;
@@ -578,35 +577,35 @@ body {
 }
 
 .message-user {
-  border: 2px solid #2563eb;
   color: inherit;
 }
 
 .message-assistant {
   align-self: flex-start;
-  background: rgba(255,255,255,0.04);
-  border: 2px solid transparent;
   color: #e2e8f0;
 }
 
-/* ─── Message Window (header + body) ──────────────────────────────── */
+/* ─── Message Window (title row + body box) ───────────────────────── */
 
-/* Every message renders as a collapsible window: a clickable header row
-   (role label, optional tool info, collapsed preview) and a body. Tool
-   and reasoning windows start collapsed; user/assistant start expanded. */
+/* Every message renders as a TITLE ROW above a BODY BOX: a clickable
+   header row (chevron + role label, optional tool info, collapsed
+   preview) followed — when expanded — by a bordered box containing the
+   body. Collapsed messages show only the title row (no box). Tool and
+   reasoning messages start collapsed; user/assistant start expanded. */
 
 .msg-header {
-  position: sticky; /* pinned to the window top while a long body scrolls */
-  /* Sticky pins relative to the scroll container's CONTENT box (i.e.
-     after .messages' 12px padding-top), so top: 0 would leave a 12px
-     gap above the pinned header where body text scrolls through.
-     top: -12px counters the padding and pins flush to the visible top. */
+  /* Sticky: while a long body scrolls, the title row stays pinned to
+     the top of the messages viewport. Sticky pins relative to the
+     scroll container's CONTENT box (after .messages' 12px padding-top),
+     so top: 0 would leave a 12px gap above the pinned row; top: -12px
+     counters the padding and pins flush to the visible top. */
+  position: sticky;
   top: -12px;
-  z-index: 2;       /* paints above the message body sliding under it */
+  z-index: 2; /* paints above the body box sliding under it */
   display: flex;
   align-items: baseline;
   gap: 8px;
-  padding: 7px 14px 3px;
+  padding: 2px 4px;
   cursor: pointer;
   user-select: none;
   font-size: 0.72rem;
@@ -617,13 +616,13 @@ body {
 }
 .msg-header:hover { color: #ccc; }
 
-/* Sticky pinning needs an opaque background: the long message body
-   scrolls underneath the pinned header, so text would bleed through a
-   transparent one. Applied to expanded windows only — collapsed rows
-   are header-only (they never scroll) and keep their clean borderless
-   look. The hairline border doubles as a divider while pinned and as a
-   subtle title-bar line when the message is fully in view. */
-.message:not(.collapsed) .msg-header {
+/* While the body box scrolls underneath the PINNED title row, an opaque
+   background keeps body text from bleeding through, and the hairline
+   reads as a divider. overlay.js toggles .msg-header-pinned on scroll /
+   content mutations (a transparent pinned row would show the body text
+   behind it; an always-on background would look like a permanent title
+   bar, which the standalone title row is not). */
+.msg-header.msg-header-pinned {
   background: #0f0f1a; /* opaque app bg */
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
@@ -633,30 +632,19 @@ body {
   flex-shrink: 0;
 }
 
-/* Collapse chevron: only visible while collapsed. Absolutely positioned
-   at the left edge — in the exact spot the message border occupied
-   before it was removed — so the label keeps the same x-position as in
-   the expanded state (see the padding-left compensation below). */
+/* Collapse chevron: always visible — right (>) while collapsed, rotated
+   90° clockwise (down, V) while expanded. */
 .msg-chevron {
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  display: none; /* expanded: no triangle, normal border */
-  width: 14px;
-  height: 14px;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
 }
 .msg-chevron svg { display: block; width: 14px; height: 14px; }
-.message.collapsed .msg-chevron {
-  display: inline-flex;
-}
-/* Border width (2px) + original padding (14px): collapsed keeps the
-   same 16px inset as the expanded layout, with the chevron filling the
-   reclaimed border space — the title never shifts. */
-.message.collapsed .msg-header {
-  padding-left: 16px;
+.message:not(.collapsed) .msg-chevron {
+  transform: rotate(90deg);
 }
 
 .msg-preview {
@@ -704,18 +692,32 @@ body {
 .msg-status-icon.icon-running { color: #fbbf24; }
 .msg-status-icon.icon-cross { color: #fca5a5; }
 
-.msg-body {
-  padding: 4px 14px 10px;
+/* The body box: exists only while expanded. Role borders/backgrounds
+   attach here (see the role rules below), so the collapsed title row
+   stays borderless. */
+.msg-window {
+  border-radius: 6px;
 }
 
-/* Collapsed: header-only single-line row, visually lighter and
-   borderless — the box frame only makes sense for the expanded body. */
+.msg-body {
+  padding: 8px 14px 10px;
+}
+
+/* Collapsed: title row only, visually lighter. */
 .message.collapsed {
   opacity: 0.8;
-  border: none;
 }
 
-.message-reasoning {
+.message-user .msg-window {
+  border: 2px solid #2563eb;
+}
+
+.message-assistant .msg-window {
+  background: rgba(255,255,255,0.04);
+  border: 2px solid transparent;
+}
+
+.message-reasoning .msg-window {
   border: 1px solid rgba(255, 255, 255, 0.18);
 }
 .message-reasoning .msg-body {
@@ -723,8 +725,10 @@ body {
 }
 
 .message-tool {
-  border: 1px solid rgba(255, 255, 255, 0.18);
   color: #aaa;
+}
+.message-tool .msg-window {
+  border: 1px solid rgba(255, 255, 255, 0.18);
 }
 .message-tool .msg-body {
   color: #aaa;
@@ -826,11 +830,15 @@ body {
 
 .message-system {
   align-self: center;
-  background: transparent;
   color: #fbbf24;
   font-size: 0.8rem;
   text-align: center;
   max-width: 90%;
+}
+/* System rows stay borderless (a status line, not a window). */
+.message-system .msg-window {
+  background: transparent;
+  border: none;
 }
 .message-system .msg-body {
   white-space: nowrap;
@@ -840,16 +848,20 @@ body {
 
 .message-notify {
   align-self: flex-start;
+  color: #fde68a;
+}
+.message-notify .msg-window {
   background: rgba(250, 204, 21, 0.12);
   border: 2px solid rgba(250, 204, 21, 0.35);
-  color: #fde68a;
 }
 
 .message-error {
   align-self: flex-start;
+  color: #fca5a5;
+}
+.message-error .msg-window {
   background: rgba(239, 68, 68, 0.12);
   border: 2px solid rgba(239, 68, 68, 0.4);
-  color: #fca5a5;
 }
 
 .message-content {
@@ -1345,6 +1357,12 @@ body {
 
 .input-bubble {
   padding: 10px 14px;
+  /* The prompt input reuses the `message message-user` classes (it
+     renders as a user-style bubble), but the message border now lives
+     on .msg-window — give the input bubble its own border/radius so it
+     keeps the user-blue frame. */
+  border: 2px solid #2563eb;
+  border-radius: 6px;
 }
 
 /* Attachment drag-drop: files dragged over the input container
@@ -1506,16 +1524,20 @@ body {
   .input-text { background: transparent; color: #1a1a2e; }
 }
 @media (prefers-color-scheme: light) {
-  .message-assistant { background: #e2e8f0; color: #1a202c; }
-  .message-system { background: #fef9c3; color: #854d0e; }
-  .message-notify { background: #fef9c3; border-color: #fde68a; color: #854d0e; }
-  .message-error { background: #fee2e2; border-color: #fecaca; color: #991b1b; }
-  .message-user { border-color: #2563eb; }
-  .message-reasoning, .message-tool { border-color: rgba(0, 0, 0, 0.2); }
+  .message-assistant .msg-window { background: #e2e8f0; }
+  .message-assistant { color: #1a202c; }
+  .message-system .msg-window { background: #fef9c3; }
+  .message-system { color: #854d0e; }
+  .message-notify .msg-window { background: #fef9c3; border-color: #fde68a; }
+  .message-notify { color: #854d0e; }
+  .message-error .msg-window { background: #fee2e2; border-color: #fecaca; }
+  .message-error { color: #991b1b; }
+  .message-user .msg-window { border-color: #2563eb; }
+  .message-reasoning .msg-window, .message-tool .msg-window { border-color: rgba(0, 0, 0, 0.2); }
   .message-reasoning .msg-body, .message-tool .msg-body { color: #888; }
   .msg-header { color: #999; }
   .msg-header:hover { color: #444; }
-  .message:not(.collapsed) .msg-header {
+  .msg-header.msg-header-pinned {
     background: #f8f8f8; /* opaque light app bg */
     border-bottom-color: rgba(0, 0, 0, 0.08);
   }

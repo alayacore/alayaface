@@ -363,6 +363,25 @@
       thumb.style.transform = "translateY(" + (ratio * maxTop) + "px)";
     }
 
+    // Sticky message title rows: toggle .msg-header-pinned on every
+    // expanded message header while its body box has scrolled underneath
+    // it. The CSS background (opaque + hairline divider) only applies
+    // while pinned — a transparent pinned row would show the body text
+    // behind it, and an always-on background would look like a permanent
+    // title bar instead of the standalone title row.
+    function updateStickyHeaders() {
+      document.querySelectorAll(".message:not(.collapsed) .msg-header").forEach(function (h) {
+        var box = h.nextElementSibling;
+        // Pinned iff the body box has actually slid UNDER the header
+        // (box.top < header.bottom). When the message sits fully in view
+        // the box is exactly adjacent (box.top == header.bottom) — that
+        // is NOT stuck; the 0.5px epsilon absorbs subpixel rounding.
+        var pinned = !!(box && box.classList && box.classList.contains("msg-window") &&
+          box.getBoundingClientRect().top < h.getBoundingClientRect().bottom - 0.5);
+        h.classList.toggle("msg-header-pinned", pinned);
+      });
+    }
+
     // The custom overlay thumb is mouse-oriented (drag / track-click).
     // On touch / pen-first devices (hover: none) native scroll works
     // and the thumb would be an unusable artifact — skip it there
@@ -428,19 +447,23 @@
       el.addEventListener("scroll", function () { updateOverlayScrollbar(el); }, { passive: true });
       // Container resize (window resize, layout change) → re-measure.
       if (typeof ResizeObserver !== "undefined" && !el._sbResizeObs) {
-        el._sbResizeObs = new ResizeObserver(function () { updateOverlayScrollbar(el); });
+        el._sbResizeObs = new ResizeObserver(function () {
+          updateOverlayScrollbar(el);
+          updateStickyHeaders();
+        });
         el._sbResizeObs.observe(el);
       }
       updateOverlayScrollbar(el);
     }
 
     sendScroll();
+    updateStickyHeaders();
     // Listen for scroll on all present and future .messages containers
     function attachScroll() {
       document.querySelectorAll(".messages").forEach(function(el) {
         if (!el._scrollAttached) {
           el._scrollAttached = true;
-          el.addEventListener("scroll", function() { sendScroll(el); }, { passive: true });
+          el.addEventListener("scroll", function() { sendScroll(el); updateStickyHeaders(); }, { passive: true });
         }
         attachOverlayScrollbar(el);
         updateOverlayScrollbar(el);
@@ -448,9 +471,12 @@
     }
     attachScroll();
     // Check for new messages containers (e.g. new sessions) and keep
-    // the overlay thumbs in sync as content is added.
+    // the overlay thumbs + sticky-header pins in sync as content is
+    // added/removed (Elm replaces text nodes on every stream delta, so
+    // this also re-pins headers while a body grows).
     var scrollObserver = new MutationObserver(function () {
       attachScroll();
+      updateStickyHeaders();
       document.querySelectorAll(".messages").forEach(updateOverlayScrollbar);
     });
     scrollObserver.observe(root, { childList: true, subtree: true });
