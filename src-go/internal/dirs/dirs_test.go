@@ -58,8 +58,7 @@ func TestEnsureSeedsDefaults(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(dir, "runtime.conf")); err == nil {
 				t.Errorf("%s: runtime.conf must not be pre-seeded", name)
 			}
-			// Both seed presets carry AlayaFace-owned settings.conf with
-			// the plan-mode system_prompt.
+			// All seed presets carry AlayaFace-owned settings.conf.
 			settings, err := os.ReadFile(filepath.Join(dir, "settings.conf"))
 			if err != nil {
 				t.Fatalf("%s settings.conf missing: %v", name, err)
@@ -68,16 +67,83 @@ func TestEnsureSeedsDefaults(t *testing.T) {
 			if !strings.Contains(text, "system_prompt") {
 				t.Errorf("%s settings.conf lacks system_prompt: %s", name, text)
 			}
-			if !strings.Contains(text, "alayaface-plan") {
-				t.Errorf("%s system_prompt lacks the plan contract: %s", name, text)
-			}
-			if !strings.Contains(text, "Simple") || !strings.Contains(text, "Complex") {
-				t.Errorf("%s system_prompt must name both presets: %s", name, text)
+			// Simple/Complex carry the plan-mode contract and name both
+			// presets; Talk is the voice-first push-to-talk preset —
+			// deliberately short and plan-free (speech turns must never
+			// trigger planning).
+			if name != "Talk" {
+				if !strings.Contains(text, "alayaface-plan") {
+					t.Errorf("%s system_prompt lacks the plan contract: %s", name, text)
+				}
+				if !strings.Contains(text, "Simple") || !strings.Contains(text, "Complex") {
+					t.Errorf("%s system_prompt must name both presets: %s", name, text)
+				}
+			} else {
+				if strings.Contains(text, "alayaface-plan") {
+					t.Errorf("Talk system_prompt must NOT carry the plan contract: %s", text)
+				}
+				if !strings.Contains(text, "Talk") {
+					t.Errorf("Talk system_prompt must identify itself: %s", text)
+				}
 			}
 		}
 		// No active-preset marker anymore.
 		if _, err := os.Stat(filepath.Join(AlayafaceDir(), "active-preset")); err == nil {
 			t.Error("active-preset marker must not exist")
+		}
+	})
+}
+
+func TestEnsureLegacyUpgradeSeedsTalk(t *testing.T) {
+	isolatedHome(t, func() {
+		// Legacy v1 install: Simple/Complex exist, NO seed_version file.
+		// The upgrade must adopt v1 (without resurrecting a v1 seed the
+		// user deleted) and add the v2 Talk preset.
+		if err := os.MkdirAll(PresetDir("Simple"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(PresetDir("Complex"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Ensure(); err != nil {
+			t.Fatal(err)
+		}
+		// Talk (introduced in v2) must have been added.
+		if _, err := os.Stat(PresetDir("Talk")); err != nil {
+			t.Errorf("legacy upgrade must seed Talk: %v", err)
+		}
+		// The version file lands at the latest version.
+		b, err := os.ReadFile(filepath.Join(AlayafaceDir(), seedVersionFile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(b) != "2" {
+			t.Fatalf("seed_version = %q, want 2", b)
+		}
+	})
+}
+
+func TestEnsureSeedVersionTracksDeletes(t *testing.T) {
+	isolatedHome(t, func() {
+		// Fresh install: everything seeded, version file at the latest.
+		if _, err := Ensure(); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range SeedPresets {
+			if _, err := os.Stat(PresetDir(name)); err != nil {
+				t.Errorf("fresh install missing seed %s: %v", name, err)
+			}
+		}
+		// Deleting a seed must NOT resurrect it on the next Ensure —
+		// the version file already covers the version that introduced it.
+		if err := os.RemoveAll(PresetDir("Talk")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Ensure(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(PresetDir("Talk")); err == nil {
+			t.Error("deleted Talk must not be resurrected")
 		}
 	})
 }

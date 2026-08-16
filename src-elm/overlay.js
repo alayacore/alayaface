@@ -73,6 +73,30 @@
       }, 0);
     });
 
+    // Same caret move WITHOUT focusing: push-to-talk transcript
+    // insertion uses this — a focused prompt input would swallow the
+    // next ` keydown (editable-target exclusion) and break the
+    // hold-to-talk loop.
+    on("setCursorPosNoFocus", function (data) {
+      setTimeout(function () {
+        var el = document.getElementById(data.id);
+        if (!el || !el.setSelectionRange) return;
+        var pos = (data.pos === undefined || data.pos === null)
+          ? el.value.length
+          : Math.max(0, Math.min(data.pos, el.value.length));
+        el.setSelectionRange(pos, pos);
+        var oldValue = el.value;
+        var deadline = Date.now() + 400;
+        (function reapply() {
+          if (el.value !== oldValue) {
+            el.setSelectionRange(pos, pos);
+          } else if (Date.now() <= deadline) {
+            setTimeout(reapply, 5);
+          }
+        })();
+      }, 0);
+    });
+
     // Voice input: read the textarea caret so Elm can insert the ASR
     // transcript exactly where the user's cursor currently is.
     on("getCursorPos", function (data) {
@@ -553,6 +577,48 @@
         clientY: e.clientY,
       });
     }, { passive: false });
+
+    // ─── Push-to-talk (hold ` to talk) ─────────────────────────────
+    // The backquote key opens a NEW session under the built-in "Talk"
+    // preset and starts ASR recording while held; releasing stops it
+    // (transcribes into the input). Rules:
+    //   - keydown only (auto-repeat filtered via e.repeat);
+    //   - no modifier held (Ctrl+` etc. stays free for other uses);
+    //   - the target must NOT be editable — while typing in the prompt
+    //     input the key types a normal ` (markdown code fences);
+    //   - keyup is forwarded unconditionally: its target may differ
+    //     from keydown's (focus moved while held), and Elm ignores an
+    //     up without a down (ptHeld guard), so the safest is to send;
+    //   - window blur forwards a release — the OS can swallow the keyup
+    //     when focus leaves the window (alt-tab etc.), which would
+    //     otherwise leave the recorder running until the 60s cap.
+    function isEditable(el) {
+      return !!el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT" ||
+        el.isContentEditable === true);
+    }
+    var PT_KEY = "`";
+    document.addEventListener("keydown", function (e) {
+      if (e.key !== PT_KEY || e.repeat) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (isEditable(e.target)) return; // typing: ` types normally
+      e.preventDefault();
+      app.ports.onPushToTalk.send({ down: true });
+    }, true);
+    document.addEventListener("keyup", function (e) {
+      if (e.key === PT_KEY) {
+        app.ports.onPushToTalk.send({ down: false });
+        // PT sessions auto-focus the prompt input on creation; leave it
+        // unfocused so the NEXT hold still works — an editable target
+        // would swallow the keydown. (PT transcriptions are inserted
+        // via setCursorPosNoFocus, which never re-focuses.)
+        if (document.activeElement && isEditable(document.activeElement)) {
+          document.activeElement.blur();
+        }
+      }
+    }, true);
+    window.addEventListener("blur", function () {
+      app.ports.onPushToTalk.send({ down: false });
+    });
     }
   };
 })();

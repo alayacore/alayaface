@@ -157,26 +157,31 @@ mod tests {
         crate::dirs::isolated_home(|| {
             let rt = tokio::runtime::Runtime::new().unwrap();
 
-            // First run seeds the built-in presets (Simple/Complex).
+            // First run seeds the built-in presets (Simple/Complex/Talk).
             let list = rt.block_on(list_presets()).unwrap();
-            assert_eq!(list.len(), 2, "expected Simple/Complex seeds");
+            assert_eq!(list.len(), 3, "expected Simple/Complex/Talk seeds");
             assert!(list.iter().any(|p| p.name == "Simple" && p.is_seed));
             assert!(list.iter().any(|p| p.name == "Complex" && p.is_seed));
+            assert!(list.iter().any(|p| p.name == "Talk" && p.is_seed));
 
             // Renaming a built-in seed is rejected (the seeded plan
-            // contract references the names).
+            // contract references the names; push-to-talk opens sessions
+            // by "Talk").
             assert!(rt
                 .block_on(rename_preset("Simple".to_string(), "foo".to_string()))
                 .is_err());
             assert!(rt
                 .block_on(rename_preset("Complex".to_string(), "bar".to_string()))
                 .is_err());
+            assert!(rt
+                .block_on(rename_preset("Talk".to_string(), "voice".to_string()))
+                .is_err());
 
             // Create a second preset by copying Simple.
             rt.block_on(copy_preset("Simple".to_string(), "work".to_string()))
                 .unwrap();
             let list = rt.block_on(list_presets()).unwrap();
-            assert_eq!(list.len(), 3, "2 seeds + work");
+            assert_eq!(list.len(), 4, "3 seeds + work");
             assert!(list.iter().any(|p| p.name == "work" && !p.is_seed));
 
             // Copying a nonexistent source or an existing target is rejected.
@@ -197,12 +202,14 @@ mod tests {
             // Deleting a non-seed preset works.
             rt.block_on(delete_preset("work2".to_string())).unwrap();
             let list = rt.block_on(list_presets()).unwrap();
-            assert_eq!(list.len(), 2, "back to the seeds");
+            assert_eq!(list.len(), 3, "back to the seeds");
 
             // Deleting a built-in seed is rejected (the seeded plan
-            // contract references the names).
+            // contract references the names; push-to-talk opens sessions
+            // by "Talk").
             assert!(rt.block_on(delete_preset("Simple".to_string())).is_err());
             assert!(rt.block_on(delete_preset("Complex".to_string())).is_err());
+            assert!(rt.block_on(delete_preset("Talk".to_string())).is_err());
         });
     }
 
@@ -213,10 +220,10 @@ mod tests {
             rt.block_on(copy_preset("Simple".to_string(), "work".to_string()))
                 .unwrap();
 
-            // Default order is alphabetical: Complex Simple work.
+            // Default order is alphabetical: Complex Simple Talk work.
             let list = rt.block_on(list_presets()).unwrap();
             let names: Vec<&str> = list.iter().map(|p| p.name.as_str()).collect();
-            assert_eq!(names, vec!["Complex", "Simple", "work"]);
+            assert_eq!(names, vec!["Complex", "Simple", "Talk", "work"]);
 
             // Full reorder is persisted.
             rt.block_on(reorder_presets(vec![
@@ -227,7 +234,7 @@ mod tests {
             .unwrap();
             let list = rt.block_on(list_presets()).unwrap();
             let names: Vec<&str> = list.iter().map(|p| p.name.as_str()).collect();
-            assert_eq!(names, vec!["work", "Simple", "Complex"]);
+            assert_eq!(names, vec!["work", "Simple", "Complex", "Talk"]);
 
             // Unknown names are dropped, missing presets appended
             // (sorted) — the file never hides a preset.
@@ -239,14 +246,14 @@ mod tests {
             .unwrap();
             let list = rt.block_on(list_presets()).unwrap();
             let names: Vec<&str> = list.iter().map(|p| p.name.as_str()).collect();
-            assert_eq!(names, vec!["Complex", "work", "Simple"]);
+            assert_eq!(names, vec!["Complex", "work", "Simple", "Talk"]);
 
             // A new preset lands at the end.
             rt.block_on(copy_preset("Simple".to_string(), "aaa".to_string()))
                 .unwrap();
             let list = rt.block_on(list_presets()).unwrap();
             let names: Vec<&str> = list.iter().map(|p| p.name.as_str()).collect();
-            assert_eq!(names, vec!["Complex", "work", "Simple", "aaa"]);
+            assert_eq!(names, vec!["Complex", "work", "Simple", "Talk", "aaa"]);
         });
     }
 

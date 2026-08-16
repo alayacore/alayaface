@@ -34,6 +34,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -198,11 +199,12 @@ func ListPresetNames() ([]string, error) {
 }
 
 // Ensure guarantees ~/.alayaface/ exists with the preset structure.
-// On FIRST RUN (empty presets root), seeds the built-in presets
-// (Simple/Complex) with their settings.conf (tool_confirm/builtin_tools/
-// system_prompt). Once seeded, the seeds are regular presets: deleting
-// one must not resurrect it, so seeding never runs again on a
-// non-empty root. Returns the sessions dir.
+// Built-in presets are seeded INCREMENTALLY, tracked by a seed-version
+// file (seed_version): each version seeds only the presets IT
+// introduced, and only when their directory is missing — so an existing
+// user (non-empty presets root) upgrading to a version that adds a seed
+// gets the new one, while a seed the user deleted is never resurrected.
+// Returns the sessions dir.
 func Ensure() (string, error) {
 	base := AlayafaceDir()
 	presets := PresetsRoot()
@@ -214,33 +216,98 @@ func Ensure() (string, error) {
 		}
 	}
 
-	// Seed built-in presets on first run only (a non-empty root means
-	// the user has already managed presets — deleting a seed must not
-	// resurrect it).
-	entries, err := os.ReadDir(presets)
-	if err != nil {
-		return "", err
-	}
-	if len(entries) == 0 {
-		for _, name := range SeedPresets {
-			if err := CreatePresetDefaults(filepath.Join(presets, name), name); err != nil {
-				return "", err
+	cur := readSeedVersion()
+	if cur == 0 {
+		// Legacy install (no version file): the original first-run logic
+		// seeded everything that was in the root at the time. Adopt v1 as
+		// the current version WITHOUT resurrecting v1 seeds the user may
+		// have deleted — unless the root is empty, which is a fresh
+		// install that must seed v1 now.
+		entries, err := os.ReadDir(presets)
+		if err != nil {
+			return "", err
+		}
+		if len(entries) == 0 {
+			for _, name := range seedVersions[0].Names {
+				if err := CreatePresetDefaults(filepath.Join(presets, name), name); err != nil {
+					return "", err
+				}
 			}
+		}
+		if err := writeSeedVersion(1); err != nil {
+			return "", err
+		}
+		cur = 1
+	}
+
+	// Seed the presets introduced by versions newer than the current one
+	// (only missing directories — deleting a seed never resurrects it).
+	for _, sv := range seedVersions {
+		if sv.Version <= cur {
+			continue
+		}
+		for _, name := range sv.Names {
+			dir := filepath.Join(presets, name)
+			if _, err := os.Stat(dir); os.IsNotExist(err) {
+				if err := CreatePresetDefaults(dir, name); err != nil {
+					return "", err
+				}
+			}
+		}
+		if err := writeSeedVersion(sv.Version); err != nil {
+			return "", err
 		}
 	}
 
 	return sessions, nil
 }
 
+// seed_version file: records how far built-in preset seeding has
+// progressed (an integer). See Ensure for the incremental semantics.
+const seedVersionFile = "seed_version"
+
+// seedVersions lists every built-in seeding step. A version may only
+// ADD presets; removing one from a later version would make Ensure
+// skip... never remove entries — append new ones.
+var seedVersions = []struct {
+	Version int
+	Names   []string
+}{
+	// v1: the original first-run seeds.
+	{1, []string{"Simple", "Complex"}},
+	// v2: the Talk preset used by push-to-talk (hold ` to open a Talk
+	// session and record).
+	{2, []string{"Talk"}},
+}
+
+func readSeedVersion() int {
+	b, err := os.ReadFile(filepath.Join(AlayafaceDir(), seedVersionFile))
+	if err != nil {
+		return 0
+	}
+	v, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
+func writeSeedVersion(v int) error {
+	return os.WriteFile(filepath.Join(AlayafaceDir(), seedVersionFile), []byte(strconv.Itoa(v)), 0o644)
+}
+
 // SeedPresets lists the built-in presets seeded on first run:
 //   - Simple  — light everyday chat and one-sentence subtasks
 //   - Complex — heavy reasoning / multi-step / research subtasks
+//   - Talk    — voice-first quick chat (the push-to-talk ` key opens a
+//     new session under this preset and auto-starts ASR recording)
 //
 // Each is a config template (model/mcp placeholders); users fill keys,
 // tune settings.conf and can copy/rename them. The plan contract in the
 // seeded system_prompt names these presets, so they cannot be renamed
-// (see IsSeedPreset).
-var SeedPresets = []string{"Simple", "Complex"}
+// (see IsSeedPreset); Talk is protected too (the push-to-talk feature
+// opens sessions by this exact name).
+var SeedPresets = []string{"Simple", "Complex", "Talk"}
 
 // IsSeedPreset reports whether a preset is one of the built-in seeds.
 // Seed presets are referenced by name in the seeded system_prompt, so
@@ -352,17 +419,28 @@ func seedSettingsConf(name string) string {
 	return string(b)
 }
 
-// seedSystemPrompt returns the seeded --system text for a preset. Both
-// seeds carry the full plan-mode contract (any session may be asked to
-// create a plan); the difference is the role framing. Keep in sync with
-// src-tauri/src/dirs.rs seed_system_prompt.
+// seedSystemPrompt returns the seeded --system text for a preset.
+// Simple/Complex carry the full plan-mode contract (any session may be
+// asked to create a plan); the difference is the role framing. Talk is
+// a voice-first quick-chat preset: short conversational replies, NO
+// plan contract (a speech turn must never trigger planning). Keep in
+// sync with src-tauri/src/dirs.rs seed_system_prompt.
 func seedSystemPrompt(name string) string {
+	if name == "Talk" {
+		return talkPrompt
+	}
 	role := "You are the Simple preset of AlayaFace: handle everyday chat and light tasks directly, in one go, without planning.\n"
 	if name == "Complex" {
 		role = "You are the Complex preset of AlayaFace: you handle heavy reasoning, multi-step and research-heavy tasks. Prefer decomposing them into a plan.\n"
 	}
 	return role + planContract
 }
+
+// talkPrompt is the seeded --system text for the Talk preset (used by
+// push-to-talk: hold ` to open a Talk session and record). Deliberately
+// short and plan-free: voice turns want a quick spoken-style answer,
+// never a plan JSON. Keep in sync with src-tauri/src/dirs.rs.
+const talkPrompt = "You are the Talk preset of AlayaFace: a fast, voice-first assistant for quick spoken questions. Reply briefly and conversationally, in one short paragraph. Never output plans, markdown or code blocks."
 
 // planContract is the plan-mode contract shared by every seed preset:
 // when to output a plan, the exact JSON schema, per-task preset choice

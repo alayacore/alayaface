@@ -156,11 +156,12 @@ pub fn list_preset_names() -> Result<Vec<String>, String> {
 }
 
 /// Ensure `~/.alayaface/` exists with the preset structure.
-/// On FIRST RUN (empty presets root), seeds the built-in presets
-/// (Simple/Complex) with their settings.conf (tool_confirm/builtin_tools/
-/// system_prompt). Once seeded, the seeds are regular presets: deleting
-/// one must not resurrect it, so seeding never runs again on a non-empty
-/// root. Returns the sessions dir.
+/// Built-in presets are seeded INCREMENTALLY, tracked by a seed-version
+/// file (seed_version): each version seeds only the presets IT
+/// introduced, and only when their directory is missing — so an existing
+/// user (non-empty presets root) upgrading to a version that adds a seed
+/// gets the new one, while a seed the user deleted is never resurrected.
+/// Returns the sessions dir.
 pub fn ensure() -> Result<PathBuf, String> {
     let base = alayaface_dir();
     let presets = presets_root();
@@ -171,31 +172,92 @@ pub fn ensure() -> Result<PathBuf, String> {
     std::fs::create_dir_all(&sessions)
         .map_err(|e| format!("Cannot create {:?}: {}", sessions, e))?;
 
-    // Seed built-in presets on first run only (a non-empty root means
-    // the user has already managed presets — deleting a seed must not
-    // resurrect it).
-    let entries: Vec<_> = std::fs::read_dir(&presets)
-        .map_err(|e| format!("Cannot read {:?}: {}", presets, e))?
-        .collect();
-    if entries.is_empty() {
-        for name in SEED_PRESETS {
-            let dir = presets.join(name);
-            create_preset_defaults(&dir, name)?;
+    let mut cur = read_seed_version();
+    if cur == 0 {
+        // Legacy install (no version file): the original first-run logic
+        // seeded everything that was in the root at the time. Adopt v1 as
+        // the current version WITHOUT resurrecting v1 seeds the user may
+        // have deleted — unless the root is empty, which is a fresh
+        // install that must seed v1 now.
+        let entries: Vec<_> = std::fs::read_dir(&presets)
+            .map_err(|e| format!("Cannot read {:?}: {}", presets, e))?
+            .collect();
+        if entries.is_empty() {
+            for name in SEED_VERSIONS[0].names {
+                let dir = presets.join(name);
+                create_preset_defaults(&dir, name)?;
+            }
         }
+        write_seed_version(1)?;
+        cur = 1;
+    }
+
+    // Seed the presets introduced by versions newer than the current one
+    // (only missing directories — deleting a seed never resurrects it).
+    for sv in SEED_VERSIONS {
+        if sv.version <= cur {
+            continue;
+        }
+        for name in sv.names {
+            let dir = presets.join(name);
+            if !dir.is_dir() {
+                create_preset_defaults(&dir, name)?;
+            }
+        }
+        write_seed_version(sv.version)?;
     }
 
     Ok(sessions)
 }
 
+/// seed_version file: records how far built-in preset seeding has
+/// progressed (an integer). See `ensure` for the incremental semantics.
+const SEED_VERSION_FILE: &str = "seed_version";
+
+/// A single built-in seeding step. A version may only ADD presets;
+/// never remove entries — append new ones.
+struct SeedVersion {
+    version: u32,
+    names: &'static [&'static str],
+}
+
+/// Every built-in seeding step.
+///   v1: the original first-run seeds.
+///   v2: the Talk preset used by push-to-talk (hold ` to open a Talk
+///       session and record).
+const SEED_VERSIONS: [SeedVersion; 2] = [
+    SeedVersion { version: 1, names: &["Simple", "Complex"] },
+    SeedVersion { version: 2, names: &["Talk"] },
+];
+
+fn seed_version_path() -> PathBuf {
+    alayaface_dir().join(SEED_VERSION_FILE)
+}
+
+fn read_seed_version() -> u32 {
+    std::fs::read_to_string(seed_version_path())
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .unwrap_or(0)
+}
+
+fn write_seed_version(v: u32) -> Result<(), String> {
+    std::fs::write(seed_version_path(), v.to_string())
+        .map_err(|e| format!("Cannot write seed_version: {e}"))
+}
+
 /// Built-in presets seeded on first run:
 ///   - Simple  — light everyday chat and one-sentence subtasks
 ///   - Complex — heavy reasoning / multi-step / research subtasks
+///   - Talk    — voice-first quick chat (the push-to-talk ` key opens a
+///     new session under this preset and auto-starts ASR recording)
 ///
 /// Each is a config template (model/mcp placeholders); users fill keys,
 /// tune settings.conf and can copy them. The plan contract in the seeded
-/// system_prompt names these presets, so they cannot be renamed (see
-/// `is_seed_preset`).
-pub const SEED_PRESETS: [&str; 2] = ["Simple", "Complex"];
+/// system_prompt names Simple/Complex, so they cannot be renamed (see
+/// `is_seed_preset`); Talk is protected too (the push-to-talk feature
+/// opens sessions by this exact name).
+pub const SEED_PRESETS: [&str; 3] = ["Simple", "Complex", "Talk"];
 
 /// Whether a preset is one of the built-in seeds. Seed presets are
 /// referenced by name in the seeded system_prompt, so renaming them is
@@ -321,11 +383,22 @@ Rules:
 - Even if a task needs no decomposition (doable in one sentence), still output a plan (a single task is fine) — that is your output format
 - After outputting the plan: stop, wait for the plan to finish and its result to come back, then continue your answer based on the result"#;
 
-/// The seeded --system text for a preset. Both seeds carry the full
+/// The seeded --system text for the Talk preset (used by push-to-talk:
+/// hold ` to open a Talk session and record). Deliberately short and
+/// plan-free: voice turns want a quick spoken-style answer, never a
+/// plan JSON. Keep in sync with src-go/internal/dirs/dirs.go talkPrompt.
+pub const TALK_PROMPT: &str = "You are the Talk preset of AlayaFace: a fast, voice-first assistant for quick spoken questions. Reply briefly and conversationally, in one short paragraph. Never output plans, markdown or code blocks.";
+
+/// The seeded --system text for a preset. Simple/Complex carry the full
 /// plan-mode contract (any session may be asked to create a plan); the
-/// difference is the role framing. Keep in sync with
+/// difference is the role framing. Talk is a voice-first quick-chat
+/// preset: short conversational replies, NO plan contract (a speech
+/// turn must never trigger planning). Keep in sync with
 /// src-go/internal/dirs/dirs.go seedSystemPrompt.
 pub fn seed_system_prompt(name: &str) -> String {
+    if name == "Talk" {
+        return TALK_PROMPT.to_string();
+    }
     let role = if name == "Complex" {
         "You are the Complex preset of AlayaFace: you handle heavy reasoning, multi-step and research-heavy tasks. Prefer decomposing them into a plan.\n"
     } else {
@@ -537,16 +610,56 @@ mod tests {
                 assert!(dir.is_dir(), "missing seed preset {name}");
                 assert!(!dir.join("model.conf").exists(), "{name}: model.conf must not be pre-seeded");
                 assert!(!dir.join("runtime.conf").exists(), "{name}: runtime.conf must not be pre-seeded");
-                // Both seed presets carry AlayaFace-owned settings.conf
-                // with the plan-mode system_prompt.
+                // All seed presets carry AlayaFace-owned settings.conf.
                 let settings = std::fs::read_to_string(dir.join("settings.conf")).unwrap();
                 assert!(settings.contains("system_prompt"), "{name}: settings.conf lacks system_prompt");
-                assert!(settings.contains("alayaface-plan"), "{name}: system_prompt lacks the plan contract");
-                assert!(settings.contains("Simple") && settings.contains("Complex"),
-                    "{name}: system_prompt must name both presets");
+                // Simple/Complex carry the plan-mode contract and name
+                // both presets; Talk is the voice-first push-to-talk
+                // preset — deliberately short and plan-free (speech
+                // turns must never trigger planning).
+                if name != "Talk" {
+                    assert!(settings.contains("alayaface-plan"), "{name}: system_prompt lacks the plan contract");
+                    assert!(settings.contains("Simple") && settings.contains("Complex"),
+                        "{name}: system_prompt must name both presets");
+                } else {
+                    assert!(!settings.contains("alayaface-plan"), "Talk system_prompt must NOT carry the plan contract");
+                    assert!(settings.contains("Talk"), "Talk system_prompt must identify itself");
+                }
             }
             // No active-preset marker anymore.
             assert!(!alayaface_dir().join("active-preset").exists());
+        });
+    }
+
+    #[test]
+    fn ensure_legacy_upgrade_seeds_talk() {
+        isolated_home(|| {
+            // Legacy v1 install: Simple/Complex exist, NO seed_version
+            // file. The upgrade must adopt v1 (without resurrecting a
+            // v1 seed the user deleted) and add the v2 Talk preset.
+            std::fs::create_dir_all(preset_dir("Simple")).unwrap();
+            std::fs::create_dir_all(preset_dir("Complex")).unwrap();
+            ensure().unwrap();
+            assert!(preset_dir("Talk").is_dir(), "legacy upgrade must seed Talk");
+            let v = std::fs::read_to_string(seed_version_path()).unwrap();
+            assert_eq!(v, "2", "seed_version = {v:?}, want 2");
+        });
+    }
+
+    #[test]
+    fn ensure_seed_version_tracks_deletes() {
+        isolated_home(|| {
+            // Fresh install: everything seeded, version file at latest.
+            ensure().unwrap();
+            for name in SEED_PRESETS {
+                assert!(preset_dir(name).is_dir(), "fresh install missing seed {name}");
+            }
+            // Deleting a seed must NOT resurrect it on the next ensure —
+            // the version file already covers the version that
+            // introduced it.
+            std::fs::remove_dir_all(preset_dir("Talk")).unwrap();
+            ensure().unwrap();
+            assert!(!preset_dir("Talk").is_dir(), "deleted Talk must not be resurrected");
         });
     }
 

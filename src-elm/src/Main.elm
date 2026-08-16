@@ -41,6 +41,10 @@ init _ =
       , isMaximized = False
       , sessionOrder = []
       , pendingSwitchOnCreate = False
+      , ptHeld = False
+      , ptCreatePending = False
+      , ptSessionId = Nothing
+      , ptTranscribing = False
       , inputRows = 1
       , cursorMsgId = Nothing
       , pendingEvents = Dict.empty
@@ -206,6 +210,14 @@ subscriptions model =
             case D.decodeValue (D.map3 CanvasZoom (D.field "deltaY" D.float) (D.field "clientX" D.float) (D.field "clientY" D.float)) raw of
                 Ok m ->
                     m
+
+                Err _ ->
+                    NoOp
+          )
+        , Ports.onPushToTalk (\raw ->
+            case D.decodeValue (D.field "down" D.bool) raw of
+                Ok down ->
+                    PushToTalk down
 
                 Err _ ->
                     NoOp

@@ -105,4 +105,8 @@ initModelWithSession =
     , versionListFor = Nothing
     , versionViewFor = Nothing
     , versionViewSession = Nothing
+    , ptHeld = False
+    , ptCreatePending = False
+    , ptSessionId = Nothing
+    , ptTranscribing = False
     }

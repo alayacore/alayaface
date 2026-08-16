@@ -312,6 +312,18 @@ type alias Model =
     , versionListFor : Maybe String
     , versionViewFor : Maybe String
     , versionViewSession : Maybe String
+    -- Push-to-talk (hold ` to talk): ptHeld = the key is currently
+    -- held down; ptCreatePending = the next SessionCreated belongs to
+    -- the PT create and must auto-start ASR (cleared on keyup, so a
+    -- release before the create finishes leaves the session unrecorded);
+    -- ptSessionId = the session the current hold records into;
+    -- ptTranscribing = the ASR result in flight came from a PT stop —
+    -- its insertion must NOT focus the prompt input (a focused input
+    -- would swallow the next ` keydown and break the talk loop).
+    , ptHeld : Bool
+    , ptCreatePending : Bool
+    , ptSessionId : Maybe String
+    , ptTranscribing : Bool
     }
 
 
@@ -339,6 +351,10 @@ type Msg
     | VoiceInput
     | CancelAsr
     | RawAudioInput
+    -- Push-to-talk: the ` key held/released (down=True/False from
+    -- overlay.js). Hold opens a new session under the built-in "Talk"
+    -- preset and starts ASR recording; release stops it (transcribes).
+    | PushToTalk Bool
     | RawAudioReady E.Value
     | RawAudioError E.Value
     | CaptureAutoStop E.Value

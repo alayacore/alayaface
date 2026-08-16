@@ -103,6 +103,7 @@ port module Ports exposing
       -- Focus / Scroll
     , scrollToBottom
     , setCursorPos
+    , setCursorPosNoFocus
     , scrollIntoView
     , onScroll
       -- Window state
@@ -110,6 +111,12 @@ port module Ports exposing
       -- Canvas zoom (wheel from bridge.js, non-passive so the browser
       -- page zoom / scroll can be prevented)
     , onCanvasWheel
+      -- Push-to-talk: the JS overlay captures the ` key (keydown with
+      -- no repeat/modifiers on a non-editable target; keyup; window
+      -- blur as a keyup safety). Elm opens a new session under the
+      -- built-in "Talk" preset and starts ASR recording on keydown,
+      -- and stops (transcribes) on keyup.
+    , onPushToTalk
       -- Unified pointer input (touch & pointer design): raw events from
       -- the transport.js dumb pipe; the gesture FSM lives in Elm.
     , onPointerDown
@@ -319,6 +326,10 @@ port scrollToBottom : { sessionId : String } -> Cmd msg
 -- Move the caret: id = element id, pos = Nothing moves to the end of
 -- the value (legacy behavior), Just pos sets the caret exactly there.
 port setCursorPos : { id : String, pos : Maybe Int } -> Cmd msg
+-- Same caret move WITHOUT focusing the element: used by push-to-talk
+-- transcript insertion — a focused prompt input would swallow the next
+-- ` keydown (editable-target exclusion) and break the hold-to-talk loop.
+port setCursorPosNoFocus : { id : String, pos : Maybe Int } -> Cmd msg
 port scrollIntoView : String -> Cmd msg
 port onScroll : ({ sessionId : String, scrollTop : Float, scrollHeight : Float, clientHeight : Float } -> msg) -> Sub msg
 
@@ -331,6 +342,11 @@ port onWindowMaximized : (Bool -> msg) -> Sub msg
 -- Canvas zoom: bridge.js forwards wheel events (with native scroll /
 -- browser zoom prevented) as { deltaY, clientX, clientY }.
 port onCanvasWheel : (E.Value -> msg) -> Sub msg
+
+-- Push-to-talk (hold-to-talk): overlay.js forwards { down : Bool } —
+-- down=true on keydown (filtered: no repeat, no modifiers, target not
+-- editable), down=false on keyup or window blur (keyup safety).
+port onPushToTalk : (E.Value -> msg) -> Sub msg
 
 -- Unified pointer input (touch & pointer design D1/D2): transport.js
 -- forwards raw pointer events from a dumb pipe that classifies the

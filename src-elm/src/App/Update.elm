@@ -998,7 +998,15 @@ update msg model =
                     )
 
                 Nothing ->
-                    ( { model | pendingSwitchOnCreate = True, showGlobalMenu = False }
+                    ( { model
+                        | pendingSwitchOnCreate = True
+                        , showGlobalMenu = False
+                        -- Tag the in-flight marker so SessionCreated can
+                        -- attribute this create (and queue ordering is
+                        -- preserved for every user create, not just the
+                        -- plan runner's).
+                        , planCreating = Just (UserCreate preset)
+                      }
                     , Ports.createSession { toolConfirm = Nothing, preset = Just preset, builtinTools = Nothing, systemPrompt = Nothing, workDir = Nothing, planId = Nothing, nodeId = Nothing, originSessionId = Nothing }
                     )
 
@@ -1016,7 +1024,62 @@ update msg model =
                 resumeSessionCreated id model
 
             else
-                createSessionWindow id model
+                -- Push-to-talk attribution (hold ` to talk): the create
+                -- that just finished is the PT one iff the in-flight
+                -- marker is a UserCreate "Talk", a PT keydown armed it
+                -- (ptCreatePending) and the key is still held — then the
+                -- new session auto-starts ASR recording. A plain menu
+                -- create of the Talk preset has no ptCreatePending; a
+                -- keyup while the create is in flight clears it. (The
+                -- marker is read BEFORE createSessionWindow, which
+                -- consumes planCreating internally.)
+                let
+                    isPtCreate =
+                        model.ptCreatePending
+                            && model.ptHeld
+                            && model.planCreating == Just (UserCreate "Talk")
+
+                    ( m1, c1 ) =
+                        createSessionWindow id model
+
+                    m2 =
+                        { m1
+                            | ptCreatePending =
+                                if isPtCreate then
+                                    False
+
+                                else
+                                    m1.ptCreatePending
+                            , ptSessionId =
+                                if isPtCreate then
+                                    Just id
+
+                                else
+                                    m1.ptSessionId
+                            -- Mirror the VoiceInput start branch: the
+                            -- recording state must be visible (red pulse)
+                            -- and PushToTalk False checks voiceActive to
+                            -- decide whether to stop.
+                            , sessions =
+                                if isPtCreate then
+                                    Dict.update id
+                                        (Maybe.map (\s -> { s | voiceActive = True }))
+                                        m1.sessions
+
+                                else
+                                    m1.sessions
+                        }
+                in
+                ( m2
+                , Cmd.batch
+                    [ c1
+                    , if isPtCreate then
+                        Ports.voiceStart { sessionId = id }
+
+                      else
+                        Cmd.none
+                    ]
+                )
         SessionCreateError text ->
             -- create_session failed. Without this the in-flight marker
             -- (planCreating) would stay set forever: every later create
@@ -1041,12 +1104,28 @@ update msg model =
 
                     else
                         model
+
+                -- A failed push-to-talk create: disarm the auto-start so
+                -- a LATER SessionCreated (from the next queued create)
+                -- is never mistaken for the PT one. A failure of some
+                -- other create (e.g. a runner) leaves the PT marker
+                -- alone — its own create is still queued behind.
+                m0b =
+                    case m0.planCreating of
+                        Just (UserCreate "Talk") ->
+                            { m0
+                                | ptCreatePending = False
+                                , ptSessionId = Nothing
+                            }
+
+                        _ ->
+                            m0
             in
-            case m0.planCreating of
+            case m0b.planCreating of
                 Just (RunnerCreate planId nodeId) ->
                     let
                         m1 =
-                            { m0 | planCreating = Nothing }
+                            { m0b | planCreating = Nothing }
 
                         ( m2, c2 ) =
                             runStepIn update planId 0 (R.SessionCreateFailed nodeId text) m1
@@ -1061,12 +1140,12 @@ update msg model =
                     -- continue with the next queued create.
                     let
                         m1 =
-                            { m0 | planCreating = Nothing }
+                            { m0b | planCreating = Nothing }
                     in
                     startNextCreateIn m1
 
                 Nothing ->
-                    ( m0, Cmd.none )
+                    ( m0b, Cmd.none )
 
         CloseSession id ->
             -- P39/D1: ownership-graph close. The FIRST close of a
@@ -1648,6 +1727,7 @@ update msg model =
 
                                     Nothing ->
                                         Nothing
+                            , ptTranscribing = False
                             , sessions =
                                 Dict.insert s.id
                                     { s
@@ -1701,6 +1781,82 @@ update msg model =
 
                 Nothing ->
                     ( model, Cmd.none )
+
+        PushToTalk True ->
+            -- Push-to-talk (hold ` to talk): open a NEW session under
+            -- the built-in "Talk" preset and start ASR recording once it
+            -- exists. Uses the same serialized create path as the preset
+            -- menu (planCreating / planCreateQueue), tagged with
+            -- UserCreate "Talk" so SessionCreated can tell this create
+            -- apart. ptCreatePending arms the auto-start; the keyup
+            -- before the create finishes disarms it. Auto-repeat
+            -- keydowns are filtered in overlay.js; ptHeld guards here.
+            if model.ptHeld then
+                ( model, Cmd.none )
+
+            else
+                case model.planCreating of
+                    -- Another create is in flight: queue behind it (FIFO
+                    -- preserves attribution — SessionCreated consumes the
+                    -- marker of the create it belongs to).
+                    Just _ ->
+                        ( { model
+                            | ptHeld = True
+                            , ptCreatePending = True
+                            , planCreateQueue = model.planCreateQueue ++ [ UserCreate "Talk" ]
+                          }
+                        , Cmd.none
+                        )
+
+                    Nothing ->
+                        ( { model
+                            | ptHeld = True
+                            , ptCreatePending = True
+                            , pendingSwitchOnCreate = True
+                            , planCreating = Just (UserCreate "Talk")
+                          }
+                        , Ports.createSession { toolConfirm = Nothing, preset = Just "Talk", builtinTools = Nothing, systemPrompt = Nothing, workDir = Nothing, planId = Nothing, nodeId = Nothing, originSessionId = Nothing }
+                        )
+
+        PushToTalk False ->
+            -- Push-to-talk released: stop the recording — the exact
+            -- equivalent of clicking the ASR mic button (voiceStop →
+            -- transcribe → insert into the input). If the session is
+            -- still being created, just disarm the auto-start (the
+            -- session appears but stays silent); if the recording is
+            -- already over (asrBusy transcription in flight, or the 60s
+            -- cap auto-stopped us) there is nothing to stop.
+            if not model.ptHeld then
+                ( model, Cmd.none )
+
+            else
+                let
+                    m1 =
+                        { model
+                            | ptHeld = False
+                            , ptCreatePending = False
+                        }
+                in
+                case m1.ptSessionId of
+                    Just sid ->
+                        case Dict.get sid m1.sessions of
+                            Just s ->
+                                if s.voiceActive then
+                                    -- Reuse the VoiceInput toggle: it turns
+                                    -- voiceActive off, marks asrBusy and
+                                    -- sends voiceStop (transcribe). Mark the
+                                    -- in-flight result as PT so its insertion
+                                    -- skips focusing the input.
+                                    update (ForSession sid VoiceInput) { m1 | ptSessionId = Nothing, ptTranscribing = True }
+
+                                else
+                                    ( { m1 | ptSessionId = Nothing }, Cmd.none )
+
+                            Nothing ->
+                                ( { m1 | ptSessionId = Nothing }, Cmd.none )
+
+                    Nothing ->
+                        ( m1, Cmd.none )
 
         RawAudioReady raw ->
             -- JS finished encoding the recording as a WAV data URI:
@@ -1803,6 +1959,16 @@ update msg model =
                                             ("Voice input error: " ++ message)
                                         )
                                         model.sessions
+                                -- A failed push-to-talk recording: drop the
+                                -- session link so the keyup cannot send a
+                                -- second voiceStop ("Not recording" noise).
+                                , ptSessionId =
+                                    if model.ptSessionId == Just sessionId then
+                                        Nothing
+
+                                    else
+                                        model.ptSessionId
+                                , ptTranscribing = False
                               }
                             , Cmd.none
                             )
@@ -1826,7 +1992,8 @@ update msg model =
                                 -- User cancelled this transcription;
                                 -- ignore the result entirely.
                                 ( { model
-                                    | sessions =
+                                    | ptTranscribing = False
+                                    , sessions =
                                         Dict.insert sessionId
                                             { s
                                                 | asrDiscard = False
@@ -1841,7 +2008,8 @@ update msg model =
                             else if ok then
                                 if String.isEmpty text then
                                     ( { model
-                                        | sessions =
+                                        | ptTranscribing = False
+                                        , sessions =
                                             Dict.insert sessionId
                                                 (appendErrorMsg
                                                     { s
@@ -1871,7 +2039,8 @@ update msg model =
 
                             else
                                 ( { model
-                                    | sessions =
+                                    | ptTranscribing = False
+                                    , sessions =
                                         Dict.insert sessionId
                                             (appendErrorMsg
                                                 { s
@@ -1913,6 +2082,7 @@ update msg model =
                                         in
                                         ( { model
                                             | pendingVoiceInsert = Nothing
+                                            , ptTranscribing = False
                                             , sessions =
                                                 Dict.insert sessionId
                                                     { s
@@ -1921,10 +2091,22 @@ update msg model =
                                                     }
                                                     model.sessions
                                           }
-                                        , Ports.setCursorPos
-                                            { id = "msg-input-" ++ sessionId
-                                            , pos = Just (pos + String.length pending.text)
-                                            }
+                                        , if model.ptTranscribing then
+                                            -- Push-to-talk insertion: do NOT
+                                            -- focus the input — a focused
+                                            -- textarea would swallow the
+                                            -- next ` keydown and break the
+                                            -- talk loop.
+                                            Ports.setCursorPosNoFocus
+                                                { id = "msg-input-" ++ sessionId
+                                                , pos = Just (pos + String.length pending.text)
+                                                }
+
+                                          else
+                                            Ports.setCursorPos
+                                                { id = "msg-input-" ++ sessionId
+                                                , pos = Just (pos + String.length pending.text)
+                                                }
                                         )
 
                                     Nothing ->
