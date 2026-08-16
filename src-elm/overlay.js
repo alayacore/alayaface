@@ -567,17 +567,23 @@
       });
     }, { passive: false });
 
-    // ─── Push-to-talk (hold ` to talk) ─────────────────────────────
-    // The backquote key opens a NEW session under the built-in "Talk"
-    // preset and starts ASR recording while held; releasing stops it
-    // (transcribes into the input). Rules:
+    // ─── Push-to-talk (hold to talk) ───────────────────────────────
+    // Plain ` held: ASR-record in the CURRENT session (like the mic
+    // button); Shift+` held: open a NEW session under the built-in
+    // "Talk" preset and record there. Releasing stops (transcribes
+    // into the input). Rules:
+    //   - matched by PHYSICAL key (e.code === "Backquote"), not e.key:
+    //     Shift+` reports e.key = "~" (or another character on foreign
+    //     layouts) while the code stays stable;
     //   - keydown only (auto-repeat filtered via e.repeat);
-    //   - no modifier held (Ctrl+` etc. stays free for other uses);
+    //   - no Ctrl/Meta/Alt (those stay free for other uses);
     //   - the target must NOT be editable — while typing in the prompt
-    //     input the key types a normal ` (markdown code fences);
-    //   - keyup is forwarded unconditionally: its target may differ
-    //     from keydown's (focus moved while held), and Elm ignores an
-    //     up without a down (ptHeld guard), so the safest is to send;
+    //     input the keys type a normal ` / ~ (markdown, shell);
+    //   - keyup is forwarded unconditionally on Backquote: its target
+    //     may differ from keydown's (focus moved while held), the user
+    //     may release Shift before ` (only the Backquote keyup
+    //     matters), and Elm ignores an up without a down (ptHeld
+    //     guard) — so the safest is to send;
     //   - window blur forwards a release — the OS can swallow the keyup
     //     when focus leaves the window (alt-tab etc.), which would
     //     otherwise leave the recorder running until the 60s cap.
@@ -585,17 +591,16 @@
       return !!el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT" ||
         el.isContentEditable === true);
     }
-    var PT_KEY = "`";
     document.addEventListener("keydown", function (e) {
-      if (e.key !== PT_KEY || e.repeat) return;
+      if (e.code !== "Backquote" || e.repeat) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
-      if (isEditable(e.target)) return; // typing: ` types normally
+      if (isEditable(e.target)) return; // typing: ` / ~ types normally
       e.preventDefault();
-      app.ports.onPushToTalk.send({ down: true });
+      app.ports.onPushToTalk.send({ down: true, shift: !!e.shiftKey });
     }, true);
     document.addEventListener("keyup", function (e) {
-      if (e.key === PT_KEY) {
-        app.ports.onPushToTalk.send({ down: false });
+      if (e.code === "Backquote") {
+        app.ports.onPushToTalk.send({ down: false, shift: false });
         // PT sessions auto-focus the prompt input on creation; blur it
         // so stray keystrokes while talking never land in the input.
         // The transcript insertion (setCursorPos) re-focuses it when
@@ -606,7 +611,7 @@
       }
     }, true);
     window.addEventListener("blur", function () {
-      app.ports.onPushToTalk.send({ down: false });
+      app.ports.onPushToTalk.send({ down: false, shift: false });
     });
     }
   };

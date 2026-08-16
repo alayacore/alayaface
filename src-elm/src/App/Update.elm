@@ -1867,15 +1867,16 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
-        PushToTalk True ->
-            -- Push-to-talk (hold ` to talk): open a NEW session under
-            -- the built-in "Talk" preset and start ASR recording once it
-            -- exists. Uses the same serialized create path as the preset
-            -- menu (planCreating / planCreateQueue), tagged with
-            -- UserCreate "Talk" so SessionCreated can tell this create
-            -- apart. ptCreatePending arms the auto-start; the keyup
-            -- before the create finishes disarms it. Auto-repeat
-            -- keydowns are filtered in overlay.js; ptHeld guards here.
+        PushToTalk True True ->
+            -- Shift+` held: push-to-talk in a NEW session. Opens a
+            -- session under the built-in "Talk" preset and starts ASR
+            -- recording once it exists. Uses the same serialized create
+            -- path as the preset menu (planCreating / planCreateQueue),
+            -- tagged with UserCreate "Talk" so SessionCreated can tell
+            -- this create apart. ptCreatePending arms the auto-start;
+            -- the keyup before the create finishes disarms it.
+            -- Auto-repeat keydowns are filtered in overlay.js; ptHeld
+            -- guards here.
             if model.ptHeld then
                 ( model, Cmd.none )
 
@@ -1903,14 +1904,50 @@ update msg model =
                         , Ports.createSession { toolConfirm = Nothing, preset = Just "Talk", builtinTools = Nothing, systemPrompt = Nothing, workDir = Nothing, planId = Nothing, nodeId = Nothing, originSessionId = Nothing }
                         )
 
-        PushToTalk False ->
-            -- Push-to-talk released: stop the recording — the exact
-            -- equivalent of clicking the ASR mic button (voiceStop →
-            -- transcribe → insert into the input). If the session is
-            -- still being created, just disarm the auto-start (the
-            -- session appears but stays silent); if the recording is
-            -- already over (asrBusy transcription in flight, or the 60s
-            -- cap auto-stopped us) there is nothing to stop.
+        PushToTalk True False ->
+            -- Plain ` held: push-to-talk in the CURRENT session — the
+            -- exact equivalent of pressing the ASR mic button (same
+            -- voiceStart + voiceActive, same availability checks).
+            -- Release (PushToTalk False) stops and transcribes. No new
+            -- session is created.
+            if model.ptHeld then
+                ( model, Cmd.none )
+
+            else
+                case model.activeId of
+                    Just sid ->
+                        case Dict.get sid model.sessions of
+                            Just s ->
+                                if s.voiceActive || s.asrBusy || s.rawRecording || not s.connected || PU.planRunningForSession model sid then
+                                    ( model, Cmd.none )
+
+                                else
+                                    ( { model
+                                        | ptHeld = True
+                                        , ptSessionId = Just sid
+                                        , sessions =
+                                            Dict.insert sid
+                                                { s | voiceActive = True }
+                                                model.sessions
+                                      }
+                                    , Ports.voiceStart { sessionId = sid }
+                                    )
+
+                            Nothing ->
+                                ( model, Cmd.none )
+
+                    Nothing ->
+                        ( model, Cmd.none )
+
+        PushToTalk False _ ->
+            -- Push-to-talk released (either mode): stop the recording —
+            -- the exact equivalent of clicking the ASR mic button
+            -- (voiceStop → transcribe → insert into the input). If the
+            -- session is still being created (Shift+` mode), just
+            -- disarm the auto-start (the session appears but stays
+            -- silent); if the recording is already over (asrBusy
+            -- transcription in flight, or the 60s cap auto-stopped us)
+            -- there is nothing to stop.
             if not model.ptHeld then
                 ( model, Cmd.none )
 

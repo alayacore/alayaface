@@ -347,10 +347,12 @@ type Msg
     | VoiceInput
     | CancelAsr
     | RawAudioInput
-    -- Push-to-talk: the ` key held/released (down=True/False from
-    -- overlay.js). Hold opens a new session under the built-in "Talk"
-    -- preset and starts ASR recording; release stops it (transcribes).
-    | PushToTalk Bool
+    -- Push-to-talk (hold to talk): the Backquote key held/released —
+    -- down=True/False from overlay.js with shift=True for Shift+` .
+    -- Shift+` opens a NEW session under the built-in "Talk" preset and
+    -- starts ASR recording; plain ` records in the CURRENT session
+    -- (like the mic button). Release stops either (transcribes).
+    | PushToTalk Bool Bool
     -- Close-session confirmation (per-session state, see
     -- SessionState.closeConfirm): RequestCloseSession opens the
     -- session's confirm overlay instead of closing (window ✕ / Ctrl+W);

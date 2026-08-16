@@ -1,10 +1,11 @@
 module PushToTalkTest exposing (tests)
 
--- Push-to-talk (hold ` to talk): a held key opens a NEW session under
--- the built-in "Talk" preset and auto-starts ASR recording; releasing
--- stops it (transcribes into the input). These tests cover the Elm
--- state machine around the async create (keydown → SessionCreated →
--- keyup) and its edge cases.
+-- Push-to-talk (hold to talk): Shift+` opens a NEW session under the
+-- built-in "Talk" preset and auto-starts ASR recording; plain `
+-- records in the CURRENT session (like the mic button); releasing
+-- either stops it (transcribes into the input). These tests cover the
+-- Elm state machine around the async create (keydown → SessionCreated
+-- → keyup), the current-session mode and the edge cases.
 
 import Dict
 import Expect
@@ -23,7 +24,7 @@ tests =
                 \_ ->
                     let
                         ( m, _ ) =
-                            App.Update.update (AT.PushToTalk True) initModelWithSession
+                            App.Update.update (AT.PushToTalk True True) initModelWithSession
                     in
                     Expect.all
                         [ \mm -> Expect.equal True mm.ptHeld
@@ -37,7 +38,7 @@ tests =
                 \_ ->
                     let
                         ( m1, _ ) =
-                            App.Update.update (AT.PushToTalk True) initModelWithSession
+                            App.Update.update (AT.PushToTalk True True) initModelWithSession
 
                         ( m2, _ ) =
                             App.Update.update (AT.SessionCreated "s9") m1
@@ -60,13 +61,13 @@ tests =
                 \_ ->
                     let
                         ( m1, _ ) =
-                            App.Update.update (AT.PushToTalk True) initModelWithSession
+                            App.Update.update (AT.PushToTalk True True) initModelWithSession
 
                         ( m2, _ ) =
                             App.Update.update (AT.SessionCreated "s9") m1
 
                         ( m3, _ ) =
-                            App.Update.update (AT.PushToTalk False) m2
+                            App.Update.update (AT.PushToTalk False False) m2
                     in
                     Expect.all
                         [ \mm -> Expect.equal False mm.ptHeld
@@ -91,10 +92,10 @@ tests =
                 \_ ->
                     let
                         ( m1, _ ) =
-                            App.Update.update (AT.PushToTalk True) initModelWithSession
+                            App.Update.update (AT.PushToTalk True True) initModelWithSession
 
                         ( m2, _ ) =
-                            App.Update.update (AT.PushToTalk False) m1
+                            App.Update.update (AT.PushToTalk False False) m1
 
                         ( m3, _ ) =
                             App.Update.update (AT.SessionCreated "s9") m2
@@ -116,10 +117,10 @@ tests =
                 \_ ->
                     let
                         ( m1, _ ) =
-                            App.Update.update (AT.PushToTalk True) initModelWithSession
+                            App.Update.update (AT.PushToTalk True True) initModelWithSession
 
                         ( m2, _ ) =
-                            App.Update.update (AT.PushToTalk True) m1
+                            App.Update.update (AT.PushToTalk True True) m1
                     in
                     Expect.all
                         [ \mm -> Expect.equal True mm.ptHeld
@@ -157,7 +158,7 @@ tests =
                             { initModelWithSession | planCreating = Just (AT.RunnerCreate "p1" "n1") }
 
                         ( m1, _ ) =
-                            App.Update.update (AT.PushToTalk True) m0
+                            App.Update.update (AT.PushToTalk True True) m0
                     in
                     Expect.all
                         [ \mm -> Expect.equal True mm.ptHeld
@@ -170,7 +171,7 @@ tests =
                 \_ ->
                     let
                         ( m1, _ ) =
-                            App.Update.update (AT.PushToTalk True) initModelWithSession
+                            App.Update.update (AT.PushToTalk True True) initModelWithSession
 
                         ( m2, _ ) =
                             App.Update.update (AT.SessionCreateError "boom") m1
@@ -185,7 +186,7 @@ tests =
                 \_ ->
                     let
                         ( m1, _ ) =
-                            App.Update.update (AT.PushToTalk True) initModelWithSession
+                            App.Update.update (AT.PushToTalk True True) initModelWithSession
 
                         ( m2, _ ) =
                             App.Update.update (AT.SessionCreated "s9") m1
@@ -216,12 +217,137 @@ tests =
                             }
 
                         ( m1, _ ) =
-                            App.Update.update (AT.PushToTalk False) m0
+                            App.Update.update (AT.PushToTalk False False) m0
                     in
                     Expect.all
                         [ \mm -> Expect.equal False mm.ptHeld
                         , \mm -> Expect.equal Nothing mm.ptSessionId
                         , \mm -> Expect.equal False mm.ptCreatePending
+                        ]
+                        m1
+            ]
+        , describe "plain ` records in the CURRENT session (no new session)"
+            [ test "keydown starts ASR in the active session" <|
+                \_ ->
+                    let
+                        ( m1, _ ) =
+                            App.Update.update (AT.PushToTalk True False) initModelWithSession
+                    in
+                    Expect.all
+                        [ \mm -> Expect.equal True mm.ptHeld
+                        , \mm -> Expect.equal (Just "s1") mm.ptSessionId
+                        , \mm -> Expect.equal False mm.ptCreatePending
+                        , \mm -> Expect.equal Nothing mm.planCreating
+                        , \mm ->
+                            case Dict.get "s1" mm.sessions of
+                                Just s ->
+                                    Expect.equal True s.voiceActive
+
+                                Nothing ->
+                                    Expect.fail "s1 missing"
+                        ]
+                        m1
+            , test "keyup stops and transcribes (like the mic button)" <|
+                \_ ->
+                    let
+                        ( m1, _ ) =
+                            App.Update.update (AT.PushToTalk True False) initModelWithSession
+
+                        ( m2, _ ) =
+                            App.Update.update (AT.PushToTalk False False) m1
+                    in
+                    Expect.all
+                        [ \mm -> Expect.equal False mm.ptHeld
+                        , \mm -> Expect.equal Nothing mm.ptSessionId
+                        , \mm ->
+                            case Dict.get "s1" mm.sessions of
+                                Just s ->
+                                    Expect.all
+                                        [ \ss -> Expect.equal False ss.voiceActive
+                                        , \ss -> Expect.equal True ss.asrBusy
+                                        ]
+                                        s
+
+                                Nothing ->
+                                    Expect.fail "s1 missing"
+                        ]
+                        m2
+            , test "no active session → no-op" <|
+                \_ ->
+                    let
+                        m0 =
+                            { initModelWithSession | activeId = Nothing }
+
+                        ( m1, _ ) =
+                            App.Update.update (AT.PushToTalk True False) m0
+                    in
+                    Expect.all
+                        [ \mm -> Expect.equal False mm.ptHeld
+                        , \mm -> Expect.equal Nothing mm.ptSessionId
+                        ]
+                        m1
+            , test "a session already transcribing (asrBusy) → no-op" <|
+                \_ ->
+                    let
+                        m0 =
+                            { initModelWithSession
+                                | sessions =
+                                    Dict.update "s1"
+                                        (\s -> Maybe.map (\ss -> { ss | asrBusy = True }) s)
+                                        initModelWithSession.sessions
+                            }
+
+                        ( m1, _ ) =
+                            App.Update.update (AT.PushToTalk True False) m0
+                    in
+                    Expect.all
+                        [ \mm -> Expect.equal False mm.ptHeld
+                        , \mm -> Expect.equal Nothing mm.ptSessionId
+                        , \mm ->
+                            case Dict.get "s1" mm.sessions of
+                                Just s ->
+                                    Expect.equal False s.voiceActive
+
+                                Nothing ->
+                                    Expect.fail "s1 missing"
+                        ]
+                        m1
+            , test "a session recording raw audio → no-op (mutual exclusion)" <|
+                \_ ->
+                    let
+                        m0 =
+                            { initModelWithSession
+                                | sessions =
+                                    Dict.update "s1"
+                                        (\s -> Maybe.map (\ss -> { ss | rawRecording = True }) s)
+                                        initModelWithSession.sessions
+                            }
+
+                        ( m1, _ ) =
+                            App.Update.update (AT.PushToTalk True False) m0
+                    in
+                    Expect.all
+                        [ \mm -> Expect.equal False mm.ptHeld
+                        , \mm -> Expect.equal Nothing mm.ptSessionId
+                        ]
+                        m1
+            , test "a disconnected session → no-op" <|
+                \_ ->
+                    let
+                        m0 =
+                            { initModelWithSession
+                                | sessions =
+                                    Dict.update "s1"
+                                        (\s -> Maybe.map (\ss -> { ss | connected = False }) s)
+                                        initModelWithSession.sessions
+                            }
+
+                        ( m1, _ ) =
+                            App.Update.update (AT.PushToTalk True False) m0
+                    in
+                    Expect.all
+                        [ \mm -> Expect.equal False mm.ptHeld
+                        , \mm -> Expect.equal Nothing mm.ptSessionId
                         ]
                         m1
             ]

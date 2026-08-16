@@ -1975,7 +1975,7 @@ viewInputBar model session =
                                 "Stop recording and transcribe"
 
                              else
-                                "Voice input (record speech, insert at the cursor) — hold ` to open a Talk session and record"
+                                "Voice input (record speech, insert at the cursor) — hold ` to record here, Shift+` to open a Talk session"
                             )
                         , Attr.disabled micLocked
                         ]

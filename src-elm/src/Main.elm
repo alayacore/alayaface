@@ -214,9 +214,9 @@ subscriptions model =
                     NoOp
           )
         , Ports.onPushToTalk (\raw ->
-            case D.decodeValue (D.field "down" D.bool) raw of
-                Ok down ->
-                    PushToTalk down
+            case D.decodeValue (D.map2 PushToTalk (D.field "down" D.bool) (D.field "shift" D.bool)) raw of
+                Ok m ->
+                    m
 
                 Err _ ->
                     NoOp
