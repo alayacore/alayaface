@@ -52,13 +52,24 @@
       setTimeout(function () {
         var el = document.getElementById(data.id);
         if (!el || !el.setSelectionRange) return;
-        el.focus();
-        // pos: null/undefined → move to the end of the value (legacy);
-        // a number → place the caret exactly there (voice insert).
-        var pos = (data.pos === undefined || data.pos === null)
-          ? el.value.length
-          : Math.max(0, Math.min(data.pos, el.value.length));
-        el.setSelectionRange(pos, pos);
+        // The target caret offset into the CURRENT value. null/undefined
+        // → move to the end of the value (legacy); a number → place the
+        // caret exactly there (voice insert). NOT clamped here: the port
+        // fires before Elm renders the new value, so el.value.length is
+        // the OLD length — clamping early (e.g. an empty input) would
+        // pin the caret at 0 forever (the reapply loop reuses the
+        // clamped pos). Clamping happens per-application below.
+        var target = (data.pos === undefined || data.pos === null)
+          ? null
+          : data.pos;
+        function apply() {
+          var p = target === null
+            ? el.value.length
+            : Math.max(0, Math.min(target, el.value.length));
+          el.focus();
+          el.setSelectionRange(p, p);
+        }
+        apply();
         var oldValue = el.value;
         var deadline = Date.now() + 400;
         (function reapply() {
@@ -67,8 +78,7 @@
             // focus were reset (the element may have been disabled /
             // replaced until this very render — a focus attempted
             // earlier landed on a disabled textarea and was ignored).
-            el.focus();
-            el.setSelectionRange(pos, pos);
+            apply();
           } else if (Date.now() <= deadline) {
             setTimeout(reapply, 5);
           }
