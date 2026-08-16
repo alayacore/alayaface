@@ -63,32 +63,11 @@
         var deadline = Date.now() + 400;
         (function reapply() {
           if (el.value !== oldValue) {
-            // Elm re-rendered with the new value → caret was reset;
-            // restore the requested position.
-            el.setSelectionRange(pos, pos);
-          } else if (Date.now() <= deadline) {
-            setTimeout(reapply, 5);
-          }
-        })();
-      }, 0);
-    });
-
-    // Same caret move WITHOUT focusing: push-to-talk transcript
-    // insertion uses this — a focused prompt input would swallow the
-    // next ` keydown (editable-target exclusion) and break the
-    // hold-to-talk loop.
-    on("setCursorPosNoFocus", function (data) {
-      setTimeout(function () {
-        var el = document.getElementById(data.id);
-        if (!el || !el.setSelectionRange) return;
-        var pos = (data.pos === undefined || data.pos === null)
-          ? el.value.length
-          : Math.max(0, Math.min(data.pos, el.value.length));
-        el.setSelectionRange(pos, pos);
-        var oldValue = el.value;
-        var deadline = Date.now() + 400;
-        (function reapply() {
-          if (el.value !== oldValue) {
+            // Elm re-rendered with the new value → the caret AND the
+            // focus were reset (the element may have been disabled /
+            // replaced until this very render — a focus attempted
+            // earlier landed on a disabled textarea and was ignored).
+            el.focus();
             el.setSelectionRange(pos, pos);
           } else if (Date.now() <= deadline) {
             setTimeout(reapply, 5);
@@ -607,10 +586,10 @@
     document.addEventListener("keyup", function (e) {
       if (e.key === PT_KEY) {
         app.ports.onPushToTalk.send({ down: false });
-        // PT sessions auto-focus the prompt input on creation; leave it
-        // unfocused so the NEXT hold still works — an editable target
-        // would swallow the keydown. (PT transcriptions are inserted
-        // via setCursorPosNoFocus, which never re-focuses.)
+        // PT sessions auto-focus the prompt input on creation; blur it
+        // so stray keystrokes while talking never land in the input.
+        // The transcript insertion (setCursorPos) re-focuses it when
+        // the ASR result arrives, so Enter sends right away.
         if (document.activeElement && isEditable(document.activeElement)) {
           document.activeElement.blur();
         }

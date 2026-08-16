@@ -44,7 +44,6 @@ init _ =
       , ptHeld = False
       , ptCreatePending = False
       , ptSessionId = Nothing
-      , ptTranscribing = False
       , closeConfirm = Nothing
       , inputRows = 1
       , cursorMsgId = Nothing

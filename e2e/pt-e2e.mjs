@@ -192,7 +192,7 @@ try {
   await shot('01-pt-recording.png');
   console.log('PT round 1 recording');
 
-  // ── release ` → transcribe → insert WITHOUT focusing the input ──
+  // ── release ` → transcribe → insert WITH the input focused ──────
   await page.keyboard.up('`');
   // Wait until the transcript lands in the input (ASR is instant here).
   let inserted = false;
@@ -205,13 +205,21 @@ try {
   const taState = await page.$eval('textarea.input-text', el => ({ v: el.value, disabled: el.disabled }));
   assert(taState.v.includes('HELLO'), 'input contains the transcript: ' + taState.v);
   assert(taState.disabled === false, 'input unlocked after insertion');
+  // The input must be FOCUSED after the insert so Enter sends right
+  // away (the user asked for this over the unfocused talk-loop).
+  await sleep(800); // setCursorPos applies focus on a deferred timer
   const activeEl = await page.evaluate(() => document.activeElement ? document.activeElement.tagName : 'none');
-  assert(activeEl !== 'TEXTAREA', 'input NOT focused after PT insert (active=' + activeEl + ')');
+  assert(activeEl === 'TEXTAREA', 'input focused after PT insert (active=' + activeEl + ')');
   assert(asrCalls >= 1, 'fake ASR endpoint was called (' + asrCalls + ')');
   await shot('02-pt-inserted.png');
-  console.log('PT round 1 transcript inserted, input unfocused');
+  console.log('PT round 1 transcript inserted, input focused');
 
-  // ── PT round 2: the loop must still work ─────────────────────────
+  // ── PT round 2 ───────────────────────────────────────────────────
+  // The input now holds focus (Enter-to-send convenience), so the talk
+  // key needs the focus OUT of the textarea — the user clicks the
+  // canvas/blank space, exactly like Discord's push-to-talk.
+  await page.$eval('textarea.input-text', el => el.blur());
+  await sleep(100);
   await page.keyboard.down('`');
   await waitFor('.mic-btn.recording', 15000);
   await sleep(500);

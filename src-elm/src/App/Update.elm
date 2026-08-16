@@ -1750,7 +1750,6 @@ update msg model =
 
                                     Nothing ->
                                         Nothing
-                            , ptTranscribing = False
                             , sessions =
                                 Dict.insert s.id
                                     { s
@@ -1867,10 +1866,8 @@ update msg model =
                                 if s.voiceActive then
                                     -- Reuse the VoiceInput toggle: it turns
                                     -- voiceActive off, marks asrBusy and
-                                    -- sends voiceStop (transcribe). Mark the
-                                    -- in-flight result as PT so its insertion
-                                    -- skips focusing the input.
-                                    update (ForSession sid VoiceInput) { m1 | ptSessionId = Nothing, ptTranscribing = True }
+                                    -- sends voiceStop (transcribe).
+                                    update (ForSession sid VoiceInput) { m1 | ptSessionId = Nothing }
 
                                 else
                                     ( { m1 | ptSessionId = Nothing }, Cmd.none )
@@ -1991,7 +1988,6 @@ update msg model =
 
                                     else
                                         model.ptSessionId
-                                , ptTranscribing = False
                               }
                             , Cmd.none
                             )
@@ -2015,8 +2011,7 @@ update msg model =
                                 -- User cancelled this transcription;
                                 -- ignore the result entirely.
                                 ( { model
-                                    | ptTranscribing = False
-                                    , sessions =
+                                    | sessions =
                                         Dict.insert sessionId
                                             { s
                                                 | asrDiscard = False
@@ -2031,8 +2026,7 @@ update msg model =
                             else if ok then
                                 if String.isEmpty text then
                                     ( { model
-                                        | ptTranscribing = False
-                                        , sessions =
+                                        | sessions =
                                             Dict.insert sessionId
                                                 (appendErrorMsg
                                                     { s
@@ -2062,8 +2056,7 @@ update msg model =
 
                             else
                                 ( { model
-                                    | ptTranscribing = False
-                                    , sessions =
+                                    | sessions =
                                         Dict.insert sessionId
                                             (appendErrorMsg
                                                 { s
@@ -2105,7 +2098,6 @@ update msg model =
                                         in
                                         ( { model
                                             | pendingVoiceInsert = Nothing
-                                            , ptTranscribing = False
                                             , sessions =
                                                 Dict.insert sessionId
                                                     { s
@@ -2114,22 +2106,15 @@ update msg model =
                                                     }
                                                     model.sessions
                                           }
-                                        , if model.ptTranscribing then
-                                            -- Push-to-talk insertion: do NOT
-                                            -- focus the input — a focused
-                                            -- textarea would swallow the
-                                            -- next ` keydown and break the
-                                            -- talk loop.
-                                            Ports.setCursorPosNoFocus
-                                                { id = "msg-input-" ++ sessionId
-                                                , pos = Just (pos + String.length pending.text)
-                                                }
-
-                                          else
-                                            Ports.setCursorPos
-                                                { id = "msg-input-" ++ sessionId
-                                                , pos = Just (pos + String.length pending.text)
-                                                }
+                                        -- Focus the input and place the
+                                        -- caret after the insert (voice
+                                        -- insert and push-to-talk alike) —
+                                        -- the user can hit Enter to send
+                                        -- right away.
+                                        , Ports.setCursorPos
+                                            { id = "msg-input-" ++ sessionId
+                                            , pos = Just (pos + String.length pending.text)
+                                            }
                                         )
 
                                     Nothing ->

@@ -103,7 +103,6 @@ port module Ports exposing
       -- Focus / Scroll
     , scrollToBottom
     , setCursorPos
-    , setCursorPosNoFocus
     , scrollIntoView
     , onScroll
       -- Window state
@@ -326,10 +325,6 @@ port scrollToBottom : { sessionId : String } -> Cmd msg
 -- Move the caret: id = element id, pos = Nothing moves to the end of
 -- the value (legacy behavior), Just pos sets the caret exactly there.
 port setCursorPos : { id : String, pos : Maybe Int } -> Cmd msg
--- Same caret move WITHOUT focusing the element: used by push-to-talk
--- transcript insertion — a focused prompt input would swallow the next
--- ` keydown (editable-target exclusion) and break the hold-to-talk loop.
-port setCursorPosNoFocus : { id : String, pos : Maybe Int } -> Cmd msg
 port scrollIntoView : String -> Cmd msg
 port onScroll : ({ sessionId : String, scrollTop : Float, scrollHeight : Float, clientHeight : Float } -> msg) -> Sub msg
 
