@@ -957,6 +957,21 @@ createSessionWindow id model =
         ]
     )
 
+
+{-| Is this message id the last (bottom-most) message of the session?
+Used by ToggleMsgCollapse to decide whether an expand should re-pin the
+viewport to the bottom.
+-}
+isLastMessage : String -> T.SessionState -> Bool
+isLastMessage msgId s =
+    case List.head (List.reverse s.messages) of
+        Just m ->
+            m.id == msgId
+
+        Nothing ->
+            False
+
+
 {-| Fixed plan mode (D2, R2): the planner hint injected via `--system`
 into EVERY session (user sessions and plan node sessions alike). No role
 lock — the model keeps its tools and may execute directly. For complex
@@ -2092,15 +2107,34 @@ update msg model =
             ( { model | ctxVisible = False }, Cmd.none )
 
         ToggleMsgCollapse sid msgId ->
-            ( updateSession model sid (\sess ->
-                case List.filter (\m -> m.id == msgId) sess.messages |> List.head of
-                    Just m ->
-                        { sess | msgCollapsed = T.toggleMsgCollapsed sess.msgCollapsed m }
+            let
+                m1 =
+                    updateSession model sid (\sess ->
+                        case List.filter (\m -> m.id == msgId) sess.messages |> List.head of
+                            Just m ->
+                                { sess | msgCollapsed = T.toggleMsgCollapsed sess.msgCollapsed m }
 
-                    Nothing ->
-                        sess
-              )
-            , Cmd.none
+                            Nothing ->
+                                sess
+                      )
+            in
+            ( m1
+            , case Dict.get sid m1.sessions of
+                Just s ->
+                    -- Expanding the BOTTOM-MOST message while auto-follow
+                    -- is active: its box grows below the fold, so re-pin
+                    -- to the bottom to reveal the content. Toggling a
+                    -- middle message keeps the view (the header that was
+                    -- clicked stays where it is; only content below it
+                    -- grows/shrinks).
+                    if s.atBottom && isLastMessage msgId s then
+                        Ports.scrollToBottom { sessionId = sid }
+
+                    else
+                        Cmd.none
+
+                Nothing ->
+                    Cmd.none
             )
 
         ForkFromCtx ->

@@ -519,7 +519,13 @@
           if (!msg2 || msg2.querySelector(".msg-window")) return; // not collapsed
           var container = msg2.closest(".messages");
           if (!container) return;
-          container.scrollTop += h.getBoundingClientRect().top - container.getBoundingClientRect().top;
+          // The .canvas layer is transformed (pan/zoom): getBoundingClientRect
+          // returns SCALED pixels, but scrollTop is layout px — divide the
+          // delta by the canvas scale (rect.width / offsetWidth, same trick
+          // the overlay scrollbar uses with offsetTop/offsetLeft).
+          var cr = container.getBoundingClientRect();
+          var scale = container.offsetWidth > 0 ? cr.width / container.offsetWidth : 1;
+          container.scrollTop += (h.getBoundingClientRect().top - cr.top) / scale;
         });
       });
     }, true);
