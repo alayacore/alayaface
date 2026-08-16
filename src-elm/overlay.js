@@ -370,14 +370,24 @@
     // behind it, and an always-on background would look like a permanent
     // title bar instead of the standalone title row.
     function updateStickyHeaders() {
-      document.querySelectorAll(".message:not(.collapsed) .msg-header").forEach(function (h) {
-        var box = h.nextElementSibling;
+      document.querySelectorAll(".msg-header").forEach(function (h) {
+        var msg = h.parentElement;
+        var box = msg && msg.classList.contains("message") ? msg.querySelector(".msg-window") : null;
+        var cr = box ? h.closest(".messages").getBoundingClientRect() : null;
+        var hr = h.getBoundingClientRect();
         // Pinned iff the body box has actually slid UNDER the header
-        // (box.top < header.bottom). When the message sits fully in view
-        // the box is exactly adjacent (box.top == header.bottom) — that
-        // is NOT stuck; the 0.5px epsilon absorbs subpixel rounding.
-        var pinned = !!(box && box.classList && box.classList.contains("msg-window") &&
-          box.getBoundingClientRect().top < h.getBoundingClientRect().bottom - 0.5);
+        // (box.top < header.bottom) WHILE the header itself is stuck at
+        // the container top (|header.top - container.top| <= 1): a
+        // message scrolled fully above the viewport also has box.top <
+        // header.bottom, but its header is gone — not pinned. When the
+        // message sits fully in view the box is exactly adjacent
+        // (box.top == header.bottom) — that is NOT stuck either; the
+        // 0.5px epsilon absorbs subpixel rounding. Collapsed messages
+        // (no box) explicitly get the class REMOVED so a stale pin from
+        // before the collapse cannot linger on the title row.
+        var pinned = !!(box && cr &&
+          box.getBoundingClientRect().top < hr.bottom - 0.5 &&
+          hr.top >= cr.top - 1 && hr.top <= cr.top + 1);
         h.classList.toggle("msg-header-pinned", pinned);
       });
     }
@@ -480,6 +490,39 @@
       document.querySelectorAll(".messages").forEach(updateOverlayScrollbar);
     });
     scrollObserver.observe(root, { childList: true, subtree: true });
+
+    // Collapse under a pinned sticky header: keep the SAME message at
+    // the top. Before the click the header is stuck to the viewport top
+    // (body scrolled under it); collapsing removes the body, the content
+    // shrinks and the browser clamps scrollTop to the new maximum — the
+    // view jumps to the conversation start and the collapsed row is
+    // lost mid-conversation. After the (async, rAF) Elm re-render, scroll
+    // the container so the collapsed row sits where the pinned header
+    // was — flush with the container top. Expand needs no adjustment
+    // (the box grows below the header; the top never moves).
+    document.addEventListener("click", function (e) {
+      var t = e.target;
+      if (!t || typeof t.closest !== "function") return;
+      var h = t.closest(".msg-header");
+      if (!h) return;
+      var msg = h.parentElement;
+      if (!msg || !msg.classList.contains("message")) return;
+      var wasExpanded = !!msg.querySelector(".msg-window");
+      var wasPinned = h.classList.contains("msg-header-pinned");
+      // Double rAF: the first frame may still run before Elm's draw
+      // (our capture listener registered before Elm's onClick), so wait
+      // one more frame to measure the settled collapsed layout.
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          if (!wasExpanded || !wasPinned) return;
+          var msg2 = h.parentElement;
+          if (!msg2 || msg2.querySelector(".msg-window")) return; // not collapsed
+          var container = msg2.closest(".messages");
+          if (!container) return;
+          container.scrollTop += h.getBoundingClientRect().top - container.getBoundingClientRect().top;
+        });
+      });
+    }, true);
 
     // 4b. Canvas zoom: wheel on the EMPTY canvas background zooms the
     //     infinite canvas centered on the cursor; wheel inside a WINDOW
