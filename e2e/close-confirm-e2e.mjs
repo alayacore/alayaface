@@ -161,6 +161,12 @@ try {
   await sleep(600);
   assert(await page.$('.overlay .confirm-page-title') === null, 'overlay closed after Close and Delete');
   assert(await page.$('.session-panel') === null, 'session gone after Close and Delete');
+  // On-disk: the session directory under ~/.alayaface/sessions/ must be
+  // removed recursively (this e2e created exactly one session).
+  const leftover = execSync(
+    `find "${home}/.alayaface/sessions" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l`
+  ).toString().trim();
+  assert(leftover === '0', 'session dir removed from disk, leftover=' + leftover);
   await shot('03-after-delete.png');
 
   // ── 6. Enter confirms the default (Close) ────────────────────────
