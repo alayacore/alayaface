@@ -568,22 +568,25 @@
     }, { passive: false });
 
     // ─── Push-to-talk (hold to talk) ───────────────────────────────
-    // Plain ` held: ASR-record in the CURRENT session (like the mic
-    // button); Shift+` held: open a NEW session under the built-in
-    // "Talk" preset and record there. Releasing stops (transcribes
-    // into the input). Rules:
-    //   - matched by PHYSICAL key (e.code === "Backquote"), not e.key:
-    //     Shift+` reports e.key = "~" (or another character on foreign
-    //     layouts) while the code stays stable;
+    // Ctrl+' held: ASR-record in the CURRENT session (like the mic
+    // button). Ctrl+" (Ctrl+Shift+') held: open a NEW session under
+    // the built-in "Talk" preset and record there. Releasing stops
+    // (transcribes into the input). Rules:
+    //   - matched by PHYSICAL key (e.code === "Quote") plus Ctrl:
+    //     Ctrl+Shift+' reports e.key = '"' (or another character on
+    //     foreign layouts) while the code stays stable;
+    //   - Ctrl+letter/symbol combos produce NO text, so this works
+    //     even while the prompt input is focused (no editable-target
+    //     exclusion needed — the old plain-` / Shift+` design could
+    //     not); ` itself is now a pure typing key (markdown fences);
     //   - keydown only (auto-repeat filtered via e.repeat);
-    //   - no Ctrl/Meta/Alt (those stay free for other uses);
-    //   - the target must NOT be editable — while typing in the prompt
-    //     input the keys type a normal ` / ~ (markdown, shell);
-    //   - keyup is forwarded unconditionally on Backquote: its target
-    //     may differ from keydown's (focus moved while held), the user
-    //     may release Shift before ` (only the Backquote keyup
-    //     matters), and Elm ignores an up without a down (ptHeld
-    //     guard) — so the safest is to send;
+    //   - no Meta/Alt (those stay free for other uses); Shift selects
+    //     the mode (Shift → new Talk session, no Shift → current);
+    //   - keyup is forwarded unconditionally on Quote: its target may
+    //     differ from keydown's (focus moved while held), the user may
+    //     release Ctrl/Shift before ' (only the Quote keyup matters),
+    //     and Elm ignores an up without a down (ptHeld guard) — so the
+    //     safest is to send;
     //   - window blur forwards a release — the OS can swallow the keyup
     //     when focus leaves the window (alt-tab etc.), which would
     //     otherwise leave the recorder running until the 60s cap.
@@ -592,14 +595,13 @@
         el.isContentEditable === true);
     }
     document.addEventListener("keydown", function (e) {
-      if (e.code !== "Backquote" || e.repeat) return;
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
-      if (isEditable(e.target)) return; // typing: ` / ~ types normally
+      if (e.code !== "Quote" || e.repeat) return;
+      if (!e.ctrlKey || e.metaKey || e.altKey) return;
       e.preventDefault();
       app.ports.onPushToTalk.send({ down: true, shift: !!e.shiftKey });
     }, true);
     document.addEventListener("keyup", function (e) {
-      if (e.code === "Backquote") {
+      if (e.code === "Quote") {
         app.ports.onPushToTalk.send({ down: false, shift: false });
         // PT sessions auto-focus the prompt input on creation; blur it
         // so stray keystrokes while talking never land in the input.

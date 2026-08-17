@@ -1,11 +1,11 @@
 module PushToTalkTest exposing (tests)
 
--- Push-to-talk (hold to talk): Shift+` opens a NEW session under the
--- built-in "Talk" preset and auto-starts ASR recording; plain `
--- records in the CURRENT session (like the mic button); releasing
--- either stops it (transcribes into the input). These tests cover the
--- Elm state machine around the async create (keydown → SessionCreated
--- → keyup), the current-session mode and the edge cases.
+-- Push-to-talk (hold to talk): Ctrl+" opens a NEW session under the
+-- built-in "Talk" preset and auto-starts ASR recording; Ctrl+' records
+-- in the CURRENT session (like the mic button); releasing either stops
+-- it (transcribes into the input). These tests cover the Elm state
+-- machine around the async create (keydown → SessionCreated → keyup),
+-- the current-session mode and the edge cases.
 
 import Dict
 import Expect
@@ -18,7 +18,7 @@ import TestHelpers exposing (initModelWithSession)
 
 tests : Test
 tests =
-    describe "push-to-talk (hold ` to talk)"
+    describe "push-to-talk (hold Ctrl+' / Ctrl+\" to talk)"
         [ describe "hold → create Talk session → record"
             [ test "keydown arms the PT create under the Talk preset" <|
                 \_ ->
@@ -226,7 +226,7 @@ tests =
                         ]
                         m1
             ]
-        , describe "plain ` records in the CURRENT session (no new session)"
+        , describe "Ctrl+' records in the CURRENT session (no new session)"
             [ test "keydown starts ASR in the active session" <|
                 \_ ->
                     let

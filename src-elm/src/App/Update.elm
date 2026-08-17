@@ -1080,7 +1080,7 @@ update msg model =
                 resumeSessionCreated id model
 
             else
-                -- Push-to-talk attribution (hold ` to talk): the create
+                -- Push-to-talk attribution (hold Ctrl+" to talk): the create
                 -- that just finished is the PT one iff the in-flight
                 -- marker is a UserCreate "Talk", a PT keydown armed it
                 -- (ptCreatePending) and the key is still held — then the
@@ -1868,7 +1868,7 @@ update msg model =
                     ( model, Cmd.none )
 
         PushToTalk True True ->
-            -- Shift+` held: push-to-talk in a NEW session. Opens a
+            -- Ctrl+" held: push-to-talk in a NEW session. Opens a
             -- session under the built-in "Talk" preset and starts ASR
             -- recording once it exists. Uses the same serialized create
             -- path as the preset menu (planCreating / planCreateQueue),
@@ -1943,7 +1943,7 @@ update msg model =
             -- Push-to-talk released (either mode): stop the recording —
             -- the exact equivalent of clicking the ASR mic button
             -- (voiceStop → transcribe → insert into the input). If the
-            -- session is still being created (Shift+` mode), just
+            -- session is still being created (Ctrl+" mode), just
             -- disarm the auto-start (the session appears but stays
             -- silent); if the recording is already over (asrBusy
             -- transcription in flight, or the 60s cap auto-stopped us)

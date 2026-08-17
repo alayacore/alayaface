@@ -312,7 +312,7 @@ type alias Model =
     , versionListFor : Maybe String
     , versionViewFor : Maybe String
     , versionViewSession : Maybe String
-    -- Push-to-talk (hold ` to talk): ptHeld = the key is currently
+    -- Push-to-talk (hold Ctrl+' to talk): ptHeld = the key is currently
     -- held down; ptCreatePending = the next SessionCreated belongs to
     -- the PT create and must auto-start ASR (cleared on keyup, so a
     -- release before the create finishes leaves the session unrecorded);
@@ -347,10 +347,10 @@ type Msg
     | VoiceInput
     | CancelAsr
     | RawAudioInput
-    -- Push-to-talk (hold to talk): the Backquote key held/released —
-    -- down=True/False from overlay.js with shift=True for Shift+` .
-    -- Shift+` opens a NEW session under the built-in "Talk" preset and
-    -- starts ASR recording; plain ` records in the CURRENT session
+    -- Push-to-talk (hold to talk): the Quote key + Ctrl held/released —
+    -- down=True/False from overlay.js with shift=True for Ctrl+" .
+    -- Ctrl+" opens a NEW session under the built-in "Talk" preset and
+    -- starts ASR recording; Ctrl+' records in the CURRENT session
     -- (like the mic button). Release stops either (transcribes).
     | PushToTalk Bool Bool
     -- Close-session confirmation (per-session state, see

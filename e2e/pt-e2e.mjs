@@ -5,16 +5,18 @@
 //   1. build fakecore + Go server (fresh HOME), start both + a fake
 //      OpenAI-compatible /audio/transcriptions endpoint
 //   2. Chrome → ASR config → set the fake endpoint URL → Save
-//   3. WITHOUT creating any session via the UI: hold Shift+` → a NEW
-//      session appears under the built-in "Talk" preset and ASR
+//   3. WITHOUT creating any session via the UI: hold Ctrl+" (Ctrl+Shift+')
+//      → a NEW session appears under the built-in "Talk" preset and ASR
 //      recording starts (mic button pulses red); the global preset
 //      menu also lists "Talk"
 //   4. release → transcription inserted into the prompt input, and the
 //      input IS focused (Enter sends right away)
-//   5. hold Shift+` again → a SECOND session appears and records →
+//   5. hold Ctrl+" again → a SECOND session appears and records →
 //      release → second transcript inserted
-//   6. plain ` (no Shift) records in the CURRENT session: NO new
-//      session is created, the active session transcribes
+//   6. Ctrl+' (no Shift) records in the CURRENT session — and it works
+//      WHILE THE INPUT IS FOCUSED (Ctrl+letter/symbol combos produce
+//      no text, so no editable-target exclusion): NO new session is
+//      created, the active session transcribes
 //
 // ALL PASS printed on success. Screenshots land in the artifact dir.
 import puppeteer from 'puppeteer-core';
@@ -177,13 +179,14 @@ try {
   assert(await page.$('.session-panel') === null, 'no session before PT');
   console.log('Talk preset seeded; no session yet');
 
-  // ── PT round 1: hold Shift+` → new Talk session + recording ─────
+  // ── PT round 1: hold Ctrl+" → new Talk session + recording ──────
+  await page.keyboard.down('Control');
   await page.keyboard.down('Shift');
-  await page.keyboard.down('`');
+  await page.keyboard.down("'");
   await waitFor('.mic-btn.recording', 15000);
   await sleep(500);
   let panels = await page.$$('.session-panel');
-  assert(panels.length === 1, 'Shift+` created exactly one session, got ' + panels.length);
+  assert(panels.length === 1, 'Ctrl+" created exactly one session, got ' + panels.length);
   const recState = await page.evaluate(() => {
     const btn = document.querySelector('.mic-btn');
     return { cls: btn ? btn.className : '', disabled: btn ? btn.disabled : null };
@@ -193,11 +196,12 @@ try {
   const locked = await page.$eval('textarea.input-text', el => el.disabled);
   assert(locked === true, 'input locked while PT recording');
   await shot('01-pt-recording.png');
-  console.log('PT round 1 recording (Shift+`)');
+  console.log('PT round 1 recording (Ctrl+")');
 
   // ── release → transcribe → insert WITH the input focused ────────
-  await page.keyboard.up('`');
+  await page.keyboard.up("'");
   await page.keyboard.up('Shift');
+  await page.keyboard.up('Control');
   // Wait until the transcript lands in the input (ASR is instant here).
   let inserted = false;
   for (let i = 0; i < 40; i++) {
@@ -218,21 +222,18 @@ try {
   await shot('02-pt-inserted.png');
   console.log('PT round 1 transcript inserted, input focused');
 
-  // ── PT round 2: Shift+` again → a SECOND new session ────────────
-  // The input now holds focus (Enter-to-send convenience), so the talk
-  // key needs the focus OUT of the textarea — the user clicks the
-  // canvas/blank space, exactly like Discord's push-to-talk.
-  await page.$eval('textarea.input-text', el => el.blur());
-  await sleep(100);
+  // ── PT round 2: Ctrl+" again → a SECOND new session ─────────────
+  await page.keyboard.down('Control');
   await page.keyboard.down('Shift');
-  await page.keyboard.down('`');
+  await page.keyboard.down("'");
   await waitFor('.mic-btn.recording', 15000);
   await sleep(500);
   panels = await page.$$('.session-panel');
-  assert(panels.length === 2, 'Shift+` round 2 created a second session, got ' + panels.length);
+  assert(panels.length === 2, 'Ctrl+" round 2 created a second session, got ' + panels.length);
   await shot('03-pt-round2-recording.png');
-  await page.keyboard.up('`');
+  await page.keyboard.up("'");
   await page.keyboard.up('Shift');
+  await page.keyboard.up('Control');
   inserted = false;
   for (let i = 0; i < 40; i++) {
     // The focused session's textarea is the LAST one in DOM order; wait
@@ -266,19 +267,23 @@ try {
   await shot('04-pt-round2-inserted.png');
   console.log('PT round 2 transcript inserted');
 
-  // ── PT round 3: plain ` records in the CURRENT session ──────────
-  // No new session — the active (focused) one records and transcribes.
+  // ── PT round 3: Ctrl+' records in the CURRENT session, focused ──
+  // The input is still FOCUSED from round 2's insertion — Ctrl+'
+  // produces no text, so it must work without blurring (the whole
+  // point of switching away from `). No new session is created.
   const panelsBefore3 = await page.$$('.session-panel');
-  assert(panelsBefore3.length === 2, 'two sessions before plain-` talk');
-  await page.evaluate(() => document.activeElement && document.activeElement.blur());
-  await sleep(100);
-  await page.keyboard.down('`');
+  assert(panelsBefore3.length === 2, 'two sessions before Ctrl+\' talk');
+  const focusedBefore = await page.evaluate(() => document.activeElement ? document.activeElement.tagName : 'none');
+  assert(focusedBefore === 'TEXTAREA', 'input focused before Ctrl+\' talk (active=' + focusedBefore + ')');
+  await page.keyboard.down('Control');
+  await page.keyboard.down("'");
   await waitFor('.mic-btn.recording', 15000);
   await sleep(500);
   const panels3 = await page.$$('.session-panel');
-  assert(panels3.length === 2, 'plain ` must NOT create a session (got ' + panels3.length + ')');
+  assert(panels3.length === 2, 'Ctrl+\' must NOT create a session (got ' + panels3.length + ')');
   await shot('05-pt-plain-recording.png');
-  await page.keyboard.up('`');
+  await page.keyboard.up("'");
+  await page.keyboard.up('Control');
   inserted = false;
   for (let i = 0; i < 40; i++) {
     const vals = await page.$$eval('textarea.input-text',
@@ -287,10 +292,10 @@ try {
     if (fresh && fresh.v.includes('HELLO') && !fresh.d) { inserted = true; break; }
     await sleep(250);
   }
-  assert(inserted, 'plain-` transcript inserted into the CURRENT session');
+  assert(inserted, 'Ctrl+\' transcript inserted into the CURRENT session');
   assert(asrCalls >= 3, 'fake ASR called three times (' + asrCalls + ')');
   await shot('06-pt-plain-inserted.png');
-  console.log('PT round 3 (plain `) transcript inserted, no new session');
+  console.log('PT round 3 (Ctrl+\') transcript inserted, no new session');
 
   console.log('ALL PASS');
   await browser.close();
