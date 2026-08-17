@@ -362,6 +362,14 @@ type Msg
     | ConfirmCloseSession String
     | ConfirmDeleteSession String
     | DismissCloseConfirm String
+    -- Cancel-task confirmation (per-session state, see
+    -- SessionState.cancelTaskConfirm): RequestCancelTask opens the
+    -- session's confirm overlay instead of aborting (send button's
+    -- Cancel state, or Ctrl+G); ConfirmCancelTask aborts; Dismiss
+    -- keeps the task running.
+    | RequestCancelTask String
+    | ConfirmCancelTask String
+    | DismissCancelTask String
     | RawAudioReady E.Value
     | RawAudioError E.Value
     | CaptureAutoStop E.Value

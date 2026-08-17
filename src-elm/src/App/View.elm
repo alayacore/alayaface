@@ -423,6 +423,44 @@ viewCloseConfirmOverlay session =
         Html.text ""
 
 
+{-| Cancel-task confirmation overlay — PER-SESSION (same pattern as the
+close-session overlay): rendered inside the session's panel, state on
+SessionState.cancelTaskConfirm. Shown when the user clicks the send
+button's Cancel state or presses Ctrl+G while a task is running. Two
+choices — Cancel task (default, autofocused via Dom.focus, so Enter
+confirms) aborts the running task; Keep running dismisses. Escape
+dismisses too.
+-}
+viewCancelTaskConfirmOverlay : T.SessionState -> Html Msg
+viewCancelTaskConfirmOverlay session =
+    if session.cancelTaskConfirm then
+        viewOverlay (DismissCancelTask session.id)
+            [ Html.div [ Attr.class "confirm-page" ]
+                [ Html.div [ Attr.class "confirm-page-title" ]
+                    [ Html.text "Cancel task?" ]
+                , Html.div [ Attr.class "close-confirm-text" ]
+                    [ Html.text "The running task will be aborted. Work completed so far stays in the conversation." ]
+                , Html.div [ Attr.class "confirm-page-buttons" ]
+                    [ Html.button
+                        [ Attr.class "confirm-page-btn confirm-page-btn-deny"
+                        , Attr.id "cancel-task-confirm"
+                        , Attr.autofocus True
+                        , Ev.onClick (ConfirmCancelTask session.id)
+                        ]
+                        [ Html.text "Cancel task" ]
+                    , Html.button
+                        [ Attr.class "confirm-page-btn close-confirm-cancel"
+                        , Ev.onClick (DismissCancelTask session.id)
+                        ]
+                        [ Html.text "Keep running" ]
+                    ]
+                ]
+            ]
+
+    else
+        Html.text ""
+
+
 viewSessionManagerOverlay : Model -> Html Msg
 viewSessionManagerOverlay model =
     if model.showSessionManager then
@@ -1296,6 +1334,7 @@ viewChatArea model session =
             Html.text ""
         , viewInputBar model session
         , viewCloseConfirmOverlay session
+        , viewCancelTaskConfirmOverlay session
         , viewConfirmOverlay session.id session
         , viewMcpInitOverlay session.id session
         , viewFilePickerOverlay session.id session
@@ -2007,7 +2046,7 @@ viewInputBar model session =
                                 ++ (if session.taskRunning then " cancel" else "")
                             )
                         , Ev.onClick
-                            (if session.taskRunning then ForSession session.id CancelTask else ForSession session.id SendPrompt)
+                            (if session.taskRunning then RequestCancelTask session.id else ForSession session.id SendPrompt)
                         , Attr.title (if session.taskRunning then "Cancel task (Ctrl+G)" else "Send")
                         , Attr.disabled inputDisabled
                         ]

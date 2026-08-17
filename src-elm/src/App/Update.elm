@@ -231,6 +231,61 @@ firstCloseConfirm model =
         model.sessions
 
 
+{-| Close this session's cancel-task confirmation overlay (per-session
+state). Used by the confirm choice (before aborting) and by Dismiss.
+-}
+clearCancelTaskConfirm : String -> Model -> Model
+clearCancelTaskConfirm sid model =
+    { model
+        | sessions =
+            Dict.update sid
+                (Maybe.map (\s -> { s | cancelTaskConfirm = False }))
+                model.sessions
+    }
+
+
+{-| The session whose cancel-task confirmation overlay Escape should
+dismiss: the ACTIVE session if its overlay is open, otherwise any
+session with one open.
+-}
+pendingCancelConfirmId : Model -> Maybe String
+pendingCancelConfirmId model =
+    case model.activeId of
+        Just sid ->
+            case Dict.get sid model.sessions of
+                Just s ->
+                    if s.cancelTaskConfirm then
+                        Just sid
+
+                    else
+                        firstCancelConfirm model
+
+                Nothing ->
+                    firstCancelConfirm model
+
+        Nothing ->
+            firstCancelConfirm model
+
+
+firstCancelConfirm : Model -> Maybe String
+firstCancelConfirm model =
+    Dict.foldl
+        (\sid s acc ->
+            case acc of
+                Just _ ->
+                    acc
+
+                Nothing ->
+                    if s.cancelTaskConfirm then
+                        Just sid
+
+                    else
+                        Nothing
+        )
+        Nothing
+        model.sessions
+
+
 focusAfterDelay : String -> Cmd Msg
 focusAfterDelay =
     Kit.focusAfterDelay
@@ -1232,6 +1287,29 @@ update msg model =
 
         DismissCloseConfirm sid ->
             ( clearCloseConfirm sid model, focusInput model )
+
+        RequestCancelTask sid ->
+            -- User-initiated task cancel (send button's Cancel state, or
+            -- Ctrl+G): show THIS session's confirm overlay instead of
+            -- aborting. Per-session state like closeConfirm. Focus the
+            -- default "Cancel task" button (Dom.focus — autofocus is
+            -- blocked when the prompt input already holds focus).
+            ( { model
+                | sessions =
+                    Dict.update sid
+                        (Maybe.map (\s -> { s | cancelTaskConfirm = True }))
+                        model.sessions
+              }
+            , Task.attempt (\_ -> NoOp) (Dom.focus "cancel-task-confirm")
+            )
+
+        ConfirmCancelTask sid ->
+            ( clearCancelTaskConfirm sid model
+            , Ports.cancelTask { sessionId = PU.workCopyId model sid }
+            )
+
+        DismissCancelTask sid ->
+            ( clearCancelTaskConfirm sid model, focusInput model )
 
         CloseSession id ->
             -- P39/D1: ownership-graph close. The FIRST close of a
@@ -6055,64 +6133,71 @@ update msg model =
                         update (DismissCloseConfirm sid) model
 
                     Nothing ->
-                        if model.ctxVisible then
-                            ( { model | ctxVisible = False }, Cmd.none )
+                        case pendingCancelConfirmId model of
+                            Just sid ->
+                                -- ... and the per-session cancel-task
+                                -- confirmation (keeps the task running).
+                                update (DismissCancelTask sid) model
 
-                        else if model.showSessionManager then
-                            update CloseSessionManager model
+                            Nothing ->
+                                if model.ctxVisible then
+                                    ( { model | ctxVisible = False }, Cmd.none )
 
-                        else if model.versionListFor /= Nothing then
-                            update CloseVersionList model
+                                else if model.showSessionManager then
+                                    update CloseSessionManager model
 
-                        else if model.versionViewFor /= Nothing then
-                            update CloseVersionView model
+                                else if model.versionListFor /= Nothing then
+                                    update CloseVersionList model
 
-                        else if model.presetManager.show then
-                            update ClosePresetManager model
+                                else if model.versionViewFor /= Nothing then
+                                    update CloseVersionView model
 
-                        else if model.defaultModelsEditor.show then
-                            update CloseDefaultModelsEditor model
+                                else if model.presetManager.show then
+                                    update ClosePresetManager model
 
-                        else if model.mcpEditor.show then
-                            update CloseMcpEditor model
+                                else if model.defaultModelsEditor.show then
+                                    update CloseDefaultModelsEditor model
 
-                        else if model.settingsEditor.show then
-                            update CloseSettingsEditor model
+                                else if model.mcpEditor.show then
+                                    update CloseMcpEditor model
 
-                        else if model.globalConfigEditor.show then
-                            update CloseGlobalConfig model
+                                else if model.settingsEditor.show then
+                                    update CloseSettingsEditor model
 
-                        else if model.asrConfigEditor.show then
-                            if model.asrConfigEditor.inForm then
-                                update AsrConfigBack model
+                                else if model.globalConfigEditor.show then
+                                    update CloseGlobalConfig model
 
-                            else
-                                update CloseAsrConfig model
+                                else if model.asrConfigEditor.show then
+                                    if model.asrConfigEditor.inForm then
+                                        update AsrConfigBack model
 
-                        else if model.planCascadePreview /= Nothing then
-                            update PlanCascadeCancel model
+                                    else
+                                        update CloseAsrConfig model
 
-                        else
-                            case model.activeId of
-                                Just sid ->
-                                    case Dict.get sid model.sessions of
-                                        Just sess ->
-                                            if sess.filePicker.show then
-                                                update (ForSession sid CloseFilePicker) model
+                                else if model.planCascadePreview /= Nothing then
+                                    update PlanCascadeCancel model
 
-                                            else if sess.showModelSelector then
-                                                update (ForSession sid CloseModelSelector) model
+                                else
+                                    case model.activeId of
+                                        Just sid ->
+                                            case Dict.get sid model.sessions of
+                                                Just sess ->
+                                                    if sess.filePicker.show then
+                                                        update (ForSession sid CloseFilePicker) model
 
-                                            else
-                                                ( updateActiveSession model (\s -> { s | mediaPreview = Nothing })
-                                                , Cmd.none
-                                                )
+                                                    else if sess.showModelSelector then
+                                                        update (ForSession sid CloseModelSelector) model
+
+                                                    else
+                                                        ( updateActiveSession model (\s -> { s | mediaPreview = Nothing })
+                                                        , Cmd.none
+                                                        )
+
+                                                Nothing ->
+                                                    ( model, Cmd.none )
 
                                         Nothing ->
                                             ( model, Cmd.none )
-
-                                Nothing ->
-                                    ( model, Cmd.none )
 
             -- Ctrl+W closes the FOCUSED window. Both a session
             -- (activeId) and a plan (planActiveId) can be "active" at
@@ -6141,17 +6226,18 @@ update msg model =
                                     Nothing ->
                                         ( model, Cmd.none )
 
-            -- Ctrl+G cancels the active session's running task — the
-            -- keyboard equivalent of the send button while it shows
-            -- "Cancel task" (only meaningful when a task is running;
-            -- otherwise it is a no-op, never a send).
+            -- Ctrl+G requests a cancel-task confirmation for the active
+            -- session's running task — the keyboard equivalent of the
+            -- send button while it shows "Cancel task" (only meaningful
+            -- when a task is running; otherwise it is a no-op, never a
+            -- send).
             else if key == "g" && ctrl then
                 case model.activeId of
                     Just sid ->
                         case Dict.get sid model.sessions of
                             Just s ->
                                 if s.taskRunning then
-                                    ( model, Ports.cancelTask { sessionId = PU.workCopyId model sid } )
+                                    update (RequestCancelTask sid) model
 
                                 else
                                     ( model, Cmd.none )

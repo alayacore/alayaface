@@ -257,6 +257,10 @@ type alias SessionState =
     -- pendingConfirm): True while the user is choosing between Close /
     -- Close and Delete / Cancel for THIS session (window ✕ or Ctrl+W).
     , closeConfirm : Bool
+    -- Cancel-task confirmation overlay (per-session): True while the
+    -- user is choosing whether to abort THIS session's running task
+    -- (send button's Cancel state, or Ctrl+G).
+    , cancelTaskConfirm : Bool
     , pendingMcpAuths : List McpAuth
     , mcpAuthRunning : Maybe String
     , filePicker : FilePickerState
@@ -450,6 +454,7 @@ emptySession id =
     , msgCollapsed = Dict.empty
     , pendingConfirm = []
     , closeConfirm = False
+    , cancelTaskConfirm = False
     , pendingMcpAuths = []
     , mcpAuthRunning = Nothing
     , filePicker = emptyFilePicker
