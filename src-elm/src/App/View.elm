@@ -2008,7 +2008,7 @@ viewInputBar model session =
                             )
                         , Ev.onClick
                             (if session.taskRunning then ForSession session.id CancelTask else ForSession session.id SendPrompt)
-                        , Attr.title (if session.taskRunning then "Cancel task" else "Send")
+                        , Attr.title (if session.taskRunning then "Cancel task (Ctrl+G)" else "Send")
                         , Attr.disabled inputDisabled
                         ]
                         [ if session.taskRunning then

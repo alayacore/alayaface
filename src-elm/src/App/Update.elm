@@ -6141,6 +6141,27 @@ update msg model =
                                     Nothing ->
                                         ( model, Cmd.none )
 
+            -- Ctrl+G cancels the active session's running task — the
+            -- keyboard equivalent of the send button while it shows
+            -- "Cancel task" (only meaningful when a task is running;
+            -- otherwise it is a no-op, never a send).
+            else if key == "g" && ctrl then
+                case model.activeId of
+                    Just sid ->
+                        case Dict.get sid model.sessions of
+                            Just s ->
+                                if s.taskRunning then
+                                    ( model, Ports.cancelTask { sessionId = PU.workCopyId model sid } )
+
+                                else
+                                    ( model, Cmd.none )
+
+                            Nothing ->
+                                ( model, Cmd.none )
+
+                    Nothing ->
+                        ( model, Cmd.none )
+
             else
                 ( model, Cmd.none )
 
