@@ -432,7 +432,10 @@ body {
 
 .session-bar-title {
   font-size: 0.72rem;
-  font-weight: 600;
+  /* 700: no 600 face in the fallback fonts; requesting 600 makes
+     WebKitGTK synthesize faux bold (see .message). 700 maps to the
+     real Bold face and renders single-pass. */
+  font-weight: 700;
   color: #888;
   letter-spacing: 0.02em;
   text-transform: uppercase;
@@ -441,6 +444,10 @@ body {
   text-overflow: ellipsis;
   flex: 1;
   min-width: 0;
+  font-synthesis: none;
+  font-synthesis-weight: none;
+  font-synthesis-style: none;
+  text-rendering: auto;
 }
 
 .session-bar-tokens {
@@ -569,6 +576,19 @@ body {
   white-space: pre-wrap;
   font-size: 1rem;
   line-height: 1.5;
+  /* WebKitGTK text hardening (inherited by the whole message subtree:
+     title row, role label, tool name, preview, tool/reasoning bodies).
+     The system fallback fonts (Noto Sans / Liberation Sans) only ship
+     Regular(400) + Bold(700); any other requested weight can make the
+     engine synthesize FAUX BOLD — glyphs drawn several times with
+     slight offsets, which reads as thick, misaligned strokes. Disable
+     synthesis (shorthand + longhands, for engines that only honor one)
+     and drop the optimizeLegibility shaping path (which double-draws
+     small text in WebKitGTK), so every glyph renders in a single pass. */
+  font-synthesis: none;
+  font-synthesis-weight: none;
+  font-synthesis-style: none;
+  text-rendering: auto;
 }
 
 .message-cursor {
@@ -628,7 +648,10 @@ body {
 }
 
 .msg-label {
-  font-weight: 600;
+  /* 700: the fallback fonts have no 600 face, so requesting 600 makes
+     WebKitGTK synthesize faux bold (see .message) instead of using the
+     real Bold face. 700 maps to a real face and renders single-pass. */
+  font-weight: 700;
   flex-shrink: 0;
 }
 
@@ -671,7 +694,8 @@ body {
 }
 
 .msg-name {
-  font-weight: 600;
+  /* 700: no 600 face in the fallback fonts (see .message / .msg-label). */
+  font-weight: 700;
   color: #aaa;
   letter-spacing: 0;
   text-transform: none;
@@ -761,7 +785,8 @@ body {
 }
 
 .tool-tag {
-  font-weight: 600;
+  /* 700: no 600 face in the fallback fonts (see .message / .msg-label). */
+  font-weight: 700;
   flex-shrink: 0;
 }
 
@@ -1342,7 +1367,8 @@ body {
 
 .md th {
   background: rgba(255, 255, 255, 0.05);
-  font-weight: 600;
+  /* 700: no 600 face in the fallback fonts (see .message / .msg-label). */
+  font-weight: 700;
 }
 
 .md hr {
