@@ -94,38 +94,9 @@ func TestEnsureSeedsDefaults(t *testing.T) {
 	})
 }
 
-func TestEnsureLegacyUpgradeSeedsTalk(t *testing.T) {
+func TestEnsureDeletedSeedNotResurrected(t *testing.T) {
 	isolatedHome(t, func() {
-		// Legacy v1 install: Simple/Complex exist, NO seed_version file.
-		// The upgrade must adopt v1 (without resurrecting a v1 seed the
-		// user deleted) and add the v2 Talk preset.
-		if err := os.MkdirAll(PresetDir("Simple"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll(PresetDir("Complex"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := Ensure(); err != nil {
-			t.Fatal(err)
-		}
-		// Talk (introduced in v2) must have been added.
-		if _, err := os.Stat(PresetDir("Talk")); err != nil {
-			t.Errorf("legacy upgrade must seed Talk: %v", err)
-		}
-		// The version file lands at the latest version.
-		b, err := os.ReadFile(filepath.Join(AlayafaceDir(), seedVersionFile))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if string(b) != "2" {
-			t.Fatalf("seed_version = %q, want 2", b)
-		}
-	})
-}
-
-func TestEnsureSeedVersionTracksDeletes(t *testing.T) {
-	isolatedHome(t, func() {
-		// Fresh install: everything seeded, version file at the latest.
+		// Fresh install: everything seeded on first run.
 		if _, err := Ensure(); err != nil {
 			t.Fatal(err)
 		}
@@ -135,7 +106,7 @@ func TestEnsureSeedVersionTracksDeletes(t *testing.T) {
 			}
 		}
 		// Deleting a seed must NOT resurrect it on the next Ensure —
-		// the version file already covers the version that introduced it.
+		// seeding only ever runs on an empty presets root.
 		if err := os.RemoveAll(PresetDir("Talk")); err != nil {
 			t.Fatal(err)
 		}

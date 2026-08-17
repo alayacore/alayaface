@@ -34,7 +34,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -199,12 +198,11 @@ func ListPresetNames() ([]string, error) {
 }
 
 // Ensure guarantees ~/.alayaface/ exists with the preset structure.
-// Built-in presets are seeded INCREMENTALLY, tracked by a seed-version
-// file (seed_version): each version seeds only the presets IT
-// introduced, and only when their directory is missing — so an existing
-// user (non-empty presets root) upgrading to a version that adds a seed
-// gets the new one, while a seed the user deleted is never resurrected.
-// Returns the sessions dir.
+// On FIRST RUN (empty presets root), seeds the built-in presets
+// (Simple/Complex/Talk) with their settings.conf (tool_confirm/
+// builtin_tools/system_prompt). Once seeded, the seeds are regular
+// presets: deleting one must not resurrect it, so seeding never runs
+// again on a non-empty root. Returns the sessions dir.
 func Ensure() (string, error) {
 	base := AlayafaceDir()
 	presets := PresetsRoot()
@@ -216,84 +214,22 @@ func Ensure() (string, error) {
 		}
 	}
 
-	cur := readSeedVersion()
-	if cur == 0 {
-		// Legacy install (no version file): the original first-run logic
-		// seeded everything that was in the root at the time. Adopt v1 as
-		// the current version WITHOUT resurrecting v1 seeds the user may
-		// have deleted — unless the root is empty, which is a fresh
-		// install that must seed v1 now.
-		entries, err := os.ReadDir(presets)
-		if err != nil {
-			return "", err
-		}
-		if len(entries) == 0 {
-			for _, name := range seedVersions[0].Names {
-				if err := CreatePresetDefaults(filepath.Join(presets, name), name); err != nil {
-					return "", err
-				}
-			}
-		}
-		if err := writeSeedVersion(1); err != nil {
-			return "", err
-		}
-		cur = 1
+	// Seed built-in presets on first run only (a non-empty root means
+	// the user has already managed presets — deleting a seed must not
+	// resurrect it).
+	entries, err := os.ReadDir(presets)
+	if err != nil {
+		return "", err
 	}
-
-	// Seed the presets introduced by versions newer than the current one
-	// (only missing directories — deleting a seed never resurrects it).
-	for _, sv := range seedVersions {
-		if sv.Version <= cur {
-			continue
-		}
-		for _, name := range sv.Names {
-			dir := filepath.Join(presets, name)
-			if _, err := os.Stat(dir); os.IsNotExist(err) {
-				if err := CreatePresetDefaults(dir, name); err != nil {
-					return "", err
-				}
+	if len(entries) == 0 {
+		for _, name := range SeedPresets {
+			if err := CreatePresetDefaults(filepath.Join(presets, name), name); err != nil {
+				return "", err
 			}
-		}
-		if err := writeSeedVersion(sv.Version); err != nil {
-			return "", err
 		}
 	}
 
 	return sessions, nil
-}
-
-// seed_version file: records how far built-in preset seeding has
-// progressed (an integer). See Ensure for the incremental semantics.
-const seedVersionFile = "seed_version"
-
-// seedVersions lists every built-in seeding step. A version may only
-// ADD presets; removing one from a later version would make Ensure
-// skip... never remove entries — append new ones.
-var seedVersions = []struct {
-	Version int
-	Names   []string
-}{
-	// v1: the original first-run seeds.
-	{1, []string{"Simple", "Complex"}},
-	// v2: the Talk preset used by push-to-talk (hold ` to open a Talk
-	// session and record).
-	{2, []string{"Talk"}},
-}
-
-func readSeedVersion() int {
-	b, err := os.ReadFile(filepath.Join(AlayafaceDir(), seedVersionFile))
-	if err != nil {
-		return 0
-	}
-	v, err := strconv.Atoi(strings.TrimSpace(string(b)))
-	if err != nil {
-		return 0
-	}
-	return v
-}
-
-func writeSeedVersion(v int) error {
-	return os.WriteFile(filepath.Join(AlayafaceDir(), seedVersionFile), []byte(strconv.Itoa(v)), 0o644)
 }
 
 // SeedPresets lists the built-in presets seeded on first run:
