@@ -400,9 +400,28 @@ pub async fn delete_session_dir(
         node_id.as_deref().unwrap_or(""),
         &session_id,
     );
-    if session_dir.exists() {
-        std::fs::remove_dir_all(&session_dir)
-            .map_err(|e| format!("Cannot delete {:?}: {}", session_dir, e))?;
+    // Retry the removal: the concurrent graceful close (close_session)
+    // can still be flushing alayacore's save while remove_dir_all
+    // traverses — the save landing between readdir and rmdir makes the
+    // final rmdir fail with ENOTEMPTY (or leave the dir behind),
+    // orphaning a session.alaya-only ghost dir (no refs.json → invisible
+    // in the session manager). The frontend sequences delete after
+    // close; this loop is the backend safety net — by the retry the
+    // save is done and the dir removes cleanly.
+    for i in 0..5 {
+        if !session_dir.exists() {
+            return Ok(()); // gone — done
+        }
+        let remove_err = std::fs::remove_dir_all(&session_dir).err();
+        if remove_err.is_none() && !session_dir.exists() {
+            return Ok(()); // removed cleanly
+        }
+        if i == 4 {
+            if let Some(e) = remove_err {
+                return Err(format!("Cannot delete {:?}: {}", session_dir, e));
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
     }
     Ok(())
 }

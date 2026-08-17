@@ -234,9 +234,21 @@
         });
     });
 
+    // In-flight close_session promises keyed by session id. "Close and
+    // Delete" fires closeSession and deleteSessionDir back to back; the
+    // backend delete_session_dir must NOT remove the directory while
+    // the graceful close is still saving — RemoveAll can then lose the
+    // race against alayacore's save (the final rmdir hits ENOTEMPTY),
+    // leaving an orphan dir containing only session.alaya: no
+    // session.refs.json → invisible in the session manager and
+    // undeletable from the UI. deleteSessionDir therefore waits for the
+    // same session's close_session to resolve first.
+    var pendingCloses = {};
     on("closeSession", function (data) {
-      transport.invoke("close_session", { sessionId: data.sessionId })
-        .catch(function (err) { rpcError("close_session", data.sessionId, err); });
+      var p = transport.invoke("close_session", { sessionId: data.sessionId })
+        .catch(function (err) { rpcError("close_session", data.sessionId, err); })
+        .finally(function () { delete pendingCloses[data.sessionId]; });
+      pendingCloses[data.sessionId] = p;
     });
 
     on("sendPrompt", function (data) {
@@ -626,11 +638,18 @@
     });
 
     on("deleteSessionDir", function (data) {
-      transport.invoke("delete_session_dir", {
-        sessionId: data.sessionId,
-        planId: (data && data.planId) || null,
-        nodeId: (data && data.nodeId) || null,
-        originSessionId: (data && data.originSessionId) || null,
+      // "Close and Delete" already sent closeSession for this id: wait
+      // for the graceful close (cancel → save → EOF → child exit) to
+      // finish before RemoveAll, so alayacore's save cannot race the
+      // directory removal and orphan a session.alaya-only ghost dir.
+      var wait = pendingCloses[data.sessionId] || Promise.resolve();
+      wait.then(function () {
+        return transport.invoke("delete_session_dir", {
+          sessionId: data.sessionId,
+          planId: (data && data.planId) || null,
+          nodeId: (data && data.nodeId) || null,
+          originSessionId: (data && data.originSessionId) || null,
+        });
       })
         .then(function () {
           // Reflect the deletion immediately

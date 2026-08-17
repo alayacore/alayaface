@@ -457,10 +457,30 @@ func DeleteSessionDir(h *Handler, w http.ResponseWriter, r *http.Request) error 
 		nodeID = *args.NodeID
 	}
 	sessionDir := planSessionDirFor(sessionsRoot, originID, planID, nodeID, args.SessionID)
-	if _, err := os.Stat(sessionDir); err == nil {
-		if err := os.RemoveAll(sessionDir); err != nil {
-			return fmt.Errorf("Cannot delete %s: %w", sessionDir, err)
+	// Retry the removal: the concurrent graceful close (close_session)
+	// can still be flushing alayacore's save while RemoveAll traverses —
+	// the save landing between readdir and rmdir makes the final rmdir
+	// fail with ENOTEMPTY (or leave the dir behind), orphaning a
+	// session.alaya-only ghost dir (no refs.json → invisible in the
+	// session manager). The frontend sequences delete after close; this
+	// loop is the backend safety net — by the retry the save is done
+	// and the dir removes cleanly.
+	for i := 0; i < 5; i++ {
+		if _, err := os.Stat(sessionDir); err != nil {
+			return writeResult(w, nil) // gone — done
 		}
+		err := os.RemoveAll(sessionDir)
+		if err == nil {
+			if _, statErr := os.Stat(sessionDir); statErr != nil {
+				return writeResult(w, nil) // removed cleanly
+			}
+		}
+		if i == 4 {
+			if err != nil {
+				return fmt.Errorf("Cannot delete %s: %w", sessionDir, err)
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 	return writeResult(w, nil)
 }
