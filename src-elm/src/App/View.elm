@@ -677,7 +677,7 @@ viewVersionDetail model hash =
 viewVersionMsg : T.Message -> Html Msg
 viewVersionMsg m =
     Html.div [ Attr.class "version-msg" ]
-        [ Html.span [ Attr.class "version-msg-role" ] [ Html.text (T.roleToString m.role) ]
+        [ Html.span [ Attr.class "version-msg-role" ] [ Html.text (T.roleLabel m.role) ]
         , Html.span [ Attr.class "version-msg-content" ] [ Html.text m.content ]
         ]
 
@@ -1646,7 +1646,7 @@ viewMsgHeader session msg collapsed =
     [ Html.span [ Attr.class "msg-chevron" ]
         [ Icons.chevron ]
     , Html.span [ Attr.class "msg-label" ]
-        [ Html.text (String.toUpper (T.roleToString msg.role)) ]
+        [ Html.text (T.roleLabel msg.role) ]
     , case msg.role of
         T.Tool ->
             Html.span [ Attr.class "msg-tool-info" ]

@@ -2,6 +2,7 @@ module Session.Types exposing
     ( Role(..)
     , roleToString
     , roleFromString
+    , roleLabel
     , MediaType(..)
     , mediaTypeToString
     , mediaTypeFromString
@@ -129,6 +130,37 @@ roleFromString s =
         _ -> Nothing
 
 
+-- Display label for a role. Mirrors roleToString but uses the
+-- human-facing tag in the message header (USER PROMPT / TOOL USE). Kept
+-- separate from roleToString because that one is the wire format
+-- (lowercase, used for HTML class names and JSON serialization) — the
+-- two cannot drift.
+
+roleLabel : Role -> String
+roleLabel r =
+    case r of
+        User ->
+            "USER PROMPT"
+
+        Assistant ->
+            "ASSISTANT"
+
+        Tool ->
+            "TOOL USE"
+
+        System ->
+            "SYSTEM"
+
+        Reasoning ->
+            "REASONING"
+
+        Notify ->
+            "NOTIFY"
+
+        Error ->
+            "ERROR"
+
+
 -- Message
 
 type alias Message =
@@ -147,8 +179,11 @@ type alias Message =
 --
 -- Collapse state is a Dict keyed by message id holding the user's
 -- EXPLICIT choice (True = collapsed, False = expanded). Messages without
--- an entry fall back to a role-based default, so tool/reasoning windows
--- start collapsed while user/assistant start expanded.
+-- an entry fall back to a role-based default, so tool/reasoning/user
+-- frames start collapsed while assistant frames start expanded. Only
+-- the assistant's reply is the thing the user actively reads; user
+-- echoes, tool windows, and reasoning are reference material that gets
+-- in the way when expanded.
 
 defaultCollapsed : Role -> Bool
 defaultCollapsed role =
@@ -157,6 +192,12 @@ defaultCollapsed role =
             True
 
         Reasoning ->
+            True
+
+        -- User echoes are replayed back from the core for every prompt;
+        -- the user just typed them, so there's no new info to expand
+        -- into. Keep them folded by default.
+        User ->
             True
 
         -- Error/Notify frames (incl. local voice-input errors) are

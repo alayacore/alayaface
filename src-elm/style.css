@@ -653,6 +653,12 @@ body {
      real Bold face. 700 maps to a real face and renders single-pass. */
   font-weight: 700;
   flex-shrink: 0;
+  /* Fixed-width tag so the chevron + label column is a clean gutter
+     regardless of role — the longest label is "USER PROMPT" (measured
+     at ~8.35em on Inter 14.4px Bold); 8.5em fits it with a hair of
+     right padding and absorbs wider fallbacks (Helvetica/Arial). */
+  display: inline-block;
+  min-width: 8.5em;
 }
 
 /* Collapse chevron: always visible — right (>) while collapsed, rotated
@@ -1882,7 +1888,10 @@ body {
 }
 .version-msg-role {
   flex-shrink: 0;
-  min-width: 64px;
+  /* 8.5em matches the wide end of the live message tag (USER PROMPT is
+     the longest label) so the read-only version view lines up column-
+     wise with the main session view. */
+  min-width: 8.5em;
   font-weight: 700;
   text-transform: uppercase;
   font-size: 0.7rem;

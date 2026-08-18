@@ -27,8 +27,8 @@ tests =
                 \_ -> Expect.equal True (defaultCollapsed Tool)
             , test "reasoning messages are collapsed by default" <|
                 \_ -> Expect.equal True (defaultCollapsed Reasoning)
-            , test "user messages are expanded by default" <|
-                \_ -> Expect.equal False (defaultCollapsed User)
+            , test "user messages are collapsed by default (only assistant is expanded)" <|
+                \_ -> Expect.equal True (defaultCollapsed User)
             , test "assistant messages are expanded by default" <|
                 \_ -> Expect.equal False (defaultCollapsed Assistant)
             , test "system is expanded by default; notify/error frames are collapsed" <|
@@ -44,7 +44,7 @@ tests =
             [ test "no explicit state falls back to the role default (tool)" <|
                 \_ -> Expect.equal True (isMsgCollapsed Dict.empty (msg "t1" Tool))
             , test "no explicit state falls back to the role default (user)" <|
-                \_ -> Expect.equal False (isMsgCollapsed Dict.empty (msg "u1" User))
+                \_ -> Expect.equal True (isMsgCollapsed Dict.empty (msg "u1" User))
             , test "explicit True wins over the role default" <|
                 \_ ->
                     Expect.equal True
@@ -66,13 +66,13 @@ tests =
                         )
             ]
         , describe "toggleMsgCollapsed"
-            [ test "collapsing a default-expanded user message stores True" <|
+            [ test "expanding a default-collapsed user message stores False" <|
                 \_ ->
                     let
                         dict =
                             toggleMsgCollapsed Dict.empty (msg "u1" User)
                     in
-                    Expect.equal (Just True) (Dict.get "u1" dict)
+                    Expect.equal (Just False) (Dict.get "u1" dict)
             , test "expanding a default-collapsed tool message stores False" <|
                 \_ ->
                     let
@@ -106,7 +106,7 @@ tests =
                             toggleMsgCollapsed twice m
                     in
                     Expect.equal
-                        ( True, False, True )
+                        ( False, True, False )
                         ( isMsgCollapsed once m
                         , isMsgCollapsed twice m
                         , isMsgCollapsed thrice m
