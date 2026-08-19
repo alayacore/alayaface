@@ -733,9 +733,20 @@ body {
   padding: 8px 14px 10px;
 }
 
-/* Collapsed: title row only, visually lighter. */
+/* Collapsed: title row only, visually lighter. Drop the header's
+   vertical padding so consecutive folded rows pack tighter (the gap
+   in .messages stays unchanged so expanded windows keep their
+   breathing room); the preview min-height is left intact on purpose —
+   it stabilizes the row height while streaming deltas toggle the
+   preview between empty and non-empty, and shrinking it would let the
+   row jump during streaming. */
 .message.collapsed {
   opacity: 0.8;
+}
+
+.message.collapsed .msg-header {
+  padding-top: 0;
+  padding-bottom: 0;
 }
 
 .message-user .msg-window {
