@@ -131,7 +131,7 @@ roleFromString s =
 
 
 -- Display label for a role. Mirrors roleToString but uses the
--- human-facing tag in the message header (USER PROMPT / TOOL USE). Kept
+-- human-facing tag in the message header (USER PROMPT / TOOL CALL). Kept
 -- separate from roleToString because that one is the wire format
 -- (lowercase, used for HTML class names and JSON serialization) — the
 -- two cannot drift.
@@ -146,7 +146,7 @@ roleLabel r =
             "ASSISTANT"
 
         Tool ->
-            "TOOL USE"
+            "TOOL CALL"
 
         System ->
             "SYSTEM"
@@ -155,10 +155,10 @@ roleLabel r =
             "REASONING"
 
         Notify ->
-            "NOTIFY"
+            "SYSTEM NOTIFY"
 
         Error ->
-            "ERROR"
+            "SYSTEM ERROR"
 
 
 -- Message

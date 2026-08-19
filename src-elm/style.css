@@ -654,11 +654,11 @@ body {
   font-weight: 700;
   flex-shrink: 0;
   /* Fixed-width tag so the chevron + label column is a clean gutter
-     regardless of role — the longest label is "USER PROMPT" (measured
-     at ~8.35em on Inter 14.4px Bold); 8.5em fits it with a hair of
+     regardless of role — the longest label is "SYSTEM NOTIFY" (measured
+     at ~10.85em on Inter 14.4px Bold); 11em fits it with a hair of
      right padding and absorbs wider fallbacks (Helvetica/Arial). */
   display: inline-block;
-  min-width: 8.5em;
+  min-width: 11em;
 }
 
 /* Collapse chevron: always visible — right (>) while collapsed, rotated
@@ -1899,10 +1899,10 @@ body {
 }
 .version-msg-role {
   flex-shrink: 0;
-  /* 8.5em matches the wide end of the live message tag (USER PROMPT is
-     the longest label) so the read-only version view lines up column-
-     wise with the main session view. */
-  min-width: 8.5em;
+  /* 11em matches the live message tag (SYSTEM NOTIFY is the longest
+     label) so the read-only version view lines up column-wise with the
+     main session view. */
+  min-width: 11em;
   font-weight: 700;
   text-transform: uppercase;
   font-size: 0.7rem;
