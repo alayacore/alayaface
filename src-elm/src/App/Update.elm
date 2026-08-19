@@ -492,32 +492,40 @@ minimalCloseSession id model =
 
                 Nothing ->
                     Cmd.none
-    in
-    ( { model
-        | sessions = Dict.remove id model.sessions
-        , sessionOrder = List.filter (\k -> k /= id) model.sessionOrder
-        , sessionNums = Dict.remove id model.sessionNums
-        , windowPositions = Dict.remove id model.windowPositions
-        , planNodeSessions = Dict.remove id model.planNodeSessions
-        , planTaskStarted = Set.remove id model.planTaskStarted
-        , connectionChain = dropChainSession model.connectionChain id
-        , sessionWorkCopies = Dict.remove id model.sessionWorkCopies
-        -- C2b: on close, drop the session's temporary resume-live marker (the live is dead).
-        , sessionResumedLives =
-            Set.remove (PU.workCopyId model id) (Set.remove id model.sessionResumedLives)
-        , activeId =
-            if model.activeId == Just id then
-                List.head (List.reverse (List.filter (\k -> k /= id) model.sessionOrder))
 
-            else
-                model.activeId
-      }
+        -- Bind the updated model so the Cmd below sees the post-drop
+        -- chain and post-remove windowPositions (anonymous record updates
+        -- don't rebind `model` — the original parameter stays in scope,
+        -- so `chainPayload model model.connectionChain` would re-emit
+        -- the stale payload containing the closing session's segment).
+        m1 =
+            { model
+                | sessions = Dict.remove id model.sessions
+                , sessionOrder = List.filter (\k -> k /= id) model.sessionOrder
+                , sessionNums = Dict.remove id model.sessionNums
+                , windowPositions = Dict.remove id model.windowPositions
+                , planNodeSessions = Dict.remove id model.planNodeSessions
+                , planTaskStarted = Set.remove id model.planTaskStarted
+                , connectionChain = dropChainSession model.connectionChain id
+                , sessionWorkCopies = Dict.remove id model.sessionWorkCopies
+                -- C2b: on close, drop the session's temporary resume-live marker (the live is dead).
+                , sessionResumedLives =
+                    Set.remove (PU.workCopyId model id) (Set.remove id model.sessionResumedLives)
+                , activeId =
+                    if model.activeId == Just id then
+                        List.head (List.reverse (List.filter (\k -> k /= id) model.sessionOrder))
+
+                    else
+                        model.activeId
+                }
+    in
+    ( m1
     , Cmd.batch
         [ -- C2b (I-E): close the work-copy process (core id); the frontend
           -- entry by Session.id was already removed in the sessions/… update above.
           Ports.closeSession { sessionId = PU.workCopyId model id }
         , runnerFailCmd
-        , Ports.setConnectionChain (chainPayload model model.connectionChain)
+        , Ports.setConnectionChain (chainPayload m1 m1.connectionChain)
         ]
     )
 
