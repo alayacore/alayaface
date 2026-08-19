@@ -638,19 +638,51 @@ try {
   // not exist → "Session directory not found" on the next click). Close
   // the t1 session, click the node again → a NEW session window with the
   // /t1 badge appears and the plan window shows NO error. Do it twice.
-  const closeT1Session = async () => {
-    await page.evaluate(() => {
+
+  // Per-session close-confirm overlay (closeConfirm = per-session state,
+  // see RequestCloseSession in App/Update.elm: ✕ no longer closes
+  // immediately — it opens a #close-confirm-close overlay. The shared
+  // helper below clicks ✕ on the matching panel(s) and then confirms
+  // "Close" (keeps the session on disk, unlike "Close and Delete").
+  // The predicate is serialized as a `(t) => body` arrow; we strip the
+  // arrow wrapper so `new Function('t', 'return (' + body + ')')`
+  // returns a real boolean — concatenating the whole arrow into a
+  // `return …` statement would build a function-returning function
+  // (always truthy → every panel gets closed).
+  const closeSessionPanels = async (predicate) => {
+    const predStr = predicate.toString();
+    const m = predStr.match(/^\s*(?:\([^)]*\)|[a-zA-Z_$][\w$]*)\s*=>\s*([\s\S]*)$/);
+    if (!m) throw new Error('closeSessionPanels: unsupported predicate: ' + predStr);
+    const body = m[1].trim();
+    // Click ✕ on every matching panel. Returns true if any matched
+    // (the overlay #close-confirm-close is then expected within 5s).
+    const anyClicked = await page.evaluate((b) => {
+      const f = new Function('t', 'return (' + b + ');');
       const panels = [...document.querySelectorAll('.session-panel')];
+      let n = 0;
       for (const p of panels) {
         const t = p.querySelector('.session-bar-title')?.textContent || '';
-        if (t.includes('/t1')) {
-          const btn = p.querySelector('.session-bar-close');
-          if (btn) btn.click();
-          break;
+        if (f(t)) {
+          const x = p.querySelector('.session-bar-close');
+          if (x) { x.click(); n++; }
         }
       }
+      return n;
+    }, body);
+    if (!anyClicked) return;
+    await page.waitForSelector('#close-confirm-close', { timeout: 5000 });
+    // The overlay lives inside the panel we just opened. When several
+    // panels overlap, page.click('#close-confirm-close') can land on a
+    // different element (the topmost one). Dispatch a real click on the
+    // FIRST #close-confirm-close directly via the DOM — this is what the
+    // page actually wires its onClick handler to.
+    await page.evaluate(() => {
+      const btn = document.getElementById('close-confirm-close');
+      if (btn) btn.click();
     });
   };
+
+  const closeT1Session = () => closeSessionPanels((t) => t.includes('/t1'));
   const waitT1Active = async (label) => {
     await page.waitForFunction(() => {
       const t = document.querySelector('.session-panel.session-panel-active .session-bar-title')?.textContent || '';
@@ -675,12 +707,29 @@ try {
   };
 
   await closeT1Session();
-  await sleep(500);
-  const hiddenAfterClose = await page.evaluate(() => {
-    const svg = [...document.querySelectorAll('.connection-seg')]
-      .find(s => s.querySelector('.node-connection-curve')) || null;
-    return svg ? getComputedStyle(svg).display === 'none' : true;
-  });
+  // Poll for the chain-svg hiding — Elm emits a fresh connectionChain
+  // payload on close, but the redraw (chain.js: drawConnections) runs
+  // asynchronously; a small retry avoids racing the redraw.
+  let hiddenAfterClose = false;
+  for (let i = 0; i < 50 && !hiddenAfterClose; i++) {
+    await sleep(100);
+    hiddenAfterClose = await page.evaluate(() => {
+      const svg = [...document.querySelectorAll('.connection-seg')]
+        .find(s => s.querySelector('.node-connection-curve')) || null;
+      return svg ? getComputedStyle(svg).display === 'none' : true;
+    });
+  }
+  if (!hiddenAfterClose) {
+    const dbg = await page.evaluate(() => ({
+      panelTitles: [...document.querySelectorAll('.session-panel')].map(p => p.querySelector('.session-bar-title')?.textContent || ''),
+      payload: window.__lastChainPayload ? {
+        segCount: window.__lastChainPayload.segments.length,
+        segs: window.__lastChainPayload.segments,
+        posIds: window.__lastChainPayload.positions.map(p => p.id),
+      } : null,
+    }));
+    console.log('DEBUG (chain still visible 5s after close): ' + JSON.stringify(dbg));
+  }
   assert(hiddenAfterClose, 'connection curve hidden after the session window closes');
   await clickNode(page, 't1');
   await waitT1Active('close→click #1 (resume from disk)');
@@ -701,16 +750,8 @@ try {
   execSync('rm -f /tmp/alayaface-fakecore-hang-once-*.marker');
   // Close the FIRST run's leftover t3 window so the wait below can only
   // match the re-run's fresh t3 session (the re-run itself is async).
-  await page.evaluate(() => {
-    const panels = [...document.querySelectorAll('.session-panel')];
-    for (const p of panels) {
-      const t = p.querySelector('.session-bar-title')?.textContent || '';
-      if (t.includes('/t3]')) {
-        const btn = p.querySelector('.session-bar-close');
-        if (btn) btn.click();
-      }
-    }
-  });
+  // Per-session close-confirm overlay → ✕ then #close-confirm-close.
+  await closeSessionPanels((t) => t.includes('/t3]'));
   await sleep(400);
   // DOM clicks (not coordinate): overlapping session windows would
   // intercept the mouse at the plan strip's button positions.
@@ -864,18 +905,8 @@ try {
   await shot(page, '05f-cascade-before.png');
   // Close the ORIGIN session: the plain "Session N" window that created
   // the plan (node sessions carry a "[Plan · ..." badge — exclude them).
-  const closedOrigin = await page.evaluate(() => {
-    const panels = [...document.querySelectorAll('.session-panel')];
-    for (const p of panels) {
-      const t = p.querySelector('.session-bar-title')?.textContent || '';
-      if (!t.includes('[Plan ·') && /Session \d+/.test(t)) {
-        const btn = p.querySelector('.session-bar-close');
-        if (btn) { btn.click(); return true; }
-      }
-    }
-    return false;
-  });
-  assert(closedOrigin, 'origin session close button clicked');
+  // Per-session close-confirm overlay → ✕ then #close-confirm-close.
+  await closeSessionPanels((t) => !t.includes('[Plan ·') && /Session \d+/.test(t));
   await page.waitForFunction(() => {
     return document.querySelectorAll('.plan-page').length === 0;
   }, { timeout: 10000 });
