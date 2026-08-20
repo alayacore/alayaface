@@ -14,16 +14,14 @@ jobs:
       frontend_path: ${{ steps.upload.outputs.path }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install Elm
+      - name: Build Frontend
         run: |
+          cd src-elm
           wget https://github.com/elm/compiler/releases/download/0.19.2/elm-0.19.2-linux-x64.gz
           gunzip elm-0.19.2-linux-x64.gz
           chmod +x elm-0.19.2-linux-x64
           mv elm-0.19.2-linux-x64 elm
-          mv elm ./src-tauri/
-      - name: Build Frontend
-        run: |
-          ./src-tauri/elm make src-elm/src/Main.elm --output=src-elm/elm.js
+          ./elm make src/Main.elm --output=elm.js
       - name: Upload Frontend Artifact
         uses: actions/upload-artifact@v4
         with:
