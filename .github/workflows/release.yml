@@ -23,8 +23,7 @@ jobs:
           mv elm ./src-tauri/
       - name: Build Frontend
         run: |
-          cd src-tauri
-          ./elm make ../src-elm/src/Main.elm --output=../src-elm/elm.js
+          ./src-tauri/elm make src-elm/src/Main.elm --output=src-elm/elm.js
       - name: Upload Frontend Artifact
         uses: actions/upload-artifact@v4
         with:
