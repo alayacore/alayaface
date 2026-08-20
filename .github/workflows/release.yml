@@ -86,7 +86,7 @@ jobs:
           cargo tauri build --target ${{ matrix.target }}
       - name: Upload Release
         uses: softprops/action-gh-release@v2
-        if: github.event_name == 'push' && github.ref == 'refs/tags/*'
+        if: github.event_name == 'push' && github.ref_type == 'tag'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
