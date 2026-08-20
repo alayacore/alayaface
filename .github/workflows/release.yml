@@ -30,6 +30,9 @@ jobs:
 
   publish-tauri:
     needs: build-frontend
+    # Required by softprops/action-gh-release to create the GitHub Release.
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -82,13 +85,16 @@ jobs:
           cd src-tauri
           cargo tauri build --target ${{ matrix.target }}
       - name: Upload Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         if: github.event_name == 'push' && github.ref == 'refs/tags/*'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          # Tauri emits bundles under target/<triple>/release/bundle when
+          # built with an explicit --target, so we must include ${{ matrix.target }}
+          # in the path or the glob matches nothing.
           files: |
-            src-tauri/target/release/bundle/*.deb
-            src-tauri/target/release/bundle/*.msi
-            src-tauri/target/release/bundle/*.app
-            src-tauri/target/release/bundle/*.appimage
+            src-tauri/target/${{ matrix.target }}/release/bundle/*.deb
+            src-tauri/target/${{ matrix.target }}/release/bundle/*.msi
+            src-tauri/target/${{ matrix.target }}/release/bundle/*.app
+            src-tauri/target/${{ matrix.target }}/release/bundle/*.appimage
