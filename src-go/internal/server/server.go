@@ -25,8 +25,9 @@ type Server struct {
 	Cache    *session.ModelCache
 	Handler  *handlers.Handler
 
-	StaticDir string
-	Token     string
+	StaticDir   string
+	Token       string
+	cachedIndex []byte
 
 	upgrader websocket.Upgrader
 }
@@ -37,13 +38,20 @@ func New(staticDir, token string) *Server {
 	h := hub.New()
 	mgr := session.NewManager()
 	cache := session.NewModelCache()
+
+	var cachedIndex []byte
+	if _, err := os.Stat(filepath.Join(staticDir, "index.html")); err == nil {
+		cachedIndex, _ = os.ReadFile(filepath.Join(staticDir, "index.html"))
+	}
+
 	return &Server{
-		Hub:       h,
-		Sessions:  mgr,
-		Cache:     cache,
-		Handler:   &handlers.Handler{Sessions: mgr, Hub: h, Cache: cache},
-		StaticDir: staticDir,
-		Token:     token,
+		Hub:         h,
+		Sessions:    mgr,
+		Cache:       cache,
+		Handler:     &handlers.Handler{Sessions: mgr, Hub: h, Cache: cache},
+		StaticDir:   staticDir,
+		Token:       token,
+		cachedIndex: cachedIndex,
 		upgrader: websocket.Upgrader{
 			// Same-origin check: the page is served by this server, so
 			// its Origin host must match the request Host. This blocks
@@ -91,17 +99,16 @@ func (s *Server) staticHandler() http.Handler {
 			fs.ServeHTTP(w, r)
 			return
 		}
-		index, err := os.ReadFile(filepath.Join(s.StaticDir, "index.html"))
-		if err != nil {
+		if s.cachedIndex == nil {
 			fs.ServeHTTP(w, r)
 			return
 		}
 		meta := `<meta name="alayaface-token" content="` + html.EscapeString(s.Token) + `">`
-		headEnd := bytes.Index(bytes.ToLower(index), []byte("</head>"))
+		headEnd := bytes.Index(bytes.ToLower(s.cachedIndex), []byte("</head>"))
 		if headEnd < 0 {
-			headEnd = len(index)
+			headEnd = len(s.cachedIndex)
 		}
-		index = append(index[:headEnd], append([]byte(meta), index[headEnd:]...)...)
+		index := append(s.cachedIndex[:headEnd], append([]byte(meta), s.cachedIndex[headEnd:]...)...)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write(index)
 	})

@@ -222,8 +222,17 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 // legacy fallbacks.
 func planSessionDirFor(sessionsRoot, originSessionDir, planId, nodeId, sessionId string) string {
 	if strings.TrimSpace(planId) != "" {
+		parentDir := originSessionDir
+		if parentDir == "" {
+			parentDir = sessionsRoot
+		}
+		// If parentDir is just a UUID (no separators), it's likely the originID from CreateSession.
+		// In that case, we should prepend sessionsRoot.
+		if parentDir != "" && !strings.Contains(parentDir, string(os.PathSeparator)) {
+			parentDir = filepath.Join(sessionsRoot, parentDir)
+		}
 		return filepath.Join(
-			originSessionDir,
+			parentDir,
 			"plans",
 			dirs.SanitizeDirComponent(planId),
 			dirs.SanitizeDirComponent(nodeId),

@@ -297,8 +297,17 @@ func SanitizeDirComponent(s string) string {
 // SanitizeDirComponent; preset selects the config template like
 // CreateSessionDirFrom.
 func CreatePlanSessionDirFrom(sessionsDir, originSessionDir, planId, nodeId, uuid, preset string) (string, error) {
+	parentDir := originSessionDir
+	if parentDir == "" {
+		parentDir = sessionsDir
+	}
+	// If parentDir is just a UUID (no separators), it's likely the originID from CreateSession.
+	// In that case, we should prepend sessionsDir.
+	if parentDir != "" && !strings.Contains(parentDir, string(os.PathSeparator)) {
+		parentDir = filepath.Join(sessionsDir, parentDir)
+	}
 	parent := filepath.Join(
-		originSessionDir,
+		parentDir,
 		"plans",
 		SanitizeDirComponent(planId),
 		SanitizeDirComponent(nodeId),
