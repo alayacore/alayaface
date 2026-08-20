@@ -8,7 +8,31 @@ on:
       - main
 
 jobs:
+  build-frontend:
+    runs-on: ubuntu-latest
+    outputs:
+      frontend_path: ${{ steps.upload.outputs.path }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Elm
+        run: |
+          wget https://github.com/elm/compiler/releases/download/0.19.2/elm-0.19.2-linux-x64.gz
+          gunzip elm-0.19.2-linux-x64.gz
+          chmod +x elm-0.19.2-linux-x64
+          mv elm-0.19.2-linux-x64 elm
+          mv elm ./src-tauri/
+      - name: Build Frontend
+        run: |
+          cd src-tauri
+          elm make ../src-elm/src/Main.elm --output=../src-elm/elm.js
+      - name: Upload Frontend Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-assets
+          path: src-elm/elm.js
+
   publish-tauri:
+    needs: build-frontend
     strategy:
       fail-fast: false
       matrix:
@@ -16,12 +40,13 @@ jobs:
     runs-on: ${{ matrix.platform == 'windows/*' && 'windows-latest' || matrix.platform == 'macos/*' && 'macos-latest' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
+      - name: Download Frontend Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-assets
+          path: src-elm/
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
-      - name: Install Elm
-        uses: Elm/setup-elm@v1
-        with:
-          version: '0.19.2'
       - name: Install dependencies
         if: github.runner.os == 'Linux'
         run: |
