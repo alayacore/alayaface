@@ -27,7 +27,20 @@ jobs:
       - name: Install Tauri CLI
         run: cargo install tauri-cli
       - name: Build App
-        run: cargo tauri build --target ${{ matrix.platform }}
+        run: |
+          if [[ "${{ matrix.platform }}" == "macos-aarch64" ]]; then
+            cargo tauri build --target aarch64-apple-darwin
+          elif [[ "${{ matrix.platform }}" == "macos-x86_64" ]]; then
+            cargo tauri build --target x86_64-apple-darwin
+          elif [[ "${{ matrix.platform }}" == "windows-aarch64" ]]; then
+            cargo tauri build --target aarch64-pc-windows-msvc
+          elif [[ "${{ matrix.platform }}" == "windows-x86_64" ]]; then
+            cargo tauri build --target x86_64-pc-windows-msvc
+          elif [[ "${{ matrix.platform }}" == "linux-aarch64" ]]; then
+            cargo tauri build --target aarch64-unknown-linux-gnu
+          else
+            cargo tauri build --target x86_64-unknown-linux-gnu
+          fi
       - name: Upload Release
         uses: softprops/action-gh-release@v1
         if: github.event_name == 'push' && github.ref == 'refs/tags/*'

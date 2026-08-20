@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "identifier": "org.alayacore.alayaface",
   "build": {
-    "beforeDevCommand": "cd src-elm && elm make src/Main.elm --output=elm.js",
-    "beforeBuildCommand": "cd src-elm && elm make src/Main.elm --output=elm.js",
+    "beforeDevCommand": "elm make src-elm/src/Main.elm --output=src-elm/elm.js",
+    "beforeBuildCommand": "elm make src-elm/src/Main.elm --output=src-elm/elm.js",
     "frontendDist": "../src-elm"
   },
   "app": {
