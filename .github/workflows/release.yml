@@ -34,21 +34,31 @@ jobs:
       fail-fast: false
       matrix:
         # We define the specific OS and target pairs.
-        # The 'runs-on' logic will ensure they run on the correct hardware.
+        # The 'runner' field picks the matching hardware. For Linux we
+        # need *native* aarch64 / x86_64 runners because the Rust
+        # build links against system .so files (glib, webkit2gtk) that
+        # pkg-config must find on the host — cross-compiling without
+        # a sysroot + cross pkg-config wrapper won't work.
         include:
           - os: macos
             target: aarch64-apple-darwin
+            runner: macos-latest
           - os: macos
             target: x86_64-apple-darwin
+            runner: macos-latest
           - os: windows
             target: aarch64-pc-windows-msvc
+            runner: windows-latest
           - os: windows
             target: x86_64-pc-windows-msvc
+            runner: windows-latest
           - os: linux
             target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
           - os: linux
             target: x86_64-unknown-linux-gnu
-    runs-on: ${{ matrix.os == 'macos' && 'macos-latest' || matrix.os == 'windows' && 'windows-latest' || 'ubuntu-latest' }}
+            runner: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - name: Download Frontend Artifact
