@@ -25,7 +25,7 @@ dev: run-tauri
 
 # Build release binary
 build-tauri: elm
-	cd $(TAURI) && $(CARGO) build --release
+	cd $(TAURI) && $(CARGO) tauri build
 
 # Run Tauri test suites (Rust unit tests + Elm tests)
 test-tauri:

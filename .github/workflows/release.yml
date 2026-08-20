@@ -1,0 +1,40 @@
+name: Release
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  publish-tauri:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ["macos-aarch64", "macos-x86_64", "windows-aarch64", "windows-x86_64", "linux-aarch64", "linux-x86_64"]
+    runs-on: ${{ matrix.platform == 'windows/*' && 'windows-latest' || matrix.platform == 'macos/*' && 'macos-latest' || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli
+      - name: Build App
+        run: cargo tauri build --target ${{ matrix.platform }}
+      - name: Upload Release
+        uses: softprops/action-gh-release@v1
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          files: |
+            src-tauri/target/release/bundle/*.deb
+            src-tauri/target/release/bundle/*.msi
+            src-tauri/target/release/bundle/*.app
+            src-tauri/target/release/bundle/*.appimage
