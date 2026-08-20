@@ -90,11 +90,14 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          # Tauri emits bundles under target/<triple>/release/bundle when
-          # built with an explicit --target, so we must include ${{ matrix.target }}
-          # in the path or the glob matches nothing.
+          # Tauri 2 puts each format in its own subdirectory under
+          # target/<triple>/release/bundle/. The glob must include the
+          # subdirectory, otherwise it silently matches zero files.
+          # We list every installer format we care about; each runner
+          # only has the subset for its OS, so the others just no-op.
+          fail_on_unmatched_files: false
           files: |
-            src-tauri/target/${{ matrix.target }}/release/bundle/*.deb
-            src-tauri/target/${{ matrix.target }}/release/bundle/*.msi
-            src-tauri/target/${{ matrix.target }}/release/bundle/*.app
-            src-tauri/target/${{ matrix.target }}/release/bundle/*.appimage
+            src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
+            src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.appimage
+            src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
+            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
