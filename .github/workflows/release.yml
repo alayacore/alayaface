@@ -57,6 +57,7 @@ jobs:
         run: cargo install tauri-cli
       - name: Build App
         run: |
+          cd src-tauri
           if [[ "${{ matrix.platform }}" == "macos-aarch64" ]]; then
             cargo tauri build --target aarch64-apple-darwin
           elif [[ "${{ matrix.platform }}" == "macos-x86_64" ]]; then
