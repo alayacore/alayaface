@@ -1,0 +1,59 @@
+name: Cleanup old release assets
+
+on:
+  schedule:
+    # Run weekly on Sunday at 02:00 UTC
+    - cron: "0 2 * * 0"
+  workflow_dispatch:
+    # Allow manual trigger too
+    inputs:
+      keep:
+        description: "Number of latest releases to keep"
+        required: true
+        default: "10"
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Delete assets from old releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          REPO="${{ github.repository }}"
+          KEEP="${{ inputs.keep || 10 }}"
+
+          echo "Keeping latest $KEEP releases for $REPO"
+
+          # Get all releases sorted by published date (newest first), skip the first KEEP
+          gh release list -R "$REPO" --limit 100 --json tagName,publishedAt \
+            | jq -c "sort_by(.publishedAt) | reverse | .[$KEEP:][] | {tag: .tagName}" \
+            | while read -r release; do
+                tag=$(echo "$release" | jq -r '.tag')
+
+                # Fetch assets for this release using release view
+                assets=$(gh release view -R "$REPO" "$tag" --json assets --jq '.assets[].name' 2>/dev/null || true)
+
+                if [ -z "$assets" ]; then
+                  echo "No assets to clean from: $tag (or release not found)"
+                  continue
+                fi
+
+                echo "Cleaning assets from: $tag"
+                echo "$assets" | while read -r asset; do
+                  if [ -n "$asset" ]; then
+                    echo "  deleting: $asset"
+                    gh release delete-asset -R "$REPO" "$tag" "$asset" --yes 2>/dev/null || true
+                  fi
+                done
+              done
+
+          echo "Cleanup complete."

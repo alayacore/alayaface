@@ -84,19 +84,36 @@ func Spawn(binaryPath, configPath, sessionPath, toolConfirm string, builtinTools
 // FindBinary detects the alayacore binary.
 //
 // Resolution order:
-//  1. ALAYACORE_BIN environment variable
-//  2. which alayacore (Unix) or where alayacore (Windows)
-//  3. Known relative/absolute paths
-//  4. Fallback to "alayacore" (assume in PATH)
+//  1. Bundled binary (next to the running executable). The
+//     recommended install layout is alayacore adjacent to the
+//     alayaface-server binary (drop-in place beside it, no install
+//     step). The bundled copy wins by default so a packaged install
+//     always uses the alayacore that ships with it; ALAYACORE_BIN or
+//     a PATH hit is the override path.
+//  2. ALAYACORE_BIN environment variable
+//  3. which alayacore (Unix) or where alayacore (Windows)
+//  4. Known relative/absolute paths
+//  5. Fallback to "alayacore" (assume in PATH)
 func FindBinary() string {
-	// 1. Check env var
+	// 1. Bundled binary (next to the running executable). A 0-byte
+	//    stub from an install that failed to find alayacore must NOT
+	//    be picked up — the spawn would fail with a confusing exec
+	//    error. The caller will see the env-var / PATH fallback take
+	//    over instead.
+	if bundled, ok := bundledBinaryPath(); ok {
+		if info, err := os.Stat(bundled); err == nil && info.Size() > 0 {
+			return bundled
+		}
+	}
+
+	// 2. Check env var
 	if bin := os.Getenv("ALAYACORE_BIN"); bin != "" {
 		if _, err := os.Stat(bin); err == nil {
 			return bin
 		}
 	}
 
-	// 2. Try `which` (Unix) or `where` (Windows)
+	// 3. Try `which` (Unix) or `where` (Windows)
 	whichCmd := "which"
 	if runtime.GOOS == "windows" {
 		whichCmd = "where"
@@ -108,7 +125,7 @@ func FindBinary() string {
 		}
 	}
 
-	// 3. Check common locations
+	// 4. Check common locations
 	for _, candidate := range []string{
 		"alayacore",
 		"../alayacore/alayacore",
@@ -122,8 +139,32 @@ func FindBinary() string {
 		}
 	}
 
-	// 4. Fallback
+	// 5. Fallback
 	return "alayacore"
+}
+
+// bundledBinaryPath returns the path to the alayacore binary that
+// would be picked up if the user placed it next to the running
+// alayaface-server binary. Returns ok=false only when the executable
+// path itself cannot be determined (rare; os.Executable can fail on
+// some platforms). The caller MUST still stat the result.
+func bundledBinaryPath() (string, bool) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", false
+	}
+	binDir := filepath.Dir(exe)
+	// filepath.Dir of a bare filename is "." — a relative path that
+	// depends on the caller's cwd. We treat that as no bundled path
+	// so the search falls back to env var / PATH.
+	if binDir == "" || binDir == "." {
+		return "", false
+	}
+	name := "alayacore"
+	if runtime.GOOS == "windows" {
+		name = "alayacore.exe"
+	}
+	return filepath.Join(binDir, name), true
 }
 
 // KillChild closes the child's stdin (EOF), waits up to 3s for a natural

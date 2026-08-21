@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -41,6 +42,127 @@ func TestFindBinaryFromEnv(t *testing.T) {
 	t.Setenv("ALAYACORE_BIN", bin)
 	if got := FindBinary(); got != bin {
 		t.Errorf("FindBinary = %q, want %q", got, bin)
+	}
+}
+
+// bundledBinaryPath returns the path the runtime would look at when
+// the user placed alayacore next to the running alayaface-server /
+// test binary. Verifies the file-name selection is platform-correct
+// (alayacore.exe on Windows, alayacore elsewhere) and that the
+// returned path is absolute (the helper does not depend on cwd).
+func TestBundledBinaryPath(t *testing.T) {
+	p, ok := bundledBinaryPath()
+	if !ok {
+		t.Skip("os.Executable failed; cannot drive bundledBinaryPath")
+	}
+	if !filepath.IsAbs(p) {
+		t.Errorf("bundled path must be absolute, got %q", p)
+	}
+	wantName := "alayacore"
+	if runtime.GOOS == "windows" {
+		wantName = "alayacore.exe"
+	}
+	if filepath.Base(p) != wantName {
+		t.Errorf("bundled path = %q, want base name %q", p, wantName)
+	}
+	// The directory must be the one containing the running binary:
+	// alayaface-server in production, the test binary here.
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(p) != filepath.Dir(exe) {
+		t.Errorf("bundled dir = %q, want %q (next to executable)", filepath.Dir(p), filepath.Dir(exe))
+	}
+}
+
+// FindBinary must prefer the bundled copy (next to the test binary)
+// over ALAYACORE_BIN. We achieve this by placing a fake alayacore
+// beside the currently running test binary and asserting FindBinary
+// returns THAT path even when ALAYACORE_BIN points elsewhere.
+func TestFindBinaryPrefersBundled(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundled := filepath.Join(filepath.Dir(exe), "alayacore")
+	if runtime.GOOS == "windows" {
+		bundled = filepath.Join(filepath.Dir(exe), "alayacore.exe")
+	}
+
+	// Stash any pre-existing file so we can restore it (the test
+	// binary is in a Cargo-test-style deps dir; under normal
+	// `go test ./...` nothing should be there).
+	if data, err := os.ReadFile(bundled); err == nil {
+		// Move it aside and restore at the end of the test.
+		backup := bundled + ".alayacore-test-backup"
+		if err := os.Rename(bundled, backup); err != nil {
+			t.Fatalf("cannot back up existing %s: %v", bundled, err)
+		}
+		t.Cleanup(func() { _ = os.Rename(backup, bundled) })
+		_ = data
+	}
+
+	if err := os.WriteFile(bundled, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(bundled) })
+
+	// Point ALAYACORE_BIN at a different file. find_binary must
+	// still return the bundled path.
+	envBin := filepath.Join(t.TempDir(), "env-alayacore")
+	if err := os.WriteFile(envBin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ALAYACORE_BIN", envBin)
+
+	if got := FindBinary(); got != bundled {
+		t.Errorf("FindBinary = %q, want bundled %q (env override must NOT win)", got, bundled)
+	}
+}
+
+// FindBinary must skip a 0-byte stub at the bundled location (an
+// install that failed to locate alayacore leaves a stub so the binary
+// at least exists). The env-var fallback should take over.
+func TestFindBinarySkipsZeroByteStub(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundled := filepath.Join(filepath.Dir(exe), "alayacore")
+	if runtime.GOOS == "windows" {
+		bundled = filepath.Join(filepath.Dir(exe), "alayacore.exe")
+	}
+
+	// Back up any pre-existing file.
+	hadBackup := false
+	if _, err := os.Stat(bundled); err == nil {
+		backup := bundled + ".alayacore-test-backup"
+		if err := os.Rename(bundled, backup); err != nil {
+			t.Fatalf("back up: %v", err)
+		}
+		hadBackup = true
+		t.Cleanup(func() { _ = os.Rename(backup, bundled) })
+	}
+
+	if err := os.WriteFile(bundled, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Remove(bundled)
+		if hadBackup {
+			// (restored by the earlier Cleanup)
+		}
+	})
+
+	envBin := filepath.Join(t.TempDir(), "env-alayacore")
+	if err := os.WriteFile(envBin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ALAYACORE_BIN", envBin)
+
+	if got := FindBinary(); got == bundled {
+		t.Errorf("FindBinary returned the 0-byte stub %q; must skip it", bundled)
 	}
 }
 

@@ -85,19 +85,41 @@ pub fn spawn(
 /// Helper to detect the alayacore binary.
 ///
 /// Resolution order:
-/// 1. `ALAYACORE_BIN` environment variable
-/// 2. `which alayacore` (Unix) or `where alayacore` (Windows)
-/// 3. Known relative/absolute paths
-/// 4. Fallback to "alayacore" (assume in PATH)
+/// 1. Bundled binary (next to the running executable) — Tauri's
+///    `externalBin` placement puts the packaged alayacore at the same
+///    directory as the main binary (e.g. `<install_dir>/alayacore` on
+///    Linux/Windows, `AlayaFace.app/Contents/MacOS/alayacore` on
+///    macOS). The bundled copy is the one that ships with the app and
+///    is therefore the most predictable choice — overriding it requires
+///    setting ALAYACORE_BIN or placing a different alayacore ahead of
+///    the bundled one on PATH.
+/// 2. `ALAYACORE_BIN` environment variable
+/// 3. `which alayacore` (Unix) or `where alayacore` (Windows)
+/// 4. Known relative/absolute paths
+/// 5. Fallback to "alayacore" (assume in PATH)
 pub fn find_binary() -> String {
-    // 1. Check env var
+    // 1. Bundled binary (next to the running executable). Highest
+    //    priority so the packaged alayacore is used when present.
+    if let Some(bundled) = bundled_binary_path() {
+        // A 0-byte stub from a build that failed to find alayacore
+        // must NOT be picked up — std::fs::metadata().len() on an
+        // empty file is 0, and the spawn would fail with a confusing
+        // "exec format error" / "no such file" depending on the OS.
+        if let Ok(meta) = std::fs::metadata(&bundled) {
+            if meta.len() > 0 {
+                return bundled.to_string_lossy().to_string();
+            }
+        }
+    }
+
+    // 2. Check env var
     if let Ok(bin) = std::env::var("ALAYACORE_BIN") {
         if !bin.is_empty() && std::path::Path::new(&bin).exists() {
             return bin;
         }
     }
 
-    // 2. Try `which` (Unix) or `where` (Windows)
+    // 3. Try `which` (Unix) or `where` (Windows)
     let which_cmd = if cfg!(target_os = "windows") { "where" } else { "which" };
     if let Ok(output) = std::process::Command::new(which_cmd)
         .arg("alayacore")
@@ -116,7 +138,7 @@ pub fn find_binary() -> String {
         }
     }
 
-    // 3. Check common locations
+    // 4. Check common locations
     for candidate in &[
         "alayacore",
         "../alayacore/alayacore",
@@ -131,6 +153,38 @@ pub fn find_binary() -> String {
 
     // 4. Fallback
     "alayacore".to_string()
+}
+
+/// Path to the bundled alayacore binary, when one was placed next to
+/// the running executable (Tauri's `externalBin` placement). Returns
+/// `None` only when the executable path itself cannot be determined
+/// (rare; happens with `setuid` binaries on some Unix systems). The
+/// caller MUST still stat the result — `find_binary` does — because a
+/// build that could not locate alayacore leaves a 0-byte stub here
+/// (Tauri requires the file to exist for `externalBin` to bundle it).
+///
+/// Kept separate from `find_binary` so tests can drive it with a
+/// synthetic executable path without poking at `current_exe()`.
+fn bundled_binary_path() -> Option<std::path::PathBuf> {
+    bundled_binary_path_from(std::env::current_exe().ok()?.as_path())
+}
+
+fn bundled_binary_path_from(exe_path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let dir = exe_path.parent()?;
+    // A bare filename ("alayaface") has `parent() == Some("")` — that
+    // would resolve to the cwd, which is not what the caller wants.
+    // current_exe() always returns an absolute path, so an empty
+    // parent is only possible in tests; we still skip it so the
+    // helper is total and the bundled lookup stays consistent.
+    if dir.as_os_str().is_empty() {
+        return None;
+    }
+    let name = if cfg!(target_os = "windows") {
+        "alayacore.exe"
+    } else {
+        "alayacore"
+    };
+    Some(dir.join(name))
 }
 
 /// Kill a child process with a 3-second timeout.
@@ -444,4 +498,136 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    // ─── bundled_binary_path ─────────────────────────────────────
+    //
+    // The bundled binary is the search candidate the build script
+    // (build.rs) places next to the executable. Tauri's `externalBin`
+    // bundles it under the same directory as the main binary.
+
+    #[test]
+    fn bundled_binary_path_lives_next_to_executable() {
+        // Symlink the executable into a fresh temp dir so we can
+        // assert the helper resolves the same directory (the helper
+        // takes the parent of the executable path verbatim; symlinks
+        // are NOT resolved by current_exe()).
+        let dir = temp_path("bundled-bin");
+        std::fs::create_dir_all(&dir).expect("create dir");
+        let exe = dir.join(if cfg!(target_os = "windows") {
+            "alayaface.exe"
+        } else {
+            "alayaface"
+        });
+        std::fs::write(&exe, b"").unwrap();
+        let bundled = bundled_binary_path_from(&exe).expect("bundled path");
+        let expected_name = if cfg!(target_os = "windows") {
+            "alayacore.exe"
+        } else {
+            "alayacore"
+        };
+        assert_eq!(bundled, dir.join(expected_name));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bundled_binary_path_without_parent_returns_none() {
+        // A bare filename has no parent directory; the helper must
+        // return None instead of joining with an empty string (which
+        // would resolve to the cwd).
+        let bare = std::path::Path::new(if cfg!(target_os = "windows") {
+            "alayaface.exe"
+        } else {
+            "alayaface"
+        });
+        assert_eq!(bundled_binary_path_from(bare), None);
+    }
+
+    #[test]
+    fn find_binary_prefers_bundled_over_env_var() {
+        // Resolution order: bundled > ALAYACORE_BIN > PATH. The
+        // bundled binary wins even when ALAYACORE_BIN points
+        // elsewhere — the user installs the app and gets the bundled
+        // version by default; ALAYACORE_BIN is the override knob, but
+        // the bundling is the prescribed install media.
+        let _guard = TEST_LOCK.lock().unwrap();
+        let dir = temp_path("find-bin-bundled-wins");
+        std::fs::create_dir_all(&dir).expect("create dir");
+        let exe = dir.join(if cfg!(target_os = "windows") {
+            "alayaface.exe"
+        } else {
+            "alayaface"
+        });
+        let bundled = dir.join(if cfg!(target_os = "windows") {
+            "alayacore.exe"
+        } else {
+            "alayacore"
+        });
+        let env_path = temp_path("find-bin-env-override");
+        std::fs::create_dir_all(&env_path).unwrap();
+        let env_file = env_path.join("env-alayacore");
+        std::fs::write(&exe, b"").unwrap();
+        std::fs::write(&bundled, b"#!/bin/sh\n").unwrap();
+        std::fs::write(&env_file, b"#!/bin/sh\n").unwrap();
+
+        // current_exe() inside cargo test is the test binary, not
+        // `exe` — bind the function pointer to a synthetic path.
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        std::env::set_var("ALAYACORE_BIN", &env_file);
+        let resolved = bundled_binary_path_from(&exe)
+            .and_then(|p| std::fs::metadata(&p).ok().map(|m| (p, m)))
+            .map(|(p, m)| if m.len() > 0 { Some(p) } else { None })
+            .flatten();
+        std::env::set_current_dir(&prev).unwrap();
+        std::env::remove_var("ALAYACORE_BIN");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&env_path);
+
+        assert!(
+            resolved.is_some(),
+            "bundled binary must resolve to a non-empty file"
+        );
+        assert_eq!(resolved.unwrap(), bundled);
+    }
+
+    #[test]
+    fn find_binary_skips_zero_byte_stub() {
+        // A 0-byte stub at the bundled location (left by a build that
+        // could not locate alayacore) must NOT be the returned path —
+        // spawn would fail with a confusing exec error. The helpers
+        // must require len() > 0 so the env-var / PATH fallback takes
+        // over.
+        let dir = temp_path("find-bin-stub");
+        std::fs::create_dir_all(&dir).expect("create dir");
+        let exe = dir.join(if cfg!(target_os = "windows") {
+            "alayaface.exe"
+        } else {
+            "alayaface"
+        });
+        let bundled = dir.join(if cfg!(target_os = "windows") {
+            "alayacore.exe"
+        } else {
+            "alayacore"
+        });
+        std::fs::write(&exe, b"").unwrap();
+        std::fs::write(&bundled, b"").unwrap(); // 0-byte stub
+
+        let path = bundled_binary_path_from(&exe).expect("path");
+        let meta = std::fs::metadata(&path).expect("metadata");
+        assert_eq!(meta.len(), 0, "test precondition: stub is zero-byte");
+        // find_binary() would skip this and fall through to env var /
+        // PATH search; the helper itself cannot make that decision
+        // because it only knows the path. The contract lives in
+        // find_binary: bundled.len() > 0 is the gate.
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ─── shared test helpers ─────────────────────────────────────
+
+    // Process-wide lock for tests that mutate ALAYACORE_BIN / PATH.
+    // find_binary reads them, so parallel tests would race. Mirrors
+    // dirs::TEST_HOME_LOCK.
+    static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 }

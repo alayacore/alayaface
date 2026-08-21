@@ -36,30 +36,30 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # We define the specific OS and target pairs.
-        # The 'runner' field picks the matching hardware. For Linux we
-        # need *native* aarch64 / x86_64 runners because the Rust
-        # build links against system .so files (glib, webkit2gtk) that
-        # pkg-config must find on the host — cross-compiling without
-        # a sysroot + cross pkg-config wrapper won't work.
+        # Unified naming: arch is arm64/amd64 (matches alayacore's
+        # release asset names); os is one of macos/windows/linux.
+        # The Rust target triple is derived from (os, arch) below
+        # because Rust requires the historical aarch64/x86_64 names —
+        # the surface here stays clean for the user, the plumbing
+        # is in the install-alayacore step.
         include:
           - os: macos
-            target: aarch64-apple-darwin
+            arch: arm64
             runner: macos-latest
           - os: macos
-            target: x86_64-apple-darwin
+            arch: amd64
             runner: macos-latest
           - os: windows
-            target: aarch64-pc-windows-msvc
+            arch: arm64
             runner: windows-latest
           - os: windows
-            target: x86_64-pc-windows-msvc
+            arch: amd64
             runner: windows-latest
           - os: linux
-            target: aarch64-unknown-linux-gnu
+            arch: arm64
             runner: ubuntu-24.04-arm
           - os: linux
-            target: x86_64-unknown-linux-gnu
+            arch: amd64
             runner: ubuntu-latest
     runs-on: ${{ matrix.runner }}
     steps:
@@ -80,21 +80,83 @@ jobs:
           sudo apt-get install -y libgtk-3-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libwebkit2gtk-4.1-dev libxdo-dev libglib2.0-dev xdg-utils
       - name: Install Tauri CLI
         run: cargo install tauri-cli
+      # Bundle alayacore with the desktop app — the build script
+      # picks it up via the binaries/alayacore-<target> path and
+      # Tauri ships it in the install next to the main executable.
+      # The user's first launch prefers the bundled copy over PATH
+      # search (see alayacore.rs::find_binary).
+      #
+      # Strategy: pin NOTHING. Pull the latest stable alayacore at
+      # tag-push time. If alayacore ships a breaking change,
+      # AlayaFace is updated alongside it (the two are versioned
+      # together); pinning here would risk a release that bundles
+      # a stale alayacore while the user otherwise has a newer one
+      # installed. Download from the pre-built release assets
+      # (`alayacore-{darwin,linux,windows}-{amd64,arm64}[.exe]`)
+      # so we don't need a Go toolchain on the runner.
+      - name: Install alayacore
+        id: install-alayacore
+        shell: bash
+        run: |
+          set -e
+          # Rust's target triple is the historical aarch64/x86_64
+          # naming — the mapping is unified on the matrix side
+          # (arm64/amd64) and translated here for the build.
+          case "${{ matrix.os }},${{ matrix.arch }}" in
+            macos,arm64)    ALAYACORE_ASSET=alayacore-darwin-arm64;     RUST_TARGET=aarch64-apple-darwin ;;
+            macos,amd64)    ALAYACORE_ASSET=alayacore-darwin-amd64;     RUST_TARGET=x86_64-apple-darwin ;;
+            windows,arm64)  ALAYACORE_ASSET=alayacore-windows-arm64.exe; RUST_TARGET=aarch64-pc-windows-msvc ;;
+            windows,amd64)  ALAYACORE_ASSET=alayacore-windows-amd64.exe; RUST_TARGET=x86_64-pc-windows-msvc ;;
+            linux,arm64)    ALAYACORE_ASSET=alayacore-linux-arm64;      RUST_TARGET=aarch64-unknown-linux-gnu ;;
+            linux,amd64)    ALAYACORE_ASSET=alayacore-linux-amd64;      RUST_TARGET=x86_64-unknown-linux-gnu ;;
+            *) echo "Unsupported (os, arch): ${{ matrix.os }},${{ matrix.arch }}" >&2; exit 1 ;;
+          esac
+
+          # Download the latest alayacore binary from GitHub
+          # releases. The /releases/latest/download/<asset> URL is
+          # a stable redirect that lands on the latest tagged
+          # release containing that asset — no version pinning
+          # needed (or wanted; see comment above).
+          URL="https://github.com/alayacore/alayacore/releases/latest/download/${ALAYACORE_ASSET}"
+          echo "Downloading $URL"
+          curl -fsSL "$URL" -o /tmp/alayacore-download
+
+          # Place at the path Tauri's externalBin resolver expects
+          # (`binaries/alayacore-<rust_target_triple>`). The build
+          # script sees the file already exists and skips its own
+          # PATH search.
+          mkdir -p src-tauri/binaries
+          mv /tmp/alayacore-download "src-tauri/binaries/alayacore-${RUST_TARGET}"
+          # Windows .exe files are already executable; chmod is a
+          # no-op there but harmless and lets us run the same
+          # command on every runner.
+          chmod +x "src-tauri/binaries/alayacore-${RUST_TARGET}" 2>/dev/null || true
+
+          # Smoke-test: if the download or the asset name is wrong,
+          # fail loudly here rather than letting the build script
+          # silently emit a 0-byte stub.
+          "src-tauri/binaries/alayacore-${RUST_TARGET}" --version
+
+          # Pass the Rust target triple to the build step.
+          echo "rust_target=${RUST_TARGET}" >> "$GITHUB_OUTPUT"
       - name: Build App
+        env:
+          RUST_TARGET: ${{ steps.install-alayacore.outputs.rust_target }}
         run: |
           cd src-tauri
-          cargo tauri build --target ${{ matrix.target }}
+          cargo tauri build --target "$RUST_TARGET"
       - name: Upload Release
         if: github.event_name == 'push' && github.ref_type == 'tag'
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUST_TARGET: ${{ steps.install-alayacore.outputs.rust_target }}
         run: |
           set -e
           cd src-tauri
 
           TAG="${GITHUB_REF#refs/tags/}"
-          BUNDLE_DIR="target/${{ matrix.target }}/release/bundle"
+          BUNDLE_DIR="target/${RUST_TARGET}/release/bundle"
 
           # Collect every installer artifact Tauri produced for this target.
           # Using 'find' instead of globs so we don't depend on knowing
@@ -105,7 +167,7 @@ jobs:
               > "$FILES_TXT" 2>/dev/null || true
 
           if [ ! -s "$FILES_TXT" ]; then
-            echo "::warning::No installer files found for ${{ matrix.target }} under $BUNDLE_DIR"
+            echo "::warning::No installer files found for ${RUST_TARGET} under $BUNDLE_DIR"
             echo "Bundle directory contents (for debugging):"
             ls -la "$BUNDLE_DIR" 2>/dev/null || echo "  (bundle directory does not exist)"
             rm -f "$FILES_TXT"
