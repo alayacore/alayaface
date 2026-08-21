@@ -121,42 +121,53 @@ jobs:
           echo "Downloading $URL"
           curl -fsSL "$URL" -o /tmp/alayacore-download
 
-          # Place at the path Tauri's externalBin resolver expects
-          # (`binaries/alayacore-<rust_target_triple>`). The build
-          # script sees the file already exists and skips its own
-          # PATH search.
+          # Tauri's externalBin resolver appends `.exe` to the
+          # source path on Windows targets (see tauri-utils
+          # `external_binaries`), so the install-time lookup is
+          # `binaries/alayacore-<rust_target>.exe`. Match that
+          # here — Windows refuses to execute a binary without the
+          # `.exe` extension, which would also fail the smoke-test.
+          ALAYACORE_BIN="alayacore-${RUST_TARGET}"
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            ALAYACORE_BIN="${ALAYACORE_BIN}.exe"
+          fi
+
           mkdir -p src-tauri/binaries
-          mv /tmp/alayacore-download "src-tauri/binaries/alayacore-${RUST_TARGET}"
+          mv /tmp/alayacore-download "src-tauri/binaries/${ALAYACORE_BIN}"
           # Windows .exe files are already executable; chmod is a
           # no-op there but harmless and lets us run the same
           # command on every runner.
-          chmod +x "src-tauri/binaries/alayacore-${RUST_TARGET}" 2>/dev/null || true
+          chmod +x "src-tauri/binaries/${ALAYACORE_BIN}" 2>/dev/null || true
 
           # Smoke-test: if the download or the asset name is wrong,
           # fail loudly here rather than letting the build script
           # silently emit a 0-byte stub.
-          "src-tauri/binaries/alayacore-${RUST_TARGET}" --version
+          "src-tauri/binaries/${ALAYACORE_BIN}" --version
 
           # Pass the Rust target triple to the build step.
           echo "rust_target=${RUST_TARGET}" >> "$GITHUB_OUTPUT"
       - name: Build App
-        env:
-          RUST_TARGET: ${{ steps.install-alayacore.outputs.rust_target }}
+        # Use ${{ ... }} substitution directly so the script that
+        # PowerShell runs on Windows (the default shell on the
+        # windows-latest runner) sees the target already expanded —
+        # bash-style "$VAR" inside `run:` is not portable to
+        # PowerShell, and GitHub's env-block + env-var-on-the-
+        # command-line is what made the previous attempt return an
+        # empty `--target` on Windows amd64.
         run: |
           cd src-tauri
-          cargo tauri build --target "$RUST_TARGET"
+          cargo tauri build --target "${{ steps.install-alayacore.outputs.rust_target }}"
       - name: Upload Release
         if: github.event_name == 'push' && github.ref_type == 'tag'
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RUST_TARGET: ${{ steps.install-alayacore.outputs.rust_target }}
         run: |
           set -e
           cd src-tauri
 
           TAG="${GITHUB_REF#refs/tags/}"
-          BUNDLE_DIR="target/${RUST_TARGET}/release/bundle"
+          BUNDLE_DIR="target/${{ steps.install-alayacore.outputs.rust_target }}/release/bundle"
 
           # Collect every installer artifact Tauri produced for this target.
           # Using 'find' instead of globs so we don't depend on knowing
@@ -167,7 +178,7 @@ jobs:
               > "$FILES_TXT" 2>/dev/null || true
 
           if [ ! -s "$FILES_TXT" ]; then
-            echo "::warning::No installer files found for ${RUST_TARGET} under $BUNDLE_DIR"
+            echo "::warning::No installer files found for ${{ steps.install-alayacore.outputs.rust_target }} under $BUNDLE_DIR"
             echo "Bundle directory contents (for debugging):"
             ls -la "$BUNDLE_DIR" 2>/dev/null || echo "  (bundle directory does not exist)"
             rm -f "$FILES_TXT"
