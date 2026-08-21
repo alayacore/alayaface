@@ -42,6 +42,15 @@ jobs:
         # because Rust requires the historical aarch64/x86_64 names —
         # the surface here stays clean for the user, the plumbing
         # is in the install-alayacore step.
+        #
+        # Windows arm64 is intentionally omitted: GitHub's public
+        # runners don't include an ARM64 Windows image (`windows-
+        # latest` is x86_64 Windows Server 2022). The ARM64 image
+        # (`windows-11-arm`) requires GitHub Team/Enterprise. Cross-
+        # compiling from x86_64 is technically possible, but we'd
+        # be shipping an installer we never ran on the target CPU.
+        # Until the runner constraint lifts, ARM64 Windows users
+        # build from source.
         include:
           - os: macos
             arch: arm64
@@ -49,9 +58,6 @@ jobs:
           - os: macos
             arch: amd64
             runner: macos-latest
-          - os: windows
-            arch: arm64
-            runner: windows-latest
           - os: windows
             arch: amd64
             runner: windows-latest
@@ -105,7 +111,6 @@ jobs:
           case "${{ matrix.os }},${{ matrix.arch }}" in
             macos,arm64)    ALAYACORE_ASSET=alayacore-darwin-arm64;     RUST_TARGET=aarch64-apple-darwin ;;
             macos,amd64)    ALAYACORE_ASSET=alayacore-darwin-amd64;     RUST_TARGET=x86_64-apple-darwin ;;
-            windows,arm64)  ALAYACORE_ASSET=alayacore-windows-arm64.exe; RUST_TARGET=aarch64-pc-windows-msvc ;;
             windows,amd64)  ALAYACORE_ASSET=alayacore-windows-amd64.exe; RUST_TARGET=x86_64-pc-windows-msvc ;;
             linux,arm64)    ALAYACORE_ASSET=alayacore-linux-arm64;      RUST_TARGET=aarch64-unknown-linux-gnu ;;
             linux,amd64)    ALAYACORE_ASSET=alayacore-linux-amd64;      RUST_TARGET=x86_64-unknown-linux-gnu ;;
@@ -141,7 +146,10 @@ jobs:
 
           # Smoke-test: if the download or the asset name is wrong,
           # fail loudly here rather than letting the build script
-          # silently emit a 0-byte stub.
+          # silently emit a 0-byte stub. Every matrix entry now
+          # runs on a runner that matches the target arch (Windows
+          # arm64 is intentionally omitted — see the matrix
+          # comment), so alayacore --version works on all of them.
           "src-tauri/binaries/${ALAYACORE_BIN}" --version
 
           # Pass the Rust target triple to the build step.
