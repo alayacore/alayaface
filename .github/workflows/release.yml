@@ -197,6 +197,44 @@ jobs:
           echo "Uploading $FILE_COUNT file(s) to release $TAG:"
           sed 's/^/  /' "$FILES_TXT"
 
+          # Strip the version segment from the filenames. Tauri emits
+          # names like {productName}_{version}_{arch}.{ext} (e.g.
+          # "alayaface_0.1.0_aarch64.AppImage"); the version in the
+          # filename is redundant for our release (the GitHub release
+          # tag carries the version), so we rename to
+          # {productName}_{arch}.{ext} (e.g. "alayaface_aarch64.AppImage").
+          # All platforms use the same pattern so a single sed handles
+          # them. The version is still preserved in the bundle metadata
+          # (the .deb control file, Windows MSI ProductVersion, macOS
+          # Info.plist CFBundleVersion) — only the FILENAME is stripped.
+          #
+          # Note: tauri.conf.json's `version` field is intentionally
+          # set to "0.0.0" (a placeholder, not a real release version)
+          # because (a) the GitHub release tag is the real version, and
+          # (b) any version string here would just be stripped from the
+          # filename anyway. The "0.0.0" makes it loud-and-clear that
+          # the field is ignored and the release tag is the source of
+          # truth. The sed pattern stays generic so a future bump
+          # (e.g. "0.0.1") would still be stripped without touching
+          # this script.
+          FILES_NEW="$(mktemp)"
+          while IFS= read -r f; do
+            dir=$(dirname "$f")
+            base=$(basename "$f")
+            new=$(echo "$base" | sed -E 's/_[0-9]+(\.[0-9]+)+_/_/')
+            if [ "$new" != "$base" ]; then
+              mv "$f" "$dir/$new"
+              echo "  renamed: $base -> $new"
+              f="$dir/$new"
+            fi
+            echo "$f" >> "$FILES_NEW"
+          done < "$FILES_TXT"
+          mv "$FILES_NEW" "$FILES_TXT"
+
+          FILE_COUNT=$(wc -l < "$FILES_TXT")
+          echo "Uploading $FILE_COUNT file(s) to release $TAG:"
+          sed 's/^/  /' "$FILES_TXT"
+
           # Build args array (avoids mapfile / process substitution which
           # are bash-only and broke under zsh on macOS / pwsh on Windows).
           ARGS=()
@@ -207,7 +245,7 @@ jobs:
 
           # Try to create the release. If another matrix job already
           # created it, fall back to uploading our files into the
-          # existing release. Idempotent across the 6 parallel jobs.
+          # existing release. Idempotent across the 5 parallel jobs.
           if gh release create "$TAG" \
                 --title "$TAG" \
                 --generate-notes \
