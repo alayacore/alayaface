@@ -86,6 +86,7 @@ jobs:
           cargo tauri build --target ${{ matrix.target }}
       - name: Upload Release
         if: github.event_name == 'push' && github.ref_type == 'tag'
+        shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -93,35 +94,45 @@ jobs:
           cd src-tauri
 
           TAG="${GITHUB_REF#refs/tags/}"
+          BUNDLE_DIR="target/${{ matrix.target }}/release/bundle"
 
           # Collect every installer artifact Tauri produced for this target.
-          # Using `find` instead of glob patterns so we don't depend on
-          # knowing Tauri 2's exact bundle subdirectory layout.
-          mapfile -t FILES < <(find "target/${{ matrix.target }}/release/bundle" \
-              -type f \
+          # Using 'find' instead of globs so we don't depend on knowing
+          # Tauri 2's exact bundle subdirectory layout.
+          FILES_TXT="$(mktemp)"
+          find "$BUNDLE_DIR" -type f \
               \( -name '*.deb' -o -name '*.AppImage' -o -name '*.msi' -o -name '*.dmg' \) \
-              2>/dev/null | sort)
+              > "$FILES_TXT" 2>/dev/null || true
 
-          if [ "${#FILES[@]}" -eq 0 ]; then
-            echo "::warning::No installer files found for ${{ matrix.target }} under target/${{ matrix.target }}/release/bundle"
+          if [ ! -s "$FILES_TXT" ]; then
+            echo "::warning::No installer files found for ${{ matrix.target }} under $BUNDLE_DIR"
             echo "Bundle directory contents (for debugging):"
-            ls -la "target/${{ matrix.target }}/release/bundle" 2>/dev/null || echo "  (bundle directory does not exist)"
+            ls -la "$BUNDLE_DIR" 2>/dev/null || echo "  (bundle directory does not exist)"
+            rm -f "$FILES_TXT"
             exit 0
           fi
 
-          echo "Uploading ${#FILES[@]} file(s) to release ${TAG}:"
-          printf '  %s\n' "${FILES[@]}"
+          FILE_COUNT=$(wc -l < "$FILES_TXT")
+          echo "Uploading $FILE_COUNT file(s) to release $TAG:"
+          sed 's/^/  /' "$FILES_TXT"
+
+          # Build args array (avoids mapfile / process substitution which
+          # are bash-only and broke under zsh on macOS / pwsh on Windows).
+          ARGS=()
+          while IFS= read -r f; do
+            ARGS+=("$f")
+          done < "$FILES_TXT"
+          rm -f "$FILES_TXT"
 
           # Try to create the release. If another matrix job already
           # created it, fall back to uploading our files into the
-          # existing release. This makes the upload idempotent across
-          # the 6 parallel jobs.
+          # existing release. Idempotent across the 6 parallel jobs.
           if gh release create "$TAG" \
                 --title "$TAG" \
                 --generate-notes \
-                "${FILES[@]}"; then
+                "${ARGS[@]}"; then
             echo "Created release $TAG"
           else
             echo "Release $TAG already exists; uploading our files to it."
-            gh release upload "$TAG" "${FILES[@]}" --clobber
+            gh release upload "$TAG" "${ARGS[@]}" --clobber
           fi
