@@ -85,19 +85,43 @@ jobs:
           cd src-tauri
           cargo tauri build --target ${{ matrix.target }}
       - name: Upload Release
-        uses: softprops/action-gh-release@v2
         if: github.event_name == 'push' && github.ref_type == 'tag'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          # Tauri 2 puts each format in its own subdirectory under
-          # target/<triple>/release/bundle/. The glob must include the
-          # subdirectory, otherwise it silently matches zero files.
-          # We list every installer format we care about; each runner
-          # only has the subset for its OS, so the others just no-op.
-          fail_on_unmatched_files: false
-          files: |
-            src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
-            src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.appimage
-            src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
-            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+        run: |
+          set -e
+          cd src-tauri
+
+          TAG="${GITHUB_REF#refs/tags/}"
+
+          # Collect every installer artifact Tauri produced for this target.
+          # Using `find` instead of glob patterns so we don't depend on
+          # knowing Tauri 2's exact bundle subdirectory layout.
+          mapfile -t FILES < <(find "target/${{ matrix.target }}/release/bundle" \
+              -type f \
+              \( -name '*.deb' -o -name '*.AppImage' -o -name '*.msi' -o -name '*.dmg' \) \
+              2>/dev/null | sort)
+
+          if [ "${#FILES[@]}" -eq 0 ]; then
+            echo "::warning::No installer files found for ${{ matrix.target }} under target/${{ matrix.target }}/release/bundle"
+            echo "Bundle directory contents (for debugging):"
+            ls -la "target/${{ matrix.target }}/release/bundle" 2>/dev/null || echo "  (bundle directory does not exist)"
+            exit 0
+          fi
+
+          echo "Uploading ${#FILES[@]} file(s) to release ${TAG}:"
+          printf '  %s\n' "${FILES[@]}"
+
+          # Try to create the release. If another matrix job already
+          # created it, fall back to uploading our files into the
+          # existing release. This makes the upload idempotent across
+          # the 6 parallel jobs.
+          if gh release create "$TAG" \
+                --title "$TAG" \
+                --generate-notes \
+                "${FILES[@]}"; then
+            echo "Created release $TAG"
+          else
+            echo "Release $TAG already exists; uploading our files to it."
+            gh release upload "$TAG" "${FILES[@]}" --clobber
+          fi
