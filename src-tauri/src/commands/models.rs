@@ -85,6 +85,12 @@ impl TempCore {
         if !config_path.is_empty() {
             cmd.arg("--config-path").arg(config_path);
         }
+        // Mirror `alayacore::spawn`: advertise the bundled rg via
+        // PATH so a probe that triggers alayacore's rg-using code
+        // paths (e.g. listing models from a config that needs
+        // content-search) doesn't fail just because the build
+        // machine lacked rg on PATH. No-op without a bundled rg.
+        crate::alayacore::prepend_rg_to_path(&mut cmd, bin);
         let mut child = cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

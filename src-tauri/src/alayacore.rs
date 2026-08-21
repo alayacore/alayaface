@@ -66,6 +66,16 @@ pub fn spawn(
     if let Some(wd) = work_dir {
         cmd.current_dir(wd);
     }
+    // Prepend the directory containing the bundled `rg` to PATH so
+    // alayacore can detect and use it. Tauri's `externalBin` places
+    // `rg` next to alayacore in the installed app (see
+    // `tauri.conf.json`), so the directory of `binary_path` is where
+    // `rg` lives at runtime. No-op if no bundled `rg` is present
+    // (typical for dev builds without ripgrep installed locally) or
+    // if `rg` is a 0-byte stub from build.rs's fallback path; in
+    // either case alayacore falls back to its inherited PATH.
+    prepend_rg_to_path(&mut cmd, binary_path);
+
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -185,6 +195,58 @@ fn bundled_binary_path_from(exe_path: &std::path::Path) -> Option<std::path::Pat
         "alayacore"
     };
     Some(dir.join(name))
+}
+
+/// Prepend the directory containing the bundled `rg` binary to `cmd`'s
+/// PATH, so alayacore can find `rg` via its own PATH search (used for
+/// fast content search).
+///
+/// Tauri's `externalBin` mechanism places every binary listed in
+/// `tauri.conf.json`'s `externalBin` (currently `alayacore` AND `rg`)
+/// in the same directory as the main executable in the packaged app.
+/// So the directory of `binary_path` (the resolved alayacore path)
+/// is where the bundled `rg` will live at runtime — prepending it to
+/// PATH makes alayacore pick up the bundled rg first, ahead of any
+/// `rg` the user has installed system-wide. This is what we want:
+/// the bundled rg is the version we tested against.
+///
+/// No-op if `rg` is not bundled next to alayacore (typical in dev
+/// mode where build.rs's fallback wrote a 0-byte stub, or where rg
+/// wasn't on the build machine at all). alayacore then falls back to
+/// its inherited PATH; if no rg is found there, alayacore falls back
+/// to its non-rg code paths.
+///
+/// A 0-byte stub at the rg location must NOT be advertised via PATH
+/// — alayacore would try to exec it and fail with a confusing "exec
+/// format error" (Unix) / "Permission denied" (Windows) depending on
+/// the OS. The `meta.len() > 0` gate mirrors the one `find_binary`
+/// uses for alayacore's own bundled stub (see the
+/// `find_binary_skips_zero_byte_stub` test).
+pub fn prepend_rg_to_path(cmd: &mut Command, binary_path: &str) {
+    let alayacore_dir = match std::path::Path::new(binary_path).parent() {
+        Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
+        _ => return,
+    };
+    let rg_name = if cfg!(target_os = "windows") {
+        "rg.exe"
+    } else {
+        "rg"
+    };
+    let rg_path = alayacore_dir.join(rg_name);
+    // A 0-byte stub at the rg location (build.rs's fallback when no
+    // rg was found on the build machine) must NOT be advertised via
+    // PATH — alayacore would try to exec it and fail with a
+    // confusing exec error.
+    match std::fs::metadata(&rg_path) {
+        Ok(meta) if meta.len() > 0 => {}
+        _ => return,
+    }
+    let current = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths = vec![alayacore_dir];
+    paths.extend(std::env::split_paths(&current));
+    if let Ok(joined) = std::env::join_paths(paths) {
+        cmd.env("PATH", joined);
+    }
 }
 
 /// Kill a child process with a 3-second timeout.
@@ -499,6 +561,86 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    #[cfg(unix)] // /bin/sh is not guaranteed on Windows; covered on Linux/macOS CI.
+    fn spawn_prepends_rg_dir_to_child_path() {
+        // End-to-end check: spawn() actually applies prepend_rg_to_path,
+        // so the child sees the bundled rg directory first in its PATH.
+        // Uses a fake alayacore (a shell script that prints its PATH)
+        // so we can capture the env the child inherited.
+        let _guard = TEST_LOCK.lock().unwrap();
+        let dir = temp_path("spawn-rg-path");
+        std::fs::create_dir_all(&dir).expect("create dir");
+
+        let rg = dir.join("rg");
+        std::fs::write(&rg, b"#!/bin/sh\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&rg, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let bin = dir.join("fake-alayacore");
+        std::fs::write(&bin, b"#!/bin/sh\necho \"$PATH\"\n").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut core = spawn(
+            bin.to_str().unwrap(),
+            "", "", "", None, "", 1, None,
+        )
+        .expect("spawn");
+        let mut out = String::new();
+        use std::io::Read;
+        core.stdout.read_to_string(&mut out).unwrap();
+        let _ = core.child.wait();
+
+        let first = std::env::split_paths(out.trim())
+            .next()
+            .expect("non-empty PATH");
+        assert_eq!(
+            first, dir,
+            "bundled rg dir must be the FIRST PATH entry, got: {first:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn spawn_does_not_set_path_when_rg_is_stub() {
+        // A 0-byte rg stub at the bundled location must NOT trigger
+        // PATH mutation: alayacore inherits its original PATH and any
+        // rg lookup falls through to the system PATH (or skips rg-only
+        // features).
+        let _guard = TEST_LOCK.lock().unwrap();
+        let dir = temp_path("spawn-rg-stub");
+        std::fs::create_dir_all(&dir).expect("create dir");
+        std::fs::write(dir.join("rg"), b"").unwrap(); // 0-byte stub
+
+        let bin = dir.join("fake-alayacore");
+        std::fs::write(&bin, b"#!/bin/sh\necho \"$PATH\"\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let original_path = std::env::var_os("PATH").unwrap_or_default();
+        let mut core = spawn(
+            bin.to_str().unwrap(),
+            "", "", "", None, "", 1, None,
+        )
+        .expect("spawn");
+        let mut out = String::new();
+        use std::io::Read;
+        core.stdout.read_to_string(&mut out).unwrap();
+        let _ = core.child.wait();
+
+        // The child should have the same PATH as the parent — spawn()
+        // did not mutate it because rg was a stub.
+        assert_eq!(
+            out.trim(),
+            original_path.to_string_lossy().trim(),
+            "PATH must be inherited unchanged when rg is a 0-byte stub"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // ─── bundled_binary_path ─────────────────────────────────────
     //
     // The bundled binary is the search candidate the build script
@@ -622,6 +764,122 @@ mod tests {
         // find_binary: bundled.len() > 0 is the gate.
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ─── prepend_rg_to_path ──────────────────────────────────────
+    //
+    // The PATH-prepending helper lets alayacore find `rg` next to
+    // itself in the installed app. The tests below lock TEST_LOCK so
+    // the parent's PATH mutation (get_envs reflects what the helper
+    // wrote to the Command) is not visible to other tests.
+
+    /// Returns the PATH value the helper wrote to `cmd` (or None if
+    /// it did not write one).
+    fn cmd_path(cmd: &Command) -> Option<std::ffi::OsString> {
+        for (k, v) in cmd.get_envs() {
+            if k == "PATH" {
+                return v.map(|s| s.to_os_string());
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn prepend_rg_to_path_adds_bundled_dir_when_rg_present() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let dir = temp_path("prepend-rg-present");
+        std::fs::create_dir_all(&dir).expect("create dir");
+        let rg_name = if cfg!(target_os = "windows") { "rg.exe" } else { "rg" };
+        let rg = dir.join(rg_name);
+        std::fs::write(&rg, b"#!/bin/sh\n").unwrap();
+        let bin = dir.join(if cfg!(target_os = "windows") {
+            "alayacore.exe"
+        } else {
+            "alayacore"
+        });
+        std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
+
+        let mut cmd = Command::new("/bin/true");
+        prepend_rg_to_path(&mut cmd, bin.to_str().unwrap());
+
+        let path = cmd_path(&cmd).expect("PATH must be set");
+        // Bundled dir is FIRST (prepended, ahead of inherited PATH)
+        // so alayacore prefers the bundled rg over any system rg.
+        let first = std::env::split_paths(&path).next().expect("non-empty PATH");
+        assert_eq!(first, dir, "bundled rg dir must be prepended to PATH");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prepend_rg_to_path_noop_when_rg_missing() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        // Directory has alayacore but no rg — helper must not touch
+        // PATH; alayacore inherits whatever the backend already had.
+        let dir = temp_path("prepend-rg-missing");
+        std::fs::create_dir_all(&dir).expect("create dir");
+        let bin = dir.join(if cfg!(target_os = "windows") {
+            "alayacore.exe"
+        } else {
+            "alayacore"
+        });
+        std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
+
+        let mut cmd = Command::new("/bin/true");
+        prepend_rg_to_path(&mut cmd, bin.to_str().unwrap());
+
+        assert!(
+            cmd_path(&cmd).is_none(),
+            "PATH must not be set when rg is not bundled"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prepend_rg_to_path_noop_when_rg_is_zero_byte_stub() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        // A 0-byte rg stub (build.rs fallback when no rg was found
+        // locally) must NOT be advertised via PATH — alayacore would
+        // try to exec it and fail with a confusing exec error.
+        let dir = temp_path("prepend-rg-stub");
+        std::fs::create_dir_all(&dir).expect("create dir");
+        let rg_name = if cfg!(target_os = "windows") { "rg.exe" } else { "rg" };
+        let rg = dir.join(rg_name);
+        std::fs::write(&rg, b"").unwrap(); // 0-byte stub
+        let bin = dir.join(if cfg!(target_os = "windows") {
+            "alayacore.exe"
+        } else {
+            "alayacore"
+        });
+        std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
+
+        let mut cmd = Command::new("/bin/true");
+        prepend_rg_to_path(&mut cmd, bin.to_str().unwrap());
+
+        assert!(
+            cmd_path(&cmd).is_none(),
+            "PATH must not be set when rg is a 0-byte stub"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prepend_rg_to_path_noop_when_binary_path_has_no_parent() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        // A bare filename ("alayacore" — current_exe() never returns
+        // this in production, but tests must cover the contract)
+        // resolves to an empty parent; helper must return without
+        // touching PATH rather than joining with the cwd.
+        let mut cmd = Command::new("/bin/true");
+        let bare = if cfg!(target_os = "windows") { "alayacore.exe" } else { "alayacore" };
+        prepend_rg_to_path(&mut cmd, bare);
+
+        assert!(
+            cmd_path(&cmd).is_none(),
+            "PATH must not be set when binary_path has no parent"
+        );
     }
 
     // ─── shared test helpers ─────────────────────────────────────

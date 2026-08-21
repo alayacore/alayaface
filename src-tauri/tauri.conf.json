@@ -31,7 +31,8 @@
       "icons/icon.ico"
     ],
     "externalBin": [
-      "binaries/alayacore"
+      "binaries/alayacore",
+      "binaries/rg"
     ],
     "macOS": {
       "infoPlist": "Info.plist"

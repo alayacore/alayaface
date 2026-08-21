@@ -33,14 +33,15 @@ fn main() {
     println!("cargo:rerun-if-env-changed=PATH");
     println!("cargo:rerun-if-env-changed=TARGET");
 
-    // 1. Ensure the bundled binary is on disk FIRST (Tauri's
-    //    externalBin resolver checks for the binary at build-time
-    //    and fails if it is missing). The PATH search and stub
+    // 1. Ensure the bundled binaries are on disk FIRST (Tauri's
+    //    externalBin resolver checks for each binary at build-time
+    //    and fails if any are missing). The PATH search and stub
     //    fallback live below.
     bundle_alayacore();
+    bundle_ripgrep();
 
     // 2. Run the Tauri build (now that binaries/alayacore-<triple>
-    //    exists or has its 0-byte stub).
+    //    and binaries/rg-<triple> exist or have their 0-byte stubs).
     tauri_build::build();
 }
 
@@ -103,13 +104,15 @@ fn dest_path() -> PathBuf {
 
 /// If the destination already has a non-empty file, there is nothing
 /// to do — the user (or a previous build) has placed a real binary
-/// there. Re-runs of `cargo build` skip the search entirely.
+/// there. Re-runs of `cargo build` skip the search entirely. The
+/// "binary" name in the message matches the caller (alayacore vs
+/// ripgrep), set by the surrounding `bundled <name>` warning.
 fn skip_reason(dest: &Path) -> Option<&'static str> {
     if !dest.exists() {
         return None;
     }
     match fs::metadata(dest) {
-        Ok(meta) if meta.len() > 0 => Some("destination already has a non-empty alayacore"),
+        Ok(meta) if meta.len() > 0 => Some("destination already has a non-empty binary"),
         Ok(_) => None, // 0-byte stub → re-try replacing it
         Err(_) => None,
     }
@@ -168,4 +171,84 @@ fn write_stub(dest: &Path) {
         let _ = fs::create_dir_all(parent);
     }
     let _ = fs::write(dest, b"");
+}
+
+/// Place ripgrep at the Tauri-bundle source path so alayacore can
+/// find it on PATH next to itself (see `alayacore::prepend_rg_to_path`).
+///
+/// Mirrors `bundle_alayacore`: try PATH first, fall back to a 0-byte
+/// stub so a local build without ripgrep installed still succeeds.
+/// The runtime check `rg.len() > 0` in `prepend_rg_to_path` skips the
+/// stub and lets alayacore fall back to whatever it finds on its
+/// inherited PATH (or skip rg-only functionality).
+fn bundle_ripgrep() {
+    let dest = ripgrep_dest_path();
+    if let Some(reason) = skip_reason(&dest) {
+        println!("cargo:warning=ripgrep bundling skipped: {reason}");
+        return;
+    }
+
+    let rg_name = if cfg!(target_os = "windows") { "rg.exe" } else { "rg" };
+    if let Some(src) = find_on_path(rg_name) {
+        match fs::copy(&src, &dest) {
+            Ok(_) => println!(
+                "cargo:warning=bundled ripgrep from {} -> {}",
+                src.display(),
+                dest.display()
+            ),
+            Err(e) => {
+                println!(
+                    "cargo:warning=could not copy ripgrep from {} to {}: {} \
+                     (creating 0-byte stub; alayacore will fall back to PATH search)",
+                    src.display(),
+                    dest.display(),
+                    e
+                );
+                write_stub(&dest);
+            }
+        }
+    } else {
+        println!(
+            "cargo:warning=ripgrep ({rg_name}) not found on PATH; \
+             creating 0-byte stub at {} (alayacore will fall back to PATH search)",
+            dest.display()
+        );
+        write_stub(&dest);
+    }
+}
+
+/// Path where the Tauri build will look for the ripgrep binary.
+/// Same naming scheme as `dest_path` — `<name>-<target_triple>` with
+/// `.exe` on Windows.
+fn ripgrep_dest_path() -> PathBuf {
+    let target = env::var("TARGET").unwrap_or_default();
+    let name = if cfg!(target_os = "windows") {
+        format!("rg-{}.exe", target)
+    } else {
+        format!("rg-{}", target)
+    };
+    PathBuf::from("binaries").join(name)
+}
+
+/// `which <name>` / `where <name>` wrapper. Used by `bundle_ripgrep`
+/// to discover a system ripgrep for local builds; the release
+/// workflow always downloads the matching binary so PATH search is
+/// only a dev convenience.
+fn find_on_path(name: &str) -> Option<PathBuf> {
+    let which_cmd = if cfg!(target_os = "windows") { "where" } else { "which" };
+    let out = Command::new(which_cmd).arg(name).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let line = stdout.lines().next()?.trim();
+    if line.is_empty() {
+        return None;
+    }
+    let p = PathBuf::from(line);
+    if p.is_file() {
+        Some(p)
+    } else {
+        None
+    }
 }

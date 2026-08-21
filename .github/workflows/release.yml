@@ -108,12 +108,20 @@ jobs:
           # Rust's target triple is the historical aarch64/x86_64
           # naming — the mapping is unified on the matrix side
           # (arm64/amd64) and translated here for the build.
+          #
+          # ripgrep's asset naming uses its own target triples,
+          # which match Rust's for macOS and Windows. For Linux,
+          # ripgrep publishes a -musl variant only (the x86_64
+          # -gnu build was dropped upstream; both arm64 variants
+          # still exist but musl is statically linked and avoids
+          # the glibc version coupling the desktop app already
+          # inherits from its system GTK/WebKit deps).
           case "${{ matrix.os }},${{ matrix.arch }}" in
-            macos,arm64)    ALAYACORE_ASSET=alayacore-darwin-arm64;     RUST_TARGET=aarch64-apple-darwin ;;
-            macos,amd64)    ALAYACORE_ASSET=alayacore-darwin-amd64;     RUST_TARGET=x86_64-apple-darwin ;;
-            windows,amd64)  ALAYACORE_ASSET=alayacore-windows-amd64.exe; RUST_TARGET=x86_64-pc-windows-msvc ;;
-            linux,arm64)    ALAYACORE_ASSET=alayacore-linux-arm64;      RUST_TARGET=aarch64-unknown-linux-gnu ;;
-            linux,amd64)    ALAYACORE_ASSET=alayacore-linux-amd64;      RUST_TARGET=x86_64-unknown-linux-gnu ;;
+            macos,arm64)    ALAYACORE_ASSET=alayacore-darwin-arm64;       RUST_TARGET=aarch64-apple-darwin;        RIPGREP_TARGET=aarch64-apple-darwin;       RIPGREP_EXT=tar.gz ;;
+            macos,amd64)    ALAYACORE_ASSET=alayacore-darwin-amd64;       RUST_TARGET=x86_64-apple-darwin;         RIPGREP_TARGET=x86_64-apple-darwin;        RIPGREP_EXT=tar.gz ;;
+            windows,amd64)  ALAYACORE_ASSET=alayacore-windows-amd64.exe;  RUST_TARGET=x86_64-pc-windows-msvc;      RIPGREP_TARGET=x86_64-pc-windows-msvc;     RIPGREP_EXT=zip ;;
+            linux,arm64)    ALAYACORE_ASSET=alayacore-linux-arm64;        RUST_TARGET=aarch64-unknown-linux-gnu;   RIPGREP_TARGET=aarch64-unknown-linux-musl; RIPGREP_EXT=tar.gz ;;
+            linux,amd64)    ALAYACORE_ASSET=alayacore-linux-amd64;        RUST_TARGET=x86_64-unknown-linux-gnu;    RIPGREP_TARGET=x86_64-unknown-linux-musl; RIPGREP_EXT=tar.gz ;;
             *) echo "Unsupported (os, arch): ${{ matrix.os }},${{ matrix.arch }}" >&2; exit 1 ;;
           esac
 
@@ -151,6 +159,68 @@ jobs:
           # arm64 is intentionally omitted — see the matrix
           # comment), so alayacore --version works on all of them.
           "src-tauri/binaries/${ALAYACORE_BIN}" --version
+
+          # ─── Bundle ripgrep alongside alayacore ────────────────
+          # alayacore uses `rg` (ripgrep) for fast content search,
+          # detected via PATH. Tauri's externalBin places both
+          # binaries in the same install directory, so the runtime
+          # prepends that directory to PATH on alayacore spawn
+          # (see alayacore::prepend_rg_to_path) and alayacore
+          # picks up the bundled rg first, ahead of any rg the
+          # user has installed system-wide.
+          #
+          # ripgrep's release assets are versioned in the filename
+          # (`ripgrep-<version>-<target>.<ext>`), unlike alayacore's
+          # which keep a stable per-target name. We can't use the
+          # /releases/latest/download/<asset> redirect trick that
+          # alayacore uses; instead, follow the /releases/latest
+          # redirect to discover the actual tag, then construct
+          # the asset URL. Same "latest at tag-push time" semantics
+          # as the alayacore install above — no version pinning,
+          # so a breaking rg change would be visible at release
+          # time alongside any alayacore change.
+          RIPGREP_TAG=$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+              https://github.com/BurntSushi/ripgrep/releases/latest \
+              | sed -E 's|.*/tag/||')
+          echo "Latest ripgrep tag: ${RIPGREP_TAG}"
+
+          RIPGREP_ASSET="ripgrep-${RIPGREP_TAG}-${RIPGREP_TARGET}.${RIPGREP_EXT}"
+          RIPGREP_URL="https://github.com/BurntSushi/ripgrep/releases/download/${RIPGREP_TAG}/${RIPGREP_ASSET}"
+          echo "Downloading $RIPGREP_URL"
+          curl -fsSL "$RIPGREP_URL" -o /tmp/ripgrep-archive
+
+          # macOS/Linux tarballs put rg at
+          # `ripgrep-<tag>-<target>/rg`; Windows zips put rg.exe
+          # at the archive root.
+          mkdir -p /tmp/ripgrep-extracted
+          if [ "$RIPGREP_EXT" = "zip" ]; then
+            # `-j` flattens paths so rg.exe lands directly in
+            # /tmp/ripgrep-extracted/ instead of a versioned
+            # subdirectory. Git Bash (the shell on the
+            # windows-latest runner) ships unzip from the
+            # Info-ZIP package.
+            unzip -j /tmp/ripgrep-archive 'rg.exe' -d /tmp/ripgrep-extracted
+            RG_PATH="/tmp/ripgrep-extracted/rg.exe"
+          else
+            tar -xzf /tmp/ripgrep-archive -C /tmp/ripgrep-extracted
+            RG_PATH="/tmp/ripgrep-extracted/ripgrep-${RIPGREP_TAG}-${RIPGREP_TARGET}/rg"
+          fi
+
+          # Same `.exe` convention as alayacore above — Tauri's
+          # externalBin resolver appends it on Windows source
+          # paths, so the source path must already include it or
+          # Windows will refuse to exec the smoke-test below.
+          RG_BIN="rg-${RUST_TARGET}"
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            RG_BIN="${RG_BIN}.exe"
+          fi
+          mv "$RG_PATH" "src-tauri/binaries/${RG_BIN}"
+          chmod +x "src-tauri/binaries/${RG_BIN}" 2>/dev/null || true
+
+          # Smoke-test: rg --version must succeed (catches wrong
+          # target / truncated download / wrong archive layout
+          # before the Tauri build runs).
+          "src-tauri/binaries/${RG_BIN}" --version
 
           # Pass the Rust target triple to the build step.
           echo "rust_target=${RUST_TARGET}" >> "$GITHUB_OUTPUT"
