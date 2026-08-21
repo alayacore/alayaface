@@ -1,9 +1,10 @@
 port module Ports exposing
-    ( -- Inbound events (Tauri → Elm)
+    (      -- Inbound events (Tauri → Elm)
       onDelta
     , onFrame
     , onStatus
     , onRpcError
+    , onAlayacoreCheck
       -- Outbound commands (Elm → Tauri)
     , createSession
     , closeSession
@@ -12,6 +13,7 @@ port module Ports exposing
     , setModel
     , setReasoningLevel
     , modelSync
+    , checkAlayacore
       -- Default (global) model list editor
     , listDefaultModels
     , syncDefaultModels
@@ -290,6 +292,14 @@ port fillMcpAuthUrl : { sessionId : String, serverName : String, authUrl : Strin
 
 port onSessionCreated : (String -> msg) -> Sub msg
 port onSessionCreateError : (String -> msg) -> Sub msg
+
+-- Startup check: check_alayacore resolves the alayacore binary and
+-- confirms it exists on disk. The frontend fires this on init() so the
+-- home screen can show a "not found" banner when the binary is
+-- missing. { ok : Bool, path : String, error : String }.
+port checkAlayacore : {} -> Cmd msg
+port onAlayacoreCheck : (E.Value -> msg) -> Sub msg
+
 -- { ok, dirs, error }
 port onSessionDirs : (E.Value -> msg) -> Sub msg
 port onSessionActionResult : (E.Value -> msg) -> Sub msg

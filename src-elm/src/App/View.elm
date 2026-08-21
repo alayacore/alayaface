@@ -249,6 +249,21 @@ viewNoSessionPanel model =
     Html.div [ Attr.class "chat-area chat-area-centered no-sessions" ]
         [ Html.div [ Attr.class "hs-container-inline" ]
             [ Html.div [ Attr.class "hs-logo" ] [ Html.text "AlayaFace" ]
+            , case model.alayacoreCheck of
+                Just check ->
+                    if check.ok then
+                        Html.text ""
+
+                    else
+                        -- Startup check failed: the alayacore binary
+                        -- was not found. Show the banner immediately
+                        -- below the logo so the user sees it first;
+                        -- the layout is centered so a wrapped error
+                        -- message still reads cleanly.
+                        Html.div [ Attr.class "init-error" ] [ Html.text check.error ]
+
+                Nothing ->
+                    Html.text ""
             , Html.div [ Attr.class "hs-tagline" ]
                 [ Html.text "No session open — right-click the canvas and pick a preset under New Session" ]
             ]

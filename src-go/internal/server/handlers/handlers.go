@@ -44,6 +44,8 @@ func Registry() map[string]Command {
 		"alayacore_confirm":     ConfirmTool,
 		"alayacore_mcp_decline": McpDecline,
 		"alayacore_mcp_cancel":  McpCancel,
+		// startup check (frontend probes on init)
+		"check_alayacore": CheckAlayacore,
 		// models
 		"list_models":         ListModels,
 		"list_default_models": ListDefaultModels,

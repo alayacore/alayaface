@@ -57,6 +57,7 @@ initModelWithSession =
     , ctxSessionId = ""
     , appWidth = 1400
     , appHeight = 900
+    , alayacoreCheck = Nothing
     , planWindows = Dict.empty
     , planMetas = Dict.empty
     , planMetaLoading = False

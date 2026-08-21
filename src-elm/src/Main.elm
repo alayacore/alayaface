@@ -78,6 +78,7 @@ init _ =
       , ctxSessionId = ""
       , appWidth = 1400
       , appHeight = 900
+      , alayacoreCheck = Nothing
       , planWindows = Dict.empty
       , planMetas = Dict.empty
       , planMetaLoading = False
@@ -135,6 +136,10 @@ init _ =
         , Ports.listPresets {}
         , Ports.fsHomeDir {}
         , Ports.getGlobalConfig {}
+        -- Startup health check: probe the alayacore binary so the home
+        -- screen can show a "not found" banner before the user clicks
+        -- New Session. Runs in parallel with the rest of init.
+        , Ports.checkAlayacore {}
         , Task.attempt GotContainerSize (Dom.getElement "main-content")
         ]
     )
@@ -177,6 +182,7 @@ subscriptions model =
         , Ports.onRawAudioReady (\raw -> RawAudioReady raw)
         , Ports.onRawAudioError (\raw -> RawAudioError raw)
         , Ports.onCaptureAutoStop (\raw -> CaptureAutoStop raw)
+        , Ports.onAlayacoreCheck (\raw -> AlayacoreCheckResult raw)
         , Ports.onPresetsList (\raw -> PresetsListResult raw)
         , Ports.onPresetActionResult (\raw -> PresetActionResult raw)
         , Ports.onSessionCreated (\id -> SessionCreated id)

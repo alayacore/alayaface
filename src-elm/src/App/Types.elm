@@ -133,6 +133,12 @@ type alias Model =
     , ctxSessionId : String
     , appWidth : Int
     , appHeight : Int
+      -- Startup health: the result of check_alayacore on init().
+      -- Nothing = check still pending (hide any banner); Just ok=True
+      -- = binary found; Just ok=False = error shown on the home screen
+      -- so the user sees WHY they can't create a session before they
+      -- click New Session.
+    , alayacoreCheck : Maybe { ok : Bool, path : String, error : String }
       -- Plan Mode
     , planWindows : Dict String PlanWindow
     -- Runtime metadata (sessions/<origin>/plans/<planId>/<planId>.meta.json):
@@ -522,6 +528,10 @@ type Msg
     | VoiceError E.Value
     | AsrResult E.Value
     | CursorPosResult E.Value
+      -- Startup probe: the backend reports whether the alayacore binary
+      -- was found. The home screen shows a clear error when this fails
+      -- so the user sees the problem before clicking New Session.
+    | AlayacoreCheckResult E.Value
       -- Presets
     | OpenPresetManager
     | ClosePresetManager

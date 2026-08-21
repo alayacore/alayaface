@@ -5836,6 +5836,21 @@ update msg model =
                 Err _ ->
                     ( model, Cmd.none )
 
+        AlayacoreCheckResult raw ->
+            -- Startup probe reply: the backend reports whether the
+            -- alayacore binary was found and where. The home screen
+            -- reads model.alayacoreCheck to show a "not found" banner;
+            -- sessions that already exist still work, but creating a
+            -- new one will fail. We always store the result so the
+            -- banner can show it (ok=True is stored too, so the view
+            -- can choose to clear the banner on success).
+            case D.decodeValue alayacoreCheckDecoder raw of
+                Ok res ->
+                    ( { model | alayacoreCheck = Just res }, Cmd.none )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
         -- Presets
         OpenPresetManager ->
             ( { model
@@ -7435,6 +7450,22 @@ asrConfigGetResultDecoder =
         (D.field "ok" D.bool)
         (D.field "active" D.string)
         (D.field "profiles" (D.list asrProfileDecoder))
+        (D.field "error" D.string)
+
+
+-- AlayacoreCheckResult: the backend reports whether the alayacore
+-- binary was found. { ok : Bool, path : String, error : String } — ok
+-- is true on a successful locate (path is the resolved binary path);
+-- ok is false on a missing binary (path is "", error is a user-facing
+-- message). The frontend renders the banner based on the ok field so
+-- a noisy `error` (e.g. set env var to a deleted file) does not by
+-- itself show the banner.
+alayacoreCheckDecoder : D.Decoder { ok : Bool, path : String, error : String }
+alayacoreCheckDecoder =
+    D.map3
+        (\ok path error -> { ok = ok, path = path, error = error })
+        (D.field "ok" D.bool)
+        (D.field "path" D.string)
         (D.field "error" D.string)
 
 

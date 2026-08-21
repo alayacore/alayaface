@@ -3,7 +3,42 @@ package handlers
 import (
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+
+	"alayaface/src-go/internal/core"
 )
+
+// AlayacoreCheck is the result of the startup check_alayacore RPC. The
+// frontend probes this on init() so the home screen can show a
+// "AlayaCore not found" banner when the binary is missing, instead of
+// letting the user click New Session and only learn at spawn time.
+type AlayacoreCheck struct {
+	OK    bool   `json:"ok"`
+	Path  string `json:"path"`
+	Error string `json:"error"`
+}
+
+// CheckAlayacore resolves the alayacore binary path and confirms it
+// exists on disk. find_binary() already filters most candidates by
+// os.Stat; the only branch that returns a non-existent path is the
+// fallback ("alayacore" on PATH, which is not stat'd). We stat the
+// returned path one more time so the result is decisive: if a stale
+// ALAYACORE_BIN env var points to a deleted file, the env-var AND the
+// `which` AND the candidate paths would all fail — the user gets a
+// clear error pointing at the exact path that was tried.
+func CheckAlayacore(h *Handler, w http.ResponseWriter, r *http.Request) error {
+	path := core.FindBinary()
+	if _, err := os.Stat(path); err == nil {
+		return writeResult(w, AlayacoreCheck{OK: true, Path: path})
+	}
+	abs, _ := filepath.Abs(path)
+	return writeResult(w, AlayacoreCheck{
+		OK:    false,
+		Path:  "",
+		Error: fmt.Sprintf("AlayaCore binary not found at '%s'. Set the ALAYACORE_BIN environment variable or install alayacore on PATH.", abs),
+	})
+}
 
 // CancelTask sends the "cancel" command to a session.
 func CancelTask(h *Handler, w http.ResponseWriter, r *http.Request) error {

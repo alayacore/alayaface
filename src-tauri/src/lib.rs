@@ -175,6 +175,7 @@ pub fn run() {
             commands::alayacore_mcp_decline,
             commands::alayacore_mcp_cancel,
             commands::fork_session,
+            commands::check_alayacore,
             commands::list_models,
             commands::list_default_models,
             commands::sync_default_models,

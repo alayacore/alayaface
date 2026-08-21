@@ -544,6 +544,27 @@
         .catch(function (err) { rpcError("mcp_cancel", data.sessionId, err); });
     });
 
+    // Startup check: probe the alayacore binary once on init so the home
+    // screen can show a "not found" banner if the binary is missing
+    // (without this, the user only learns at New Session → spawn time,
+    // and the error is buried in the session-create flow).
+    on("checkAlayacore", function () {
+      transport.invoke("check_alayacore", {})
+        .then(function (res) {
+          app.ports.onAlayacoreCheck.send({
+            ok: !!(res && res.ok),
+            path: (res && res.path) || "",
+            error: (res && res.error) || "",
+          });
+        })
+        .catch(function (err) {
+          app.ports.onAlayacoreCheck.send({
+            ok: false, path: "",
+            error: String((err && err.message) || err),
+          });
+        });
+    });
+
     on("forkSession", function (data) {
       transport.invoke("fork_session", {
         sourceSessionId: data.sourceSessionId,
