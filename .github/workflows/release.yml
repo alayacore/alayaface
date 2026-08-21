@@ -189,17 +189,21 @@ jobs:
           echo "Downloading $RIPGREP_URL"
           curl -fsSL "$RIPGREP_URL" -o /tmp/ripgrep-archive
 
-          # macOS/Linux tarballs put rg at
-          # `ripgrep-<tag>-<target>/rg`; Windows zips put rg.exe
-          # at the archive root.
+          # macOS/Linux tarballs and the Windows zip BOTH put rg/rg.exe
+          # at `ripgrep-<tag>-<target>/rg[.exe]` — the Windows zip is
+          # not flatter than the tarballs. Extract just the binary
+          # (with `-j` on zip) so the destination is always
+          # `/tmp/ripgrep-extracted/rg[.exe]` regardless of layout.
           mkdir -p /tmp/ripgrep-extracted
           if [ "$RIPGREP_EXT" = "zip" ]; then
             # `-j` flattens paths so rg.exe lands directly in
-            # /tmp/ripgrep-extracted/ instead of a versioned
-            # subdirectory. Git Bash (the shell on the
-            # windows-latest runner) ships unzip from the
-            # Info-ZIP package.
-            unzip -j /tmp/ripgrep-archive 'rg.exe' -d /tmp/ripgrep-extracted
+            # /tmp/ripgrep-extracted/. The wildcard
+            # `ripgrep-*/rg.exe` matches the versioned subdirectory
+            # ripgrep puts inside every release zip — a bare `rg.exe`
+            # would miss it ("filename not matched"). Git Bash (the
+            # shell on the windows-latest runner) ships unzip from
+            # the Info-ZIP package.
+            unzip -j /tmp/ripgrep-archive 'ripgrep-*/rg.exe' -d /tmp/ripgrep-extracted
             RG_PATH="/tmp/ripgrep-extracted/rg.exe"
           else
             tar -xzf /tmp/ripgrep-archive -C /tmp/ripgrep-extracted
