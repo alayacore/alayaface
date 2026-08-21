@@ -29,13 +29,67 @@
 //! used as --system.
 
 use std::path::PathBuf;
+use std::sync::RwLock;
 
-/// Get alayaface's base directory (~/.alayaface).
+/// Process-global override for the base config directory. When set via
+/// `set_override` (from the --config-path CLI flag), it replaces
+/// `$HOME/.alayaface` in every helper. Mutating it after startup is
+/// racy — callers should treat it as one-shot init.
+///
+/// `RwLock` so the read path (AlayafaceDir → many call sites) doesn't
+/// block the writer and tests can re-set it freely.
+static CONFIG_PATH_OVERRIDE: RwLock<Option<PathBuf>> = RwLock::new(None);
+
+/// Override the base config directory used by every helper in this
+/// crate. Pass an empty `PathBuf` (or the default) to fall back to
+/// `$HOME/.alayaface`. A leading `~` or `~/` is expanded against
+/// `$HOME`, mirroring the Go side.
+pub fn set_override(path: PathBuf) {
+    let mut guard = CONFIG_PATH_OVERRIDE.write().expect("CONFIG_PATH_OVERRIDE poisoned");
+    *guard = if path.as_os_str().is_empty() { None } else { Some(path) };
+}
+
+/// Read the current override (empty when the default $HOME/.alayaface
+/// is in effect). Tests inspect this to verify the flag plumbed through.
+pub fn override_path() -> PathBuf {
+    let guard = CONFIG_PATH_OVERRIDE.read().expect("CONFIG_PATH_OVERRIDE poisoned");
+    guard.clone().unwrap_or_default()
+}
+
+/// Get alayaface's base directory ($HOME/.alayaface by default, or the
+/// --config-path override when set).
 pub fn alayaface_dir() -> PathBuf {
+    let override_dir = {
+        let guard = CONFIG_PATH_OVERRIDE.read().expect("CONFIG_PATH_OVERRIDE poisoned");
+        guard.clone()
+    };
+    if let Some(path) = override_dir {
+        return expand_home(&path);
+    }
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home).join(".alayaface")
+}
+
+/// Expand a leading "~" or "~/" against $HOME. A bare "~" becomes
+/// $HOME; absolute and relative paths pass through unchanged (mirrors
+/// the Go side).
+fn expand_home(path: &PathBuf) -> PathBuf {
+    let s = path.to_string_lossy();
+    if s == "~" {
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_else(|_| ".".to_string());
+        return PathBuf::from(home);
+    }
+    if let Some(rest) = s.strip_prefix("~/").or_else(|| s.strip_prefix("~\\")) {
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_else(|_| ".".to_string());
+        return PathBuf::from(home).join(rest);
+    }
+    path.clone()
 }
 
 /// Directory holding all presets (~/.alayaface/presets).
@@ -760,5 +814,110 @@ mod tests {
             let got = serde_json::to_string_pretty(&args).unwrap();
             assert_eq!(got, c.expected, "SpawnArgs case {}", c.name);
         }
+    }
+
+    // ─── --config-path override ────────────────────────────────────
+    //
+    // The override is a process-global RwLock<Option<PathBuf>>, so
+    // tests share the static with `isolated_home`. The lock below
+    // serializes them.
+
+    /// Run a closure with both HOME and the override isolated, restoring
+    /// both on exit. Tests that touch the override MUST go through this
+    /// helper — `CONFIG_PATH_OVERRIDE` is process-global.
+    fn isolated_override<F: FnOnce() -> R, R>(f: F) -> R {
+        let _guard = TEST_HOME_LOCK.lock().unwrap();
+        let old_home = std::env::var_os("HOME");
+        let old_override = override_path();
+        let tmp = std::env::temp_dir().join(format!(
+            "alayaface-test-{}-{}",
+            std::process::id(),
+            TEST_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        ));
+        std::env::set_var("HOME", &tmp);
+        // Make sure no stray override leaks in.
+        set_override(PathBuf::new());
+        let result = f();
+        match old_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        set_override(old_override);
+        let _ = std::fs::remove_dir_all(&tmp);
+        result
+    }
+
+    #[test]
+    fn override_replaces_home_default() {
+        isolated_override(|| {
+            // No override → $HOME/.alayaface as before.
+            let want = std::env::temp_dir().join("default-anchor");
+            std::env::set_var("HOME", &want);
+            assert_eq!(alayaface_dir(), want.join(".alayaface"));
+
+            // Absolute override replaces the default entirely.
+            let custom = std::env::temp_dir().join("my-custom-alayaface");
+            set_override(custom.clone());
+            assert_eq!(alayaface_dir(), custom);
+            // Every helper routes through the override.
+            assert_eq!(presets_root(), custom.join("presets"));
+            assert_eq!(preset_order_file(), custom.join("preset_order.conf"));
+        });
+    }
+
+    #[test]
+    fn override_tilde_expands_against_home() {
+        isolated_override(|| {
+            let home = std::env::temp_dir().join("tilde-home");
+            std::env::set_var("HOME", &home);
+
+            // Bare "~" expands to $HOME (NOT $HOME/.alayaface — the
+            // override is used as-is, only the leading "~" is expanded).
+            set_override(PathBuf::from("~"));
+            assert_eq!(alayaface_dir(), home);
+
+            // "~/nested" expands to $HOME/nested.
+            set_override(PathBuf::from("~/nested/cfg"));
+            assert_eq!(alayaface_dir(), home.join("nested").join("cfg"));
+        });
+    }
+
+    #[test]
+    fn override_clearing_restores_default() {
+        isolated_override(|| {
+            let home = std::env::temp_dir().join("clear-home");
+            std::env::set_var("HOME", &home);
+
+            // Set, then clear — back to $HOME/.alayaface.
+            set_override(std::env::temp_dir().join("x"));
+            set_override(PathBuf::new());
+            assert_eq!(alayaface_dir(), home.join(".alayaface"));
+
+            // Empty PathBuf and never-set behave identically.
+            assert_eq!(alayaface_dir(), alayaface_dir());
+        });
+    }
+
+    #[test]
+    fn ensure_seeds_under_override_not_home() {
+        isolated_override(|| {
+            let home = std::env::temp_dir().join("seed-home");
+            std::env::set_var("HOME", &home);
+
+            let custom = std::env::temp_dir().join("seed-custom");
+            set_override(custom.clone());
+
+            let sessions = ensure().unwrap();
+            assert_eq!(sessions, custom.join("sessions"));
+            for name in SEED_PRESETS {
+                let dir = custom.join("presets").join(name);
+                assert!(dir.is_dir(), "{name} must be seeded under override, got {dir:?}");
+            }
+            // And nothing leaked into $HOME/.alayaface.
+            assert!(
+                !home.join(".alayaface").exists(),
+                "default $HOME/.alayaface must NOT exist when override is set"
+            );
+        });
     }
 }

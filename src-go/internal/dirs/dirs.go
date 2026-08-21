@@ -35,10 +35,48 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 )
 
-// AlayafaceDir returns the base directory (~/.alayaface).
+// configPathOverride, when non-empty, replaces $HOME/.alayaface as the
+// base directory returned by AlayafaceDir(). Set by the --config-path
+// CLI flag (alayaface-server) before the server starts so every RPC
+// handler, the session manager and the FS subsystem all see the same
+// location. Mutating it after startup is racy — callers should treat
+// it as one-shot init.
+var (
+	configPathMu       sync.RWMutex
+	configPathOverride string
+)
+
+// SetConfigPath overrides the base config directory (normally
+// $HOME/.alayaface) used by every other helper in this package. Pass an
+// empty string to fall back to the default. Leading "~" or "~/" is
+// expanded against $HOME, mirroring fs_resolve_path.
+func SetConfigPath(path string) {
+	configPathMu.Lock()
+	defer configPathMu.Unlock()
+	configPathOverride = path
+}
+
+// ConfigPath returns the current override (empty if the default
+// $HOME/.alayaface is in effect). Tests inspect this to verify the
+// flag plumbed through.
+func ConfigPath() string {
+	configPathMu.RLock()
+	defer configPathMu.RUnlock()
+	return configPathOverride
+}
+
+// AlayafaceDir returns the base directory used by AlayaFace
+// ($HOME/.alayaface by default, or the --config-path override when set).
 func AlayafaceDir() string {
+	configPathMu.RLock()
+	override := configPathOverride
+	configPathMu.RUnlock()
+	if override != "" {
+		return expandHome(override)
+	}
 	home := os.Getenv("HOME")
 	if home == "" {
 		home = os.Getenv("USERPROFILE")
@@ -47,6 +85,33 @@ func AlayafaceDir() string {
 		home = "."
 	}
 	return filepath.Join(home, ".alayaface")
+}
+
+// expandHome expands a leading "~" or "~/" against $HOME. A bare "~"
+// becomes $HOME; anything else is left untouched (so absolute paths
+// and relative paths pass through).
+func expandHome(path string) string {
+	if path == "~" {
+		home := os.Getenv("HOME")
+		if home == "" {
+			home = os.Getenv("USERPROFILE")
+		}
+		if home == "" {
+			home = "."
+		}
+		return home
+	}
+	if strings.HasPrefix(path, "~/") || strings.HasPrefix(path, "~\\") {
+		home := os.Getenv("HOME")
+		if home == "" {
+			home = os.Getenv("USERPROFILE")
+		}
+		if home == "" {
+			home = "."
+		}
+		return filepath.Join(home, path[2:])
+	}
+	return path
 }
 
 // PresetsRoot returns the directory holding all presets (~/.alayaface/presets).

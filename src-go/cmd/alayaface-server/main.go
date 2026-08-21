@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"alayaface/src-go/internal/dirs"
 	"alayaface/src-go/internal/server"
 )
 
@@ -21,7 +22,15 @@ func main() {
 	static := flag.String("static", "../src-elm", "directory of the Elm frontend assets")
 	token := flag.String("token", "", "optional bearer token (RPC: Authorization header, WS: ?token=)")
 	bin := flag.String("alayacore-bin", "", "path to the alayacore binary (default: ALAYACORE_BIN env or PATH discovery)")
+	configPath := flag.String("config-path", "", "base directory for AlayaFace config (presets, sessions, etc.); overrides $HOME/.alayaface. Leading \"~\" is expanded against $HOME.")
 	flag.Parse()
+
+	// Install the override BEFORE anything reads the config dir
+	// (server.New wires handlers, and the session manager starts
+	// accepting RPCs as soon as Routes() is mounted).
+	if *configPath != "" {
+		dirs.SetConfigPath(*configPath)
+	}
 
 	if *bin != "" {
 		// core.FindBinary checks ALAYACORE_BIN first; the flag takes

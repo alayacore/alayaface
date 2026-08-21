@@ -84,8 +84,10 @@ make run-go
 参数：
 
 ```
-alayaface-server --addr 0.0.0.0:8765 --static ../src-elm [--token <token>]
+alayaface-server --addr 0.0.0.0:8765 --static ../src-elm [--token <token>] [--config-path <dir>]
 ```
+
+`--config-path <dir>` 覆盖配置目录（通常为 `$HOME/.alayaface`）；预设、会话、全局/ASR 配置以及内容对象存储都位于 `<dir>` 下。便于在同一台机器上保留多个互相隔离的安装（例如每个客户端/服务端部署一份）。开头的 `~` 会按 `$HOME` 展开（即 `--config-path ~/.alayaface-test` 是绝对路径的简写形式）。两个后端均支持——Tauri 桌面应用接受同样的参数（`alayaface --config-path <dir>`）。
 
 > ⚠️ 使用 `0.0.0.0` 且不带 `--token` 时，任何能访问该端口的人都可以通过 API 创建会话、读取文件。当端口暴露在 localhost/SSH 之外时，请加上 `--token <t>`。令牌会被注入到所托管的页面中（`<meta name="alayaface-token">`），`bridge.js` 会自动附带它（RPC 用 `Authorization: Bearer`，WS 用 `?token=`），因此浏览器客户端无需改动；但任何能获取页面本身的人也会拿到令牌（页面本身就是凭证）。
 

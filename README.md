@@ -97,8 +97,17 @@ over SSH port forwarding (`ssh -L 8765:localhost:8765 <host>` then open
 Options:
 
 ```
-alayaface-server --addr 0.0.0.0:8765 --static ../src-elm [--token <token>]
+alayaface-server --addr 0.0.0.0:8765 --static ../src-elm [--token <token>] [--config-path <dir>]
 ```
+
+`--config-path <dir>` overrides the base config directory (normally
+`$HOME/.alayaface`); presets, sessions, global/asr config and the
+content object store all live under `<dir>`. Useful for keeping
+multiple isolated installs on the same machine (e.g. one per
+client/server deployment). A leading `~` is expanded against `$HOME`
+(so `--config-path ~/.alayaface-test` is shorthand for the absolute
+path). Available on both backends — the Tauri desktop app takes the
+same flag (`alayaface --config-path <dir>`).
 
 > ⚠️ With `0.0.0.0` and no `--token`, anyone who can reach the port can
 > create sessions and read files via the API. Add `--token <t>` when the

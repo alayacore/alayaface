@@ -184,6 +184,93 @@ func TestSessionDirCopyExcludesSettingsConf(t *testing.T) {
 	})
 }
 
+func TestConfigPathOverride(t *testing.T) {
+	// Process-global state — no t.Parallel.
+	prev := ConfigPath()
+	t.Cleanup(func() { SetConfigPath(prev) })
+
+	isolatedHome(t, func() {
+		// Default: still $HOME/.alayaface when no override is set.
+		old := ConfigPath()
+		SetConfigPath("")
+		t.Cleanup(func() { SetConfigPath(old) })
+
+		wantDefault := filepath.Join(os.Getenv("HOME"), ".alayaface")
+		if got := AlayafaceDir(); got != wantDefault {
+			t.Errorf("AlayafaceDir() = %q, want %q", got, wantDefault)
+		}
+
+		// Absolute override replaces the default entirely.
+		override := t.TempDir()
+		SetConfigPath(override)
+		if got := AlayafaceDir(); got != override {
+			t.Errorf("AlayafaceDir() with override = %q, want %q", got, override)
+		}
+		// Every helper routes through the override.
+		if got := PresetsRoot(); got != filepath.Join(override, "presets") {
+			t.Errorf("PresetsRoot() = %q, want %q", got, filepath.Join(override, "presets"))
+		}
+		if got := GlobalConfigFile(); got != filepath.Join(override, "global.conf") {
+			t.Errorf("GlobalConfigFile() = %q, want %q", got, filepath.Join(override, "global.conf"))
+		}
+		if got := AsrConfigFile(); got != filepath.Join(override, "asr.conf") {
+			t.Errorf("AsrConfigFile() = %q, want %q", got, filepath.Join(override, "asr.conf"))
+		}
+
+		// "~" expands against $HOME.
+		SetConfigPath("~")
+		if got := AlayafaceDir(); got != os.Getenv("HOME") {
+			t.Errorf("AlayafaceDir() with \"~\" = %q, want %q", got, os.Getenv("HOME"))
+		}
+		SetConfigPath("~/nested/config")
+		if got := AlayafaceDir(); got != filepath.Join(os.Getenv("HOME"), "nested", "config") {
+			t.Errorf("AlayafaceDir() with \"~/nested/config\" = %q, want %q", got, filepath.Join(os.Getenv("HOME"), "nested", "config"))
+		}
+
+		// Empty override restores the $HOME/.alayaface default.
+		SetConfigPath("")
+		if got := AlayafaceDir(); got != wantDefault {
+			t.Errorf("AlayafaceDir() after clearing override = %q, want %q", got, wantDefault)
+		}
+	})
+}
+
+func TestEnsureUsesConfigPathOverride(t *testing.T) {
+	// Ensure() must create the directory structure under the override,
+	// not under $HOME/.alayaface — the override is the whole point of
+	// the flag.
+	prev := ConfigPath()
+	t.Cleanup(func() { SetConfigPath(prev) })
+
+	isolatedHome(t, func() {
+		override := t.TempDir()
+		// Make sure the temp dir is NOT under $HOME so a regression that
+		// silently fell back to the default would be visible.
+		override, err := filepath.Abs(override)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		old := ConfigPath()
+		SetConfigPath(override)
+		t.Cleanup(func() { SetConfigPath(old) })
+
+		if _, err := Ensure(); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range SeedPresets {
+			if _, err := os.Stat(filepath.Join(override, "presets", name)); err != nil {
+				t.Errorf("seed preset %s not created under override: %v", name, err)
+			}
+		}
+		// And nothing leaked into the default location.
+		defaultBase := filepath.Join(os.Getenv("HOME"), ".alayaface")
+		if _, err := os.Stat(defaultBase); err == nil {
+			t.Errorf("default base %q must NOT exist when override is set", defaultBase)
+		}
+	})
+}
+
 func TestSanitizeDirComponent(t *testing.T) {
 	cases := []struct {
 		in   string
