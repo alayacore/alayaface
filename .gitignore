@@ -35,3 +35,11 @@ src-go/bin/
 # docs/archive/ (root-anchored so only the working files are ignored).
 /TODO.md
 /REFACTOR.md
+
+# AppImage debug extraction: `--appimage-extract` unpacks next to the
+# .AppImage and lands in `./squashfs-root/`. That's local scratch (271 MB
+# on the linux/amd64 image), not a repo input — ignore it everywhere so
+# `git status` doesn't show it as untracked after a one-off `extract` for
+# debugging the AppImage's bundled binaries.
+/squashfs-root/
+**/squashfs-root/
