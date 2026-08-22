@@ -104,7 +104,14 @@ jobs:
         id: install-alayacore
         shell: bash
         run: |
-          set -e
+          # `set -euo pipefail` (not just `-e`): a segfaulting
+          # `rg --version` is how a structurally-broken ripgrep
+          # manifests (exit 139 = 128 + SIGSEGV) — with plain
+          # `-e` that signal exit was being masked in some
+          # contexts and the broken rg was silently shipped.
+          # `-u` catches unset-var typos; `-o pipefail` catches
+          # failures inside the `curl … | sha256sum` chain.
+          set -euo pipefail
           # Rust's target triple is the historical aarch64/x86_64
           # naming — the mapping is unified on the matrix side
           # (arm64/amd64) and translated here for the build.
@@ -189,6 +196,33 @@ jobs:
           echo "Downloading $RIPGREP_URL"
           curl -fsSL "$RIPGREP_URL" -o /tmp/ripgrep-archive
 
+          # ── Verify the tarball against GitHub's published
+          # sidecar .sha256 asset. This catches three classes of
+          # breakage the smoke test can't:
+          #
+          #  1. Truncated/corrupted downloads (HTTP 200 with a
+          #     partial body — `curl -f` won't catch this).
+          #  2. Re-uploaded tarball under the same tag with
+          #     different content (would still pass `--version`
+          #     if the new build also happens to print a version).
+          #  3. Mirror / MITM serving a different file under the
+          #     same URL.
+          #
+          # ripgrep publishes a `${ASSET}.sha256` sidecar next to
+          # every tarball/zip — the content is the same sha256sum
+          # format `sha256sum` emits (hex + "  filename"), so we
+          # can use awk to extract just the hash and compare.
+          EXPECTED_SHA=$(curl -fsSL \
+              "https://github.com/BurntSushi/ripgrep/releases/download/${RIPGREP_TAG}/${RIPGREP_ASSET}.sha256" \
+              | awk '{print $1}')
+          ACTUAL_SHA=$(sha256sum /tmp/ripgrep-archive | awk '{print $1}')
+          echo "Expected ripgrep tarball sha256: ${EXPECTED_SHA}"
+          echo "Actual   ripgrep tarball sha256: ${ACTUAL_SHA}"
+          if [ "${ACTUAL_SHA}" != "${EXPECTED_SHA}" ]; then
+            echo "::error::ripgrep tarball sha256 mismatch for ${RIPGREP_ASSET} (got ${ACTUAL_SHA}, expected ${EXPECTED_SHA}) — refusing to bundle a possibly-tampered/corrupted binary"
+            exit 1
+          fi
+
           # macOS/Linux tarballs and the Windows zip BOTH put rg/rg.exe
           # at `ripgrep-<tag>-<target>/rg[.exe]` — the Windows zip is
           # not flatter than the tarballs. Extract just the binary
@@ -220,6 +254,61 @@ jobs:
           fi
           mv "$RG_PATH" "src-tauri/binaries/${RG_BIN}"
           chmod +x "src-tauri/binaries/${RG_BIN}" 2>/dev/null || true
+
+          # ── Pin the extracted `rg` binary's sha256.
+          #
+          # The tarball-sha check above catches anything GitHub
+          # would call a tampered/corrupted release, but it can't
+          # catch the failure mode that produced the broken
+          # alayaface_amd64.AppImage on 2026-08-21: a `rg` whose
+          # tarball was fine (matched GitHub's digest) but whose
+          # ELF layout differed from every published ripgrep
+          # artifact — 3 LOAD segments vs. 2, with `.dynamic`
+          # moved into a separate LOAD that left a stale `.got`
+          # pointer behind, making the binary SIGSEGV in
+          # `alayacore`'s CRT init at unrelocated 0x69eb70
+          # (an unmapped gap between LOADs). That artifact also
+          # had a non-zero `.dynstr` and a `RUNPATH=$ORIGIN/../lib`
+          # entry the official `ripgrep-15.2.0-*-linux-musl/rg`
+          # does not carry — i.e., it was clearly *not* the binary
+          # ripgrep published, but somehow ended up at
+          # `binaries/rg-x86_64-unknown-linux-gnu` anyway.
+          #
+          # Pinning each (target, ripgrep-tag) pair to the binary's
+          # own sha256 forces the next build to either reproduce
+          # the exact same ripgrep release artifact (good — it's a
+          # deterministic upstream build), or fail loudly when
+          # ripgrep ships a new release (intended — bump the
+          # pin deliberately). The smoke test alone is not
+          # sufficient because a freshly-broken `rg --version`
+          # segfaults (exit 139), and `set -e`'s default
+          # signal-handling is unreliable inside some GH Actions
+          # shell contexts — see the `set -euo pipefail` note
+          # above.
+          #
+          # To regenerate: download the tarball for the new tag,
+          # extract it, and paste the resulting `sha256sum rg`
+          # hash here for the matching RIPGREP_TARGET.
+          declare -A EXPECTED_RG_SHA=(
+            # ripgrep 15.2.0 (released 2026-07-15) — verified against
+            # the tarball at
+            # https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz
+            # sha256(tarball)=33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c
+            ["x86_64-unknown-linux-musl"]="e62198eb19b136b88c330af83647b5a962cb99b6b1f066758568f12de1974849"
+            ["aarch64-unknown-linux-musl"]="800b1e7206afe799dfb5a6901f23147cfaabe0e52210538100f61e86e1740915"
+          )
+          EXPECTED="${EXPECTED_RG_SHA[${RIPGREP_TARGET}]:-}"
+          if [ -z "${EXPECTED}" ]; then
+            echo "::warning::no pinned rg sha256 for RIPGREP_TARGET=${RIPGREP_TARGET} (tag=${RIPGREP_TAG}) — skipping extracted-binary check. Add one to release.yml's EXPECTED_RG_SHA map before bundling a new target."
+          else
+            ACTUAL_RG_SHA=$(sha256sum "src-tauri/binaries/${RG_BIN}" | awk '{print $1}')
+            echo "Expected rg sha256 (${RIPGREP_TARGET}): ${EXPECTED}"
+            echo "Actual   rg sha256 (${RIPGREP_TARGET}): ${ACTUAL_RG_SHA}"
+            if [ "${ACTUAL_RG_SHA}" != "${EXPECTED}" ]; then
+              echo "::error::bundled rg sha256 mismatch for ${RIPGREP_TARGET} ${RIPGREP_TAG} (got ${ACTUAL_RG_SHA}, expected ${EXPECTED}) — refusing to ship a binary that isn't byte-identical to the upstream ripgrep release"
+              exit 1
+            fi
+          fi
 
           # Smoke-test: rg --version must succeed (catches wrong
           # target / truncated download / wrong archive layout
