@@ -10,19 +10,13 @@ view :
     { sessionId : String
     , draft : T.McpDraft
     , isNew : Bool
-    , onBack : msg
     , onSave : msg
     , onField : String -> String -> msg
     }
     -> Html msg
 view config =
     Html.div [ Attr.class "me-page" ]
-        [ Html.div [ Attr.class "me-page-header" ]
-            [ Html.button [ Attr.class "me-back-btn", Ev.onClick config.onBack ] [ Html.text "← Back" ]
-            , Html.div [ Attr.class "me-page-title" ]
-                [ Html.text (if config.isNew then "Add MCP Server" else "Edit MCP Server") ]
-            ]
-        , Html.div [ Attr.class "me-fields" ]
+        [ Html.div [ Attr.class "me-fields" ]
             [ selectField "type" "Type" [ "http", "stdio" ] config.draft.type_ config
             , textField "server" "Server Name" config.draft.server config
             , if config.draft.type_ == "http" then
@@ -60,8 +54,7 @@ view config =
             , selectField "proto-version" "Proto Version" (protoVersionOptions config.draft.protoVersion) config.draft.protoVersion config
             ]
         , Html.div [ Attr.class "me-actions" ]
-            [ Html.button [ Attr.class "me-save-btn", Ev.onClick config.onSave ] [ Html.text "Save" ]
-            , Html.button [ Attr.class "me-cancel-btn", Ev.onClick config.onBack ] [ Html.text "Cancel" ]
+            [ Html.button [ Attr.class "btn btn-primary", Ev.onClick config.onSave ] [ Html.text "Save" ]
             ]
         ]
 

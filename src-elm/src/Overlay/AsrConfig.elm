@@ -47,7 +47,6 @@ view :
     , onDelete : String -> msg
     , onDeleteConfirm : msg
     , onDeleteCancel : msg
-    , onClose : msg
       -- Form callbacks
     , onName : String -> msg
     , onProtocol : String -> msg
@@ -92,11 +91,7 @@ protocolDisplayName protocol =
 
 listView cfg =
     Html.div [ Attr.class "me-page" ]
-        [ Html.div [ Attr.class "me-page-header" ]
-            [ Html.button [ Attr.class "me-back-btn", Ev.onClick cfg.onClose ] [ Html.text "← Back" ]
-            , Html.div [ Attr.class "me-page-title" ] [ Html.text "ASR config" ]
-            ]
-        , if cfg.loading then
+        [ if cfg.loading then
             Html.div [ Attr.class "sel-page-status" ] [ Html.text "Loading…" ]
 
           else
@@ -119,7 +114,7 @@ listView cfg =
                         (List.map (profileRow cfg) cfg.profiles)
                 , Html.div [ Attr.class "me-actions" ]
                     [ Html.button
-                        [ Attr.class "me-save-btn"
+                        [ Attr.class "btn btn-primary"
                         , Attr.disabled cfg.syncing
                         , Ev.onClick cfg.onAdd
                         ]
@@ -197,12 +192,7 @@ profileRow cfg p =
 
 formView cfg =
     Html.div [ Attr.class "me-page" ]
-        [ Html.div [ Attr.class "me-page-header" ]
-            [ Html.button [ Attr.class "me-back-btn", Ev.onClick cfg.onBack ] [ Html.text "← Back" ]
-            , Html.div [ Attr.class "me-page-title" ]
-                [ Html.text (if cfg.isNew then "New ASR endpoint" else "Edit ASR endpoint") ]
-            ]
-        , Html.div [ Attr.class "me-body" ]
+        [ Html.div [ Attr.class "me-body" ]
             [ case cfg.error of
                 Just err ->
                     Html.div [ Attr.class "sel-page-status sel-page-status-error" ]
@@ -301,13 +291,11 @@ formView cfg =
                 ]
             , Html.div [ Attr.class "me-actions" ]
                 [ Html.button
-                    [ Attr.class "me-save-btn"
+                    [ Attr.class "btn btn-primary"
                     , Attr.disabled cfg.syncing
                     , Ev.onClick cfg.onSave
                     ]
                     [ Html.text (if cfg.syncing then "Saving…" else "Save") ]
-                , Html.button [ Attr.class "me-cancel-btn", Ev.onClick cfg.onBack ]
-                    [ Html.text "Cancel" ]
                 ]
             ]
         ]

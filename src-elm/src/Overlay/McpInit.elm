@@ -52,9 +52,7 @@ view config =
                 |> List.head
     in
     Html.div [ Attr.class "mcp-init-page" ]
-        [ Html.div [ Attr.class "confirm-page-title" ]
-            [ Html.text "Initializing MCP Servers" ]
-        , Html.div [ Attr.class "mcp-init-status" ]
+        [ Html.div [ Attr.class "mcp-init-status" ]
             [ Html.text statusText ]
         , if not (List.isEmpty config.mcpServers) then
             Html.div [ Attr.class "mcp-init-list" ]

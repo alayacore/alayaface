@@ -43,8 +43,7 @@ view :
     -> Html msg
 view config =
     Html.div [ Attr.class "sel-page" ]
-        [ Html.div [ Attr.class "sel-page-title" ] [ Html.text "Preset Manager" ]
-        , Html.div [ Attr.class "me-hint" ]
+        [ Html.div [ Attr.class "me-hint" ]
             [ Html.text "Each preset is a full config set (models, MCP servers, tool settings and its own system prompt). New sessions pick a preset from the global menu; Copy duplicates it; Edit opens its config — you can edit any preset without switching. Built-in presets (Simple/Complex) cannot be renamed or deleted — copy one to customize. Drag a row by its ⠿ handle to reorder the list." ]
         , case config.error of
             Just err ->

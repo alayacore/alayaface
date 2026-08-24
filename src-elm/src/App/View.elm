@@ -409,7 +409,11 @@ keep the conversation on disk, resumable later), Close and Delete
 viewCloseConfirmOverlay : T.SessionState -> Html Msg
 viewCloseConfirmOverlay session =
     if session.closeConfirm then
-        viewOverlay (DismissCloseConfirm session.id)
+        viewOverlay
+            { onClose = DismissCloseConfirm session.id
+            , onBack = Nothing
+            , title = "Close session"
+            }
             [ Html.div [ Attr.class "confirm-page" ]
                 [ Html.div [ Attr.class "confirm-page-title" ]
                     [ Html.text "Close session?" ]
@@ -417,19 +421,19 @@ viewCloseConfirmOverlay session =
                     [ Html.text "The session window and its process will be closed. \"Close\" keeps your conversation on disk (it can be resumed later); \"Close and Delete\" also removes the session's files permanently." ]
                 , Html.div [ Attr.class "confirm-page-buttons" ]
                     [ Html.button
-                        [ Attr.class "confirm-page-btn confirm-page-btn-allow"
+                        [ Attr.class "btn btn-primary"
                         , Attr.id "close-confirm-close"
                         , Attr.autofocus True
                         , Ev.onClick (ConfirmCloseSession session.id)
                         ]
                         [ Html.text "Close" ]
                     , Html.button
-                        [ Attr.class "confirm-page-btn confirm-page-btn-deny"
+                        [ Attr.class "btn btn-danger"
                         , Ev.onClick (ConfirmDeleteSession session.id)
                         ]
                         [ Html.text "Close and Delete" ]
                     , Html.button
-                        [ Attr.class "confirm-page-btn close-confirm-cancel"
+                        [ Attr.class "btn close-confirm-cancel"
                         , Ev.onClick (DismissCloseConfirm session.id)
                         ]
                         [ Html.text "Cancel" ]
@@ -452,7 +456,11 @@ dismisses too.
 viewCancelTaskConfirmOverlay : T.SessionState -> Html Msg
 viewCancelTaskConfirmOverlay session =
     if session.cancelTaskConfirm then
-        viewOverlay (DismissCancelTask session.id)
+        viewOverlay
+            { onClose = DismissCancelTask session.id
+            , onBack = Nothing
+            , title = "Cancel task"
+            }
             [ Html.div [ Attr.class "confirm-page" ]
                 [ Html.div [ Attr.class "confirm-page-title" ]
                     [ Html.text "Cancel task?" ]
@@ -460,14 +468,14 @@ viewCancelTaskConfirmOverlay session =
                     [ Html.text "The running task will be aborted. Work completed so far stays in the conversation." ]
                 , Html.div [ Attr.class "confirm-page-buttons" ]
                     [ Html.button
-                        [ Attr.class "confirm-page-btn confirm-page-btn-deny"
+                        [ Attr.class "btn btn-danger"
                         , Attr.id "cancel-task-confirm"
                         , Attr.autofocus True
                         , Ev.onClick (ConfirmCancelTask session.id)
                         ]
                         [ Html.text "Cancel task" ]
                     , Html.button
-                        [ Attr.class "confirm-page-btn close-confirm-cancel"
+                        [ Attr.class "btn close-confirm-cancel"
                         , Ev.onClick (DismissCancelTask session.id)
                         ]
                         [ Html.text "Keep running" ]
@@ -491,10 +499,13 @@ viewSessionManagerOverlay model =
                 List.filterMap decodeSessionDir model.sessionDirs
                     |> List.filter (\d -> Dict.member d.id model.sessionRefs)
         in
-        viewOverlay CloseSessionManager
+        viewOverlay
+            { onClose = CloseSessionManager
+            , onBack = Nothing
+            , title = "Session manager"
+            }
             [ Html.div [ Attr.class "sel-page" ]
-                [ Html.div [ Attr.class "sel-page-title" ] [ Html.text "Session Manager" ]
-                , Html.div [ Attr.class "sel-page-status sel-page-status-fixed" ]
+                [ Html.div [ Attr.class "sel-page-status sel-page-status-fixed" ]
                     [ Html.text "Resume re-opens a saved session (its history is replayed from disk)." ]
                 , case model.sessionManagerError of
                     Just err ->
@@ -598,10 +609,13 @@ viewVersionList model sid =
         headHash =
             Dict.get sid model.sessionRefs |> Maybe.map .head
     in
-    viewOverlay CloseVersionList
+    viewOverlay
+        { onClose = CloseVersionList
+        , onBack = Just CloseSessionManager
+        , title = "Versions · " ++ String.left 8 sid
+        }
         [ Html.div [ Attr.class "sel-page" ]
-            [ Html.div [ Attr.class "sel-page-title" ] [ Html.text ("Versions · " ++ String.left 8 sid) ]
-            , Html.div [ Attr.class "sel-page-status" ]
+            [ Html.div [ Attr.class "sel-page-status" ]
                 [ Html.text "Read-only snapshots of this session's history (head = current world)." ]
             , Html.div [ Attr.class "sel-page-list" ]
                 (List.indexedMap
@@ -675,11 +689,13 @@ viewVersionDetail model hash =
                 Nothing ->
                     []
     in
-    viewOverlay CloseVersionView
+    viewOverlay
+        { onClose = CloseVersionView
+        , onBack = Just CloseVersionList
+        , title = "Version · " ++ String.left 8 sid ++ " · " ++ String.left 12 hash
+        }
         [ Html.div [ Attr.class "sel-page" ]
-            [ Html.div [ Attr.class "sel-page-title" ]
-                [ Html.text ("Version · " ++ String.left 8 sid ++ " · " ++ String.left 12 hash) ]
-            , Html.div [ Attr.class "sel-page-status" ]
+            [ Html.div [ Attr.class "sel-page-status" ]
                 [ Html.text "Read-only snapshot — changes here never touch the live session." ]
             , case version of
                 Just _ ->
@@ -1269,11 +1285,13 @@ viewPlanCascadeOverlay model =
                     scope.rootUserMessages
                         + List.sum (List.map .truncateUserMessages scope.levels)
             in
-            viewOverlay PlanCascadeCancel
+            viewOverlay
+                { onClose = PlanCascadeCancel
+                , onBack = Nothing
+                , title = "Re-run cascade"
+                }
                 [ Html.div [ Attr.class "cascade-page" ]
-                    [ Html.div [ Attr.class "sel-page-title" ]
-                        [ Html.text ("Re-run affects " ++ String.fromInt (1 + List.length scope.levels) ++ " plan(s)") ]
-                    , Html.div [ Attr.class "cascade-scope" ]
+                    [ Html.div [ Attr.class "cascade-scope" ]
                         [ viewCascadeChain scope ]
                     , Html.div [ Attr.class "cascade-warning" ]
                         [ Html.text ("Re-running will truncate the parent session's old results and everything after them (including your " ++ String.fromInt totalUser ++ " message(s))") ]
@@ -1287,12 +1305,12 @@ viewPlanCascadeOverlay model =
                             [ Html.text ("Child plans to close: " ++ String.join ", " scope.closePlanIds) ]
                     , Html.div [ Attr.class "sel-page-input-row" ]
                         [ Html.button
-                            [ Attr.class "confirm-page-btn confirm-page-btn-allow"
+                            [ Attr.class "btn btn-primary"
                             , Ev.onClick PlanCascadeConfirm
                             ]
                             [ Html.text "Re-run" ]
                         , Html.button
-                            [ Attr.class "confirm-page-btn"
+                            [ Attr.class "btn"
                             , Ev.onClick PlanCascadeCancel
                             ]
                             [ Html.text "Cancel" ]
@@ -2153,19 +2171,41 @@ viewResizeHandle sid handle =
         []
 
 
-viewOverlay : Msg -> List (Html Msg) -> Html Msg
-viewOverlay onClose children =
+viewOverlay :
+    { onClose : Msg
+    , onBack : Maybe Msg
+    , title : String
+    }
+    -> List (Html Msg)
+    -> Html Msg
+viewOverlay tb children =
     Html.div [ Attr.class "overlay" ]
-        [ Html.div [ Attr.class "overlay-page", Ev.stopPropagationOn "click" (D.succeed ( NoOp, True )) ]
-            ([ Html.button
-                [ Attr.class "overlay-close"
-                , Ev.stopPropagationOn "click" (D.succeed ( onClose, True ))
-                , Attr.title "Close"
+        [ Html.div
+            [ Attr.class "overlay-card"
+            , Ev.stopPropagationOn "click" (D.succeed ( NoOp, True ))
+            ]
+            [ Html.div [ Attr.class "card-titlebar" ]
+                [ case tb.onBack of
+                    Just back ->
+                        Html.button
+                            [ Attr.class "card-back"
+                            , Ev.stopPropagationOn "click" (D.succeed ( back, True ))
+                            , Attr.title "Back"
+                            ]
+                            [ Icons.back ]
+
+                    Nothing ->
+                        Html.text ""
+                , Html.span [ Attr.class "card-title" ] [ Html.text tb.title ]
+                , Html.button
+                    [ Attr.class "card-close"
+                    , Ev.stopPropagationOn "click" (D.succeed ( tb.onClose, True ))
+                    , Attr.title "Close"
+                    ]
+                    [ Icons.cross ]
                 ]
-                [ Html.text "✕" ]
-             ]
-                ++ children
-            )
+            , Html.div [ Attr.class "card-body" ] children
+            ]
         ]
 
 
@@ -2173,7 +2213,11 @@ viewConfirmOverlay : String -> T.SessionState -> Html Msg
 viewConfirmOverlay sid session =
     case session.pendingConfirm of
         first :: _ ->
-            viewOverlay (CloseConfirm sid)
+            viewOverlay
+                { onClose = CloseConfirm sid
+                , onBack = Nothing
+                , title = "Tool confirmation"
+                }
                 [ Overlay.ConfirmTool.view
                     { onConfirm = \id allowed -> ConfirmTool sid id allowed
                     }
@@ -2196,7 +2240,11 @@ viewMcpInitOverlay sid session =
                 _ -> False
     in
     if showOverlay then
-        viewOverlay (CloseMcpInit sid)
+        viewOverlay
+            { onClose = CloseMcpInit sid
+            , onBack = Nothing
+            , title = "MCP servers"
+            }
             [ Overlay.McpInit.view
                 { mcpStatus = session.mcpStatus
                 , mcpServers = session.mcpServers
@@ -2219,7 +2267,11 @@ viewMcpInitOverlay sid session =
 viewFilePickerOverlay : String -> T.SessionState -> Html Msg
 viewFilePickerOverlay sid session =
     if session.filePicker.show then
-        viewOverlay (ForSession sid CloseFilePicker)
+        viewOverlay
+            { onClose = ForSession sid CloseFilePicker
+            , onBack = Nothing
+            , title = "Attach media"
+            }
             [ Overlay.FilePicker.view
                 { sessionId = sid
                 , entries = FP.filterEntries session.filePicker
@@ -2247,7 +2299,46 @@ viewFilePickerOverlay sid session =
 viewModelSelectorOverlay : String -> T.SessionState -> Html Msg
 viewModelSelectorOverlay sid session =
     if session.showModelSelector then
-        viewOverlay (ForSession sid CloseModelSelector)
+        let
+            pageTitle =
+                case session.modelSelector.page of
+                    Sel.ModelSelEdit ->
+                        case session.modelSelector.draft of
+                            Just d ->
+                                if d.id == 0 then
+                                    "Model · Add new"
+
+                                else
+                                    "Model · Edit"
+
+                            Nothing ->
+                                "Model selector"
+
+                    Sel.ModelSelConfirmSync ->
+                        "Model · Unsaved changes"
+
+                    Sel.ModelSelSyncing ->
+                        "Model · Syncing"
+
+                    Sel.ModelSelSyncFailed ->
+                        "Model · Sync failed"
+
+                    Sel.ModelSelLoading ->
+                        "Model · Loading"
+
+                    Sel.ModelSelList ->
+                        "Model selector"
+        in
+        viewOverlay
+            { onClose = ForSession sid CloseModelSelector
+            , onBack =
+                if session.modelSelector.page == Sel.ModelSelEdit then
+                    Just (ForSession sid ModelSelectorEditBack)
+
+                else
+                    Nothing
+            , title = pageTitle
+            }
             [ Overlay.Selector.viewPage
                 { title = "Model Selector"
                 , page = session.modelSelector.page
@@ -2262,7 +2353,6 @@ viewModelSelectorOverlay sid session =
                                 { sessionId = sid
                                 , draft = draft
                                 , isNew = draft.id == 0
-                                , onBack = ForSession sid ModelSelectorEditBack
                                 , onSave = ForSession sid ModelSelectorEditSave
                                 , onField = \field value -> ForSession sid (ModelSelectorEditField field value)
                                 }
@@ -2343,9 +2433,47 @@ viewDefaultModelsEditorOverlay model =
     let
         ed =
             model.defaultModelsEditor
+
+        pageTitle =
+            case ed.state.page of
+                Sel.ModelSelEdit ->
+                    case ed.state.draft of
+                        Just d ->
+                            if d.id == 0 then
+                                "Default model · Add new"
+
+                            else
+                                "Default model · Edit"
+
+                        Nothing ->
+                            "Default models"
+
+                Sel.ModelSelConfirmSync ->
+                    "Default model · Unsaved changes"
+
+                Sel.ModelSelSyncing ->
+                    "Default model · Syncing"
+
+                Sel.ModelSelSyncFailed ->
+                    "Default model · Sync failed"
+
+                Sel.ModelSelLoading ->
+                    "Default models · Loading"
+
+                Sel.ModelSelList ->
+                    "Default models"
     in
     if ed.show then
-        viewOverlay CloseDefaultModelsEditor
+        viewOverlay
+            { onClose = CloseDefaultModelsEditor
+            , onBack =
+                if ed.state.page == Sel.ModelSelEdit then
+                    Just DefaultModelsEditBack
+
+                else
+                    Nothing
+            , title = pageTitle
+            }
             [ Overlay.Selector.viewPage
                 { title = "Model Selector"
                 , page = ed.state.page
@@ -2369,7 +2497,6 @@ viewDefaultModelsEditorOverlay model =
                                 { sessionId = "default"
                                 , draft = draft
                                 , isNew = draft.id == 0
-                                , onBack = DefaultModelsEditBack
                                 , onSave = DefaultModelsEditSave
                                 , onField = DefaultModelsEditField
                                 }
@@ -2456,9 +2583,47 @@ viewMcpEditorOverlay model =
     let
         ed =
             model.mcpEditor
+
+        pageTitle =
+            case ed.state.page of
+                Sel.ModelSelEdit ->
+                    case ed.state.draft of
+                        Just d ->
+                            if d.id == 0 then
+                                "MCP server · Add new"
+
+                            else
+                                "MCP server · Edit"
+
+                        Nothing ->
+                            "MCP servers"
+
+                Sel.ModelSelConfirmSync ->
+                    "MCP server · Unsaved changes"
+
+                Sel.ModelSelSyncing ->
+                    "MCP server · Syncing"
+
+                Sel.ModelSelSyncFailed ->
+                    "MCP server · Sync failed"
+
+                Sel.ModelSelLoading ->
+                    "MCP servers · Loading"
+
+                Sel.ModelSelList ->
+                    "MCP servers"
     in
     if ed.show then
-        viewOverlay CloseMcpEditor
+        viewOverlay
+            { onClose = CloseMcpEditor
+            , onBack =
+                if ed.state.page == Sel.ModelSelEdit then
+                    Just McpEditBack
+
+                else
+                    Nothing
+            , title = pageTitle
+            }
             [ Overlay.Selector.viewPage
                 { title = "MCP Servers"
                 , page = ed.state.page
@@ -2473,7 +2638,6 @@ viewMcpEditorOverlay model =
                                 { sessionId = "default"
                                 , draft = draft
                                 , isNew = draft.id == 0
-                                , onBack = McpEditBack
                                 , onSave = McpEditSave
                                 , onField = McpEditField
                                 }
@@ -2557,7 +2721,11 @@ viewSettingsEditorOverlay model =
             model.settingsEditor
     in
     if ed.show then
-        viewOverlay CloseSettingsEditor
+        viewOverlay
+            { onClose = CloseSettingsEditor
+            , onBack = Nothing
+            , title = "Settings"
+            }
             [ Overlay.Settings.view
                 { toolConfirm = ed.toolConfirm
                 , builtinTools = ed.builtinTools
@@ -2571,7 +2739,6 @@ viewSettingsEditorOverlay model =
                 , onSystemPromptInput = SetSystemPrompt
                 , onReasoningLevelInput = SetSettingsReasoningLevel
                 , onSave = SettingsSave
-                , onCancel = CloseSettingsEditor
                 }
             ]
     else
@@ -2585,7 +2752,11 @@ viewGlobalConfigOverlay model =
             model.globalConfigEditor
     in
     if ed.show then
-        viewOverlay CloseGlobalConfig
+        viewOverlay
+            { onClose = CloseGlobalConfig
+            , onBack = Nothing
+            , title = "Global config"
+            }
             [ Overlay.GlobalConfig.view
                 { input = ed.input
                 , loading = ed.loading
@@ -2593,7 +2764,6 @@ viewGlobalConfigOverlay model =
                 , error = ed.error
                 , onInput = SetRecursionLimit
                 , onSave = GlobalConfigSave
-                , onCancel = CloseGlobalConfig
                 }
             ]
     else
@@ -2615,7 +2785,25 @@ viewAsrConfigOverlay model =
             }
     in
     if ed.show then
-        viewOverlay CloseAsrConfig
+        viewOverlay
+            { onClose = CloseAsrConfig
+            , onBack =
+                if ed.inForm then
+                    Just AsrConfigBack
+
+                else
+                    Nothing
+            , title =
+                if ed.inForm then
+                    if ed.editingId == Nothing then
+                        "ASR config · Add endpoint"
+
+                    else
+                        "ASR config · Edit endpoint"
+
+                else
+                    "ASR config"
+            }
             [ Overlay.AsrConfig.view
                 { inForm = ed.inForm
                 , profiles = List.map row model.asrConfig.profiles
@@ -2636,7 +2824,6 @@ viewAsrConfigOverlay model =
                 , onDelete = AsrConfigDelete
                 , onDeleteConfirm = AsrConfigDeleteConfirm
                 , onDeleteCancel = AsrConfigDeleteCancel
-                , onClose = CloseAsrConfig
                 , onName = SetAsrName
                 , onProtocol = SetAsrProtocol
                 , onUrl = SetAsrUrl
@@ -2661,7 +2848,11 @@ viewPresetManagerOverlay model =
             model.presetManager
     in
     if pm.show then
-        viewOverlay ClosePresetManager
+        viewOverlay
+            { onClose = ClosePresetManager
+            , onBack = Nothing
+            , title = "Preset manager"
+            }
             [ Overlay.PresetManager.view
                 { presets = model.presets
                 , loading = pm.loading

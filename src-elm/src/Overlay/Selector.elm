@@ -122,8 +122,7 @@ viewList cfg =
                 |> Maybe.map cfg.itemId
     in
     Html.div [ Attr.class "sel-page" ]
-        [ pageTitle cfg.title False
-        , Html.div [ Attr.class "sel-page-input-row" ]
+        [ Html.div [ Attr.class "sel-page-input-row" ]
             [ Html.input
                 [ Attr.class "sel-page-input"
                 , Attr.id cfg.inputId
@@ -281,32 +280,31 @@ filterItems search items term =
         List.filter (\m -> Fuzzy.fuzzyMatch needle (String.toLower (search m))) items
 
 
-pageTitle : String -> Bool -> Html msg
-pageTitle title dirty =
-    Html.div
-        [ Attr.class "sel-page-title"
-        , Attr.title (if dirty then "Unsaved changes" else "")
-        ]
-        [ Html.text (title ++ (if dirty then " *" else "")) ]
-
-
 statusPage : String -> Bool -> String -> Html msg
-statusPage title dirty status =
+statusPage _ dirty status =
     Html.div [ Attr.class "sel-page" ]
-        [ pageTitle title dirty
+        [ if dirty then
+            Html.div [ Attr.class "sel-page-dirty" ] [ Html.text "•" ]
+
+          else
+            Html.text ""
         , Html.div [ Attr.class "sel-page-status" ] [ Html.text status ]
         ]
 
 
 syncPrompt : String -> Bool -> { onConfirm : msg, onDiscard : msg, onCancel : msg } -> Html msg
-syncPrompt title dirty callbacks =
+syncPrompt _ dirty callbacks =
     Html.div [ Attr.class "sel-page" ]
-        [ pageTitle title dirty
+        [ if dirty then
+            Html.div [ Attr.class "sel-page-dirty" ] [ Html.text "•" ]
+
+          else
+            Html.text ""
         , Html.div [ Attr.class "sel-page-status" ]
             [ Html.text "You have unsaved changes. Sync them now?" ]
         , Html.div [ Attr.class "sel-page-actions" ]
             [ Html.button
-                [ Attr.class "me-save-btn"
+                [ Attr.class "btn btn-primary"
                 , Ev.onClick callbacks.onConfirm
                 ]
                 [ Html.text "Sync & Close" ]
@@ -325,24 +323,28 @@ syncPrompt title dirty callbacks =
 
 
 syncFailed : String -> Bool -> String -> { onRetry : msg, onBack : msg, onDiscard : msg } -> Html msg
-syncFailed title dirty error callbacks =
+syncFailed _ dirty error callbacks =
     Html.div [ Attr.class "sel-page" ]
-        [ pageTitle title dirty
+        [ if dirty then
+            Html.div [ Attr.class "sel-page-dirty" ] [ Html.text "•" ]
+
+          else
+            Html.text ""
         , Html.div [ Attr.class "sel-page-status sel-page-status-error" ]
             [ Html.text ("Sync failed: " ++ error) ]
         , Html.div [ Attr.class "sel-page-actions" ]
             [ Html.button
-                [ Attr.class "me-save-btn"
+                [ Attr.class "btn btn-primary"
                 , Ev.onClick callbacks.onRetry
                 ]
                 [ Html.text "Retry" ]
             , Html.button
-                [ Attr.class "me-cancel-btn"
+                [ Attr.class "btn"
                 , Ev.onClick callbacks.onBack
                 ]
                 [ Html.text "Back" ]
             , Html.button
-                [ Attr.class "me-cancel-btn"
+                [ Attr.class "btn"
                 , Ev.onClick callbacks.onDiscard
                 ]
                 [ Html.text "Discard & Close" ]

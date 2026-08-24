@@ -10,19 +10,13 @@ view :
     { sessionId : String
     , draft : T.ModelDraft
     , isNew : Bool
-    , onBack : msg
     , onSave : msg
     , onField : String -> String -> msg
     }
     -> Html msg
 view config =
     Html.div [ Attr.class "me-page" ]
-        [ Html.div [ Attr.class "me-page-header" ]
-            [ Html.button [ Attr.class "me-back-btn", Ev.onClick config.onBack ] [ Html.text "← Back" ]
-            , Html.div [ Attr.class "me-page-title" ]
-                [ Html.text (if config.isNew then "Add Model" else "Edit Model") ]
-            ]
-        , Html.div [ Attr.class "me-fields" ]
+        [ Html.div [ Attr.class "me-fields" ]
             [ textField "name" "Name" config.draft.name config
             , selectField "protocol_type" "Protocol Type" [ "openai", "anthropic" ] config.draft.protocolType config
             , textField "base_url" "Base URL" config.draft.baseUrl config
@@ -32,8 +26,7 @@ view config =
             , textField "max_tokens" "Max Tokens" config.draft.maxTokens config
             ]
         , Html.div [ Attr.class "me-actions" ]
-            [ Html.button [ Attr.class "me-save-btn", Ev.onClick config.onSave ] [ Html.text "Save" ]
-            , Html.button [ Attr.class "me-cancel-btn", Ev.onClick config.onBack ] [ Html.text "Cancel" ]
+            [ Html.button [ Attr.class "btn btn-primary", Ev.onClick config.onSave ] [ Html.text "Save" ]
             ]
         ]
 

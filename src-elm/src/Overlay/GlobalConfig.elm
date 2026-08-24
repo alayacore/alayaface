@@ -17,16 +17,11 @@ view :
     , error : Maybe String
     , onInput : String -> msg
     , onSave : msg
-    , onCancel : msg
     }
     -> Html msg
 view config =
     Html.div [ Attr.class "me-page" ]
-        [ Html.div [ Attr.class "me-page-header" ]
-            [ Html.button [ Attr.class "me-back-btn", Ev.onClick config.onCancel ] [ Html.text "← Back" ]
-            , Html.div [ Attr.class "me-page-title" ] [ Html.text "Global config" ]
-            ]
-        , if config.loading then
+        [ if config.loading then
             Html.div [ Attr.class "sel-page-status" ] [ Html.text "Loading…" ]
 
           else
@@ -57,13 +52,11 @@ view config =
                     ]
                 , Html.div [ Attr.class "me-actions" ]
                     [ Html.button
-                        [ Attr.class "me-save-btn"
+                        [ Attr.class "btn btn-primary"
                         , Attr.disabled config.syncing
                         , Ev.onClick config.onSave
                         ]
                         [ Html.text (if config.syncing then "Saving…" else "Save") ]
-                    , Html.button [ Attr.class "me-cancel-btn", Ev.onClick config.onCancel ]
-                        [ Html.text "Cancel" ]
                     ]
                 ]
         ]
