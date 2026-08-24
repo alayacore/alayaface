@@ -24,6 +24,52 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   -webkit-text-size-adjust: 100%;
+
+  /* ─── Unified design tokens (Phase 7 / UI unification) ─────────────
+     The session window is the reference: opaque dark card on a near-
+     black canvas, subtle white border, 6px radius, indigo accent. Every
+     overlay, menu, panel and input field reuses these tokens instead of
+     redefining its own palette. Light-mode overrides live below in the
+     @media (prefers-color-scheme: light) blocks. */
+
+  /* Surfaces */
+  --surface-card:        rgba(15, 15, 26, 0.98);   /* session window / modal card */
+  --surface-elevated:    rgba(20, 20, 35, 0.97);   /* floating menus */
+  --surface-row:         rgba(255, 255, 255, 0.04); /* list rows, tooltips */
+  --surface-row-hover:   rgba(255, 255, 255, 0.07);
+  --surface-input:       transparent;              /* sit on the card body */
+  --surface-code:        rgba(255, 255, 255, 0.03);
+
+  /* Borders */
+  --border-subtle:       rgba(255, 255, 255, 0.10); /* row / input border */
+  --border-strong:       rgba(255, 255, 255, 0.12); /* card border */
+  --border-titlebar:     rgba(255, 255, 255, 0.06); /* bar bottom hairline */
+
+  /* Foreground */
+  --fg-muted:            #888;
+  --fg-default:          #ddd;
+  --fg-strong:           #fff;
+
+  /* Accent / state (same hex as the existing usage — no new palette) */
+  --accent:              #6366f1;
+  --accent-hover:        #5558e6;
+  --accent-soft:         rgba(99, 102, 241, 0.15);
+  --accent-soft-hover:   rgba(99, 102, 241, 0.25);
+  --success:             #16a34a;
+  --success-strong:      #4ade80;
+  --danger:              #dc2626;
+  --danger-soft:         rgba(220, 38, 38, 0.15);
+  --warning:             #fbbf24;
+  --warning-strong:      #f59e0b;
+  --info:                #3b82f6;
+
+  /* Radii */
+  --r-sm:                4px;   /* buttons, inputs */
+  --r-md:                6px;   /* cards */
+  --r-lg:                8px;   /* elevated menus */
+
+  /* Shadows (matches .session-panel box-shadow) */
+  --shadow-card:         0 4px 24px rgba(0, 0, 0, 0.4), 0 1px 4px rgba(0, 0, 0, 0.2);
 }
 
 * {

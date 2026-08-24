@@ -1,22 +1,55 @@
-module Icons exposing (paperclip, chip, chevron, check, cross, running, send, mic, bulb, stop, audio)
+module Icons exposing
+    ( paperclip, chip, chevron, check, cross, running, send, mic, bulb, stop, audio
+    , back, plus, menu, layers, gear, folder, file, copy, clip, grip, search, circle, warning
+    )
 
 {-| Hand-drawn SVG icons for the input-bar footer (replacing the old
-emoji buttons). All icons share a chunky, short-and-fat, near-square
-style: 24×24 viewBox, round caps/joins, `currentColor` strokes so they
-inherit the button's color (and hover color) automatically.
+emoji buttons) and the unified overlay menus / cards (replacing the
+emoji literals sprinkled across overlay pages).
 
+All icons share a chunky, short-and-fat, near-square style: 24×24
+viewBox, round caps/joins, `currentColor` strokes so they inherit the
+button's color (and hover color) automatically. Two stroke weights:
+2.6–2.8 for control icons (close, check, chevron, etc.) and 2.0 for
+outline icons (folder, file, copy, grip) — the difference is one tier
+of optical weight, not a separate design language.
+
+List:
 - paperclip — attachment (vertical orientation, two loops)
 - chip      — model selector (CPU die + pins)
-- audio     — sound-wave bars (raw audio input: record and send as UA)
+- audio     — sound-wave bars (raw audio input)
+- chevron   — right-pointing chevron (collapsed message window)
+- check     — tool status (call finished / done)
+- cross     — close / deny (two chunky strokes; replaces the old ✕ emoji)
+- running   — spinner arc (tool status: input streaming / running)
+- send      — paper plane (send button)
+- mic       — voice input (capsule + sound cup)
+- bulb      — reasoning-level selector (lightbulb)
+- stop      — filled rounded square (cancel task / stop recording)
+
+Unified overlay icons (Phase 7):
+- back      — left chevron, returns to the previous page (replaces "← Back")
+- plus      — add a new row (replaces "+ Add")
+- menu      — hamburger (replaces ☰)
+- layers    — stacked rectangle (replaces ◱ / Preset)
+- gear      — settings cog (replaces ⚙)
+- folder    — file picker dir entry (replaces 📁)
+- file      — file picker file entry (replaces 📄)
+- copy      — duplicate (replaces 📋 URL)
+- clip      — attach / paperclip alt (replaces 📎)
+- grip      — vertical dots, drag handle (replaces ⠿)
+- search    — magnifying glass (replaces 🔍)
+- circle    — filled dot, "active" marker (replaces ●)
+- warning   — triangle + exclamation (replaces ⏳ / ⚠)
 
 Rendered with elm/svg: the root `Svg.svg` is the HTML-embedding bridge
 (returns `Html msg`), inner shapes get the proper SVG namespace.
-
 -}
 
 import Html exposing (Html)
 import Html.Attributes as Attr
-import Svg exposing (Svg, circle, g, path, rect)
+import Svg as SvgNS
+import Svg exposing (Svg, g, path, polyline, rect)
 import Svg.Attributes as SAttr
 
 
@@ -31,6 +64,26 @@ icon gAttrs children =
             ([ SAttr.fill "none"
              , SAttr.stroke "currentColor"
              , SAttr.strokeWidth "2.4"
+             , SAttr.strokeLinecap "round"
+             , SAttr.strokeLinejoin "round"
+             ]
+                ++ gAttrs
+            )
+            children
+        ]
+
+
+iconSm : List (Svg.Attribute msg) -> List (Svg msg) -> Html msg
+iconSm gAttrs children =
+    Svg.svg
+        [ Attr.attribute "viewBox" "0 0 24 24"
+        , Attr.attribute "width" "16"
+        , Attr.attribute "height" "16"
+        ]
+        [ g
+            ([ SAttr.fill "none"
+             , SAttr.stroke "currentColor"
+             , SAttr.strokeWidth "2.0"
              , SAttr.strokeLinecap "round"
              , SAttr.strokeLinejoin "round"
              ]
@@ -108,7 +161,9 @@ check =
         ]
 
 
-{-| Cross for the tool status (tool call errored). Two chunky strokes.
+{-| Cross for the tool status (tool call errored) and the unified
+close-X on every overlay card. Two chunky strokes; hover color comes
+from the parent button's CSS.
 -}
 cross : Html msg
 cross =
@@ -215,4 +270,200 @@ audio =
         , path [ SAttr.d "M12 3.5 v17" ] []
         , path [ SAttr.d "M16 6.5 v11" ] []
         , path [ SAttr.d "M20 10 v4" ] []
+        ]
+
+
+
+-- ─── Unified overlay icons (Phase 7) ─────────────────────────────────
+
+
+{-| Back arrow — replaces the literal "← Back" buttons on the model
+editor / MCP editor / settings / global config / ASR config pages. Same
+chunky stroke style; renders at 16×16 (iconSm) so it sits well inside
+the small me-back-btn footprint.
+-}
+back : Html msg
+back =
+    iconSm [ SAttr.strokeWidth "2.4" ]
+        [ polyline [ SAttr.points "14 6 8 12 14 18" ] []
+        ]
+
+
+{-| Plus sign — replaces "+ Add" / "+" buttons. Centered plus.
+-}
+plus : Html msg
+plus =
+    icon [ SAttr.strokeWidth "2.6" ]
+        [ path [ SAttr.d "M12 5 V19 M5 12 H19" ] []
+        ]
+
+
+{-| Hamburger menu — replaces ☰ in the global menu's "Session Manager"
+row. Three short horizontal bars, slight optical spacing at the right.
+-}
+menu : Html msg
+menu =
+    icon [ SAttr.strokeWidth "2.6" ]
+        [ path [ SAttr.d "M4 7 H18" ] []
+        , path [ SAttr.d "M4 12 H18" ] []
+        , path [ SAttr.d "M4 17 H12" ] []
+        ]
+
+
+{-| Stacked layers — replaces ◱ in the global menu's "Preset Manager"
+row. Three offset rounded rectangles suggesting depth.
+-}
+layers : Html msg
+layers =
+    icon [ SAttr.strokeWidth "2.2" ]
+        [ path
+            [ SAttr.d "M12 3 L21 8 L12 13 L3 8 Z" ]
+            []
+        , path
+            [ SAttr.d "M3 12 L12 17 L21 12" ]
+            []
+        , path
+            [ SAttr.d "M3 16 L12 21 L21 16" ]
+            []
+        ]
+
+
+{-| Gear / cog — replaces ⚙ in the global menu's "Global config" row.
+Outer toothed ring with an inner circle.
+-}
+gear : Html msg
+gear =
+    icon [ SAttr.strokeWidth "2.2" ]
+        [ SvgNS.circle
+            [ SAttr.cx "12"
+            , SAttr.cy "12"
+            , SAttr.r "3"
+            ]
+            []
+        , path
+            [ SAttr.d
+                (String.concat
+                    [ "M12 2.5 V5"
+                    , " M12 19 V21.5"
+                    , " M2.5 12 H5"
+                    , " M19 12 H21.5"
+                    , " M5.6 5.6 L7.3 7.3"
+                    , " M16.7 16.7 L18.4 18.4"
+                    , " M5.6 18.4 L7.3 16.7"
+                    , " M16.7 7.3 L18.4 5.6"
+                    ]
+                )
+            ]
+            []
+        ]
+
+
+{-| Folder — replaces 📁 in the file picker. Tab on top + body, rounded
+right corners on the body.
+-}
+folder : Html msg
+folder =
+    iconSm []
+        [ path
+            [ SAttr.d "M3 7 a1 1 0 0 1 1 -1 h5 l2 2 h8 a1 1 0 0 1 1 1 v9 a1 1 0 0 1 -1 1 H4 a1 1 0 0 1 -1 -1 Z" ]
+            []
+        ]
+
+
+{-| Document with folded corner — replaces 📄 in the file picker.
+-}
+file : Html msg
+file =
+    iconSm []
+        [ path
+            [ SAttr.d "M6 3 H14 L19 8 V20 a1 1 0 0 1 -1 1 H6 a1 1 0 0 1 -1 -1 V4 a1 1 0 0 1 1 -1 Z" ]
+            []
+        , path
+            [ SAttr.d "M14 3 V8 H19" ]
+            []
+        ]
+
+
+{-| Two overlapping document outlines — copy / duplicate gesture
+(replaces 📋 URL in MCP init).
+-}
+copy : Html msg
+copy =
+    iconSm []
+        [ rect
+            [ SAttr.x "8"
+            , SAttr.y "8"
+            , SAttr.width "12"
+            , SAttr.height "12"
+            , SAttr.rx "1.5"
+            ]
+            []
+        , path
+            [ SAttr.d "M16 8 V5 a1 1 0 0 0 -1 -1 H5 a1 1 0 0 0 -1 1 V17 a1 1 0 0 0 1 1 H8" ]
+            []
+        ]
+
+
+{-| Paperclip — replaces 📎 in MCP init button labels and other copy
+gestures. Same chunky wire as the paperclip in the input bar.
+-}
+clip : Html msg
+clip =
+    icon [ SAttr.strokeWidth "2.4" ]
+        [ path
+            [ SAttr.d "M16.5 7.5 L9 15 a3.5 3.5 0 0 0 5 5 L20.5 13.5 a5.5 5.5 0 0 0 -8 -8 L6 11.5 a2.5 2.5 0 0 0 3.5 3.5 L16 8.5" ]
+            []
+        ]
+
+
+{-| Vertical drag handle — six dots in two columns. Replaces ⠿ in the
+preset manager's drag handle.
+-}
+grip : Html msg
+grip =
+    iconSm []
+        [ SvgNS.circle [ SAttr.cx "9", SAttr.cy "6", SAttr.r "1.2", SAttr.fill "currentColor", SAttr.stroke "none" ] []
+        , SvgNS.circle [ SAttr.cx "9", SAttr.cy "12", SAttr.r "1.2", SAttr.fill "currentColor", SAttr.stroke "none" ] []
+        , SvgNS.circle [ SAttr.cx "9", SAttr.cy "18", SAttr.r "1.2", SAttr.fill "currentColor", SAttr.stroke "none" ] []
+        , SvgNS.circle [ SAttr.cx "15", SAttr.cy "6", SAttr.r "1.2", SAttr.fill "currentColor", SAttr.stroke "none" ] []
+        , SvgNS.circle [ SAttr.cx "15", SAttr.cy "12", SAttr.r "1.2", SAttr.fill "currentColor", SAttr.stroke "none" ] []
+        , SvgNS.circle [ SAttr.cx "15", SAttr.cy "18", SAttr.r "1.2", SAttr.fill "currentColor", SAttr.stroke "none" ] []
+        ]
+
+
+{-| Magnifying glass — replaces 🔍 in the global menu's zoom row.
+-}
+search : Html msg
+search =
+    icon [ SAttr.strokeWidth "2.4" ]
+        [ SvgNS.circle [ SAttr.cx "10.5", SAttr.cy "10.5", SAttr.r "6" ] []
+        , path [ SAttr.d "M15 15 L20 20" ] []
+        ]
+
+
+{-| Filled dot — replaces ● in the selector's active marker. Solid
+disc, slightly larger than the surrounding text baseline.
+-}
+circle : Html msg
+circle =
+    icon [ SAttr.fill "currentColor", SAttr.stroke "none" ]
+        [ SvgNS.circle [ SAttr.cx "12", SAttr.cy "12", SAttr.r "4.5" ] []
+        ]
+
+
+{-| Warning triangle with exclamation — replaces ⚠ / ⏳ in status rows
+and tooltips.
+-}
+warning : Html msg
+warning =
+    icon [ SAttr.strokeWidth "2.2" ]
+        [ path
+            [ SAttr.d "M12 3 L22 20 H2 Z" ]
+            []
+        , path
+            [ SAttr.d "M12 10 V14" ]
+            []
+        , path
+            [ SAttr.d "M12 17 V17.5" ]
+            []
         ]
