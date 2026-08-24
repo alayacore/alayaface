@@ -2327,15 +2327,65 @@ body {
 
 .me-field-input {
   padding: 6px 10px;
-  border-radius: 4px;
-  border: 1px solid #444;
-  background: transparent;
-  color: #eee;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-input);
+  color: var(--fg-default);
   font-size: 0.85rem;
   outline: none;
   transition: border-color 0.15s;
 }
-.me-field-input:focus { border-color: #6366f1; }
+.me-field-input:focus { border-color: var(--accent); }
+
+/* Unified .input family — same look across all overlay editors, the
+   selector's search bar, and the file picker. The legacy .me-field-input /
+   .fp-page-input / .sel-page-input / .confirm-page-input classes below
+   are kept as transient aliases (they render identically to .input). */
+.input {
+  padding: 6px 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-input);
+  color: var(--fg-default);
+  font-size: 0.85rem;
+  outline: none;
+  transition: border-color 0.15s;
+  width: 100%;
+}
+.input::placeholder { color: #555; }
+.input:focus { border-color: var(--accent); }
+
+/* Larger variant — used for the file-picker / selector input row,
+   which carries a prefix toggle and wants a slightly bigger hit area. */
+.input-lg { padding: 8px 12px; font-size: 0.95rem; }
+
+/* Select — same frame as .input, plus an inline chevron SVG that
+   matches the Icons.elm stroke style. */
+.input-select,
+.me-field-select {
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%23888' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
+  min-width: 180px;
+}
+.input-select option,
+.me-field-select option { background: #1e1e2e; color: #ddd; }
+.input-select:disabled,
+.me-field-select:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Light theme overrides */
+@media (prefers-color-scheme: light) {
+  .input,
+  .me-field-input { background: white; color: #1a1a2e; border-color: rgba(0, 0, 0, 0.15); }
+  .input:focus,
+  .me-field-input:focus { border-color: var(--accent); }
+  .input-select option,
+  .me-field-select option { background: #fff; color: #1a1a2e; }
+}
 
 .me-field-select {
   appearance: none;

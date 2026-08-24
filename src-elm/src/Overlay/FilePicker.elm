@@ -45,7 +45,7 @@ view config =
                 [ Html.text (if isUrlMode then "URL" else "File") ]
             , Html.input
                 [ Attr.id inputId
-                , Attr.class "fp-page-input"
+                , Attr.class "input input-lg"
                 , Attr.type_ "text"
                 , Attr.value config.input
                 , Ev.onInput config.onInput

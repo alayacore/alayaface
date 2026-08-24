@@ -195,7 +195,7 @@ viewRow config idx p =
                     if name == p.name then
                         [ Html.div [ Attr.class "pm-row pm-row-renaming" ]
                             [ Html.input
-                                [ Attr.class "me-field-input"
+                                [ Attr.class "input"
                                 , Attr.type_ "text"
                                 , Attr.value config.renameInput
                                 , Attr.disabled config.busy

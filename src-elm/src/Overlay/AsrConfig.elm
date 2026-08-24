@@ -204,7 +204,7 @@ formView cfg =
                 [ Html.div [ Attr.class "me-field" ]
                     [ Html.label [ Attr.class "me-field-label" ] [ Html.text "Name" ]
                     , Html.input
-                        [ Attr.class "me-field-input"
+                        [ Attr.class "input"
                         , Attr.id "asr-config-name"
                         , Attr.type_ "text"
                         , Attr.value cfg.name
@@ -218,7 +218,7 @@ formView cfg =
                 , Html.div [ Attr.class "me-field" ]
                     [ Html.label [ Attr.class "me-field-label" ] [ Html.text "Protocol" ]
                     , Html.select
-                        [ Attr.class "me-field-input me-field-select"
+                        [ Attr.class "input input-select"
                         , Attr.id "asr-config-protocol"
                         , Ev.onInput cfg.onProtocol
                         ]
@@ -235,7 +235,7 @@ formView cfg =
                 , Html.div [ Attr.class "me-field" ]
                     [ Html.label [ Attr.class "me-field-label" ] [ Html.text "Endpoint URL" ]
                     , Html.input
-                        [ Attr.class "me-field-input"
+                        [ Attr.class "input"
                         , Attr.id "asr-config-url"
                         , Attr.type_ "text"
                         , Attr.value cfg.url
@@ -249,7 +249,7 @@ formView cfg =
                 , Html.div [ Attr.class "me-field" ]
                     [ Html.label [ Attr.class "me-field-label" ] [ Html.text "API key" ]
                     , Html.input
-                        [ Attr.class "me-field-input"
+                        [ Attr.class "input"
                         , Attr.id "asr-config-api-key"
                         , Attr.type_ "password"
                         , Attr.value cfg.apiKey
@@ -263,7 +263,7 @@ formView cfg =
                 , Html.div [ Attr.class "me-field" ]
                     [ Html.label [ Attr.class "me-field-label" ] [ Html.text "Model" ]
                     , Html.input
-                        [ Attr.class "me-field-input"
+                        [ Attr.class "input"
                         , Attr.id "asr-config-model"
                         , Attr.type_ "text"
                         , Attr.value cfg.model
@@ -277,7 +277,7 @@ formView cfg =
                 , Html.div [ Attr.class "me-field" ]
                     [ Html.label [ Attr.class "me-field-label" ] [ Html.text "Language" ]
                     , Html.input
-                        [ Attr.class "me-field-input"
+                        [ Attr.class "input"
                         , Attr.id "asr-config-language"
                         , Attr.type_ "text"
                         , Attr.value cfg.language

@@ -37,7 +37,7 @@ view config =
                     [ Html.div [ Attr.class "me-field" ]
                         [ Html.label [ Attr.class "me-field-label" ] [ Html.text "Plan recursion limit" ]
                         , Html.input
-                            [ Attr.class "me-field-input"
+                            [ Attr.class "input"
                             , Attr.id "global-config-recursion-limit"
                             , Attr.type_ "number"
                             , Attr.min "1"

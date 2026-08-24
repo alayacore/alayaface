@@ -67,7 +67,7 @@ view config =
                     [ Html.div [ Attr.class "me-field" ]
                         [ Html.label [ Attr.class "me-field-label" ] [ Html.text "Pre-approved tools" ]
                         , Html.input
-                            [ Attr.class "me-field-input"
+                            [ Attr.class "input"
                             , Attr.id "settings-tool-confirm"
                             , Attr.type_ "text"
                             , Attr.value config.toolConfirm
@@ -81,7 +81,7 @@ view config =
                     , Html.div [ Attr.class "me-field" ]
                         [ Html.label [ Attr.class "me-field-label" ] [ Html.text "Built-in tools" ]
                         , Html.input
-                            [ Attr.class "me-field-input"
+                            [ Attr.class "input"
                             , Attr.id "settings-builtin-tools"
                             , Attr.type_ "text"
                             , Attr.value config.builtinTools
@@ -95,7 +95,7 @@ view config =
                     , Html.div [ Attr.class "me-field" ]
                         [ Html.label [ Attr.class "me-field-label" ] [ Html.text "Reasoning level" ]
                         , Html.select
-                            [ Attr.class "me-field-input me-field-select"
+                            [ Attr.class "input input-select"
                             , Attr.id "settings-reasoning-level"
                             , Attr.disabled config.syncing
                             , Ev.onInput (\v -> config.onReasoningLevelInput (Maybe.withDefault 1 (String.toInt v)))
@@ -116,7 +116,7 @@ view config =
                     , Html.div [ Attr.class "me-field" ]
                         [ Html.label [ Attr.class "me-field-label" ] [ Html.text "System prompt" ]
                         , Html.textarea
-                            [ Attr.class "me-field-input me-field-textarea"
+                            [ Attr.class "input me-field-textarea"
                             , Attr.id "settings-system-prompt"
                             , Attr.rows (systemPromptRows config.systemPrompt)
                             , Attr.value config.systemPrompt

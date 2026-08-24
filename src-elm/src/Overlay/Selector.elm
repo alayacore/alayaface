@@ -125,7 +125,7 @@ viewList cfg =
     Html.div [ Attr.class "sel-page" ]
         [ Html.div [ Attr.class "sel-page-input-row" ]
             [ Html.input
-                [ Attr.class "sel-page-input"
+                [ Attr.class "input"
                 , Attr.id cfg.inputId
                 , Attr.type_ "text"
                 , Attr.value cfg.input

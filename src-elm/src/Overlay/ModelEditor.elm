@@ -36,7 +36,7 @@ textField key label value config =
     Html.div [ Attr.class "me-field" ]
         [ Html.label [ Attr.class "me-field-label", Attr.for (inputId key config.sessionId) ] [ Html.text label ]
         , Html.input
-            [ Attr.class "me-field-input"
+            [ Attr.class "input"
             , Attr.id (inputId key config.sessionId)
             , Attr.type_ "text"
             , Attr.value value
@@ -51,7 +51,7 @@ selectField key label options value config =
     Html.div [ Attr.class "me-field" ]
         [ Html.label [ Attr.class "me-field-label", Attr.for (inputId key config.sessionId) ] [ Html.text label ]
         , Html.select
-            [ Attr.class "me-field-input"
+            [ Attr.class "input"
             , Attr.id (inputId key config.sessionId)
             , Ev.onInput (config.onField key)
             ]
