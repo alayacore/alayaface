@@ -3,6 +3,7 @@ module Overlay.PresetManager exposing (view)
 import Html exposing (Html)
 import Html.Attributes as Attr
 import Html.Events as Ev
+import Icons
 import Json.Decode as D
 
 
@@ -82,8 +83,10 @@ nameLabel p =
         ]
 
 
-{-| The drag handle ("⠿") — the only draggable part of a row, so
-clicking Copy/Edit/Rename/Delete is never swallowed by a drag gesture.
+{-| The drag handle — the only draggable part of a row, so clicking
+Copy/Edit/Rename/Delete is never swallowed by a drag gesture. Renders
+the Icons.grip SVG (six vertical dots) so the visual matches the rest
+of the icon family.
 -}
 dragHandle : Int -> PresetInfo -> (Int -> msg) -> msg -> Html msg
 dragHandle idx p onDragStart onDragEnd =
@@ -95,7 +98,7 @@ dragHandle idx p onDragStart onDragEnd =
         , Ev.on "dragstart" (D.succeed (onDragStart idx))
         , Ev.on "dragend" (D.succeed onDragEnd)
         ]
-        [ Html.text "⠿" ]
+        [ Icons.grip ]
 
 
 {-| Drop zone of a row: dragover must preventDefault or the browser

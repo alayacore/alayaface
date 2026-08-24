@@ -4,6 +4,7 @@ import Html exposing (Html)
 import Html.Attributes as Attr
 import Html.Events as Ev
 import Html.Keyed as Keyed
+import Icons
 import Json.Decode as D
 import Session.Types as T
 
@@ -95,9 +96,10 @@ viewEntry : Int -> T.DirEntry -> { a | sessionId : String, selected : Int, onPic
 viewEntry idx entry config =
     Html.div
         [ Attr.id ("fp-item-" ++ config.sessionId ++ "-" ++ entry.name)
-        , Attr.class ("fp-page-item" ++ (if idx == config.selected then " fp-page-item-selected" else ""))
+        , Attr.class ("list-row" ++ (if idx == config.selected then " list-row-selected" else ""))
         , Ev.onClick (config.onPick idx)
         ]
-        [ Html.span [ Attr.class "fp-page-item-icon" ] [ Html.text (if entry.isDir then "📁" else "📄") ]
-        , Html.span [ Attr.class "fp-page-item-name" ] [ Html.text entry.name ]
+        [ Html.span [ Attr.class "list-row-icon" ]
+            [ if entry.isDir then Icons.folder else Icons.file ]
+        , Html.span [ Attr.class "list-row-name" ] [ Html.text entry.name ]
         ]
