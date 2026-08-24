@@ -3,6 +3,7 @@ module Overlay.McpInit exposing (view)
 import Html exposing (Html)
 import Html.Attributes as Attr
 import Html.Events as Ev
+import Icons
 import Session.Types as T
 
 
@@ -90,23 +91,23 @@ view config =
                                     Just a ->
                                         Html.span [ Attr.class "mcp-init-actions" ]
                                             [ Html.button
-                                                [ Attr.class "mcp-init-btn mcp-init-btn-url"
+                                                [ Attr.class "btn btn-info btn-sm"
                                                 , Ev.onClick (config.onFillUrl a.server a.url)
                                                 , Attr.title "Copy authorization URL"
                                                 ]
-                                                [ Html.text "📋 URL" ]
+                                                [ Icons.copy, Html.text "URL" ]
                                             , Html.button
-                                                [ Attr.class "mcp-init-btn mcp-init-btn-auth"
+                                                [ Attr.class "btn btn-success-outline btn-sm"
                                                 , Ev.onClick (config.onAuthConfirm a.server)
                                                 , Attr.title "Open browser to authorize"
                                                 ]
-                                                [ Html.text "✓ Authorize" ]
+                                                [ Icons.check, Html.text "Authorize" ]
                                             , Html.button
-                                                [ Attr.class "mcp-init-btn mcp-init-btn-deny"
+                                                [ Attr.class "btn btn-warning btn-sm"
                                                 , Ev.onClick (config.onAuthDeny a.server)
                                                 , Attr.title "Skip this server"
                                                 ]
-                                                [ Html.text "✕ Deny" ]
+                                                [ Icons.cross, Html.text "Deny" ]
                                             ]
 
                                     Nothing ->
@@ -120,7 +121,7 @@ view config =
             Html.text ""
         , Html.div [ Attr.class "mcp-init-footer" ]
             [ Html.button
-                [ Attr.class "mcp-init-btn mcp-init-btn-close"
+                [ Attr.class "btn btn-danger-outline"
                 , Ev.onClick config.onClose
                 , Attr.title "Close overlay"
                 ]

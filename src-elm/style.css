@@ -331,11 +331,15 @@ body {
 }
 
 .global-menu-icon {
-  font-size: 1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 20px;
-  text-align: center;
+  height: 18px;
   flex-shrink: 0;
+  color: #ddd;
 }
+.global-menu-icon svg { display: block; }
 
 /* ─── New Session hover submenu (preset picker) ───────────────────────
    The item keeps its highlight while the pointer is inside the flyout,
@@ -1208,6 +1212,136 @@ body {
     color: #1a1a2e;
   }
 }
+
+/* ─── Unified button family (Phase 7) ────────────────────────────────
+   The previous CSS shipped 17 distinct button classes (confirm-page-btn,
+   sel-page-action, pm-btn, asr-row-btn, me-save-btn, mcp-init-btn, …)
+   with conflicting sizes, hover states, and disabled looks. They are
+   collapsed into a single .btn family with semantic modifiers; the
+   page-specific classes below are kept as legacy aliases until their
+   call sites are migrated. Once migrated, they should be deleted. */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 5px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--fg-default);
+  font-size: 0.82rem;
+  font-weight: 500;
+  line-height: 1.3;
+  text-align: center;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s, transform 0.1s;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.btn:hover:not(:disabled) {
+  background: var(--surface-row-hover);
+  border-color: var(--border-strong);
+}
+.btn:active:not(:disabled) { transform: scale(0.97); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Size variants */
+.btn-sm { padding: 3px 10px; font-size: 0.72rem; min-width: 56px; }
+.btn-lg { padding: 8px 20px; font-size: 0.9rem; min-width: 120px; }
+
+/* Filled semantic variants (single CTA on a modal page) */
+.btn-primary { background: var(--accent); border-color: var(--accent); color: white; }
+.btn-primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn-danger { background: var(--danger); border-color: var(--danger); color: white; }
+.btn-danger:hover:not(:disabled) { background: rgba(220, 38, 38, 0.85); border-color: rgba(220, 38, 38, 0.85); }
+.btn-success { background: var(--success); border-color: var(--success); color: white; }
+.btn-success:hover:not(:disabled) { background: rgba(22, 163, 74, 0.85); border-color: rgba(22, 163, 74, 0.85); }
+
+/* Outline semantic variants (many actions on the same row) */
+.btn-info { border-color: var(--info); color: var(--info); }
+.btn-info:hover:not(:disabled) { background: rgba(59, 130, 246, 0.12); }
+.btn-warning { border-color: var(--warning-strong); color: var(--warning-strong); }
+.btn-warning:hover:not(:disabled) { background: rgba(245, 158, 11, 0.12); }
+.btn-danger-outline { border-color: rgba(248, 113, 113, 0.5); color: #f87171; }
+.btn-danger-outline:hover:not(:disabled) {
+  background: rgba(248, 113, 113, 0.12);
+  border-color: #f87171;
+  color: #fca5a5;
+}
+.btn-success-outline { border-color: rgba(74, 222, 128, 0.4); color: var(--success-strong); }
+.btn-success-outline:hover:not(:disabled) {
+  background: rgba(74, 222, 128, 0.1);
+  border-color: var(--success-strong);
+  color: #86efac;
+}
+
+/* Ghost — text-only, no border */
+.btn-ghost { border-color: transparent; background: transparent; color: var(--fg-muted); }
+.btn-ghost:hover:not(:disabled) { background: var(--surface-row); color: var(--fg-strong); }
+
+/* Light theme overrides */
+@media (prefers-color-scheme: light) {
+  .btn { border-color: rgba(0, 0, 0, 0.15); color: #333; }
+  .btn:hover:not(:disabled) { background: rgba(0, 0, 0, 0.04); border-color: rgba(0, 0, 0, 0.25); }
+  .btn-ghost { color: #666; }
+  .btn-ghost:hover:not(:disabled) { background: rgba(0, 0, 0, 0.04); color: #1a1a2e; }
+  .btn-danger-outline { color: var(--danger); border-color: rgba(220, 38, 38, 0.35); }
+  .btn-danger-outline:hover:not(:disabled) { background: rgba(220, 38, 38, 0.08); color: #b91c1c; }
+  .btn-success-outline { color: var(--success); border-color: rgba(22, 163, 74, 0.4); }
+  .btn-success-outline:hover:not(:disabled) { background: rgba(22, 163, 74, 0.08); color: #166534; }
+}
+
+/* Legacy aliases — keep these so any remaining call site still
+   renders correctly. They render the same as a plain .btn. */
+.confirm-page-btn,
+.pm-btn,
+.asr-row-btn,
+.sel-page-action,
+.sel-page-item-btn,
+.me-save-btn,
+.me-cancel-btn,
+.me-back-btn,
+.mcp-init-btn,
+.plan-strip-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 5px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--fg-default);
+  font-size: 0.82rem;
+  font-weight: 500;
+  line-height: 1.3;
+  text-align: center;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s, transform 0.1s;
+}
+.confirm-page-btn:hover,
+.pm-btn:hover:not(:disabled),
+.asr-row-btn:hover,
+.sel-page-action:hover:not(:disabled),
+.sel-page-item-btn:hover,
+.me-save-btn:hover,
+.me-cancel-btn:hover,
+.me-back-btn:hover,
+.mcp-init-btn:hover,
+.plan-strip-btn:hover {
+  background: var(--surface-row-hover);
+  border-color: var(--border-strong);
+}
+.confirm-page-btn:active,
+.sel-page-item-btn:active { transform: scale(0.97); }
+.confirm-page-btn:disabled,
+.pm-btn:disabled,
+.asr-row-btn:disabled,
+.sel-page-action:disabled,
+.sel-page-item-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ─── Confirm Page (inside Overlay) ─────────────────────────────────── */
 

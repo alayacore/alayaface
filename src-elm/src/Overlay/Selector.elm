@@ -17,6 +17,7 @@ import Fuzzy
 import Html exposing (Html)
 import Html.Attributes as Attr
 import Html.Events as Ev
+import Icons
 import Json.Decode as D
 import Session.Selector exposing (Page(..))
 
@@ -154,11 +155,11 @@ viewList cfg =
             , Html.span [ Attr.class "sel-page-current-name" ]
                 [ Html.text cfg.currentValue ]
             , Html.button
-                [ Attr.class "sel-page-add-btn"
+                [ Attr.class "btn btn-primary btn-sm"
                 , Ev.stopPropagationOn "click" (D.succeed ( cfg.onAdd, True ))
                 , Attr.title cfg.addTitle
                 ]
-                [ Html.text "+ Add" ]
+                [ Icons.plus, Html.text "Add" ]
             ]
         , if List.isEmpty cfg.items then
             Html.div [ Attr.class "sel-page-status" ] [ Html.text cfg.emptyText ]
@@ -215,16 +216,16 @@ viewItem idx item cfg =
             , Html.span [ Attr.class "sel-page-item-sub" ] [ Html.text (cfg.itemSubtitle item) ]
             ]
         , Html.span [ Attr.class "sel-page-item-check" ]
-            [ if isActive then Html.text "●" else Html.text "" ]
+            [ if isActive then Icons.circle else Html.text "" ]
         , if isConfirmingDelete then
             Html.span [ Attr.class "sel-page-item-actions" ]
                 [ Html.button
-                    [ Attr.class "sel-page-action sel-page-action-danger"
+                    [ Attr.class "btn btn-danger btn-sm"
                     , stopClick (cfg.onDeleteConfirm (cfg.itemId item))
                     ]
                     [ Html.text "Confirm" ]
                 , Html.button
-                    [ Attr.class "sel-page-action"
+                    [ Attr.class "btn btn-sm"
                     , stopClick cfg.onDeleteCancel
                     ]
                     [ Html.text "Cancel" ]
@@ -235,7 +236,7 @@ viewItem idx item cfg =
                 [ case cfg.onActivate of
                     Just activate ->
                         Html.button
-                            [ Attr.class "sel-page-action sel-page-action-default"
+                            [ Attr.class "btn btn-success-outline btn-sm"
                             , Attr.disabled isActive
                             , Attr.title cfg.activateTitle
                             , stopClick (activate (cfg.itemId item))
@@ -245,14 +246,14 @@ viewItem idx item cfg =
                     Nothing ->
                         Html.text ""
                 , Html.button
-                    [ Attr.class "sel-page-action"
+                    [ Attr.class "btn btn-sm"
                     , Attr.disabled isActive
                     , Attr.title (cfg.editTitle item)
                     , stopClick (cfg.onEdit (cfg.itemId item))
                     ]
                     [ Html.text "Edit" ]
                 , Html.button
-                    [ Attr.class "sel-page-action sel-page-action-danger"
+                    [ Attr.class "btn btn-danger-outline btn-sm"
                     , Attr.disabled (isActive || not cfg.canDelete)
                     , Attr.title (cfg.deleteTitle item)
                     , stopClick (cfg.onDelete (cfg.itemId item))
@@ -309,12 +310,12 @@ syncPrompt _ dirty callbacks =
                 ]
                 [ Html.text "Sync & Close" ]
             , Html.button
-                [ Attr.class "me-cancel-btn"
+                [ Attr.class "btn"
                 , Ev.onClick callbacks.onDiscard
                 ]
                 [ Html.text "Discard & Close" ]
             , Html.button
-                [ Attr.class "me-cancel-btn"
+                [ Attr.class "btn"
                 , Ev.onClick callbacks.onCancel
                 ]
                 [ Html.text "Cancel" ]

@@ -158,13 +158,13 @@ viewRow config idx p =
                     [ nameLabel p
                     , Html.span [ Attr.class "pm-confirm-text" ] [ Html.text "Delete this preset?" ]
                     , Html.button
-                        [ Attr.class "pm-btn pm-btn-danger"
+                        [ Attr.class "btn btn-danger btn-sm"
                         , Attr.disabled config.busy
                         , Ev.onClick (config.onDeleteConfirm p.name)
                         ]
                         [ Html.text "Delete" ]
                     , Html.button
-                        [ Attr.class "pm-btn"
+                        [ Attr.class "btn btn-sm"
                         , Attr.disabled config.busy
                         , Ev.onClick config.onDeleteCancel
                         ]
@@ -181,7 +181,7 @@ viewRow config idx p =
 
                       else
                         Html.button
-                            [ Attr.class "pm-btn"
+                            [ Attr.class "btn btn-danger-outline btn-sm"
                             , Attr.disabled config.busy
                             , Ev.onClick (config.onDelete p.name)
                             ]
@@ -203,13 +203,13 @@ viewRow config idx p =
                                 ]
                                 []
                             , Html.button
-                                [ Attr.class "pm-btn pm-btn-primary"
+                                [ Attr.class "btn btn-primary btn-sm"
                                 , Attr.disabled (config.busy || String.isEmpty (String.trim config.renameInput))
                                 , Ev.onClick (config.onRenameSave p.name)
                                 ]
                                 [ Html.text "Save" ]
                             , Html.button
-                                [ Attr.class "pm-btn"
+                                [ Attr.class "btn btn-sm"
                                 , Attr.disabled config.busy
                                 , Ev.onClick config.onRenameCancel
                                 ]
@@ -226,7 +226,7 @@ viewRow config idx p =
 
                               else
                                 Html.button
-                                    [ Attr.class "pm-btn"
+                                    [ Attr.class "btn btn-sm"
                                     , Attr.disabled config.busy
                                     , Ev.onClick (config.onRenameStart p.name)
                                     ]
@@ -244,14 +244,14 @@ viewRow config idx p =
                                 [ dragHandle idx p config.onDragStart config.onDragEnd
                                 , nameLabel p
                                 , Html.button
-                                    [ Attr.class "pm-btn"
+                                    [ Attr.class "btn btn-sm"
                                     , Attr.disabled config.busy
                                     , Ev.onClick (config.onCopy p.name)
                                     , Attr.title "Duplicate this preset"
                                     ]
                                     [ Html.text "Copy" ]
                                 , Html.button
-                                    [ Attr.class "pm-btn"
+                                    [ Attr.class "btn btn-sm"
                                     , Attr.disabled config.busy
                                     , Ev.onClick (config.onToggleEdit p.name)
                                     ]
@@ -261,7 +261,7 @@ viewRow config idx p =
 
                                   else
                                     Html.button
-                                        [ Attr.class "pm-btn"
+                                        [ Attr.class "btn btn-sm"
                                         , Attr.disabled config.busy
                                         , Ev.onClick (config.onRenameStart p.name)
                                         ]
@@ -271,7 +271,7 @@ viewRow config idx p =
 
                                   else
                                     Html.button
-                                        [ Attr.class "pm-btn pm-btn-danger"
+                                        [ Attr.class "btn btn-danger-outline btn-sm"
                                         , Attr.disabled config.busy
                                         , Ev.onClick (config.onDelete p.name)
                                         ]
@@ -284,19 +284,19 @@ viewRow config idx p =
                                     [ Html.span [ Attr.class "pm-edit-label" ]
                                         [ Html.text ("Edit " ++ p.name ++ ":") ]
                                     , Html.button
-                                        [ Attr.class "pm-btn pm-btn-primary"
+                                        [ Attr.class "btn btn-primary btn-sm"
                                         , Attr.disabled config.busy
                                         , Ev.onClick (config.onEditModels p.name)
                                         ]
                                         [ Html.text "Models" ]
                                     , Html.button
-                                        [ Attr.class "pm-btn pm-btn-primary"
+                                        [ Attr.class "btn btn-primary btn-sm"
                                         , Attr.disabled config.busy
                                         , Ev.onClick (config.onEditMcp p.name)
                                         ]
                                         [ Html.text "MCP Servers" ]
                                     , Html.button
-                                        [ Attr.class "pm-btn pm-btn-primary"
+                                        [ Attr.class "btn btn-primary btn-sm"
                                         , Attr.disabled config.busy
                                         , Ev.onClick (config.onEditSettings p.name)
                                         ]

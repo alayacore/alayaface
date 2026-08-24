@@ -3,6 +3,7 @@ module Overlay.MediaPreview exposing (view)
 import Html exposing (Html)
 import Html.Attributes as Attr
 import Html.Events as Ev
+import Icons
 import Json.Decode as D
 import Session.Types as T
 
@@ -29,11 +30,11 @@ view config =
             , Ev.stopPropagationOn "click" (D.succeed ( config.noOp, True ))
             ]
             [ Html.button
-                [ Attr.class "media-preview-close"
+                [ Attr.class "card-close"
                 , Ev.stopPropagationOn "click" (D.succeed ( config.onClose, True ))
                 , Attr.title "Close"
                 ]
-                [ Html.text "✕" ]
+                [ Icons.cross ]
             , content config.item
             ]
         ]

@@ -149,14 +149,14 @@ profileRow cfg p =
 
               else
                 Html.button
-                    [ Attr.class "asr-row-btn"
+                    [ Attr.class "btn btn-success-outline btn-sm"
                     , Attr.disabled cfg.syncing
                     , Attr.title "Use this endpoint for voice input"
                     , Ev.onClick (cfg.onSetActive p.id)
                     ]
                     [ Html.text "Use" ]
             , Html.button
-                [ Attr.class "asr-row-btn"
+                [ Attr.class "btn btn-sm"
                 , Attr.disabled cfg.syncing
                 , Ev.onClick (cfg.onEdit p.id)
                 ]
@@ -164,13 +164,13 @@ profileRow cfg p =
             , if armed then
                 Html.span [ Attr.class "asr-row-confirm" ]
                     [ Html.button
-                        [ Attr.class "asr-row-btn asr-row-btn-danger"
+                        [ Attr.class "btn btn-danger btn-sm"
                         , Attr.disabled cfg.syncing
                         , Ev.onClick cfg.onDeleteConfirm
                         ]
                         [ Html.text "Confirm delete" ]
                     , Html.button
-                        [ Attr.class "asr-row-btn"
+                        [ Attr.class "btn btn-sm"
                         , Attr.disabled cfg.syncing
                         , Ev.onClick cfg.onDeleteCancel
                         ]
@@ -179,7 +179,7 @@ profileRow cfg p =
 
               else
                 Html.button
-                    [ Attr.class "asr-row-btn asr-row-btn-danger"
+                    [ Attr.class "btn btn-danger-outline btn-sm"
                     , Attr.disabled cfg.syncing
                     , Ev.onClick (cfg.onDelete p.id)
                     ]

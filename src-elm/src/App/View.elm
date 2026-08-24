@@ -235,7 +235,7 @@ viewSessionPanel model id =
                         , Ev.stopPropagationOn "click" (D.succeed ( RequestCloseSession id, True ))
                         , Attr.title "Close session"
                         ]
-                        [ Html.text "✕" ]
+                        [ Icons.cross ]
                     ]
                 , viewChatArea model session
                 ]
@@ -300,7 +300,7 @@ viewGlobalMenu model =
                     -- which also resets the flyout.
                     , Ev.onClick (SetPresetSubmenu (not model.presetSubmenuOpen))
                     ]
-                    [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "+" ]
+                    [ Html.span [ Attr.class "global-menu-icon" ] [ Icons.plus ]
                     , Html.text " New Session"
                     , if model.presetSubmenuOpen then
                         Html.div [ Attr.class "global-menu-submenu" ]
@@ -326,21 +326,21 @@ viewGlobalMenu model =
                     [ Attr.class "global-menu-item"
                     , Ev.onClick OpenSessionManager
                     ]
-                    [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "☰" ]
+                    [ Html.span [ Attr.class "global-menu-icon" ] [ Icons.menu ]
                     , Html.text " Session Manager"
                     ]
                 , Html.div
                     [ Attr.class "global-menu-item"
                     , Ev.onClick OpenPresetManager
                     ]
-                    [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "◱" ]
+                    [ Html.span [ Attr.class "global-menu-icon" ] [ Icons.layers ]
                     , Html.text "Preset Manager"
                     ]
                 , Html.div
                     [ Attr.class "global-menu-item"
                     , Ev.onClick OpenGlobalConfig
                     ]
-                    [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "⚙" ]
+                    [ Html.span [ Attr.class "global-menu-icon" ] [ Icons.gear ]
                     , Html.text "Global config"
                     ]
                 , Html.div
@@ -355,7 +355,7 @@ viewGlobalMenu model =
                     , Ev.onClick CanvasZoomReset
                     , Attr.title "Reset zoom to 100%"
                     ]
-                    [ Html.span [ Attr.class "global-menu-icon" ] [ Html.text "🔍" ]
+                    [ Html.span [ Attr.class "global-menu-icon" ] [ Icons.search ]
                     , Html.text
                         ("Zoom "
                             ++ String.fromInt (round (model.canvasScale * 100))
@@ -543,7 +543,7 @@ viewSessionManagerOverlay model =
                                         Html.text ""
                                     ]
                                 , Html.button
-                                    [ Attr.class "sel-page-item-btn sel-page-item-btn-allow"
+                                    [ Attr.class "btn btn-success btn-sm"
                                     , Ev.onClick (ResumeSession dir.id)
                                     , Attr.disabled (not canResume)
                                     , Attr.title
@@ -556,13 +556,13 @@ viewSessionManagerOverlay model =
                                     ]
                                     [ Html.text "Resume" ]
                                 , Html.button
-                                    [ Attr.class "sel-page-item-btn"
+                                    [ Attr.class "btn btn-sm"
                                     , Ev.onClick (OpenVersionList dir.id)
                                     , Attr.title "Browse this session's versions (read-only history)"
                                     ]
                                     [ Html.text ("Versions (" ++ String.fromInt (List.length (Maybe.withDefault [] (Maybe.map .versions (Dict.get dir.id model.sessionRefs)))) ++ ")") ]
                                 , Html.button
-                                    [ Attr.class "sel-page-item-btn sel-page-item-btn-deny"
+                                    [ Attr.class "btn btn-danger btn-sm"
                                     , Ev.onClick (DeleteSession dir.id)
                                     , Attr.title "Delete this session's files on disk"
                                     ]
@@ -631,7 +631,7 @@ viewVersionList model sid =
                                     [ Html.text (String.left 12 h ++ (if isHead then " · head" else "")) ]
                                 ]
                             , Html.button
-                                [ Attr.class "sel-page-item-btn sel-page-item-btn-allow"
+                                [ Attr.class "btn btn-success btn-sm"
                                 , Ev.onClick (ViewVersion sid h)
                                 , Attr.title "View this version's messages (read-only)"
                                 ]
@@ -809,14 +809,14 @@ viewPlanPanel model planId =
                         , Ev.stopPropagationOn "click" (D.succeed ( PlanToggleInfo, True ))
                         , Attr.title "Plan description (goal, tasks, run log)"
                         ]
-                        [ Html.text "?" ]
+                        [ Icons.warning ]
                     , Html.button
                         [ Attr.class "session-bar-close"
                         , Ev.stopPropagationOn "mousedown" (D.succeed ( NoOp, True ))
                         , Ev.stopPropagationOn "click" (D.succeed ( PlanClose planId, True ))
                         , Attr.title "Close plan window"
                         ]
-                        [ Html.text "✕" ]
+                        [ Icons.cross ]
                     ]
                 , Html.div [ Attr.class "plan-panel-body" ]
                     [ case pv.errors of
@@ -946,7 +946,7 @@ viewPlanRunStrip win =
 stripBtn : String -> Msg -> String -> Html Msg
 stripBtn label msg tip =
     Html.button
-        [ Attr.class "plan-strip-btn"
+        [ Attr.class "btn btn-sm"
         , Ev.onClick msg
         , Attr.title tip
         ]
@@ -1017,11 +1017,11 @@ viewPlanInfoWindow planId win plan =
         [ Html.div [ Attr.class "plan-info-head" ]
             [ Html.span [ Attr.class "plan-info-title" ] [ Html.text tabTitle ]
             , Html.button
-                [ Attr.class "plan-info-close"
+                [ Attr.class "card-close"
                 , Ev.onClick PlanCloseInfo
                 , Attr.title "Close"
                 ]
-                [ Html.text "✕" ]
+                [ Icons.cross ]
             ]
         , Html.div [ Attr.class "plan-info-body" ]
             [ case win.selectedNode of
@@ -1207,7 +1207,7 @@ viewPlanNodeInfo planId win t =
         , Html.div [ Attr.class "plan-node-detail-label" ] [ Html.text "Prompt" ]
         , Html.div [ Attr.class "plan-node-detail-prompt" ] [ Html.text t.prompt ]
         , Html.button
-            [ Attr.class "confirm-page-btn"
+            [ Attr.class "btn btn-primary"
             , Attr.disabled (not canRetry)
             , Ev.onClick (PlanRunRetryNode nodeId)
             ]

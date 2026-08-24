@@ -24,12 +24,12 @@ view config p =
                 Html.text ""
         , Html.div [ Attr.class "confirm-page-buttons" ]
             [ Html.button
-                [ Attr.class "confirm-page-btn confirm-page-btn-allow"
+                [ Attr.class "btn btn-success btn-lg"
                 , Ev.onClick (config.onConfirm p.id True)
                 ]
                 [ Html.text "✓ Allow" ]
             , Html.button
-                [ Attr.class "confirm-page-btn confirm-page-btn-deny"
+                [ Attr.class "btn btn-danger btn-lg"
                 , Ev.onClick (config.onConfirm p.id False)
                 ]
                 [ Html.text "✕ Deny" ]
