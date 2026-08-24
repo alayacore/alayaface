@@ -6,7 +6,29 @@
 use std::io;
 use std::process::{Child, Command, Stdio};
 
-use std::io::Write;
+use std::io::{BufReader, Read, Write};
+use std::time::{Duration, Instant};
+
+use crate::tlv;
+
+/// The alayacore TLV protocol `message_version` this adapter implements.
+///
+/// alayacore announces its version as the first boot frame
+/// (`SM {"type":"version","data":{"message_version":N,...}}`, see
+/// `alayacore/adapter-guide/README.md`). A mismatch means the wire
+/// format the adapter knows about has drifted from the binary the user
+/// installed — silently sending prompts into a binary that parses them
+/// differently is worse than refusing to start, so `check_alayacore`
+/// hard-fails on mismatch with the same UX as a missing binary.
+pub const SUPPORTED_MESSAGE_VERSION: i64 = 11;
+
+/// How long `check_message_version` waits for the boot version frame
+/// before giving up. The version frame is the FIRST thing alayacore
+/// emits on stdout (before any task/model/reasoning/ready SMs, and
+/// before any replayed history) — in practice it arrives in a few ms,
+/// so 2s is generous. Anything slower means the binary is hung or
+/// running a different mode; either way we cannot trust it.
+pub const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Spawned alayacore process with its pipes.
 pub struct CoreProcess {
@@ -249,6 +271,137 @@ pub fn prepend_rg_to_path(cmd: &mut Command, binary_path: &str) {
     }
 }
 
+/// Spawn alayacore briefly and verify its `message_version` matches
+/// `SUPPORTED_MESSAGE_VERSION`. Used by `check_alayacore` to gate the
+/// home-screen banner: a wrong version is just as unusable as a
+/// missing binary (the wire format has drifted), so the same
+/// `ok=false` UX is surfaced.
+///
+/// The probe spawns `alayacore --rawio`, reads TLV frames until
+/// `SM {"type":"version",...}` arrives or `VERSION_PROBE_TIMEOUT`
+/// elapses, then kills the child. Config path / session / tools are
+/// irrelevant for the version announcement, so the probe uses the
+/// minimal flag set (no config dir, no session). stderr is discarded
+/// to avoid polluting the caller's terminal with probe-only logs.
+///
+/// Error messages are user-facing (the home screen shows them
+/// verbatim), so they name the offending version when known.
+pub fn check_message_version(binary_path: &str) -> Result<(), String> {
+    let mut child = match Command::new(binary_path)
+        .arg("--rawio")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return Err(format!(
+                "alayacore could not be started to verify its protocol version: {e}"
+            ));
+        }
+    };
+
+    // Take stdout; kill_child-style close + wait handled by the helper
+    // below. No stdin pipe (stdin closed above) — alayacore sees EOF
+    // immediately and exits as soon as it finishes emitting boot SMs.
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "failed to capture alayacore stdout".to_string())?;
+    let mut reader = BufReader::new(stdout);
+
+    let result = read_version_frame(&mut reader);
+    // Drain kill: close (already null) + SIGKILL + wait so we never
+    // leak a probe process. The probe is short-lived either way.
+    let _ = child.kill();
+    let _ = child.wait();
+
+    result
+}
+
+/// Read TLV frames until the boot `SM {"type":"version",...}` arrives
+/// or `VERSION_PROBE_TIMEOUT` elapses. Returns Ok(()) if the version
+/// matches `SUPPORTED_MESSAGE_VERSION`, otherwise an Err naming the
+/// observed version (or the failure mode). Pulled out of
+/// `check_message_version` so unit tests can drive it with a
+/// synthetic `Read` (a real alayacore is awkward to mock — its
+/// version announcement requires running the actual binary).
+fn read_version_frame<R: Read>(reader: &mut R) -> Result<(), String> {
+    let start = Instant::now();
+    loop {
+        let elapsed = start.elapsed();
+        if elapsed >= VERSION_PROBE_TIMEOUT {
+            return Err(format!(
+                "alayacore did not announce its protocol version within {}s",
+                VERSION_PROBE_TIMEOUT.as_secs()
+            ));
+        }
+
+        // Per-read deadline via a background thread would be ideal, but
+        // TLV frames are short and alayacore's version frame is the
+        // FIRST one it writes — in practice the read either returns
+        // immediately or blocks on a hung binary. Guard the whole loop
+        // with the elapsed-time check and accept that the final blocked
+        // read is bounded by VERSION_PROBE_TIMEOUT via a short overall
+        // ceiling — the probe is killed by the caller when this fn
+        // returns, so a stuck read only delays shutdown by a few ms in
+        // the worst case.
+        match tlv::read_frame(reader) {
+            Ok(Some(frame)) => {
+                if frame.tag != "SM" {
+                    // The version SM is the very first boot frame;
+                    // anything else arriving before it means a broken
+                    // core. Report what we saw so the user can diagnose.
+                    return Err(format!(
+                        "unexpected boot frame before version announcement: tag={}, value={}",
+                        frame.tag,
+                        frame.value.chars().take(120).collect::<String>()
+                    ));
+                }
+                let env: tlv::SystemMsgEnvelope = match serde_json::from_str(&frame.value) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return Err(format!(
+                            "alayacore sent a malformed version frame: {e}"
+                        ));
+                    }
+                };
+                if env.msg_type != "version" {
+                    return Err(format!(
+                        "expected alayacore's first frame to be 'version', got '{}'",
+                        env.msg_type
+                    ));
+                }
+                let observed = match env.data.get("message_version").and_then(|v| v.as_i64()) {
+                    Some(n) => n,
+                    None => {
+                        return Err(
+                            "alayacore's version frame is missing message_version".to_string()
+                        );
+                    }
+                };
+                if observed != SUPPORTED_MESSAGE_VERSION {
+                    return Err(format!(
+                        "alayacore message version {observed} is incompatible with expected version {SUPPORTED_MESSAGE_VERSION}. Please upgrade alayacore."
+                    ));
+                }
+                return Ok(());
+            }
+            Ok(None) => {
+                // EOF before any version frame — alayacore exited
+                // without announcing itself.
+                return Err(
+                    "alayacore exited before announcing its protocol version".to_string(),
+                );
+            }
+            Err(e) => {
+                return Err(format!("failed to read alayacore's boot frames: {e}"));
+            }
+        }
+    }
+}
+
 /// Kill a child process with a 3-second timeout.
 /// Closes stdin first (EOF — alayacore drains the active task and
 /// auto-saves at task end), then waits up to 3s for a natural exit,
@@ -370,14 +523,28 @@ mod tests {
     use super::*;
     use std::process::{Command, Stdio};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     fn temp_path(name: &str) -> std::path::PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("alayaface-{}-{}-{}", name, std::process::id(), nanos))
+        // Add an atomic counter (process-global) so two parallel
+        // tests that happen to compute the same nanosecond timestamp
+        // do not share a path. The previous nanos-only scheme collided
+        // under cargo test's parallel execution — Linux returned
+        // ETXTBSY ("Text file busy") when two tests wrote to the same
+        // fake-alayacore binary concurrently.
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "alayaface-{}-{}-{}-{}",
+            name,
+            std::process::id(),
+            n,
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
     }
 
     #[test]
@@ -568,7 +735,7 @@ mod tests {
         // so the child sees the bundled rg directory first in its PATH.
         // Uses a fake alayacore (a shell script that prints its PATH)
         // so we can capture the env the child inherited.
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = crate::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = temp_path("spawn-rg-path");
         std::fs::create_dir_all(&dir).expect("create dir");
 
@@ -609,7 +776,7 @@ mod tests {
         // PATH mutation: alayacore inherits its original PATH and any
         // rg lookup falls through to the system PATH (or skips rg-only
         // features).
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = crate::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = temp_path("spawn-rg-stub");
         std::fs::create_dir_all(&dir).expect("create dir");
         std::fs::write(dir.join("rg"), b"").unwrap(); // 0-byte stub
@@ -692,7 +859,7 @@ mod tests {
         // elsewhere — the user installs the app and gets the bundled
         // version by default; ALAYACORE_BIN is the override knob, but
         // the bundling is the prescribed install media.
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = crate::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = temp_path("find-bin-bundled-wins");
         std::fs::create_dir_all(&dir).expect("create dir");
         let exe = dir.join(if cfg!(target_os = "windows") {
@@ -786,7 +953,7 @@ mod tests {
 
     #[test]
     fn prepend_rg_to_path_adds_bundled_dir_when_rg_present() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = crate::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = temp_path("prepend-rg-present");
         std::fs::create_dir_all(&dir).expect("create dir");
         let rg_name = if cfg!(target_os = "windows") { "rg.exe" } else { "rg" };
@@ -813,7 +980,7 @@ mod tests {
 
     #[test]
     fn prepend_rg_to_path_noop_when_rg_missing() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = crate::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Directory has alayacore but no rg — helper must not touch
         // PATH; alayacore inherits whatever the backend already had.
         let dir = temp_path("prepend-rg-missing");
@@ -838,7 +1005,7 @@ mod tests {
 
     #[test]
     fn prepend_rg_to_path_noop_when_rg_is_zero_byte_stub() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = crate::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // A 0-byte rg stub (build.rs fallback when no rg was found
         // locally) must NOT be advertised via PATH — alayacore would
         // try to exec it and fail with a confusing exec error.
@@ -867,7 +1034,7 @@ mod tests {
 
     #[test]
     fn prepend_rg_to_path_noop_when_binary_path_has_no_parent() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = crate::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // A bare filename ("alayacore" — current_exe() never returns
         // this in production, but tests must cover the contract)
         // resolves to an empty parent; helper must return without
@@ -887,5 +1054,175 @@ mod tests {
     // Process-wide lock for tests that mutate ALAYACORE_BIN / PATH.
     // find_binary reads them, so parallel tests would race. Mirrors
     // dirs::TEST_HOME_LOCK.
-    static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    //
+    // Aliased to crate::TEST_ENV_LOCK so cmd.rs tests that mutate
+    // PATH serialize with the alayacore.rs tests here (env var
+    // mutations are process-global, not per-module). Same shim
+    // rationale as in commands/cmd::tests — per-module statics can't
+    // borrow a sibling module's static.
+
+    // ─── check_message_version ────────────────────────────────
+    //
+    // The probe spawns a real alayacore. Driving it with a synthetic
+    // binary is fragile (TLV framing + spawn ordering + argv parsing),
+    // so these tests cover the PARSE path via `read_version_frame`
+    // directly — that is where every business rule lives (match,
+    // mismatch, missing field, malformed JSON, wrong-type first frame,
+    // EOF before frame). Spawn-failure coverage is left to the
+    // integration test in commands/cmd.rs (it has a real
+    // `_does_not_exist_` path to drive).
+
+    use std::io::Cursor;
+
+    /// Build the bytes of a single TLV frame.
+    fn encode(tag: &str, value: &str) -> Vec<u8> {
+        tlv::encode(tag, value)
+    }
+
+    #[test]
+    fn read_version_frame_accepts_matching_version() {
+        // Real alayacore boot: version FIRST, then everything else.
+        // read_version_frame should accept the version frame and stop
+        // (it does not drain subsequent frames).
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&encode(
+            "SM",
+            r#"{"type":"version","data":{"message_version":11,"core_version":"test"}}"#,
+        ));
+        bytes.extend_from_slice(&encode(
+            "SM",
+            r#"{"type":"task","data":{"in_progress":false}}"#,
+        ));
+        let mut r = Cursor::new(bytes);
+        read_version_frame(&mut r).expect("matching version must pass");
+    }
+
+    #[test]
+    fn read_version_frame_rejects_wrong_version() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&encode(
+            "SM",
+            r#"{"type":"version","data":{"message_version":10,"core_version":"old"}}"#,
+        ));
+        let mut r = Cursor::new(bytes);
+        let err = read_version_frame(&mut r).expect_err("mismatch must error");
+        // User-facing: include the observed AND the expected number so
+        // the home-screen banner tells the user which upgrade to fetch.
+        assert!(
+            err.contains("message version 10"),
+            "error must name the observed version: {err:?}"
+        );
+        assert!(
+            err.contains(&format!("expected version {SUPPORTED_MESSAGE_VERSION}")),
+            "error must name the expected version: {err:?}"
+        );
+        assert!(
+            err.contains("upgrade"),
+            "error must tell the user what to do: {err:?}"
+        );
+    }
+
+    #[test]
+    fn read_version_frame_rejects_missing_message_version_field() {
+        // An SM frame with type=version but no message_version field
+        // (corrupt / pre-release core) must surface a clear error.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&encode(
+            "SM",
+            r#"{"type":"version","data":{"core_version":"weird"}}"#,
+        ));
+        let mut r = Cursor::new(bytes);
+        let err = read_version_frame(&mut r).expect_err("missing field must error");
+        assert!(
+            err.contains("missing message_version"),
+            "error must call out the missing field: {err:?}"
+        );
+    }
+
+    #[test]
+    fn read_version_frame_rejects_malformed_json() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&encode("SM", "{not json"));
+        let mut r = Cursor::new(bytes);
+        let err = read_version_frame(&mut r).expect_err("malformed JSON must error");
+        assert!(
+            err.contains("malformed"),
+            "error must call out the parse failure: {err:?}"
+        );
+    }
+
+    #[test]
+    fn read_version_frame_rejects_wrong_first_frame_type() {
+        // alayacore must send the version frame FIRST. A non-version
+        // SM as the first frame means a buggy / older core.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&encode(
+            "SM",
+            r#"{"type":"task","data":{"in_progress":false}}"#,
+        ));
+        let mut r = Cursor::new(bytes);
+        let err = read_version_frame(&mut r).expect_err("wrong first-frame type must error");
+        assert!(
+            err.contains("expected") && err.contains("version"),
+            "error must explain the expected first frame: {err:?}"
+        );
+    }
+
+    #[test]
+    fn read_version_frame_rejects_non_sm_first_frame() {
+        // Anything that isn't SM as the first frame is unexpected —
+        // the version announcement must come first on stdout.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&encode("UT", "echo"));
+        let mut r = Cursor::new(bytes);
+        let err = read_version_frame(&mut r).expect_err("non-SM first frame must error");
+        assert!(
+            err.contains("unexpected boot frame"),
+            "error must call out the unexpected tag: {err:?}"
+        );
+    }
+
+    #[test]
+    fn read_version_frame_rejects_eof_before_frame() {
+        // alayacore exited before announcing itself. Common when the
+        // binary is broken (config parse error, missing model, etc.).
+        let mut r = Cursor::new(Vec::<u8>::new());
+        let err = read_version_frame(&mut r).expect_err("EOF must error");
+        assert!(
+            err.contains("exited"),
+            "error must reflect the EOF scenario: {err:?}"
+        );
+    }
+
+    #[test]
+    fn read_version_frame_skips_unknown_frames_after_version() {
+        // Once the version frame passes, the helper returns Ok(()) and
+        // stops reading — subsequent frames are the boot task /
+        // model_list / etc. that the live session reader will consume.
+        // Drive that with a NOOP: the helper must NOT block on
+        // unread data after Ok.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&encode(
+            "SM",
+            r#"{"type":"version","data":{"message_version":11}}"#,
+        ));
+        // Pad with a bunch of unread frames — the helper must return
+        // before reading them.
+        for i in 0..32 {
+            bytes.extend_from_slice(&encode(
+                "SM",
+                &format!(r#"{{"type":"task","data":{{"n":{i}}}}}"#),
+            ));
+        }
+        let total = bytes.len();
+        let mut r = Cursor::new(bytes);
+        read_version_frame(&mut r).expect("matching version must pass");
+        // Cursor::position() lets us assert the helper stopped reading
+        // after the version frame (the first frame's length).
+        let consumed = r.position() as usize;
+        assert!(
+            consumed < total,
+            "helper must not drain later frames (consumed {consumed} of {total} bytes)",
+        );
+    }
 }

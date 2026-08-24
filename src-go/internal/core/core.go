@@ -5,6 +5,10 @@
 package core
 
 import (
+	"bufio"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -12,7 +16,33 @@ import (
 	"runtime"
 	"strconv"
 	"time"
+
+	"alayaface/src-go/internal/tlv"
 )
+
+// SupportedMessageVersion is the alayacore TLV protocol
+// `message_version` this adapter implements.
+//
+// alayacore announces its version as the first boot frame
+// (`SM {"type":"version","data":{"message_version":N,...}}`, see
+// alayacore/adapter-guide/README.md). A mismatch means the wire
+// format the adapter knows about has drifted from the binary the user
+// installed — silently sending prompts into a binary that parses them
+// differently is worse than refusing to start, so `CheckAlayacore`
+// hard-fails on mismatch with the same UX as a missing binary.
+//
+// Must stay in sync with src-tauri/src/alayacore.rs::SUPPORTED_MESSAGE_VERSION
+// (AGENTS.md: "two backends must stay symmetric").
+const SupportedMessageVersion = 11
+
+// VersionProbeTimeout is how long CheckMessageVersion waits for the
+// boot version frame before giving up. The version frame is the
+// FIRST thing alayacore emits on stdout (before any
+// task/model/reasoning/ready SMs and before any replayed history) —
+// in practice it arrives in a few ms, so 2s is generous. Anything
+// slower means the binary is hung or running a different mode;
+// either way we cannot trust it.
+const VersionProbeTimeout = 2 * time.Second
 
 // CoreProcess is a spawned alayacore process with its pipes.
 type CoreProcess struct {
@@ -167,7 +197,126 @@ func bundledBinaryPath() (string, bool) {
 	return filepath.Join(binDir, name), true
 }
 
-// KillChild closes the child's stdin (EOF), waits up to 3s for a natural
+// CheckMessageVersion spawns alayacore briefly and verifies its
+// `message_version` matches SupportedMessageVersion. Used by
+// CheckAlayacore to gate the home-screen banner: a wrong version is
+// just as unusable as a missing binary (the wire format has drifted),
+// so the same `ok=false` UX is surfaced.
+//
+// The probe spawns `alayacore --rawio`, reads TLV frames until
+// `SM {"type":"version",...}` arrives or VersionProbeTimeout
+// elapses, then kills the child. Config path / session / tools are
+// irrelevant for the version announcement, so the probe uses the
+// minimal flag set (no config dir, no session). stderr is discarded
+// to avoid polluting the caller's terminal with probe-only logs.
+//
+// Error messages are user-facing (the home screen shows them
+// verbatim), so they name the offending version when known.
+//
+// Port of src-tauri/src/alayacore.rs::check_message_version.
+func CheckMessageVersion(binaryPath string) error {
+	if binaryPath == "" {
+		return errors.New("alayacore binary path is empty")
+	}
+	cmd := exec.Command(binaryPath, "--rawio")
+	cmd.Stdin = nil // closed → alayacore sees EOF immediately
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("failed to capture alayacore stdout: %w", err)
+	}
+	cmd.Stderr = nil
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("alayacore could not be started to verify its protocol version: %w", err)
+	}
+	defer KillChild(cmd)
+
+	if err := readVersionFrame(stdout); err != nil {
+		return err
+	}
+	return nil
+}
+
+// readVersionFrame reads TLV frames from r until the boot
+// `SM {"type":"version",...}` arrives or VersionProbeTimeout elapses.
+// Returns nil if the version matches SupportedMessageVersion;
+// otherwise an error naming the observed version (or the failure
+// mode). Pulled out of CheckMessageVersion so unit tests can drive
+// it with a synthetic io.Reader (a real alayacore is awkward to
+// mock — its wire format requires running the actual binary).
+//
+// r should be the OS pipe from StdoutPipe (a *os.File on Unix). We
+// use SetReadDeadline so a hung alayacore cannot block ReadFull
+// forever — without it, a probe that emitted a partial frame would
+// hang the loop's goroutine until KillChild fires, leaking the
+// child in the worst case. The deadline is re-armed on every
+// iteration so it always covers the remaining probe budget.
+func readVersionFrame(r io.Reader) error {
+	// Arm a read deadline so a hung alayacore can't block the read
+	// loop forever. ReadFull blocks on the underlying pipe; without
+	// a deadline a stuck binary would hang here until KillChild
+	// fires.
+	if rd, ok := r.(interface{ SetReadDeadline(time.Time) error }); ok {
+		_ = rd.SetReadDeadline(time.Now().Add(VersionProbeTimeout))
+	}
+
+	reader := bufio.NewReader(r)
+	for {
+		// Re-arm the deadline — the previous ReadFull consumed
+		// some of the budget; subsequent reads must respect the
+		// remaining time.
+		if rd, ok := r.(interface{ SetReadDeadline(time.Time) error }); ok {
+			_ = rd.SetReadDeadline(time.Now().Add(VersionProbeTimeout))
+		}
+
+		frame, err := tlv.ReadFrame(reader)
+		if err != nil {
+			return fmt.Errorf("failed to read alayacore's boot frames: %w", err)
+		}
+		if frame == nil {
+			// Clean EOF (ReadFrame returns (nil, nil) when the
+			// header read is short) — alayacore exited without
+			// announcing itself.
+			return errors.New("alayacore exited before announcing its protocol version")
+		}
+		if frame.Tag != "SM" {
+			// The version SM is the very first boot frame;
+			// anything else arriving before it means a broken
+			// core. Report what we saw so the user can
+			// diagnose.
+			preview := frame.Value
+			if len(preview) > 120 {
+				preview = preview[:120]
+			}
+			return fmt.Errorf("unexpected boot frame before version announcement: tag=%s, value=%s", frame.Tag, preview)
+		}
+
+		var env struct {
+			Type string          `json:"type"`
+			Data json.RawMessage `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(frame.Value), &env); err != nil {
+			return fmt.Errorf("alayacore sent a malformed version frame: %w", err)
+		}
+		if env.Type != "version" {
+			return fmt.Errorf("expected alayacore's first frame to be 'version', got '%s'", env.Type)
+		}
+		var data struct {
+			MessageVersion *int64  `json:"message_version"`
+			CoreVersion    *string `json:"core_version"`
+		}
+		if err := json.Unmarshal(env.Data, &data); err != nil {
+			return fmt.Errorf("alayacore's version frame data is malformed: %w", err)
+		}
+		if data.MessageVersion == nil {
+			return errors.New("alayacore's version frame is missing message_version")
+		}
+		if *data.MessageVersion != SupportedMessageVersion {
+			return fmt.Errorf("alayacore message version %d is incompatible with expected version %d. Please upgrade alayacore.",
+				*data.MessageVersion, SupportedMessageVersion)
+		}
+		return nil
+	}
+}
 // exit — alayacore drains the active task (auto-saving at task end) and
 // exits — then sends kill as a fallback. Safe to call from multiple
 // goroutines (Wait errors are ignored).

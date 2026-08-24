@@ -41,6 +41,7 @@ import (
 	"strings"
 	"time"
 
+	"alayaface/src-go/internal/core"
 	"alayaface/src-go/internal/tlv"
 )
 
@@ -369,6 +370,24 @@ func main() {
 			_ = os.WriteFile(sessionFile, []byte(`{"version":1}`), 0o644)
 		}
 	}
+
+	// Version announcement (mirrors real alayacore's first boot SM
+	// {"type":"version","data":{"message_version":N,"core_version":"..."}}).
+	// The frontend-side startup probe (check_alayacore) reads this
+	// frame and rejects binaries whose protocol has drifted; we MUST
+	// match core.SupportedMessageVersion exactly, otherwise every
+	// integration test that boots fakecore via create_session / probe
+	// would surface a "wrong version" error and skip the session setup.
+	// The frame is emitted BEFORE the task SM, matching real alayacore's
+	// documented boot order: version → task → ... → session/ready.
+	version, _ := json.Marshal(map[string]any{
+		"type": "version",
+		"data": map[string]any{
+			"message_version": core.SupportedMessageVersion,
+			"core_version":    "fakecore",
+		},
+	})
+	writeFrame("SM", string(version))
 
 	// Startup system message, like alayacore announcing its task. The
 	// cwd/builtin_tools fields let tests assert spawn flags (per-plan

@@ -28,6 +28,15 @@ send_cmd!(alayacore_cancel, "cancel");
 /// points to a deleted file, the env-var AND the `which` AND the
 /// candidate paths would all fail — the user gets a clear error
 /// pointing at the exact path that was tried.
+///
+/// When the binary IS reachable, we also verify its TLV protocol
+/// `message_version` matches `SUPPORTED_MESSAGE_VERSION` by spawning
+/// it briefly and reading its first boot SM frame
+/// (`{"type":"version","data":{"message_version":N,...}}`). A wrong
+/// version is as unusable as a missing binary (the wire format has
+/// drifted — silently talking to a mismatched core is worse than
+/// refusing to start), so the same `ok=false` UX is surfaced with a
+/// message that names the observed and expected versions.
 #[derive(Serialize)]
 pub struct AlayacoreCheck {
     pub ok: bool,
@@ -39,11 +48,24 @@ pub struct AlayacoreCheck {
 pub fn check_alayacore() -> AlayacoreCheck {
     let path = alayacore::find_binary();
     match std::path::Path::new(&path).metadata() {
-        Ok(_) => AlayacoreCheck {
-            ok: true,
-            path,
-            error: String::new(),
-        },
+        Ok(_) => {
+            // Binary exists on disk; verify the protocol version
+            // matches what this adapter implements. The probe spawns
+            // alayacore briefly and kills it — same UX surface as a
+            // missing binary (ok=false, empty path, descriptive error).
+            if let Err(err) = alayacore::check_message_version(&path) {
+                return AlayacoreCheck {
+                    ok: false,
+                    path: String::new(),
+                    error: err,
+                };
+            }
+            AlayacoreCheck {
+                ok: true,
+                path,
+                error: String::new(),
+            }
+        }
         Err(_) => AlayacoreCheck {
             ok: false,
             path: String::new(),
@@ -131,7 +153,83 @@ mod tests {
     // race each other (the missing-binary test can clobber the env vars
     // BEFORE the env-var test's check_alayacore call sees them). The
     // same pattern is used in dirs.rs::TEST_HOME_LOCK.
-    static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    //
+    // The lock is acquired with `unwrap_or_else(|e| e.into_inner())`
+    // (poison-tolerant) so a single failing test does not cascade —
+    // a `lock().unwrap()` would poison the Mutex on a panic and make
+    // every later test in this module fail with PoisonError before
+    // even running. Tests are isolated by env restoration, so the
+    // poisoned state is irrelevant to the assertion outcome.
+    //
+    // This shares crate::TEST_ENV_LOCK with alayacore::tests so a
+    // cmd test's PATH mutation cannot race with an alayacore test's
+    // PATH read (env vars are process-global, so per-module locks
+    // don't help across module boundaries).
+    //
+    // (The local alias below is a thin `fn` shim so call sites can
+    // keep the existing `crate::TEST_ENV_LOCK.lock()` syntax without a wall of
+    // `crate::TEST_ENV_LOCK.lock().unwrap_or_else(...)` boilerplate
+    // everywhere. Per-module statics can't be initialised with a
+    // borrow of a sibling module's static — hence the function.)
+
+    /// Process-global counter so two parallel tests cannot pick the
+    /// same temp dir name. Linux returns ETXTBSY ("Text file busy")
+    /// when two tests concurrently write the same fake-alayacore
+    /// binary — `Command::new` then sees the file mid-write and
+    /// refuses to exec it.
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static PATH_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    /// Build a fake alayacore that emits a configurable
+    /// `message_version` followed by enough SM frames to look like a
+    /// running core. The probe in `check_alayacore` reads the FIRST
+    /// frame and then kills the process; this helper writes that
+    /// first frame so we can drive the version-mismatch path with a
+    /// real subprocess (the synthetic Read approach in
+    /// `alayacore::tests::read_version_frame_*` covers the parser,
+    /// but spawning exercises the full check_alayacore wiring too).
+    #[cfg(unix)]
+    fn write_fake_alayacore(dir: &std::path::Path, message_version: i64) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        // The probe spawns alayacore, reads TLV frames until the
+        // version SM arrives, then kills the child. We only need to
+        // emit ONE valid TLV frame (the version SM); alayacore's
+        // expected wire format is `[2-byte tag][4-byte big-endian
+        // length][value bytes]`. Use Python — dash's printf does NOT
+        // interpret `\xNN` escapes, so a shell-based emitter would
+        // emit the literal `\x` text and the probe would refuse the
+        // bogus length prefix. The shebang is ABSOLUTE
+        // (`/usr/bin/python3`, not `/usr/bin/env python3`): the
+        // tests strip PATH to an empty dir so `which` cannot find a
+        // python binary, and `env` would refuse to launch the
+        // script. Absolute path bypasses the env var entirely.
+        let payload = format!(
+            r#"{{"type":"version","data":{{"message_version":{message_version},"core_version":"fake"}}}}"#
+        );
+        let script = format!(
+            r#"#!/usr/bin/python3
+import struct, sys, time
+payload = {payload:?}.encode()
+sys.stdout.buffer.write(b"SM")
+sys.stdout.buffer.write(struct.pack(">I", len(payload)))
+sys.stdout.buffer.write(payload)
+sys.stdout.flush()
+# Block forever so the probe sees the frame and then kills us
+# on timeout. EOF would surface as a different error mode in the
+# version check (the probe reports "exited before announcing"),
+# which is a valid result for a broken binary but not what we
+# want to test here.
+while True:
+    time.sleep(1)
+"#
+        );
+
+        let bin = dir.join("alayacore");
+        std::fs::write(&bin, script).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        bin
+    }
 
     /// check_alayacore must reflect the env-var override. A real
     /// executable file placed at ALAYACORE_BIN must be reported as
@@ -139,14 +237,17 @@ mod tests {
     /// a user-facing error that names the path that was tried.
     #[test]
     fn check_alayacore_env_var_points_to_real_file() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = crate::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!(
-            "alayaface-check-bin-{}",
-            std::process::id()
+            "alayaface-check-bin-{}-{}",
+            std::process::id(),
+            PATH_COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        let bin = dir.join("alayacore");
-        std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
+        // The binary must announce the supported protocol version —
+        // otherwise the new version check in check_alayacore rejects
+        // it (a wrong-version binary is treated like a missing one).
+        let bin = write_fake_alayacore(&dir, crate::alayacore::SUPPORTED_MESSAGE_VERSION);
         std::env::set_var("ALAYACORE_BIN", &bin);
 
         let got = check_alayacore();
@@ -160,7 +261,7 @@ mod tests {
 
     #[test]
     fn check_alayacore_missing_binary_returns_error() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = crate::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Point ALAYACORE_BIN at a path that does NOT exist. Strip PATH
         // to an empty value so `which alayacore` fails, and chdir into
         // an empty temp dir so the relative candidate paths
@@ -168,8 +269,9 @@ mod tests {
         // resolve. FindBinary then falls back to the "alayacore" string,
         // which is not stat-able, so check_alayacore must report ok=false.
         let empty_path = std::env::temp_dir().join(format!(
-            "alayaface-empty-path-{}",
-            std::process::id()
+            "alayaface-empty-path-{}-{}",
+            std::process::id(),
+            PATH_COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&empty_path).unwrap();
         let orig_path = std::env::var("PATH").unwrap_or_default();
@@ -197,5 +299,103 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&empty_path);
+    }
+
+    /// check_alayacore must reject a binary that announces a
+    /// mismatching protocol version. The home-screen banner surfaces
+    /// the same `ok=false` UX as the missing-binary case, but the
+    /// error names the version mismatch so the user knows to upgrade
+    /// alayacore (not fix their PATH / ALAYACORE_BIN).
+    #[cfg(unix)]
+    #[test]
+    fn check_alayacore_wrong_version_returns_error() {
+        let _guard = crate::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!(
+            "alayaface-wrong-version-{}-{}",
+            std::process::id(),
+            PATH_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = write_fake_alayacore(&dir, alayacore::SUPPORTED_MESSAGE_VERSION - 1);
+
+        let orig_path = std::env::var("PATH").unwrap_or_default();
+        let orig_bin = std::env::var("ALAYACORE_BIN").unwrap_or_default();
+        std::env::set_var("ALAYACORE_BIN", &bin);
+        // Strip PATH so `which alayacore` cannot resolve to a real
+        // binary on the test host — the env-var must win. Keep
+        // /usr/bin in the PATH so concurrent tests that rely on
+        // PATH for unrelated lookups (e.g. `Command::new("sleep")`)
+        // do not race-fail when this test runs in parallel. The
+        // fake alayacore dir comes FIRST so `which` finds our fake
+        // first; /usr/bin is the fallback for everything else.
+        std::env::set_var("PATH", format!("{}:/usr/bin", dir.display()));
+
+        let got = check_alayacore();
+
+        // Restore env before any assertions so a failure leaves the
+        // process in a sane state for the next test.
+        std::env::set_var("PATH", orig_path);
+        if orig_bin.is_empty() {
+            std::env::remove_var("ALAYACORE_BIN");
+        } else {
+            std::env::set_var("ALAYACORE_BIN", orig_bin);
+        }
+
+        assert!(!got.ok, "ok=true on a wrong-version binary; path = {:?}, error = {:?}", got.path, got.error);
+        assert!(got.path.is_empty(), "path must be empty on ok=false: {:?}", got.path);
+        assert!(
+            got.error.contains("message version"),
+            "error must mention the protocol version: {:?}",
+            got.error
+        );
+        assert!(
+            got.error.contains("upgrade"),
+            "error must tell the user what to do: {:?}",
+            got.error
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// check_alayacore must accept a binary that announces the
+    /// supported protocol version. This is the happy path that
+    /// `check_alayacore_env_var_points_to_real_file` would have
+    /// caught if the old binary happened to spawn correctly — the
+    /// dedicated test makes the contract explicit and survives even
+    /// if a future change makes `find_binary` prefer the env var
+    /// differently.
+    #[cfg(unix)]
+    #[test]
+    fn check_alayacore_matching_version_returns_ok() {
+        let _guard = crate::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!(
+            "alayaface-matching-version-{}-{}",
+            std::process::id(),
+            PATH_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = write_fake_alayacore(&dir, alayacore::SUPPORTED_MESSAGE_VERSION);
+
+        let orig_path = std::env::var("PATH").unwrap_or_default();
+        let orig_bin = std::env::var("ALAYACORE_BIN").unwrap_or_default();
+        std::env::set_var("ALAYACORE_BIN", &bin);
+        // Same trick as the wrong-version test: keep /usr/bin in
+        // PATH so concurrent tests' PATH lookups don't race-fail.
+        std::env::set_var("PATH", format!("{}:/usr/bin", dir.display()));
+
+        let got = check_alayacore();
+
+        std::env::set_var("PATH", orig_path);
+        if orig_bin.is_empty() {
+            std::env::remove_var("ALAYACORE_BIN");
+        } else {
+            std::env::set_var("ALAYACORE_BIN", orig_bin);
+        }
+
+        assert!(got.ok, "ok=false for a matching-version binary; path = {:?}, error = {:?}", got.path, got.error);
+        assert_eq!(got.path, bin.to_string_lossy().to_string());
+        assert!(got.error.is_empty(), "error must be empty on ok: {:?}", got.error);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

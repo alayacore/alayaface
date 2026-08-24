@@ -256,10 +256,13 @@ viewNoSessionPanel model =
 
                     else
                         -- Startup check failed: the alayacore binary
-                        -- was not found. Show the banner immediately
-                        -- below the logo so the user sees it first;
-                        -- the layout is centered so a wrapped error
-                        -- message still reads cleanly.
+                        -- was not found OR it announced a mismatching
+                        -- protocol `message_version` (same UX on
+                        -- purpose — both are "this binary won't work
+                        -- with this adapter"). Show the banner
+                        -- immediately below the logo so the user sees
+                        -- it first; the layout is centered so a
+                        -- wrapped error message still reads cleanly.
                         Html.div [ Attr.class "init-error" ] [ Html.text check.error ]
 
                 Nothing ->

@@ -115,6 +115,19 @@ impl Default for ModelCache {
     }
 }
 
+/// Shared process-wide lock for tests that mutate env vars
+/// (`PATH`, `ALAYACORE_BIN`, etc.) or global state. Mutations to
+/// `std::env` are process-global in Rust — concurrent reads from
+/// other tests would observe a partial mutation and either panic
+/// (`No such file or directory` for `Command::new("sleep")`) or
+/// silently capture the wrong baseline. Per-module TEST_LOCKs only
+/// serialize within a module; a single shared lock here covers every
+/// test in the crate. Poison-tolerant: a failing test must not
+/// cascade-lock every later test (matches the convention in the
+/// `cmd` test module).
+#[cfg(test)]
+pub static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))

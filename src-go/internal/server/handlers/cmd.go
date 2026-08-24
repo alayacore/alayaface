@@ -19,25 +19,46 @@ type AlayacoreCheck struct {
 	Error string `json:"error"`
 }
 
-// CheckAlayacore resolves the alayacore binary path and confirms it
-// exists on disk. find_binary() already filters most candidates by
-// os.Stat; the only branch that returns a non-existent path is the
-// fallback ("alayacore" on PATH, which is not stat'd). We stat the
-// returned path one more time so the result is decisive: if a stale
-// ALAYACORE_BIN env var points to a deleted file, the env-var AND the
-// `which` AND the candidate paths would all fail — the user gets a
-// clear error pointing at the exact path that was tried.
+// CheckAlayacore resolves the alayacore binary path, confirms it
+// exists on disk, and verifies its TLV protocol `message_version`
+// matches the one this adapter implements. find_binary() already
+// filters most candidates by os.Stat; the only branch that returns a
+// non-existent path is the fallback ("alayacore" on PATH, which is
+// not stat'd). We stat the returned path one more time so the result
+// is decisive: if a stale ALAYACORE_BIN env var points to a deleted
+// file, the env-var AND the `which` AND the candidate paths would all
+// fail — the user gets a clear error pointing at the exact path that
+// was tried.
+//
+// When the binary IS reachable, we also probe its protocol version by
+// spawning it briefly and reading its first boot SM frame
+// (`{"type":"version","data":{"message_version":N,...}}`). A wrong
+// version is as unusable as a missing binary (the wire format has
+// drifted — silently talking to a mismatched core is worse than
+// refusing to start), so the same `OK=false` UX is surfaced with a
+// message that names the observed and expected versions.
 func CheckAlayacore(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	path := core.FindBinary()
-	if _, err := os.Stat(path); err == nil {
-		return writeResult(w, AlayacoreCheck{OK: true, Path: path})
+	if _, err := os.Stat(path); err != nil {
+		abs, _ := filepath.Abs(path)
+		return writeResult(w, AlayacoreCheck{
+			OK:    false,
+			Path:  "",
+			Error: fmt.Sprintf("AlayaCore binary not found at '%s'. Set the ALAYACORE_BIN environment variable or install alayacore on PATH.", abs),
+		})
 	}
-	abs, _ := filepath.Abs(path)
-	return writeResult(w, AlayacoreCheck{
-		OK:    false,
-		Path:  "",
-		Error: fmt.Sprintf("AlayaCore binary not found at '%s'. Set the ALAYACORE_BIN environment variable or install alayacore on PATH.", abs),
-	})
+	// Binary exists on disk; verify the protocol version matches
+	// what this adapter implements. The probe spawns alayacore
+	// briefly and kills it — same UX surface as a missing binary
+	// (OK=false, empty path, descriptive error).
+	if err := core.CheckMessageVersion(path); err != nil {
+		return writeResult(w, AlayacoreCheck{
+			OK:    false,
+			Path:  "",
+			Error: err.Error(),
+		})
+	}
+	return writeResult(w, AlayacoreCheck{OK: true, Path: path})
 }
 
 // CancelTask sends the "cancel" command to a session.
