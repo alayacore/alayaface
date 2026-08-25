@@ -2033,6 +2033,13 @@ body {
 
 .sel-page-item {
   display: flex;
+  /* Phase 7 fix: the row used to be a fixed-width single line with
+     id + name + check + 3 buttons. On narrow overlays (e.g. the 360px
+     session panel min-width) the actions didn't fit horizontally and
+     the user had to scroll sideways. Wrapping lets the action bar drop
+     to a second line when the row is too narrow, while wide rows
+     stay single-line. */
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 5px 10px;
@@ -2109,6 +2116,22 @@ body {
   display: flex;
   gap: 4px;
   flex-shrink: 0;
+  /* Phase 7 fix: the row used to be a fixed-width single line with
+     id + name + check + 3 buttons. On narrow overlays (the 360px
+     session-panel minimum) the action bar ate most of the row, the
+     name got truncated to a few characters, and the user had to
+     scroll sideways to see the rest.
+
+     The action bar now lives on its own row beneath the name+subtitle
+     — always, regardless of viewport width. CSS media queries can't
+     see the session-panel width (only the viewport width), and the
+     overlay can be narrow even on a 4K monitor. One extra row of
+     vertical space per item is a fair trade for readable names + a
+     consistent action bar. */
+  flex-basis: 100%;
+  /* Indent under the name column (24px id + 8px gap) so the buttons
+     line up with the model title, not the leading number. */
+  padding-left: 32px;
 }
 
 .sel-page-action {
