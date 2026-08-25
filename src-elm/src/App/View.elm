@@ -542,31 +542,33 @@ viewSessionManagerOverlay model =
                                       else
                                         Html.text ""
                                     ]
-                                , Html.button
-                                    [ Attr.class "btn btn-success btn-sm"
-                                    , Ev.onClick (ResumeSession dir.id)
-                                    , Attr.disabled (not canResume)
-                                    , Attr.title
-                                        (if active then
-                                            "Session is already open"
+                                , Html.span [ Attr.class "sel-page-item-actions sel-page-item-actions-flush" ]
+                                    [ Html.button
+                                        [ Attr.class "btn btn-success btn-sm"
+                                        , Ev.onClick (ResumeSession dir.id)
+                                        , Attr.disabled (not canResume)
+                                        , Attr.title
+                                            (if active then
+                                                "Session is already open"
 
-                                         else
-                                            "Re-open this session (replays its history)"
-                                        )
+                                             else
+                                                "Re-open this session (replays its history)"
+                                            )
+                                        ]
+                                        [ Html.text "Resume" ]
+                                    , Html.button
+                                        [ Attr.class "btn btn-sm"
+                                        , Ev.onClick (OpenVersionList dir.id)
+                                        , Attr.title "Browse this session's versions (read-only history)"
+                                        ]
+                                        [ Html.text ("Versions (" ++ String.fromInt (List.length (Maybe.withDefault [] (Maybe.map .versions (Dict.get dir.id model.sessionRefs)))) ++ ")") ]
+                                    , Html.button
+                                        [ Attr.class "btn btn-danger btn-sm"
+                                        , Ev.onClick (DeleteSession dir.id)
+                                        , Attr.title "Delete this session's files on disk"
+                                        ]
+                                        [ Html.text "Delete" ]
                                     ]
-                                    [ Html.text "Resume" ]
-                                , Html.button
-                                    [ Attr.class "btn btn-sm"
-                                    , Ev.onClick (OpenVersionList dir.id)
-                                    , Attr.title "Browse this session's versions (read-only history)"
-                                    ]
-                                    [ Html.text ("Versions (" ++ String.fromInt (List.length (Maybe.withDefault [] (Maybe.map .versions (Dict.get dir.id model.sessionRefs)))) ++ ")") ]
-                                , Html.button
-                                    [ Attr.class "btn btn-danger btn-sm"
-                                    , Ev.onClick (DeleteSession dir.id)
-                                    , Attr.title "Delete this session's files on disk"
-                                    ]
-                                    [ Html.text "Delete" ]
                                 ]
                             ) dirs
                         )

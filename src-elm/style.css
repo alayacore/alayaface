@@ -1477,6 +1477,19 @@ body {
 .fp-page-prefix:hover { background: var(--accent-soft-hover); }
 .fp-page-prefix:active { background: rgba(99, 102, 241, 0.4); }
 
+/* The FilePicker list — a scrollable column container around .list-row
+   entries. Mirrors .sel-page-list / .pm-list layout (column flex). */
+.fp-page-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  margin: 0 -4px;
+  padding: 2px;
+}
+
 /* Unified list-row family — same hover/selected look for the file
    picker and the selector. The page-specific classes below are kept
    as transient aliases. */
@@ -1531,9 +1544,14 @@ body {
   .list-row.list-row-selected:hover { background: var(--accent-hover); }
 }
 
-.fp-page-list,
-.fp-page-item,
-.sel-page-list,
+/* ─── list-row (rows in any .*-page-list) ───────────────────────────
+   This is a ROW, not the list container. Keep .fp-page-list and
+   .sel-page-list OUT of this selector — they're the column containers
+   that wrap these rows. The original grouping was an oversight during
+   Phase 7 step 6 (commit 4d2b890) that made items line up horizontally
+   inside .sel-page-list / .fp-page-list. The list containers have their
+   own display: flex; flex-direction: column; rules further down. */
+.list-row,
 .sel-page-item {
   display: flex;
   align-items: center;
@@ -2024,6 +2042,14 @@ body {
 }
 
 .sel-page-list {
+  /* Column container — matches .pm-list (Preset Manager) so items stack
+     vertically. The legacy group selector at ~line 1534 also sets
+     display:flex on this class (intended for .sel-page-item rows), which
+     made every session line up side-by-side in a single horizontal row.
+     Pinning flex-direction to column restores the expected layout. */
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   flex: 1;
   overflow-y: auto;
   min-height: 0;
@@ -2032,14 +2058,13 @@ body {
 }
 
 .sel-page-item {
+  /* Single-line row — matches the .pm-row (Preset Manager) pattern so
+     the action buttons sit inline on the right side of the same row as
+     the title (rather than wrapping to a new row beneath it). The name
+     column has flex: 1 + min-width: 0 so it shrinks / ellipsises if
+     the row gets narrow, instead of forcing the actions onto a second
+     line. */
   display: flex;
-  /* Phase 7 fix: the row used to be a fixed-width single line with
-     id + name + check + 3 buttons. On narrow overlays (e.g. the 360px
-     session panel min-width) the actions didn't fit horizontally and
-     the user had to scroll sideways. Wrapping lets the action bar drop
-     to a second line when the row is too narrow, while wide rows
-     stay single-line. */
-  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 5px 10px;
@@ -2092,8 +2117,14 @@ body {
 }
 
 .sel-page-item-sub {
+  /* Inherits the parent's foreground color and dims it, so it stays
+     legible in both dark mode (light gray on dark card) and light mode
+     (dim dark on light card). The previous hardcoded
+     rgba(255,255,255,0.45) was white-on-white in light mode and
+     effectively invisible. */
+  color: inherit;
+  opacity: 0.6;
   font-size: 0.72rem;
-  color: rgba(255,255,255,0.45);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2116,22 +2147,19 @@ body {
   display: flex;
   gap: 4px;
   flex-shrink: 0;
-  /* Phase 7 fix: the row used to be a fixed-width single line with
-     id + name + check + 3 buttons. On narrow overlays (the 360px
-     session-panel minimum) the action bar ate most of the row, the
-     name got truncated to a few characters, and the user had to
-     scroll sideways to see the rest.
+  /* Inline on the right of the row — matches the .pm-row pattern. The
+     title column has flex: 1 + min-width: 0 so it shrinks/ellipsises
+     if the row is narrow, instead of forcing a wrap to a second line. */
+}
 
-     The action bar now lives on its own row beneath the name+subtitle
-     — always, regardless of viewport width. CSS media queries can't
-     see the session-panel width (only the viewport width), and the
-     overlay can be narrow even on a 4K monitor. One extra row of
-     vertical space per item is a fair trade for readable names + a
-     consistent action bar. */
-  flex-basis: 100%;
-  /* Indent under the name column (24px id + 8px gap) so the buttons
-     line up with the model title, not the leading number. */
-  padding-left: 32px;
+/* Variant kept for callers without a leading .sel-page-item-id column
+   (e.g. the Session Manager list). The base .sel-page-item-actions
+   used to have padding-left: 32px to indent under the id column, and
+   this flush variant cancelled it. Now that the base has no left
+   padding (the actions sit inline on the right), the variant is a
+   no-op — kept for backward compatibility with existing call sites. */
+.sel-page-item-actions-flush {
+  padding-left: 0;
 }
 
 .sel-page-action {
