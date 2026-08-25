@@ -1714,14 +1714,14 @@ body {
      on .msg-window — give the input bubble its own border/radius so it
      keeps the user-blue frame. */
   border: 2px solid #2563eb;
-  border-radius: 6px;
+  border-radius: var(--r-md);
 }
 
 /* Attachment drag-drop: files dragged over the input container
    highlight the bubble so the drop target is obvious. */
 .input-container.input-drop-active .input-bubble {
-  border-color: #6366f1;
-  background: rgba(99, 102, 241, 0.07);
+  border-color: var(--accent);
+  background: var(--accent-soft);
   box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.25);
 }
 
@@ -2274,34 +2274,6 @@ body {
   overflow: hidden;
 }
 
-.me-page-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-shrink: 0;
-}
-
-.me-back-btn {
-  padding: 3px 10px;
-  border-radius: 4px;
-  border: 1px solid #555;
-  background: transparent;
-  color: #aaa;
-  font-size: 0.78rem;
-  cursor: pointer;
-  transition: border-color 0.15s, color 0.15s;
-}
-.me-back-btn:hover {
-  border-color: #818cf8;
-  color: #a5b4fc;
-}
-
-.me-page-title {
-  font-size: 1rem;
-  font-weight: 700;
-  color: #818cf8;
-}
-
 .me-fields {
   flex: 1;
   overflow-y: auto;
@@ -2546,9 +2518,6 @@ body {
 .me-cancel-btn:hover { border-color: #818cf8; color: #a5b4fc; }
 
 @media (prefers-color-scheme: light) {
-  .me-page-title { color: #6366f1; }
-  .me-back-btn { border-color: #c0c0cc; color: #555; }
-  .me-back-btn:hover { border-color: #6366f1; color: #6366f1; }
   .me-field-label { color: #666; }
   .me-field-input { background: white; color: #1a1a2e; border-color: #d0d0d8; }
   .me-field-input:focus { border-color: #6366f1; }
@@ -2607,7 +2576,7 @@ body {
   flex: 1;
   font-size: 0.85rem;
   font-weight: 500;
-  color: #eee;
+  color: var(--fg-default);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2643,23 +2612,23 @@ body {
   gap: 8px;
   padding: 4px 10px 8px 10px;
   margin-top: -2px;
-  border: 1px solid #333;
+  border: 1px solid var(--border-subtle);
   border-top: none;
-  border-radius: 0 0 4px 4px;
-  background: rgba(255,255,255,0.02);
+  border-radius: 0 0 var(--r-sm) var(--r-sm);
+  background: var(--surface-row);
 }
 
 .pm-edit-label {
   flex: 1;
   font-size: 0.75rem;
-  color: #888;
+  color: var(--fg-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 @media (prefers-color-scheme: light) {
-  .pm-edit-row { border-color: #d8d8e0; background: rgba(0,0,0,0.02); }
+  .pm-edit-row { border-color: rgba(0,0,0,0.12); background: rgba(0,0,0,0.02); }
   .pm-edit-label { color: #666; }
 }
 
@@ -2667,8 +2636,6 @@ body {
   font-size: 0.75rem;
   color: #f87171;
 }
-
-.pm-btn {
   padding: 3px 10px;
   min-width: 56px;
   text-align: center;
@@ -3231,14 +3198,15 @@ body {
   flex: 1;
   padding: 6px 10px;
   font-size: 0.8rem;
-  border: 1px solid #3a3a4e;
+  border: 1px solid var(--border-subtle);
   background: transparent;
-  color: #aaa;
-  border-radius: 6px;
+  color: var(--fg-muted);
+  border-radius: var(--r-sm);
   cursor: pointer;
+  transition: background 0.12s, color 0.12s;
 }
-.plan-tab:hover { background: rgba(255,255,255,0.04); }
-.plan-tab-active { background: #6366f1; border-color: #6366f1; color: white; }
+.plan-tab:hover { background: var(--surface-row-hover); }
+.plan-tab-active { background: var(--accent); border-color: var(--accent); color: white; }
 
 .plan-filter-row { margin-bottom: 10px; }
 
