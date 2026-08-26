@@ -30,7 +30,8 @@ Node lifecycle:
       +---- RetryNode                                          Succeeded
     Failed (attempts >= max) --> downstream Blocked
 
-Failure sources: SM task task_error, SM error, session disconnect.
+Failure sources: SM `error` (task errors — adapter-guide §692),
+session disconnect, session-create failure.
 TaskDone/SessionError only apply to Running nodes — an idle SM task
 frame arriving while Starting (before the prompt is sent) is ignored.
 -}
@@ -62,12 +63,14 @@ type Event
     | ResumeBranchFrom String
     | SessionCreatedFor String String
     | SessionCreateFailed String String
-    -- TaskDone sid isError output delegated: `delegated` is true when the
+    -- TaskDone sid output delegated: `delegated` is true when the
     -- node session's LAST assistant message was a plan JSON (the Update
     -- layer detects this via Plan.Detect) — the node does NOT succeed;
     -- it enters WaitingForPlan until the sub-plan's result is fed back
-    -- (ResumeDelegatedNode) and the model answers again.
-    | TaskDone String Bool (Maybe String) Bool
+    -- (ResumeDelegatedNode) and the model answers again. A TaskDone
+    -- always carries the SUCCESS path; task failures arrive separately
+    -- as SessionError (SM `error` frames — adapter-guide §692).
+    | TaskDone String (Maybe String) Bool
     | SessionError String String
     | SessionDisconnected String String
     | RetryNode String
@@ -119,8 +122,8 @@ step now ev run =
                     -- once (bindSession only fires on Starting → Running).
                     bindSession nodeId sid run
 
-                TaskDone sid isError output delegated ->
-                    ( taskDone now sid isError output delegated run, [] )
+                TaskDone sid output delegated ->
+                    ( taskDone now sid output delegated run, [] )
 
                 -- create_session failed (e.g. invalid node preset): treat
                 -- it as a node failure so retry/backoff applies instead
@@ -363,31 +366,27 @@ outputsOf run =
         run.nodes
 
 
-taskDone : Int -> String -> Bool -> Maybe String -> Bool -> PT.RunState -> PT.RunState
-taskDone now sid isError output delegated run =
+taskDone : Int -> String -> Maybe String -> Bool -> PT.RunState -> PT.RunState
+taskDone now sid output delegated run =
     case nodeBySessionId sid run of
         Just nodeId ->
             updateNode nodeId
                 (\n ->
-                    case ( n.status, isError, delegated ) of
+                    case ( n.status, delegated ) of
                         -- Successful task whose last assistant message was
                         -- a plan JSON: the node delegated to a sub-plan and
                         -- must wait for its feedback (recursion).
-                        ( PT.Running, False, True ) ->
+                        ( PT.Running, True ) ->
                             { n | status = PT.WaitingForPlan }
 
                         -- Normal completion.
-                        ( PT.Running, False, False ) ->
+                        ( PT.Running, False ) ->
                             { n | status = PT.Succeeded, finishedAt = Just now, output = output }
-
-                        -- Task failure (delegation flag is meaningless).
-                        ( PT.Running, True, _ ) ->
-                            failNode now "Task failed" n
 
                         -- A manual message in a waiting node completed it
                         -- without delegation → the node is done (edge case:
                         -- the user talked to the waiting session directly).
-                        ( PT.WaitingForPlan, False, False ) ->
+                        ( PT.WaitingForPlan, False ) ->
                             { n | status = PT.Succeeded, finishedAt = Just now, output = output }
 
                         _ ->
@@ -841,7 +840,7 @@ reaches the state machine.
 eventSessionId : Event -> Maybe String
 eventSessionId ev =
     case ev of
-        TaskDone sid _ _ _ ->
+        TaskDone sid _ _ ->
             Just sid
 
         SessionError sid _ ->

@@ -3886,7 +3886,7 @@ update msg model =
                                 Just pid ->
                                     ( m1
                                     , Task.perform
-                                        (\t -> PlanRunFrame t (R.TaskDone sid False (lastAssistantOutput m1 sid) False))
+                                        (\t -> PlanRunFrame t (R.TaskDone sid (lastAssistantOutput m1 sid) False))
                                         (Task.map Time.posixToMillis Time.now)
                                     )
 

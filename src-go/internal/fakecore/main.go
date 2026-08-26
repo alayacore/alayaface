@@ -139,11 +139,41 @@ func nextReplyID() string {
 var contextTokens int
 
 // taskDoneFrame emits the task-completion SM frame carrying the current
-// context token count — real alayacore reports it on every task frame.
+// context token count and the latest step's speed metrics — real
+// alayacore reports all three on every task frame (adapter-guide).
+// step_tps/ttft_ms mirror the terminal adapter's "end-of-task" readout:
+// after a step that produced output tokens, the values stay visible
+// across the task-end broadcast so the speed bar doesn't blank out
+// when the task finishes.
 func taskDoneFrame() string {
 	contextTokens += 4096
-	return fmt.Sprintf(`{"type":"task","data":{"in_progress":false,"context":%d}}`, contextTokens)
+	return fmt.Sprintf(
+		`{"type":"task","data":{"in_progress":false,"context":%d,"step_tps":%.1f,"ttft_ms":%d}}`,
+		contextTokens, lastStepTps, lastTtftMs,
+	)
 }
+
+// taskDoneBareFrame is the same as taskDoneFrame but WITHOUT step_tps /
+// ttft_ms — used by fail-once / fail-always to mirror real alayacore's
+// behaviour when a step produced no output tokens (adapter-guide:
+// "step_tps / ttft_ms are absent until a step with output tokens
+// completes"). The failure itself is signalled by the SM `error` frame
+// the caller sends before this one.
+func taskDoneBareFrame() string {
+	contextTokens += 4096
+	return fmt.Sprintf(
+		`{"type":"task","data":{"in_progress":false,"context":%d}}`,
+		contextTokens,
+	)
+}
+
+// fake speed metrics — bumped on each streamed reply so the session-bar
+// speed readout exercises the step_tps/ttft_ms path end-to-end.
+var (
+	fakeStep   = 1
+	lastStepTps = 18.5
+	lastTtftMs  = 240
+)
 
 type cmdMsg struct {
 	ID    string `json:"id"`
@@ -175,6 +205,11 @@ func echoID(tag, id, content string) {
 // verify output injection: a downstream node's prompt contains the
 // upstream node's final answer (which itself echoes its own prompt).
 func streamReply() {
+	// Bump the fake per-step speed metrics so successive task completions
+	// produce a visibly varying speed readout on the session bar.
+	fakeStep++
+	lastStepTps = 12.0 + float64(fakeStep%6)  // 12..17 tok/s
+	lastTtftMs = 150 + (fakeStep%5)*40         // 150..310 ms
 	rid := nextReplyID()
 	aid1 := nextReplyID()
 	aid2 := nextReplyID()
@@ -480,6 +515,9 @@ func main() {
 					stagedText = ""
 					continue
 				}
+				// SM-task-start per adapter-guide: in_progress:true with
+				// current_step + context; step_tps / ttft_ms are absent
+				// until a step with output tokens completes.
 				writeFrame("SM", `{"type":"task","data":{"in_progress":true,"current_step":1,"context":0}}`)
 				if hanging {
 					// Hung task: swallow the prompt (no reply) — the
@@ -676,9 +714,12 @@ func failOnceReply() {
 	marker := filepath.Join(os.TempDir(), fmt.Sprintf("alayaface-fakecore-fail-once-%x.marker", h[:8]))
 	if _, err := os.Stat(marker); os.IsNotExist(err) {
 		_ = os.WriteFile(marker, []byte("failed-once"), 0o644)
-		// Task failure: SM task frame with in_progress=false,
-		// task_error=true (the runner maps this to a node failure).
-		writeFrame("SM", `{"type":"task","data":{"in_progress":false,"task_error":true}}`)
+		// Task failure: SM `error` frame marks the failure (adapter-guide
+		// §692: SM `error`/`notify` are reserved for non-command events
+		// including task errors), followed by a bare task_end frame
+		// (no step_tps/ttft_ms — the step produced no output tokens).
+		writeFrame("SM", `{"type":"error","data":{"text":"fake-once failure"}}`)
+		writeFrame("SM", taskDoneBareFrame())
 		return
 	}
 	streamReply()
@@ -688,7 +729,10 @@ func failOnceReply() {
 // reach a terminal Failed node: max_attempts=1 + fail-always). Unlike
 // fail-once it needs no marker — the failure is permanent.
 func failAlwaysReply() {
-	writeFrame("SM", `{"type":"task","data":{"in_progress":false,"task_error":true,"error":"permanent fake failure"}}`)
+	// Same protocol as failOnceReply: SM `error` for the failure reason,
+	// then a bare task_end (no step metrics for a non-producing step).
+	writeFrame("SM", `{"type":"error","data":{"text":"permanent fake failure"}}`)
+	writeFrame("SM", taskDoneBareFrame())
 }
 
 // hangOnceReply simulates a task that HANGS: the first process writes the

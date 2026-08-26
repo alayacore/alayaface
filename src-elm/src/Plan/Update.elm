@@ -1813,7 +1813,7 @@ is ignored by the machine.
 cascadeAfterRunnerStep : Dispatch -> String -> R.Event -> PT.RunState -> Model -> ( Model, Cmd Msg )
 cascadeAfterRunnerStep dispatch planId ev run2 model =
     case ( ev, model.planCascade ) of
-        ( R.TaskDone sid _ _ _, Just cs ) ->
+        ( R.TaskDone sid _ _, Just cs ) ->
             case List.head cs.levels of
                 Just lvl ->
                     if lvl.planId == planId && lvl.conversationId == sid then
@@ -2411,18 +2411,22 @@ planEventFromFrame model ev =
                                                     |> Result.toMaybe
                                                     |> Maybe.withDefault True
 
-                                            taskError =
-                                                D.decodeValue (D.field "task_error" D.bool) env.data
-                                                    |> Result.toMaybe
-                                                    |> Maybe.withDefault False
-
+                                            -- A task frame's failure is no
+                                            -- longer carried by a fake
+                                            -- `task_error` field (real
+                                            -- alayacore has no such field;
+                                            -- adapter-guide §692 reserves
+                                            -- SM `error` for task errors).
+                                            -- TaskDone always means success;
+                                            -- failures arrive as the
+                                            -- sibling "error" branch below.
                                             ( started, maybeDone ) =
-                                                Plan.Frames.taskEvent model.planTaskStarted sid inProgress taskError
+                                                Plan.Frames.taskEvent model.planTaskStarted sid inProgress
                                         in
                                         case maybeDone of
-                                            Just ( taskSid, err ) ->
+                                            Just taskSid ->
                                                 ( { model | planTaskStarted = started }
-                                                , Just (R.TaskDone convId err (lastAssistantOutput model sid) (lastAssistantIsPlan model sid))
+                                                , Just (R.TaskDone convId (lastAssistantOutput model sid) (lastAssistantIsPlan model sid))
                                                 )
 
                                             Nothing ->

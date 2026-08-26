@@ -12,24 +12,27 @@ prompt, node done in milliseconds). A real task always starts with
 `in_progress:true` (after the prompt, which is only sent once the session
 is bound), so:
 
-    taskEvent started sid inProgress taskError
-    --> ( updatedStarted, Maybe ( sid, taskError ) )
+    taskEvent started sid inProgress
+    --> ( updatedStarted, Maybe sid )
 
   - `in_progress:true`  → remember the session (real task start), no event.
   - `in_progress:false` → TaskDone only if that session had started; the
-    boot frame (never started) is ignored.
+    boot frame (never started) is ignored. A TaskDone is always a
+    SUCCESS — task failures travel as SM `error` frames and are routed
+    to the runner as `SessionError` (adapter-guide §692: SM `error`/
+    `notify` are reserved for non-command events including task errors).
 -}
 
 import Set exposing (Set)
 
 
-taskEvent : Set String -> String -> Bool -> Bool -> ( Set String, Maybe ( String, Bool ) )
-taskEvent started sid inProgress taskError =
+taskEvent : Set String -> String -> Bool -> ( Set String, Maybe String )
+taskEvent started sid inProgress =
     if inProgress then
         ( Set.insert sid started, Nothing )
 
     else if Set.member sid started then
-        ( started, Just ( sid, taskError ) )
+        ( started, Just sid )
 
     else
         ( started, Nothing )
