@@ -36,6 +36,8 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -175,6 +177,17 @@ var (
 	lastTtftMs  = 240
 )
 
+// llmURL / llmModel — when llmURL is non-empty, streamReply forwards
+// the prompt to this OpenAI-compatible endpoint and translates the SSE
+// stream back into Ar/At/AT frames plus real step_tps / ttft_ms
+// measurements (instead of the canned hardcoded "Hello world" reply).
+// Used by the speed-display E2E to drive fakecore with a real local
+// model (e.g. http://172.16.9.6:9999/v1 + gemma-4-12B).
+var (
+	llmURL   string
+	llmModel string
+)
+
 type cmdMsg struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
@@ -198,18 +211,18 @@ func echoID(tag, id, content string) {
 	writeFrame(tag, "\x00"+id+"\x00"+content)
 }
 
-// streamReply emits a canned assistant reply: reasoning + text deltas
-// followed by empty AT/AR terminators (delta mode), an INTERMEDIATE task
-// SM frame after the first text step completes (in_progress:true +
-// step_tps/ttft_ms — mirrors real alayacore's `SM-task-step.bin`
-// broadcast on stepFinishEvent so the session-bar shows live speed
-// metrics while the task is still running, not only at task_end), and
-// the task-done SM frame (in_progress=false → the runner marks the
-// node Succeeded). The last assistant message echoes the received
-// prompt so the E2E can verify output injection: a downstream node's
-// prompt contains the upstream node's final answer (which itself
-// echoes its own prompt).
+// streamReply emits either a canned assistant reply OR — when llmURL is
+// set — forwards the staged user prompt to the real LLM and streams
+// the SSE response back as Ar/At/AT frames with real step_tps / ttft_ms
+// broadcast on intermediate + final task frames (mirror of alayacore's
+// SM-task-step.bin / SM-task-end.bin). Either way the last assistant
+// message echoes the received prompt so E2E output-injection checks
+// still hold.
 func streamReply() {
+	if llmURL != "" {
+		realLLMReply()
+		return
+	}
 	// Bump the fake per-step speed metrics so successive task completions
 	// produce a visibly varying speed readout on the session bar.
 	fakeStep++
@@ -247,6 +260,124 @@ func writeRuntimeConf(configDir, modelName string) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(configDir, "runtime.conf"), []byte("active_model: \""+modelName+"\"\n"), 0o644)
+}
+
+// realLLMReply forwards the staged user prompt to llmURL (OpenAI-
+// compatible /v1/chat/completions with stream:true), parses the SSE
+// response, and translates each delta.content into an At frame on a
+// single stable history id (so the client's per-(role,id) delta
+// accumulation works). At the end it broadcasts an SM task frame
+// with the measured step_tps / ttft_ms — the speed the session-bar
+// reads. If the upstream call fails or returns no choices, it emits
+// an SM error frame followed by a bare task_end so the runner marks
+// the node as failed rather than hanging.
+func realLLMReply() {
+	body := fmt.Sprintf(
+		`{"model":%q,"messages":[{"role":"user","content":%q}],"stream":true,"stream_options":{"include_usage":true}}`,
+		llmModel, stagedText,
+	)
+	url := strings.TrimRight(llmURL, "/") + "/chat/completions"
+	req, err := http.NewRequest("POST", url, strings.NewReader(body))
+	if err != nil {
+		writeFrame("SM", fmt.Sprintf(`{"type":"error","data":{"text":"build request: %s"}}`, err.Error()))
+		writeFrame("SM", taskDoneBareFrame())
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		writeFrame("SM", fmt.Sprintf(`{"type":"error","data":{"text":"http: %s"}}`, err.Error()))
+		writeFrame("SM", taskDoneBareFrame())
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		writeFrame("SM", fmt.Sprintf(`{"type":"error","data":{"text":"upstream %d: %s"}}`, resp.StatusCode, string(b)))
+		writeFrame("SM", taskDoneBareFrame())
+		return
+	}
+
+	aid := nextReplyID()
+	startedAt := time.Now()
+	var firstTokenAt time.Time
+	var tokenCount int
+	var fullText strings.Builder
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" || !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "[DONE]" {
+			break
+		}
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content string `json:"content"`
+				} `json:"delta"`
+			} `json:"choices"`
+			Usage *struct {
+				CompletionTokens int `json:"completion_tokens"`
+			} `json:"usage"`
+		}
+		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+			continue
+		}
+		if chunk.Usage != nil && chunk.Usage.CompletionTokens > 0 {
+			tokenCount = chunk.Usage.CompletionTokens
+		}
+		for _, c := range chunk.Choices {
+			if c.Delta.Content == "" {
+				continue
+			}
+			if firstTokenAt.IsZero() {
+				firstTokenAt = time.Now()
+			}
+			fullText.WriteString(c.Delta.Content)
+			echoID("At", aid, c.Delta.Content)
+			if chunk.Usage == nil {
+				tokenCount += len(c.Delta.Content) / 4
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		writeFrame("SM", fmt.Sprintf(`{"type":"error","data":{"text":"stream read: %s"}}`, err.Error()))
+		writeFrame("SM", taskDoneBareFrame())
+		return
+	}
+	endedAt := time.Now()
+
+	if tokenCount == 0 && fullText.Len() == 0 {
+		writeFrame("SM", `{"type":"error","data":{"text":"upstream returned no choices"}}`)
+		writeFrame("SM", taskDoneBareFrame())
+		return
+	}
+
+	var stepTps, ttftMs float64
+	if !firstTokenAt.IsZero() {
+		ttftMs = float64(firstTokenAt.Sub(startedAt).Milliseconds())
+	}
+	streamDur := endedAt.Sub(startedAt).Seconds()
+	if streamDur > 0 && tokenCount > 0 {
+		stepTps = float64(tokenCount) / streamDur
+	}
+	lastStepTps = stepTps
+	lastTtftMs = int(ttftMs)
+
+	echoID("AT", aid, "")
+	contextTokens += tokenCount * 4 // rough context bump
+	writeFrame("SM", fmt.Sprintf(
+		`{"type":"task","data":{"in_progress":false,"context":%d,"step_tps":%.1f,"ttft_ms":%d}}`,
+		contextTokens, lastStepTps, lastTtftMs,
+	))
+	history = append(history, histMsg{"assistant", fullText.String(), aid})
 }
 
 func coOk(id string, output map[string]any) {
@@ -376,6 +507,14 @@ func main() {
 	systemFlag := flag.String("system", "", "system prompt (accepted; non-empty switches to plan mode)")
 	builtinToolsFlag := flag.String("builtin-tools", "", "builtin tools (accepted; echoed in the boot frame)")
 	reasoningLevelFlag := flag.Int("reasoning-level", 1, "initial reasoning level 0|1|2 (accepted; echoed in the boot frame and an SM reasoning frame)")
+	// --llm-url <openai-base> + --llm-model <name> make fakecore act as a
+	// pure protocol shim: it forwards the user prompt to a real OpenAI-
+	// compatible /v1/chat/completions endpoint, streams the reply back as
+	// Ar/At/AT frames, and broadcasts intermediate + final task frames
+	// with the real step_tps / ttft_ms (mirrors what alayacore would
+	// emit when calling that endpoint directly). Empty url = canned mode.
+	flag.StringVar(&llmURL, "llm-url", "", "OpenAI-compatible base URL (e.g. http://172.16.9.6:9999/v1). Empty = canned replies.")
+	flag.StringVar(&llmModel, "llm-model", "", "model name to send with the chat completions request (required when --llm-url is set)")
 	flag.Parse()
 
 	if !*rawio {
