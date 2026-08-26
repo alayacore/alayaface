@@ -402,6 +402,28 @@ func smModelList() {
 	// Full ModelInfo shape (mirrors real alayacore's model_list so the
 	// Elm modelInfoDecoder accepts it): id, name, protocol_type,
 	// base_url, api_key, model_name, context_limit, max_tokens.
+	//
+	// In --llm-url mode the canned fake-model-* entries (which point at
+	// a non-running localhost:11434) are replaced with a single entry
+	// that mirrors the upstream LLM, so the UI's model picker shows
+	// something usable instead of dead Ollama pointers.
+	if llmURL != "" {
+		name := llmURL
+		if llmModel != "" {
+			// Trim the long gguf suffix into a friendlier display name.
+			if i := strings.LastIndex(llmModel, "/"); i >= 0 {
+				name = llmModel[i+1:]
+			} else {
+				name = llmModel
+			}
+		}
+		payload := fmt.Sprintf(
+			`{"type":"model_list","data":{"models":[{"id":1,"name":%q,"protocol_type":"openai","base_url":%q,"api_key":"","model_name":%q,"context_limit":262144,"max_tokens":0}]}}`,
+			name, llmURL, llmModel,
+		)
+		writeFrame("SM", payload)
+		return
+	}
 	payload := `{"type":"model_list","data":{"models":[` +
 		`{"id":1,"name":"fake-model-1","protocol_type":"openai","base_url":"http://localhost:11434/v1","api_key":"fake","model_name":"model-1","context_limit":8192,"max_tokens":2048},` +
 		`{"id":2,"name":"fake-model-2","protocol_type":"openai","base_url":"http://localhost:11434/v1","api_key":"fake","model_name":"model-2","context_limit":16384,"max_tokens":4096}]}}`
@@ -611,8 +633,21 @@ func main() {
 
 	// Active-model notification (mirrors real alayacore's SM "model"
 	// frame): the frontend reads context_limit from it for the session
-	// bar's token readout.
-	writeFrame("SM", `{"type":"model","data":{"active_id":1,"active_name":"fake-model-1","context_limit":8192}}`)
+	// bar's token readout. In --llm-url mode the active model name is
+	// the same one we surface in smModelList so the session-bar title
+	// matches the model picker.
+	if llmURL != "" {
+		activeName := llmModel
+		if i := strings.LastIndex(activeName, "/"); i >= 0 {
+			activeName = activeName[i+1:]
+		}
+		writeFrame("SM", fmt.Sprintf(
+			`{"type":"model","data":{"active_id":1,"active_name":%q,"context_limit":262144}}`,
+			activeName,
+		))
+	} else {
+		writeFrame("SM", `{"type":"model","data":{"active_id":1,"active_name":"fake-model-1","context_limit":8192}}`)
+	}
 
 	// Boot SMs first, then replayed history content, then the explicit
 	// readiness signal — mirrors alayacore v0.62.4+:
