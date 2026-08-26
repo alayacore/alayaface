@@ -199,11 +199,16 @@ func echoID(tag, id, content string) {
 }
 
 // streamReply emits a canned assistant reply: reasoning + text deltas
-// followed by empty AT/AR terminators (delta mode) and the task-done SM
-// frame (in_progress=false → the runner marks the node Succeeded). The
-// last assistant message echoes the received prompt so the E2E can
-// verify output injection: a downstream node's prompt contains the
-// upstream node's final answer (which itself echoes its own prompt).
+// followed by empty AT/AR terminators (delta mode), an INTERMEDIATE task
+// SM frame after the first text step completes (in_progress:true +
+// step_tps/ttft_ms — mirrors real alayacore's `SM-task-step.bin`
+// broadcast on stepFinishEvent so the session-bar shows live speed
+// metrics while the task is still running, not only at task_end), and
+// the task-done SM frame (in_progress=false → the runner marks the
+// node Succeeded). The last assistant message echoes the received
+// prompt so the E2E can verify output injection: a downstream node's
+// prompt contains the upstream node's final answer (which itself
+// echoes its own prompt).
 func streamReply() {
 	// Bump the fake per-step speed metrics so successive task completions
 	// produce a visibly varying speed readout on the session bar.
@@ -218,6 +223,15 @@ func streamReply() {
 	echoID("At", aid1, " world")
 	echoID("AT", aid1, "")
 	echoID("AR", rid, "")
+	// Step 1 just finished — broadcast an in_progress:true task frame
+	// with this step's speed metrics (mirrors real alayacore's
+	// SM-task-step.bin). Without this, the session-bar stays empty
+	// until the task ends and never shows live speed while streaming.
+	contextTokens += 1024
+	writeFrame("SM", fmt.Sprintf(
+		`{"type":"task","data":{"in_progress":true,"current_step":2,"context":%d,"step_tps":%.1f,"ttft_ms":%d}}`,
+		contextTokens, lastStepTps, lastTtftMs,
+	))
 	echoID("At", aid2, "Received prompt: "+stagedText+versionSuffix())
 	echoID("AT", aid2, "")
 	writeFrame("SM", taskDoneFrame())
