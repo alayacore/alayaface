@@ -53,8 +53,12 @@ async function main() {
 
   await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "networkidle0", timeout: 20000 });
 
-  // Open the global menu: right-click the canvas (contextmenu).
-  await page.mouse.click(400, 300, { button: "right" });
+  // Open the global menu: right-click the canvas (contextmenu). The
+  // other suites dispatch the event on .main-content (a real mouse
+  // right-click can be swallowed by the pointer layer), so mirror that.
+  await page.waitForSelector(".main-content", { timeout: 15000 });
+  await page.$eval(".main-content", (el) => el.dispatchEvent(
+    new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 30, clientY: 30 })));
   await waitFor(() => page.evaluate(() => [...document.querySelectorAll(".global-menu-item")].some((el) => el.textContent.includes("Preset Manager"))));
   await page.evaluate(() => [...document.querySelectorAll(".global-menu-item")].find((el) => el.textContent.includes("Preset Manager")).click());
   await waitFor(() => page.evaluate(() => document.body.textContent.includes("Preset Manager") && !!document.querySelector(".pm-row")));
@@ -87,7 +91,7 @@ async function main() {
   const layout = await page.evaluate(() => {
     const f = document.querySelector(".me-fields");
     const a = document.querySelector(".me-actions");
-    const pageEl = document.querySelector(".overlay-page");
+    const pageEl = document.querySelector(".overlay-card");
     if (!f || !a || !pageEl) return null;
     const fRect = f.getBoundingClientRect();
     const aRect = a.getBoundingClientRect();
@@ -120,8 +124,8 @@ async function main() {
   if (gs.reasoning_level !== 2) throw new Error("preset reasoning_level should be 2, got " + gs.reasoning_level);
 
   // Close the preset manager (× overlay-close), then New Session.
-  await page.evaluate(() => { const b = document.querySelector(".overlay-close"); if (b) b.click(); });
-  console.log("clicked overlay-close; body has PresetManager:",
+  await page.evaluate(() => { const b = document.querySelector(".card-close"); if (b) b.click(); });
+  console.log("clicked card-close; body has PresetManager:",
     await page.evaluate(() => document.body.textContent.includes("Preset Manager")));
   await waitFor(() => page.evaluate(() => !document.body.textContent.includes("Preset Manager")));
   console.log("preset manager closed");
@@ -131,7 +135,8 @@ async function main() {
   });
   // New Session submenu is click-only: reopen the global menu, click the
   // item, then the preset.
-  await page.mouse.click(400, 300, { button: "right" });
+  await page.$eval(".main-content", (el) => el.dispatchEvent(
+    new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 30, clientY: 30 })));
   await waitFor(() => page.evaluate(() => [...document.querySelectorAll(".global-menu-item")].some((el) => el.textContent.includes("New Session"))));
   await page.evaluate(() => {
     const item = [...document.querySelectorAll(".global-menu-item")].find((el) => el.textContent.includes("New Session"));

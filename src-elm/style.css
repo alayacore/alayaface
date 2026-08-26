@@ -511,6 +511,16 @@ body {
   letter-spacing: 0.02em;
 }
 
+.session-bar-speed {
+  flex-shrink: 0;
+  margin-left: 8px;
+  font-size: 0.62rem;
+  color: #6c9a6c;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+
 .session-bar-close {
   flex-shrink: 0;
   background: none;
@@ -589,6 +599,7 @@ body {
   .session-bar:hover { background: rgba(0,0,0,0.05); }
   .session-bar:active { background: rgba(99,102,241,0.08); }
   .session-bar-title { color: #999; }
+  .session-bar-speed { color: #3d7a3d; }
 }
 
 /* ─── Chat Area ────────────────────────────────────────────────────── */

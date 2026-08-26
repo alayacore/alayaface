@@ -53,9 +53,15 @@ async function main() {
 
   // Seed list: Simple, Complex. Add one more so reorder is meaningful.
   await rpc("copy_preset", { source: "Simple", name: "work" });
-  let presets = await rpc("list_presets", {});
+  // The copy is async on the backend: wait for the seeded list (sorted
+  // alphabetically) instead of asserting immediately after the RPC.
+  const presets = await waitFor(async () => {
+    const ps = await rpc("list_presets", {});
+    return ps && ps.map((p) => p.name).join(",") === "Complex,Simple,Talk,work" ? ps : null;
+  }, 10000);
   console.log("initial presets:", presets.map((p) => p.name).join(", "));
-  assert(presets.map((p) => p.name).join(",") === "Complex,Simple,work", "default alphabetical order");
+  assert(presets.map((p) => p.name).join(",") === "Complex,Simple,Talk,work", "default alphabetical order");
+  let presetsReordered = presets;
 
   const browser = await puppeteer.launch({ executablePath: CHROME, headless: true, args: ["--no-sandbox", "--disable-gpu"] });
   const page = await browser.newPage();
@@ -64,24 +70,28 @@ async function main() {
   page.on("console", (m) => { if (m.type() === "error" || m.type() === "warn") console.log("[console." + m.type() + "]", m.text().slice(0, 300)); });
   await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "networkidle0", timeout: 20000 });
 
-  // Open Preset Manager (right-click canvas → menu item).
-  await page.mouse.click(400, 300, { button: "right" });
+  // Open Preset Manager (right-click canvas → menu item). Dispatch the
+  // contextmenu event on .main-content (a real mouse right-click can be
+  // swallowed by the pointer layer).
+  await page.waitForSelector(".main-content", { timeout: 15000 });
+  await page.$eval(".main-content", (el) => el.dispatchEvent(
+    new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 30, clientY: 30 })));
   await waitFor(() => page.evaluate(() => [...document.querySelectorAll(".global-menu-item")].some((el) => el.textContent.includes("Preset Manager"))));
   await page.evaluate(() => [...document.querySelectorAll(".global-menu-item")].find((el) => el.textContent.includes("Preset Manager")).click());
   await waitFor(() => page.evaluate(() => !!document.querySelector(".pm-row")));
 
   const names = () => page.evaluate(() =>
     [...document.querySelectorAll(".pm-row .pm-name")].map((el) => el.textContent));
-  assert((await names()).join(",") === "Complex,Simple,work", "manager rows render in order");
+  assert((await names()).join(",") === "Complex,Simple,Talk,work", "manager rows render in order");
 
   const handles = await page.evaluate(() => [...document.querySelectorAll(".pm-drag-handle")].length);
-  assert(handles === 3, "each row has a drag handle");
+  assert(handles === 4, "each row has a drag handle");
 
-  // Synthetic HTML5 drag: drag row 0 (Complex) onto row 2 (work).
+  // Synthetic HTML5 drag: drag row 0 (Complex) onto the last row (work).
   const result = await page.evaluate(() => {
     const rows = [...document.querySelectorAll(".pm-row")];
     const src = rows[0].querySelector(".pm-drag-handle");
-    const dst = rows[2];
+    const dst = rows[rows.length - 1];
     const dt = new DataTransfer();
     const fire = (target, type) => {
       const ev = new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt });
@@ -99,39 +109,41 @@ async function main() {
   assert(result.started && result.over && result.dropped, "dragstart/dragover(preventDefault)/drop dispatched");
 
   // UI reordered immediately.
-  await waitFor(async () => (await names()).join(",") === "Simple,work,Complex", 5000);
-  console.log("  ✓ UI list reordered to Simple,work,Complex");
+  await waitFor(async () => (await names()).join(",") === "Simple,Talk,work,Complex", 5000);
+  console.log("  ✓ UI list reordered to Simple,Talk,work,Complex");
 
   // Persisted to disk (preset_order.conf).
   await waitFor(() => {
     const f = join(home, ".alayaface", "preset_order.conf");
     if (!existsSync(f)) return false;
     const arr = JSON.parse(readFileSync(f, "utf8"));
-    return arr.join(",") === "Simple,work,Complex";
+    return arr.join(",") === "Simple,Talk,work,Complex";
   }, 5000);
   console.log("  ✓ preset_order.conf persisted");
 
   // Backend list_presets returns the new order.
-  presets = await rpc("list_presets", {});
-  assert(presets.map((p) => p.name).join(",") === "Simple,work,Complex", "list_presets returns new order");
+  presetsReordered = await rpc("list_presets", {});
+  assert(presetsReordered.map((p) => p.name).join(",") === "Simple,Talk,work,Complex", "list_presets returns new order");
 
   // Reopen the manager → order survives.
-  await page.evaluate(() => document.querySelector(".overlay-close").click());
+  await page.evaluate(() => document.querySelector(".card-close").click());
   await waitFor(() => page.evaluate(() => !document.body.textContent.includes("Preset Manager")));
-  await page.mouse.click(400, 300, { button: "right" });
+  await page.$eval(".main-content", (el) => el.dispatchEvent(
+    new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 30, clientY: 30 })));
   await waitFor(() => page.evaluate(() => [...document.querySelectorAll(".global-menu-item")].some((el) => el.textContent.includes("Preset Manager"))));
   await page.evaluate(() => [...document.querySelectorAll(".global-menu-item")].find((el) => el.textContent.includes("Preset Manager")).click());
   await waitFor(() => page.evaluate(() => !!document.querySelector(".pm-row")));
-  assert((await names()).join(",") === "Simple,work,Complex", "order survives reopen");
+  assert((await names()).join(",") === "Simple,Talk,work,Complex", "order survives reopen");
 
   // Global New Session submenu also uses the same order.
-  await page.evaluate(() => document.querySelector(".overlay-close").click());
+  await page.evaluate(() => document.querySelector(".card-close").click());
   await waitFor(() => page.evaluate(() => !document.body.textContent.includes("Preset Manager")));
-  await page.mouse.click(400, 300, { button: "right" });
+  await page.$eval(".main-content", (el) => el.dispatchEvent(
+    new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 30, clientY: 30 })));
   await waitFor(() => page.evaluate(() => [...document.querySelectorAll(".global-menu-item")].some((el) => el.textContent.includes("New Session"))));
   await page.evaluate(() => [...document.querySelectorAll(".global-menu-item")].find((el) => el.textContent.includes("New Session")).click());
   const submenu = await page.evaluate(() => [...document.querySelectorAll(".global-menu-submenu-item")].map((el) => el.textContent));
-  assert(submenu.join(",") === "Simple,work,Complex", "New Session submenu uses reordered list: " + submenu.join(","));
+  assert(submenu.join(",") === "Simple,Talk,work,Complex", "New Session submenu uses reordered list: " + submenu.join(","));
 
   await browser.close();
   console.log("ALL PASS");

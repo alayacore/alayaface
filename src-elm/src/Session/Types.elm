@@ -284,6 +284,14 @@ type alias SessionState =
     , taskRunning : Bool
     , taskCurrentStep : Int
     , taskMaxSteps : Int
+      -- Latest completed step's end-to-end throughput (tokens/sec,
+      -- latency included) and time-to-first-token (ms), reported by the
+      -- core in SM task frames (step_tps / ttft_ms). 0 until a step
+      -- with output tokens completes; the session-bar renders them as a
+      -- compact speed readout (mirrors the terminal adapter's status
+      -- bar speed segment).
+    , taskStepTps : Float
+    , taskTtftMs : Int
     , contextTokens : Int
     , contextLimit : Int
     , historyContents : Dict String String
@@ -484,6 +492,8 @@ emptySession id =
     , taskRunning = False
     , taskCurrentStep = 0
     , taskMaxSteps = 0
+    , taskStepTps = 0
+    , taskTtftMs = 0
     , contextTokens = 0
     , contextLimit = 0
     , historyContents = Dict.empty

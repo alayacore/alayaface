@@ -382,35 +382,45 @@ handleSystemTask s data =
             D.decodeValue (D.field "max_steps" D.int) data
                 |> Result.toMaybe
 
-        taskError =
-            D.decodeValue (D.field "task_error" D.bool) data
-                |> Result.toMaybe
-                |> Maybe.withDefault False
-
-        tokens =
-            D.decodeValue (D.field "context_tokens" D.int) data
-                |> Result.toMaybe
-                |> Maybe.map (\v -> v)
-
+        -- The canonical wire field is `context` (adapter-guide); the
+        -- legacy `context_tokens` is still emitted by older cores / the
+        -- test stand-in, so keep it as a fallback.
         context =
             D.decodeValue (D.field "context" D.int) data
                 |> Result.toMaybe
 
+        legacyTokens =
+            D.decodeValue (D.field "context_tokens" D.int) data
+                |> Result.toMaybe
+
         contextTokens =
-            case tokens of
-                Just t ->
-                    t
+            case context of
+                Just c ->
+                    c
 
                 Nothing ->
-                    Maybe.withDefault s.contextTokens context
+                    Maybe.withDefault s.contextTokens legacyTokens
+
+        -- Latest completed step's end-to-end throughput (tokens/sec)
+        -- and TTFT (ms). Absent until a step with output tokens
+        -- completes; 0 for a tool-only step. Rendered by the
+        -- session-bar as "12.5 tok/s · ttft 1.2s" (mirrors the
+        -- terminal adapter's status bar).
+        stepTps =
+            D.decodeValue (D.field "step_tps" D.float) data
+                |> Result.toMaybe
+                |> Maybe.withDefault 0
+
+        ttftMs =
+            D.decodeValue (D.field "ttft_ms" D.int) data
+                |> Result.toMaybe
+                |> Maybe.withDefault 0
 
         done =
             not inProgress
 
         statusMsg =
-            if taskError then
-                "Task failed"
-            else if done then
+            if done then
                 "Task complete"
             else
                 case ( step, maxSteps ) of
@@ -421,12 +431,14 @@ handleSystemTask s data =
                         "Task in progress…"
     in
     { s
-        | taskRunning = not done && not taskError
+        | taskRunning = not done
         , taskCurrentStep = Maybe.withDefault s.taskCurrentStep step
         , taskMaxSteps = Maybe.withDefault s.taskMaxSteps maxSteps
         , contextTokens = contextTokens
+        , taskStepTps = stepTps
+        , taskTtftMs = ttftMs
         , statusMsg = statusMsg
-        , sendPending = if done || taskError then False else s.sendPending
+        , sendPending = if done then False else s.sendPending
     }
 
 

@@ -271,7 +271,7 @@ TLV frame logs are printed to stderr with the `[tlv]` prefix:
 
 ```
 [tlv] << abc-123 AT 0b
-[tlv] >> abc-123 UT 15b :cancel
+[tlv] >> abc-123 CI 40b {"id":"a1","name":"cancel","input":""}
 [tlv] << abc-123 SM 80b {"type":"task",...}
 ```
 

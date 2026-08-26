@@ -342,7 +342,7 @@ try {
 
   // P37: concurrency is fixed at 8 (no header input); Run lives in the
   // overlay strip on the canvas.
-  assert(await clickByText('button.plan-strip-btn', 'Run'), 'Run button');
+  assert(await clickByText('.plan-run-strip button', 'Run'), 'Run button');
 
   // R4: the run completes → succeeded node windows close AND the plan
   // window auto-closes (D10/D11, feedback queued first). So wait for the
@@ -756,7 +756,7 @@ try {
   // DOM clicks (not coordinate): overlapping session windows would
   // intercept the mouse at the plan strip's button positions.
   const clickPlanHeaderBtn = (label) => page.evaluate((lbl) => {
-    const btns = [...document.querySelectorAll('button.plan-strip-btn')];
+    const btns = [...document.querySelectorAll('.plan-run-strip button')];
     const b = btns.find(x => (x.textContent || '').includes(lbl));
     if (b && !b.disabled) { b.click(); return true; }
     return false;
@@ -781,9 +781,9 @@ try {
   // P38: a re-run whose old result already sits in the origin session
   // needs the impact-scope confirmation → confirm it (Phase C/D will
   // replace this dialog with the cascade state machine).
-  await page.waitForSelector('.cascade-page .confirm-page-btn-allow', { timeout: 10000 }).catch(() => {});
+  await page.waitForSelector('.cascade-page .btn-primary', { timeout: 10000 }).catch(() => {});
   await page.evaluate(() => {
-    const b = document.querySelector('.cascade-page .confirm-page-btn-allow');
+    const b = document.querySelector('.cascade-page .btn-primary');
     if (b) b.click();
   });
   try {
@@ -799,7 +799,7 @@ try {
       })),
       sessionTitles: [...document.querySelectorAll('.session-panel')].map(p =>
         p.querySelector('.session-bar-title')?.textContent || ''),
-      runStrip: [...document.querySelectorAll('.plan-strip-btn')].map(b => ({ t: b.textContent || '', dis: b.disabled })),
+      runStrip: [...document.querySelectorAll('.plan-run-strip .btn')].map(b => ({ t: b.textContent || '', dis: b.disabled })),
     }));
     throw new Error('8b: t3 session never appeared after re-Run. state=' + JSON.stringify(st));
   }
@@ -852,9 +852,9 @@ try {
   execSync('rm -f /tmp/alayaface-fakecore-hang-once-*.marker');
   assert(await clickPlanHeaderBtn('Run'), 'plan-close re-Run button');
   // P38 impact-scope confirmation (same as 8b).
-  await page.waitForSelector('.cascade-page .confirm-page-btn-allow', { timeout: 10000 }).catch(() => {});
+  await page.waitForSelector('.cascade-page .btn-primary', { timeout: 10000 }).catch(() => {});
   await page.evaluate(() => {
-    const b = document.querySelector('.cascade-page .confirm-page-btn-allow');
+    const b = document.querySelector('.cascade-page .btn-primary');
     if (b) b.click();
   });
   await page.waitForFunction(() => {
@@ -892,9 +892,9 @@ try {
   execSync('rm -f /tmp/alayaface-fakecore-hang-once-*.marker');
   assert(await clickPlanHeaderBtn('Run'), 'cascade re-Run button');
   // P38 impact-scope confirmation (same as 8b/8d).
-  await page.waitForSelector('.cascade-page .confirm-page-btn-allow', { timeout: 10000 }).catch(() => {});
+  await page.waitForSelector('.cascade-page .btn-primary', { timeout: 10000 }).catch(() => {});
   await page.evaluate(() => {
-    const b = document.querySelector('.cascade-page .confirm-page-btn-allow');
+    const b = document.querySelector('.cascade-page .btn-primary');
     if (b) b.click();
   });
   await page.waitForFunction(() => {

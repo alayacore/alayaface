@@ -132,17 +132,17 @@ func nextReplyID() string {
 }
 
 // contextTokens tracks the session's consumed context tokens (mirrors
-// real alayacore's context_tokens field on task SM frames). Each
-// completed task consumes a fixed amount; the frontend renders the
-// session bar readout "used/limit pct%" from context_tokens and the
-// active model's context_limit.
+// real alayacore's `context` field on task SM frames, adapter-guide).
+// Each completed task consumes a fixed amount; the frontend renders the
+// session bar readout "used/limit pct%" from context and the active
+// model's context_limit.
 var contextTokens int
 
 // taskDoneFrame emits the task-completion SM frame carrying the current
 // context token count — real alayacore reports it on every task frame.
 func taskDoneFrame() string {
 	contextTokens += 4096
-	return fmt.Sprintf(`{"type":"task","data":{"in_progress":false,"task_error":false,"context_tokens":%d}}`, contextTokens)
+	return fmt.Sprintf(`{"type":"task","data":{"in_progress":false,"context":%d}}`, contextTokens)
 }
 
 type cmdMsg struct {
@@ -480,7 +480,7 @@ func main() {
 					stagedText = ""
 					continue
 				}
-				writeFrame("SM", `{"type":"task","data":{"in_progress":true,"current_step":1,"context":0,"context_tokens":0}}`)
+				writeFrame("SM", `{"type":"task","data":{"in_progress":true,"current_step":1,"context":0}}`)
 				if hanging {
 					// Hung task: swallow the prompt (no reply) — the
 					// runner's timeout would fail the node (removed in

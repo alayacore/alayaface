@@ -231,7 +231,7 @@ try {
   const runB = await page.evaluate(() => {
     const win = [...document.querySelectorAll('.plan-panel')].find(p =>
       (p.getAttribute('data-plan') || '').startsWith('e2e-demo-beta'));
-    const btn = win && win.querySelector('button.plan-strip-btn');
+    const btn = win && win.querySelector('.plan-run-strip button');
     if (btn) { btn.click(); return true; }
     return false;
   });
@@ -258,9 +258,13 @@ try {
   });
   assert(enabledAfterB, 'session input re-enabled after plan B completed');
   console.log('PASS: session input re-enabled after plan B completed');
-  const msgsB = await page.$$eval('.message-content', els => els.map(e => e.textContent || ''));
-  const bResults = msgsB.filter(t => t.startsWith('[Plan Result]'));
-  assert(bResults.length === 1 && /\[Plan: e2e-demo-beta-\d+\]/.test(bResults[0]),
+  // User echoes are collapsed by default (Phase 7 "fold" design): the
+  // body is empty and the full result is folded into the header's
+  // one-line preview (the last line of the message — the plan link
+  // [Plan: e2e-demo-beta-…]). Match the preview, not .message-content.
+  const msgsB = await page.$$eval('.message-user .msg-preview', els => els.map(e => e.textContent || ''));
+  const bResults = msgsB.filter(t => /\[Plan: e2e-demo-beta-\d+\]/.test(t));
+  assert(bResults.length === 1,
     'B completed → its [Plan: e2e-demo-beta-…] result is in S, got: ' + JSON.stringify(bResults));
   console.log('PASS: plan B ran to completion, its [Plan Result] is in S');
 
@@ -281,37 +285,40 @@ try {
       const d = p.getAttribute('data-plan') || '';
       return d.startsWith('e2e-demo-') && !d.startsWith('e2e-demo-beta');
     });
-    const btn = win && win.querySelector('button.plan-strip-btn');
+    const btn = win && win.querySelector('.plan-run-strip button');
     if (btn) { btn.click(); return true; }
     return false;
   });
   assert(runA, 'Run button (plan A window)');
-  const confirmShown = await page.waitForSelector('.cascade-page .confirm-page-btn-allow', { timeout: 10000 })
+  const confirmShown = await page.waitForSelector('.cascade-page .btn-primary', { timeout: 10000 })
     .then(() => true)
     .catch(() => false);
   assert(confirmShown,
     'plan A (never completed, followed by B) must show the impact-scope confirmation before running');
   await shot(page, '03-confirm-overlay.png');
   await page.evaluate(() => {
-    const b = document.querySelector('.cascade-page .confirm-page-btn-allow');
+    const b = document.querySelector('.cascade-page .btn-primary');
     if (b) b.click();
   });
   console.log('PASS: confirmation overlay shown for plan A (creation-anchor truncation)');
 
   // ── 8. A completes → assertions ───────────────────────────────────
+  // User echoes are collapsed by default (Phase 7 fold design): match
+  // the header preview (last line of the message — the plan link).
   await page.waitForFunction(() => {
-    const msgs = [...document.querySelectorAll('.message-content')].map(e => e.textContent || '');
-    return msgs.some(t => /\[Plan: e2e-demo-\d+\]/.test(t) && t.includes('[Plan Result]'));
+    const pre = [...document.querySelectorAll('.message-user .msg-preview')].map(e => e.textContent || '');
+    return pre.some(t => /\[Plan: e2e-demo-\d+\]/.test(t));
   }, { timeout: E2E_TIMEOUT });
   await sleep(800);
   await shot(page, '04-final.png');
 
-  const msgs = await page.$$eval('.message-content', els => els.map(e => e.textContent || ''));
-  const results = msgs.filter(t => t.startsWith('[Plan Result]'));
+  const pre = await page.$$eval('.message-user .msg-preview', els => els.map(e => e.textContent || ''));
+  const results = pre.filter(t => /\[Plan: e2e-demo-\d+\]/.test(t));
   assert(results.length === 1,
     'exactly ONE [Plan Result] remains (A\'s; B\'s was truncated away), got: ' + JSON.stringify(results));
-  assert(/\[Plan: e2e-demo-\d+\]/.test(results[0]) && !/e2e-demo-beta/.test(results[0]),
+  assert(!/e2e-demo-beta/.test(results[0]),
     "A's [Plan Result] carries the [Plan: e2e-demo-…] link (not Beta), got: " + results[0].slice(0, 120));
+  const msgs = await page.$$eval('.message-content', els => els.map(e => e.textContent || ''));
   assert(!msgs.some(t => t.includes('E2E Demo Beta')),
     "plan B's plan JSON + result are gone (truncated at A's creation anchor)");
   console.log('PASS: A\'s [Plan Result] sits after A (B\'s plan/result replaced, not appended past)');

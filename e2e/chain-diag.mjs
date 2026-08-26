@@ -127,7 +127,7 @@ await sleep(1200);
 // Run the plan → wait for completion (plan window auto-closes) → reopen
 // via the status-bar button → click t1 node → its session resumes.
 await page.evaluate(() => {
-  const btn = [...document.querySelectorAll('button.plan-strip-btn')].find(b => (b.textContent || '').includes('Run'));
+  const btn = [...document.querySelectorAll('.plan-run-strip button')].find(b => (b.textContent || '').includes('Run'));
   if (btn) btn.click();
 });
 await page.waitForFunction(() => {

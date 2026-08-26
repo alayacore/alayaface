@@ -229,6 +229,23 @@ viewSessionPanel model id =
                                 )
                             ]
                             [ Html.text tokenLabel ]
+                    , let
+                        speedLabel =
+                            F.formatSpeed session.taskStepTps session.taskTtftMs
+                      in
+                      if speedLabel == "" then
+                        Html.text ""
+
+                      else
+                        Html.span
+                            [ Attr.class "session-bar-speed"
+                            , Attr.title
+                                ("Latest step: "
+                                    ++ F.formatSpeed session.taskStepTps session.taskTtftMs
+                                    ++ " (end-to-end tokens/sec · time-to-first-token)"
+                                )
+                            ]
+                            [ Html.text speedLabel ]
                     , Html.button
                         [ Attr.class "session-bar-close"
                         , Ev.stopPropagationOn "mousedown" (D.succeed ( NoOp, True ))
@@ -2853,7 +2870,7 @@ viewPresetManagerOverlay model =
         viewOverlay
             { onClose = ClosePresetManager
             , onBack = Nothing
-            , title = "Preset manager"
+            , title = "Preset Manager"
             }
             [ Overlay.PresetManager.view
                 { presets = model.presets

@@ -538,8 +538,8 @@ tests =
                         ]
                         s
             ]
-        , describe "system task/model frames (token usage)"
-            [ test "task frame context_tokens updates the session token count" <|
+        , describe "system task/model frames (token usage + speed)"
+            [ test "task frame context updates the session token count" <|
                 \_ ->
                     let
                         s =
@@ -551,8 +551,7 @@ tests =
                                             , ( "data"
                                               , E.object
                                                     [ ( "in_progress", E.bool False )
-                                                    , ( "task_error", E.bool False )
-                                                    , ( "context_tokens", E.int 4096 )
+                                                    , ( "context", E.int 4096 )
                                                     ]
                                               )
                                             ]
@@ -560,7 +559,7 @@ tests =
                                     )
                     in
                     Expect.equal 4096 s.contextTokens
-            , test "task frame falls back to the legacy context field" <|
+            , test "task frame falls back to the legacy context_tokens field" <|
                 \_ ->
                     let
                         s =
@@ -572,8 +571,7 @@ tests =
                                             , ( "data"
                                               , E.object
                                                     [ ( "in_progress", E.bool False )
-                                                    , ( "task_error", E.bool False )
-                                                    , ( "context", E.int 2048 )
+                                                    , ( "context_tokens", E.int 2048 )
                                                     ]
                                               )
                                             ]
@@ -581,6 +579,63 @@ tests =
                                     )
                     in
                     Expect.equal 2048 s.contextTokens
+            , test "task frame step_tps/ttft_ms update the speed readout" <|
+                \_ ->
+                    let
+                        s =
+                            emptySession "s1"
+                                |> applyFrame
+                                    (frame "SM"
+                                        (E.object
+                                            [ ( "type", E.string "task" )
+                                            , ( "data"
+                                              , E.object
+                                                    [ ( "in_progress", E.bool True )
+                                                    , ( "current_step", E.int 2 )
+                                                    , ( "max_steps", E.int 10 )
+                                                    , ( "context", E.int 8600 )
+                                                    , ( "step_tps", E.float 12.5 )
+                                                    , ( "ttft_ms", E.int 1200 )
+                                                    ]
+                                              )
+                                            ]
+                                        )
+                                    )
+                    in
+                    Expect.all
+                        [ \st -> Expect.within (Expect.Absolute 0.0001) 12.5 st.taskStepTps
+                        , \st -> Expect.equal 1200 st.taskTtftMs
+                        , \st -> Expect.equal 8600 st.contextTokens
+                        , \st -> Expect.equal True st.taskRunning
+                        , \st -> Expect.equal 2 st.taskCurrentStep
+                        , \st -> Expect.equal 10 st.taskMaxSteps
+                        ]
+                        s
+            , test "task frame without speed fields leaves the readout empty" <|
+                \_ ->
+                    let
+                        s =
+                            emptySession "s1"
+                                |> applyFrame
+                                    (frame "SM"
+                                        (E.object
+                                            [ ( "type", E.string "task" )
+                                            , ( "data"
+                                              , E.object
+                                                    [ ( "in_progress", E.bool False )
+                                                    , ( "context", E.int 100 )
+                                                    ]
+                                              )
+                                            ]
+                                        )
+                                    )
+                    in
+                    Expect.all
+                        [ \st -> Expect.equal 0 st.taskStepTps
+                        , \st -> Expect.equal 0 st.taskTtftMs
+                        , \st -> Expect.equal False st.taskRunning
+                        ]
+                        s
             , test "model frame context_limit updates the session limit" <|
                 \_ ->
                     let

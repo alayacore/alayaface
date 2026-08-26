@@ -193,7 +193,7 @@ try {
   });
   await page.waitForSelector('.plan-page', { timeout: 30000 });
   await sleep(800);
-  assert(await clickByText('button.plan-strip-btn', 'Run'), 'Run button');
+  assert(await clickByText('.plan-run-strip button', 'Run'), 'Run button');
   await page.waitForFunction(() => {
     return [...document.querySelectorAll('.plan-offer-btn')].some(e => e.textContent.includes('Completed'));
   }, { timeout: 120000 });

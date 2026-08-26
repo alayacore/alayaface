@@ -235,7 +235,7 @@ try {
   assert(winWidths.s && winWidths.p && winWidths.s === winWidths.p,
     'plan window width matches the session window width, got: ' + JSON.stringify(winWidths));
   console.log('PASS: plan window width matches the session window (' + winWidths.p + ')');
-  assert(await clickByText('button.plan-strip-btn', 'Run'), 'Run button');
+  assert(await clickByText('.plan-run-strip button', 'Run'), 'Run button');
   await page.waitForFunction(() => {
     return [...document.querySelectorAll('.plan-offer-btn')].some(e => e.textContent.includes('Completed'));
   }, { timeout: E2E_TIMEOUT });
@@ -258,11 +258,11 @@ try {
   });
   writeFileSync(path.join(tmpdir(), 'alayaface-fakecore-version.marker'), 'v2');
   await reopenPlanViaStatusBar();
-  assert(await clickByText('button.plan-strip-btn', 'Run'), 're-Run button');
+  assert(await clickByText('.plan-run-strip button', 'Run'), 're-Run button');
   // Impact-scope confirmation (the old result sits in S).
-  await page.waitForSelector('.cascade-page .confirm-page-btn-allow', { timeout: 10000 }).catch(() => {});
+  await page.waitForSelector('.cascade-page .btn-primary', { timeout: 10000 }).catch(() => {});
   await page.evaluate(() => {
-    const b = document.querySelector('.cascade-page .confirm-page-btn-allow');
+    const b = document.querySelector('.cascade-page .btn-primary');
     if (b) b.click();
   });
 
@@ -398,10 +398,10 @@ try {
   // resumed S' window.
   writeFileSync(path.join(tmpdir(), 'alayaface-fakecore-version.marker'), 'v3');
   await reopenPlanViaStatusBar();
-  assert(await clickByText('button.plan-strip-btn', 'Run'), 'chained re-Run button');
-  await page.waitForSelector('.cascade-page .confirm-page-btn-allow', { timeout: 10000 }).catch(() => {});
+  assert(await clickByText('.plan-run-strip button', 'Run'), 'chained re-Run button');
+  await page.waitForSelector('.cascade-page .btn-primary', { timeout: 10000 }).catch(() => {});
   await page.evaluate(() => {
-    const b = document.querySelector('.cascade-page .confirm-page-btn-allow');
+    const b = document.querySelector('.cascade-page .btn-primary');
     if (b) b.click();
   });
   await page.waitForFunction(() => {

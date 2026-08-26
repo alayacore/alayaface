@@ -166,7 +166,7 @@ TLV 帧日志会以 `[tlv]` 前缀打印到 stderr：
 
 ```
 [tlv] << abc-123 AT 0b
-[tlv] >> abc-123 UT 15b :cancel
+[tlv] >> abc-123 CI 40b {"id":"a1","name":"cancel","input":""}
 [tlv] << abc-123 SM 80b {"type":"task",...}
 ```
 

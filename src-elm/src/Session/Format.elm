@@ -1,4 +1,4 @@
-module Session.Format exposing (formatTokens, formatTokenUsage)
+module Session.Format exposing (formatTokens, formatTokenUsage, formatSpeed)
 
 {-| Token-count formatting for the session bar readout.
 
@@ -45,6 +45,29 @@ formatTokenUsage used limit =
             ++ " "
             ++ oneDecimal (toFloat used * 100 / toFloat limit)
             ++ "%"
+
+
+{-| Speed readout for the session bar, mirroring the terminal adapter's
+status-bar speed segment: the latest completed step's end-to-end
+throughput, with TTFT when the core reported it.
+
+    12.5 0      -> "12.5 tok/s"
+    12.5 1200   -> "12.5 tok/s · ttft 1.2s"
+    0    1200   -> ""        (no step with output tokens yet)
+
+`step_tps` / `ttft_ms` come from SM task frames (adapter-guide); they are
+absent (0) until the first step with output tokens completes.
+-}
+formatSpeed : Float -> Int -> String
+formatSpeed stepTps ttftMs =
+    if stepTps <= 0 then
+        ""
+
+    else if ttftMs > 0 then
+        oneDecimal stepTps ++ " tok/s · ttft " ++ oneDecimal (toFloat ttftMs / 1000) ++ "s"
+
+    else
+        oneDecimal stepTps ++ " tok/s"
 
 
 {-| One decimal place, always shown: 4.096 -> "4.1", 4.0 -> "4.0",
