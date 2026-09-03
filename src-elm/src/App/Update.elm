@@ -1440,7 +1440,7 @@ update msg model =
                         ( model, Cmd.none )
 
                     else
-                        -- C2b（I-D）：core id → Session.id。
+                        -- C2b (I-D): core id → Session.id.
                         let
                             sid =
                                 PU.sessionIdOfWorkCopy model ev.sessionId

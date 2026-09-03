@@ -1,4 +1,4 @@
-module HandlersTest exposing (tests)
+module HandlersTest exposing (tests, userEchoMediaTests)
 
 import Expect
 import Dict
@@ -658,4 +658,78 @@ tests =
                     in
                     Expect.equal 8192 s.contextLimit
             ]
+        ]
+
+
+{-| A user message is echoed as SEVERAL frames that all share ONE history
+id: UT for the text plus UI/UV/UA/UD per attachment (real alayacore and
+fakecore both emit `hist-<n>` for every frame of the message). Echo dedup
+keyed on the history id alone therefore threw away every frame after the
+first — a voice message lost its audio chip, an image+text message lost the
+image preview (the attachment still reached the model, so the bug was only
+visible in the transcript). `voice-e2e.mjs`'s "UA echo rendered an audio
+chip" assertion is the same observation from the browser side.
+-}
+userEchoMediaTests : Test
+userEchoMediaTests =
+    let
+        echoFrame tag text =
+            { sessionId = "s1"
+            , tag = tag
+            , rawValue = ""
+            , historyId = Just "hist-1"
+            , content = Just text
+            , json = Nothing
+            , userContentType = Just tag
+            }
+    in
+    describe "user echo frames sharing one history id"
+        [ test "text + audio echo keeps both the text and the media chip" <|
+            \_ ->
+                let
+                    s =
+                        emptySession "s1"
+                            |> applyFrame (echoFrame "UT" "hello")
+                            |> applyFrame (echoFrame "UA" "data:audio/wav;base64,AAAA")
+                in
+                case List.head (List.reverse s.messages) of
+                    Just msg ->
+                        Expect.all
+                            [ \_ -> Expect.equal "hello" msg.content
+                            , \_ ->
+                                case msg.media of
+                                    Just [ m ] ->
+                                        Expect.equal "data:audio/wav;base64,AAAA" m.uri
+
+                                    other ->
+                                        Expect.fail ("audio echo dropped its media (media = " ++ Debug.toString other ++ ")")
+                            ]
+                            msg
+
+                    Nothing ->
+                        Expect.fail "no user message rendered"
+        , test "a repeated echo of the same frame is still deduplicated" <|
+            \_ ->
+                let
+                    s =
+                        emptySession "s1"
+                            |> applyFrame (echoFrame "UT" "hello")
+                            |> applyFrame (echoFrame "UT" "hello")
+                in
+                Expect.equal 1 (List.length s.messages)
+        , test "two attachments on one message both render" <|
+            \_ ->
+                let
+                    s =
+                        emptySession "s1"
+                            |> applyFrame (echoFrame "UT" "two files")
+                            |> applyFrame (echoFrame "UI" "data:image/png;base64,AA")
+                            |> applyFrame (echoFrame "UD" "data:application/pdf;base64,BB")
+                in
+                case List.head (List.reverse s.messages) of
+                    Just msg ->
+                        Expect.equal 2 (msg.media |> Maybe.withDefault [] |> List.length)
+
+                    Nothing ->
+                        Expect.fail "no user message rendered"
         ]

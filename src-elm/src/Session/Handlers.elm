@@ -167,15 +167,26 @@ handleUserEchoFrame s tag historyId content =
             else
                 ""
     in
+    -- The dedup key is tag + history id, NOT the history id alone: one user
+    -- message is echoed as SEVERAL frames that all share its id (UT for the
+    -- text plus UI/UV/UA/UD for each attachment; real alayacore and fakecore
+    -- both emit `hist-<n>` on every frame of the message). Keying on the id
+    -- by itself dropped every frame after the first — a voice message lost
+    -- its audio chip, an image + text message lost the image preview, and
+    -- nothing complained because the attachment still reached the model.
+    -- Same composite-key convention handleCompleteFrame already uses below.
     case historyId of
         Just hid ->
-            if Set.member hid s.processedEchoIds then
+            let
+                echoKey = tag ++ ":" ++ hid
+            in
+            if Set.member echoKey s.processedEchoIds then
                 s
 
             else
                 let
                     newEchoIds =
-                        Set.insert hid s.processedEchoIds
+                        Set.insert echoKey s.processedEchoIds
 
                     lastMsg =
                         List.head (List.reverse s.messages)
