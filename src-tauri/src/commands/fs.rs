@@ -131,9 +131,21 @@ pub async fn fs_resolve_path(path: String) -> Result<ResolvedPath, String> {
     })
 }
 
-/// Guess MIME type from file extension.
-fn guess_mime(path: &std::path::Path) -> &str {
-    match path.extension().and_then(|e| e.to_str()).unwrap_or("") {
+/// Guess MIME type from a file extension.
+///
+/// The extension is lowercased first: real recordings and camera files
+/// carry uppercase suffixes (`.JPG`, `.PNG`, `.MOV`), and Go's `guessMime`
+/// already matched case-insensitively — without this the same attachment
+/// resolved to `image/jpeg` on the Go backend but
+/// `application/octet-stream` here, so a `.PNG` preview broke only in the
+/// Tauri app (and a prompt built from it carried the wrong content type).
+fn guess_mime(path: &std::path::Path) -> &'static str {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
         "jpg" | "jpeg" => "image/jpeg",
         "png" => "image/png",
         "gif" => "image/gif",
@@ -351,14 +363,25 @@ mod tests {
         let out = fs_read_file_text(small.to_string_lossy().to_string()).await.unwrap();
         assert_eq!(out, "hello");
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[tokio::test]
+    }    #[tokio::test]
     async fn delete_directory_fails_cleanly() {
         let dir = temp_path("deletedir");
         let path = dir.to_string_lossy().to_string();
         let err = fs_delete_file(path).await.unwrap_err();
         assert_eq!(err, "Cannot delete file: Is a directory");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn guess_mime_is_case_insensitive() {
+        // Camera/phone files carry uppercase suffixes. Go's guessMime
+        // lowercases; matching it keeps a .PNG previewing identically on
+        // both backends instead of degrading to octet-stream here.
+        assert_eq!(guess_mime(std::path::Path::new("/x/a.PNG")), "image/png");
+        assert_eq!(guess_mime(std::path::Path::new("/x/a.JPG")), "image/jpeg");
+        assert_eq!(guess_mime(std::path::Path::new("/x/a.MOV")), "video/quicktime");
+        assert_eq!(guess_mime(std::path::Path::new("/x/a.mp4")), "video/mp4");
+        assert_eq!(guess_mime(std::path::Path::new("/x/no-suffix")), "application/octet-stream");
+        assert_eq!(guess_mime(std::path::Path::new("/x/a.weIrD")), "application/octet-stream");
     }
 }

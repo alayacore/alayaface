@@ -7,6 +7,30 @@ import (
 	"testing"
 )
 
+// TestGuessMime pins the MIME table's case handling: uppercase suffixes must
+// resolve exactly like lowercase ones, because Rust's guess_mime lowercases
+// too — a .JPG that came back as application/octet-stream on one backend only
+// is the drift this guards.
+func TestGuessMime(t *testing.T) {
+	cases := map[string]string{
+		"/x/a.png":          "image/png",
+		"/x/a.PNG":          "image/png",
+		"/x/photo.JPG":      "image/jpeg",
+		"/x/clip.MOV":       "video/quicktime",
+		"/x/a.mp4":          "video/mp4",
+		"/x/notes.md":       "text/plain",
+		"/x/a.xml":          "text/xml",
+		"/x/no-suffix":      "application/octet-stream",
+		"/x/a.weIrD":        "application/octet-stream",
+		"/x/archive.tar.gz": "application/octet-stream",
+	}
+	for path, want := range cases {
+		if got := guessMime(path); got != want {
+			t.Errorf("guessMime(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
 // TestFsReadFileSizes: oversized files must be rejected before being
 // read into memory (sparse files via Truncate — no multi-MB writes).
 func TestFsReadFileSizes(t *testing.T) {
