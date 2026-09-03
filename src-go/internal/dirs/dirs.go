@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -309,12 +310,7 @@ var SeedPresets = []string{"Simple", "Complex", "Talk"}
 // Seed presets are referenced by name in the seeded system_prompt, so
 // renaming them is rejected (rename_preset).
 func IsSeedPreset(name string) bool {
-	for _, s := range SeedPresets {
-		if s == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(SeedPresets, name)
 }
 
 // CreateSessionDirFrom creates a session directory from a specific
@@ -581,7 +577,7 @@ func copyDirExcluding(src, dst string, exclude []string) error {
 	}
 	for _, e := range entries {
 		name := e.Name()
-		if !e.IsDir() && contains(exclude, name) {
+		if !e.IsDir() && slices.Contains(exclude, name) {
 			continue
 		}
 		srcPath := filepath.Join(src, name)
@@ -601,13 +597,4 @@ func copyDirExcluding(src, dst string, exclude []string) error {
 		}
 	}
 	return nil
-}
-
-func contains(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }

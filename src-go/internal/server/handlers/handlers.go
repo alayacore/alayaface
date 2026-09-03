@@ -4,6 +4,8 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 
 	"alayaface/src-go/internal/core"
@@ -65,11 +67,11 @@ func Registry() map[string]Command {
 		"sync_asr_config": SyncAsrConfig,
 		"asr_transcribe":  AsrTranscribe,
 		// presets
-		"list_presets":     ListPresets,
-		"copy_preset":      CopyPreset,
-		"rename_preset":    RenamePreset,
-		"delete_preset":    DeletePreset,
-		"reorder_presets":  ReorderPresets,
+		"list_presets":    ListPresets,
+		"copy_preset":     CopyPreset,
+		"rename_preset":   RenamePreset,
+		"delete_preset":   DeletePreset,
+		"reorder_presets": ReorderPresets,
 		// fs
 		"fs_list_dir":           FsListDir,
 		"fs_home_dir":           FsHomeDir,
@@ -95,7 +97,10 @@ func decodeArgs(r *http.Request, v any) error {
 	defer r.Body.Close()
 	dec := json.NewDecoder(r.Body)
 	if err := dec.Decode(v); err != nil {
-		if err.Error() == "EOF" {
+		// Compare with errors.Is, not err.Error(): the decoder wraps the
+		// sentinel, and a message comparison silently stops matching on any
+		// Go change (or a real syntax error whose text happens to differ).
+		if errors.Is(err, io.EOF) {
 			return nil // empty body → zero value args
 		}
 		return err

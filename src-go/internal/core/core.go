@@ -143,16 +143,16 @@ func FindBinary() string {
 		}
 	}
 
-	// 3. Try `which` (Unix) or `where` (Windows)
-	whichCmd := "which"
-	if runtime.GOOS == "windows" {
-		whichCmd = "where"
-	}
-	if out, err := exec.Command(whichCmd, "alayacore").Output(); err == nil {
-		line := firstLine(string(out))
-		if line != "" {
-			return line
+	// 3. PATH lookup. exec.LookPath is the same search `which`/`where`
+	// perform, but it also applies the platform rules we would get wrong by
+	// hand: PATHEXT on Windows (.exe), the current-directory restriction,
+	// and the executability check. Shelling out also cost a fork per call
+	// (check_alayacore probes this on every app start).
+	if found, err := exec.LookPath("alayacore"); err == nil {
+		if abs, aerr := filepath.Abs(found); aerr == nil {
+			return abs
 		}
+		return found
 	}
 
 	// 4. Check common locations
@@ -317,9 +317,13 @@ func readVersionFrame(r io.Reader) error {
 		return nil
 	}
 }
-// exit — alayacore drains the active task (auto-saving at task end) and
-// exits — then sends kill as a fallback. Safe to call from multiple
-// goroutines (Wait errors are ignored).
+
+// KillChild terminates an alayacore child and reaps it. It closes stdin
+// first so the child sees EOF — alayacore drains the active task (auto-saving
+// at task end) and exits — then sends kill as a fallback. Safe to call from
+// multiple goroutines (Wait errors are ignored; callers that may race, e.g.
+// the reader's disconnect path and closeGracefully, guard it with a
+// sync.Once — os/exec forbids concurrent Waits).
 func KillChild(cmd *exec.Cmd) {
 	if cmd == nil || cmd.Process == nil {
 		return
@@ -339,13 +343,4 @@ func KillChild(cmd *exec.Cmd) {
 		_ = cmd.Process.Kill()
 		<-done
 	}
-}
-
-func firstLine(s string) string {
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' || s[i] == '\r' {
-			return s[:i]
-		}
-	}
-	return s
 }

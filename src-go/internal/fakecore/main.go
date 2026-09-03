@@ -172,7 +172,7 @@ func taskDoneBareFrame() string {
 // fake speed metrics — bumped on each streamed reply so the session-bar
 // speed readout exercises the step_tps/ttft_ms path end-to-end.
 var (
-	fakeStep   = 1
+	fakeStep    = 1
 	lastStepTps = 18.5
 	lastTtftMs  = 240
 )
@@ -226,8 +226,8 @@ func streamReply() {
 	// Bump the fake per-step speed metrics so successive task completions
 	// produce a visibly varying speed readout on the session bar.
 	fakeStep++
-	lastStepTps = 12.0 + float64(fakeStep%6)  // 12..17 tok/s
-	lastTtftMs = 150 + (fakeStep%5)*40         // 150..310 ms
+	lastStepTps = 12.0 + float64(fakeStep%6) // 12..17 tok/s
+	lastTtftMs = 150 + (fakeStep%5)*40       // 150..310 ms
 	rid := nextReplyID()
 	aid1 := nextReplyID()
 	aid2 := nextReplyID()
