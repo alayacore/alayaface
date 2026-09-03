@@ -24,18 +24,21 @@ pub async fn list_models(
         return Ok(model_cache.get());
     }
 
-    // Ask any connected session
-    {
+    // Ask any connected session. Pick it under the lock, then RELEASE the
+    // lock: the write itself must not serialize other sessions' commands,
+    // and the 2s wait for the model_list below must not freeze the whole
+    // backend (Go's ListModels uses ForEach, which only holds the manager
+    // lock for the snapshot).
+    let target = {
         let map = sessions.0.lock().await;
-        for (sid, handle) in map.iter() {
-            if !handle.connected.load(std::sync::atomic::Ordering::SeqCst) {
-                continue;
-            }
-            // send_cmd registers the call ID → name mapping so the
-            // matching CO frame is rendered with the command name.
-            if send_cmd(&map, sid, "model_load", "").await.is_err() {
-                break;
-            }
+        map.iter()
+            .find(|(_, h)| h.connected.load(std::sync::atomic::Ordering::SeqCst))
+            .map(|(id, _)| id.clone())
+    };
+    if let Some(sid) = target {
+        // send_cmd registers the call ID → name mapping so the matching CO
+        // frame is rendered with the command name.
+        if send_cmd(sessions.inner(), &sid, "model_load", "").await.is_ok() {
             // WAIT for the SM model_list to populate the cache: the
             // reply arrives via the stdout reader thread, so checking
             // the cache immediately after send_cmd would always miss it
@@ -44,16 +47,15 @@ pub async fn list_models(
             // call). Sleep on the cache's notification instead of
             // polling (M6/D6); 2s bound, on timeout fall back to the
             // probe.
-            match tokio::time::timeout(
+            if tokio::time::timeout(
                 std::time::Duration::from_secs(2),
                 model_cache.wait_non_empty(),
             )
             .await
+            .is_ok()
             {
-                Ok(()) => return Ok(model_cache.get()),
-                Err(_) => {}
+                return Ok(model_cache.get());
             }
-            break;
         }
     }
 

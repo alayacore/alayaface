@@ -38,6 +38,29 @@ pub struct SessionHandle {
     pub owner: String,
 }
 
+/// A cheap, lock-free snapshot of one session's shared handles.
+///
+/// `SessionHandle` itself cannot be cloned (its `Drop` kills the child —
+/// see the `impl Drop` below), but every field it shares is an `Arc`.
+/// Commands that need to talk to a session therefore clone THIS out of
+/// the map under the lock and release the lock BEFORE touching the
+/// stdin pipe (see `refs`).
+///
+/// Why that matters: writing to alayacore's stdin is a BLOCKING syscall
+/// on a ~64 KiB OS pipe. A child that stops draining it (wedged task)
+/// makes the write block for as long as it stays wedged. When the
+/// SessionMap lock was held across that write, one wedged session froze
+/// EVERY other session's commands and the whole create/close/list path —
+/// the same "lock held across a slow operation" class as the historical
+/// B2 close drift, and the Go backend never had it (its `Manager.Get`
+/// copies the pointer out and releases the mutex before writing).
+#[derive(Clone)]
+pub struct SessionRefs {
+    pub stdin: Arc<Mutex<Option<std::process::ChildStdin>>>,
+    pub connected: Arc<AtomicBool>,
+    pub pending_commands: Arc<PendingCommands>,
+}
+
 /// Bounded pending-command registry: call ID → command name (CI sent,
 /// CO not yet received). If a CO reply never arrives (protocol anomaly
 /// / killed core), an entry must not grow the map forever — insert
@@ -133,6 +156,26 @@ impl Drop for SessionHandle {
 
 /// Shared map of session_id → SessionHandle.
 pub struct SessionMap(pub Arc<Mutex<HashMap<String, SessionHandle>>>);
+
+impl SessionHandle {
+    /// Snapshot of this session's shared handles (see `SessionRefs`).
+    pub(crate) fn refs(&self) -> SessionRefs {
+        SessionRefs {
+            stdin: self.stdin.clone(),
+            connected: self.connected.clone(),
+            pending_commands: self.pending_commands.clone(),
+        }
+    }
+}
+
+/// Look up a session's shared handles and RELEASE the map lock.
+///
+/// Every command that writes to a session goes through here, so no
+/// caller can end up holding the map lock across a blocking stdin write.
+pub(crate) async fn refs(sessions: &SessionMap, session_id: &str) -> Result<SessionRefs, String> {
+    let map = sessions.0.lock().await;
+    get(&map, session_id).map(SessionHandle::refs)
+}
 
 /// Configuration for creating a new session.
 pub struct SessionConfig<'a> {
@@ -388,6 +431,48 @@ mod tests {
         let map = SessionMap(Arc::new(tokio::sync::Mutex::new(HashMap::new())));
         let err = close("nope", &map).await.unwrap_err();
         assert_eq!(err, "Session not found");
+    }
+
+    /// A write to a session must not hold the GLOBAL SessionMap lock.
+    ///
+    /// The write is blocking (an OS pipe), so if the map lock were held
+    /// for its duration — as it was before this fix, where every command
+    /// did `let map = sessions.0.lock().await` and then wrote — ONE
+    /// wedged alayacore (a child that stops draining stdin) would freeze
+    /// every other session's commands plus create/close/resume. The Go
+    /// backend never had the flaw: its `Manager.Get` releases the map
+    /// mutex before `WriteFrames` takes the per-session one.
+    ///
+    /// The pending write is held open deterministically by keeping this
+    /// session's stdin mutex locked, so no sleep racing is involved.
+    #[tokio::test]
+    async fn stdin_write_does_not_hold_the_session_map_lock() {
+        let child = Command::new("sleep")
+            .arg("60")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sleep");
+        let (map, stdin) = map_with_session(child, "s1");
+        // Hold stdin: any command for "s1" now parks waiting for it.
+        let mut stdin_guard = stdin.try_lock().unwrap();
+
+        let map_arc = map.0.clone();
+        let sender = tokio::spawn(async move {
+            crate::commands::send_cmd(&SessionMap(map_arc), "s1", "model_load", "").await
+        });
+        // Let the sender get past its (brief) lookup and park on stdin.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            map.0.try_lock().is_ok(),
+            "SessionMap lock must be free while a session's stdin write is \
+             pending (one wedged alayacore must not freeze the others)"
+        );
+
+        // Release stdin so the write can go through and the task be joined.
+        drop(stdin_guard);
+        sender.await.expect("sender task panicked").expect("send_cmd should succeed");
     }
 }
 

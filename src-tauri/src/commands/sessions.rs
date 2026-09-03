@@ -491,9 +491,8 @@ pub async fn fork_session(
 
     // Tell source alayacore to fork
     {
-        let map = sessions.0.lock().await;
         let input = format!("{} {}", history_id, target_file);
-        crate::commands::send_cmd(&map, &source_session_id, "fork", &input).await?;
+        crate::commands::send_cmd(sessions.inner(), &source_session_id, "fork", &input).await?;
     }
 
     // Wait for session file to stabilize

@@ -2,11 +2,10 @@
 //!
 //! Commands for sending prompts to sessions.
 
-use crate::commands::MediaItem;
+use crate::commands::{write_frames_to, MediaItem};
 use crate::session::{self, SessionMap};
 use crate::tlv;
 
-use std::io::Write;
 use tauri::State;
 
 #[tauri::command]
@@ -16,16 +15,14 @@ pub async fn alayacore_send_prompt(
     media: Vec<MediaItem>,
     sessions: State<'_, SessionMap>,
 ) -> Result<(), String> {
-    let map = sessions.0.lock().await;
-    let handle = session::get(&map, &session_id)?;
-    if !handle.connected.load(std::sync::atomic::Ordering::SeqCst) {
-        return Err("Session is disconnected".to_string());
-    }
-
-    let mut guard = handle.stdin.lock().await;
-    let stdin = guard
-        .as_mut()
-        .ok_or_else(|| "Session is disconnected".to_string())?;
+    // Build the whole message (media + text + UE flush) first, then write
+    // it under ONE stdin lock — and crucially WITHOUT holding the
+    // SessionMap lock. A prompt carries media data URIs (megabytes) on a
+    // ~64 KiB OS pipe: if this one alayacore stops draining stdin, the
+    // write blocks, and holding the global map lock across it used to
+    // freeze every other session's commands (Go's SendPrompt only ever
+    // takes the per-session stdin lock).
+    let mut frames: Vec<(String, String)> = Vec::with_capacity(media.len() + 2);
     for item in &media {
         let tag = match item.media_type.as_str() {
             "image" => tlv::TAG_USER_IMAGE,
@@ -34,17 +31,13 @@ pub async fn alayacore_send_prompt(
             "document" => tlv::TAG_USER_DOC,
             _ => return Err(format!("Unknown media type: {}", item.media_type)),
         };
-        let preview: String = item.uri.chars().take(200).collect();
-        log::info!("[tlv] >> {} {} {}b {}", session_id, tag, item.uri.len(), preview);
-        tlv::write_frame(stdin, tag, &item.uri).map_err(|e| format!("Write error: {e}"))?;
+        frames.push((tag.to_string(), item.uri.clone()));
     }
     if !text.is_empty() {
-        let preview: String = text.chars().take(200).collect();
-        log::info!("[tlv] >> {} {} {}b {}", session_id, tlv::TAG_USER_TEXT, text.len(), preview);
-        tlv::write_frame(stdin, tlv::TAG_USER_TEXT, &text).map_err(|e| format!("Write error: {e}"))?;
+        frames.push((tlv::TAG_USER_TEXT.to_string(), text));
     }
-    log::info!("[tlv] >> {} {} 0b", session_id, tlv::TAG_USER_END);
-    tlv::write_frame(stdin, tlv::TAG_USER_END, "").map_err(|e| format!("Write error: {e}"))?;
-    stdin.flush().map_err(|e| format!("Flush error: {e}"))?;
-    Ok(())
+    frames.push((tlv::TAG_USER_END.to_string(), String::new()));
+
+    let refs = session::refs(sessions.inner(), &session_id).await?;
+    write_frames_to(&refs, &session_id, &frames).await
 }

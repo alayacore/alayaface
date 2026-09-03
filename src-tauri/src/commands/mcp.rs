@@ -172,17 +172,20 @@ fn send_mcp_result(
     code: Option<&str>,
 ) -> Result<(), String> {
     tauri::async_runtime::handle().block_on(async {
-        let map = sessions_arc.lock().await;
+        // `send_cmd` locks the map only for the lookup and releases it
+        // before writing to stdin — the map lock must never be held
+        // across a blocking pipe write (see session::refs).
+        let sessions = crate::session::SessionMap(sessions_arc.clone());
 
         match code {
             Some(c) => {
                 let input = format!("{} {} {}", server_name, c, redirect_uri);
                 log::info!("[mcp_auth] Sending mcp_confirm: {}", input);
-                crate::commands::send_cmd(&map, session_id, "mcp_confirm", &input).await?;
+                crate::commands::send_cmd(&sessions, session_id, "mcp_confirm", &input).await?;
             }
             None => {
                 log::info!("[mcp_auth] Auth failed/cancelled — sending mcp_decline {}", server_name);
-                crate::commands::send_cmd(&map, session_id, "mcp_decline", server_name).await?;
+                crate::commands::send_cmd(&sessions, session_id, "mcp_decline", server_name).await?;
             }
         }
         Ok(())

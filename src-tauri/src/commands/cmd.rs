@@ -83,8 +83,7 @@ pub async fn alayacore_reason(
     level: u32,
     sessions: State<'_, SessionMap>,
 ) -> Result<(), String> {
-    let map = sessions.0.lock().await;
-    send_cmd(&map, &session_id, "reason", &level.to_string())
+    send_cmd(sessions.inner(), &session_id, "reason", &level.to_string())
         .await
         .map(|_| ())
 }
@@ -95,8 +94,7 @@ pub async fn alayacore_model_set(
     model_id: u32,
     sessions: State<'_, SessionMap>,
 ) -> Result<(), String> {
-    let map = sessions.0.lock().await;
-    send_cmd(&map, &session_id, "model_set", &model_id.to_string())
+    send_cmd(sessions.inner(), &session_id, "model_set", &model_id.to_string())
         .await
         .map(|_| ())
 }
@@ -107,8 +105,7 @@ pub async fn alayacore_model_sync(
     config: String,
     sessions: State<'_, SessionMap>,
 ) -> Result<(), String> {
-    let map = sessions.0.lock().await;
-    send_cmd(&map, &session_id, "model_sync", &config).await.map(|_| ())
+    send_cmd(sessions.inner(), &session_id, "model_sync", &config).await.map(|_| ())
 }
 
 #[tauri::command]
@@ -118,9 +115,8 @@ pub async fn alayacore_confirm(
     allowed: bool,
     sessions: State<'_, SessionMap>,
 ) -> Result<(), String> {
-    let map = sessions.0.lock().await;
     let name = if allowed { "tool_confirm" } else { "tool_decline" };
-    send_cmd(&map, &session_id, name, &id).await.map(|_| ())
+    send_cmd(sessions.inner(), &session_id, name, &id).await.map(|_| ())
 }
 
 #[tauri::command]
@@ -129,8 +125,7 @@ pub async fn alayacore_mcp_decline(
     server: String,
     sessions: State<'_, SessionMap>,
 ) -> Result<(), String> {
-    let map = sessions.0.lock().await;
-    send_cmd(&map, &session_id, "mcp_decline", &server)
+    send_cmd(sessions.inner(), &session_id, "mcp_decline", &server)
         .await
         .map(|_| ())
 }
@@ -140,8 +135,7 @@ pub async fn alayacore_mcp_cancel(
     session_id: String,
     sessions: State<'_, SessionMap>,
 ) -> Result<(), String> {
-    let map = sessions.0.lock().await;
-    send_cmd(&map, &session_id, "mcp_cancel", "").await.map(|_| ())
+    send_cmd(sessions.inner(), &session_id, "mcp_cancel", "").await.map(|_| ())
 }
 
 #[cfg(test)]

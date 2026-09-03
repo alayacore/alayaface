@@ -48,18 +48,21 @@ pub struct MediaItem {
 
 // ─── Shared Helpers ──────────────────────────────────────────────────
 
-/// Send a raw TLV frame to a session's stdin.
-pub(crate) async fn send_raw(
-    map: &std::collections::HashMap<String, crate::session::SessionHandle>,
+/// Write one TLV frame to a session's stdin (single stdin lock hold).
+///
+/// The caller supplies `refs` (from `session::refs`), so the SessionMap
+/// lock is NOT held across this blocking pipe write. `session_id` is
+/// only used for the log line.
+pub(crate) async fn write_frame_to(
+    refs: &crate::session::SessionRefs,
     session_id: &str,
     tag: &str,
     value: &str,
 ) -> Result<(), String> {
-    let handle = crate::session::get(map, session_id)?;
-    if !handle.connected.load(std::sync::atomic::Ordering::SeqCst) {
+    if !refs.connected.load(std::sync::atomic::Ordering::SeqCst) {
         return Err("Session is disconnected".to_string());
     }
-    let mut guard = handle.stdin.lock().await;
+    let mut guard = refs.stdin.lock().await;
     let stdin = guard
         .as_mut()
         .ok_or_else(|| "Session is disconnected".to_string())?;
@@ -70,6 +73,31 @@ pub(crate) async fn send_raw(
     let preview: String = value.chars().take(200).collect();
     log::info!("[tlv] >> {} {} {}b {}", session_id, tag, value.len(), preview);
 
+    Ok(())
+}
+
+/// Write a batch of TLV frames under ONE stdin lock so a concurrent
+/// command cannot interleave between them (mirrors Go's
+/// `Session.WriteFrames` / `alayacore_send_prompt`). Flushes once at the
+/// end, so a multi-frame message reaches alayacore as one write burst.
+pub(crate) async fn write_frames_to(
+    refs: &crate::session::SessionRefs,
+    session_id: &str,
+    frames: &[(String, String)],
+) -> Result<(), String> {
+    if !refs.connected.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err("Session is disconnected".to_string());
+    }
+    let mut guard = refs.stdin.lock().await;
+    let stdin = guard
+        .as_mut()
+        .ok_or_else(|| "Session is disconnected".to_string())?;
+    for (tag, value) in frames {
+        let preview: String = value.chars().take(200).collect();
+        log::info!("[tlv] >> {} {} {}b {}", session_id, tag, value.len(), preview);
+        tlv::write_frame(stdin, tag, value).map_err(|e| format!("Write error: {e}"))?;
+    }
+    stdin.flush().map_err(|e| format!("Flush error: {e}"))?;
     Ok(())
 }
 
@@ -89,19 +117,22 @@ pub(crate) fn resolve_binary(binary_path: &str) -> String {
 /// the command name to the matching CO frame (CO carries only the ID).
 /// Returns the generated call ID on success.
 pub(crate) async fn send_cmd(
-    map: &std::collections::HashMap<String, crate::session::SessionHandle>,
+    sessions: &SessionMap,
     session_id: &str,
     name: &str,
     input: &str,
 ) -> Result<String, String> {
     let id = uuid::Uuid::new_v4().to_string();
+    // Looked up once; the map lock is already released here, so the
+    // pending registry and the write below cannot block any other
+    // session's commands.
+    let refs = crate::session::refs(sessions, session_id).await?;
     // Register the mapping BEFORE writing the frame — the CO reply can
     // arrive as soon as the CI frame is flushed.
-    let handle = crate::session::get(map, session_id)?;
-    handle.pending_commands.insert(id.clone(), name.to_string()).await;
+    refs.pending_commands.insert(id.clone(), name.to_string()).await;
     let payload = serde_json::json!({ "id": id, "name": name, "input": input });
-    if let Err(e) = send_raw(map, session_id, tlv::TAG_CMD_INPUT, &payload.to_string()).await {
-        handle.pending_commands.remove(&id).await;
+    if let Err(e) = write_frame_to(&refs, session_id, tlv::TAG_CMD_INPUT, &payload.to_string()).await {
+        refs.pending_commands.remove(&id).await;
         return Err(e);
     }
     Ok(id)
@@ -186,8 +217,9 @@ macro_rules! send_cmd {
             session_id: String,
             sessions: State<'_, SessionMap>,
         ) -> Result<(), String> {
-            let map = sessions.0.lock().await;
-            $crate::commands::send_cmd(&map, &session_id, $cmd_name, "")
+            // No map lock here: `send_cmd` looks the session up and
+            // releases the lock before writing to stdin.
+            $crate::commands::send_cmd(sessions.inner(), &session_id, $cmd_name, "")
                 .await
                 .map(|_| ())
         }
