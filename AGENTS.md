@@ -54,12 +54,25 @@ and the config files (`model.conf`, `mcp.conf`, `settings.conf`, `global.conf`).
 ## Verification (run before every commit)
 
 ```bash
-cd src-go && go vet ./... && go test -race ./...
+make test-go                        # go vet + go test -race ./...
 cd src-elm && elm make src/Main.elm --output=/tmp/m.js && elm-test
-cd src-tauri && cargo test
+cd src-tauri && cargo test          # (and cargo clippy --lib: no errors)
 ./scripts/check-backend-parity.sh
-cd e2e && node plan-e2e.mjs && node restart-e2e.mjs   # headless Chrome + fakecore
+make e2e                            # every script in e2e/scripts.txt
 ```
+
+`make e2e` and CI both drive the list in **`e2e/scripts.txt`** — do not
+hand-copy it into either runner. Four scripts had rotted (Phase 7's
+button/overlay restyle renamed the selectors they matched) purely because
+they were in no list anyone ran: CI executed 2 of 12 and `make e2e` 7.
+A script that nothing runs is not a test.
+
+**The two backends are behaviorally symmetric, not just name-symmetric.**
+`check-backend-parity.sh` only proves command names match; it cannot see a
+divergent error path, default, or byte range — those have been found by
+reading both sides (see the B-series and the reasoning-level / MIME / WAV
+slicing fixes). When you change behavior, change Go AND Rust in the same
+commit, and say in the message which twin you checked.
 
 ## M-series refactor workflow (gitignored)
 

@@ -1,0 +1,17 @@
+# Behavioural E2E scripts, one per line (basename without "-e2e.mjs").
+# Single source of truth: `make e2e` and .github/workflows/ci.yml both read
+# this file. Keep it in sync with nothing — that is the point: four scripts
+# rotted for weeks because they were in neither runner's list.
+# *-diag.mjs are diagnostic dumps (no assertions) and stay out on purpose.
+plan
+restart
+fork
+two-plans
+reasoning-level
+preset-reorder
+attachment-drop
+touch
+close-confirm
+cancel-confirm
+pt
+voice

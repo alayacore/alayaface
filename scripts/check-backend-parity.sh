@@ -36,7 +36,7 @@ if [ -n "$missing_in_go" ] || [ -n "$missing_in_rust" ]; then
   fail=1
 fi
 
-# bridge.js may invoke a subset (not every backend command has a UI
+# transport.js may invoke a subset (not every backend command has a UI
 # entry point), so only check one direction: bridge ⊆ backends.
 missing_in_backends=$(comm -23 <(echo "$bridge_cmds") <(cat <(echo "$rust_cmds") <(echo "$go_cmds") | sort -u))
 if [ -n "$missing_in_backends" ]; then

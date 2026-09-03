@@ -58,15 +58,23 @@ build-go: elm
 check-parity:
 	./scripts/check-backend-parity.sh
 
-# Run Go backend test suites
+# Run Go backend test suites (-race: the backends are concurrent by design —
+# session readers, the hub, graceful close — and AGENTS.md requires -race
+# before every commit; CI passes it too, so the target must not be the one
+# place that silently skips it)
 test-go:
-	cd $(SRC_GO) && $(GO) test ./...
+	cd $(SRC_GO) && $(GO) vet ./... && $(GO) test ./... -race
 
 # Headless-browser E2E for Plan Mode (Go backend + fakecore + system
 # Chrome). Requires node + puppeteer-core (npm install once in e2e/) and
 # google-chrome on PATH. No real model needed.
+# Which scripts to run comes from e2e/scripts.txt — the SAME file CI reads.
+# Four scripts rotted for weeks because they were in neither runner's list
+# (and the lists had already drifted: CI ran 2, this target ran 7).
 e2e: elm
-	cd e2e && $(NPM) install && node plan-e2e.mjs && node restart-e2e.mjs && node fork-e2e.mjs && node two-plans-e2e.mjs && node reasoning-level-e2e.mjs && node preset-reorder-e2e.mjs && node attachment-drop-e2e.mjs
+	cd e2e && $(NPM) install
+	cd e2e && for t in $$(grep -v '^\s*\#' scripts.txt | grep -v '^\s*$$'); do \
+		echo "== $$t-e2e.mjs"; node "$$t-e2e.mjs" || exit 1; done
 
 # Clean Go build artifacts
 clean-go:

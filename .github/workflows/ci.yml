@@ -88,9 +88,14 @@ jobs:
       - name: Install e2e deps
         run: npm install
         working-directory: e2e
-      - name: Plan E2E
-        run: node plan-e2e.mjs
-        working-directory: e2e
-      - name: Restart E2E
-        run: node restart-e2e.mjs
+      # The script list lives in e2e/scripts.txt, shared with `make e2e` —
+      # a list duplicated per runner is how four scripts came to be running
+      # nowhere at all.
+      - name: E2E (all scripts from e2e/scripts.txt)
+        run: |
+          grep -v '^\s*\#' scripts.txt | grep -v '^\s*$' | while read -r t; do
+            echo "::group::$t-e2e.mjs"
+            node "$t-e2e.mjs"
+            echo "::endgroup::"
+          done
         working-directory: e2e
