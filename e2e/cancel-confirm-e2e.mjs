@@ -116,7 +116,7 @@ try {
     await waitFor('.session-panel');
     await sleep(600);
   };
-  const overlayButtons = () => page.$$eval('.overlay .confirm-page-btn', els => els.map(e => e.textContent || ''));
+  const overlayButtons = () => page.$$eval('.overlay .confirm-page-buttons button', els => els.map(e => e.textContent || ''));
 
   await page.goto(base + '/', { waitUntil: 'networkidle0', timeout: 30000 });
   await page.waitForSelector('.main-content', { timeout: 30000 });
@@ -156,7 +156,7 @@ try {
   await shot('02-cancel-confirm.png');
 
   // ── 4. Keep running → overlay closes, task keeps hanging ─────────
-  const keepBtn = await page.$$('.overlay .confirm-page-btn');
+  const keepBtn = await page.$$('.overlay .confirm-page-buttons button');
   await keepBtn[1].click();
   await sleep(300);
   assert(await page.$('.overlay .confirm-page-title') === null, 'overlay closed after Keep running');

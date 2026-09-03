@@ -171,16 +171,16 @@ try {
   assert(await clickMenuItem('ASR config'), 'menu: ASR config');
   await waitFor('.me-page');
   // Wait for the list (loading finishes) before clicking Add.
-  await page.waitForSelector('.me-save-btn', { timeout: 10000 });
+  await page.waitForSelector('.me-actions .btn', { timeout: 10000 });
   await shot('01-asr-list-empty.png');
   // Empty list → Add endpoint enters the form.
-  await page.$eval('.me-save-btn', el => el.click());
+  await page.$eval('.me-actions .btn', el => el.click());
   await waitFor('#asr-config-url');
   await sleep(200);
   await page.$eval('#asr-config-name', (el, v) => { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); }, 'Local whisper');
   await page.$eval('#asr-config-url', (el, url) => { el.value = url; el.dispatchEvent(new Event('input', { bubbles: true })); }, `http://127.0.0.1:${asrPort}/v1/audio/transcriptions`);
   await sleep(200);
-  await page.$eval('.me-save-btn', el => el.click());
+  await page.$eval('.me-actions .btn', el => el.click());
   await sleep(800);
   // Back on the list; the new profile is active (first one).
   const rowCount = await page.$$eval('.asr-row', els => els.length);
@@ -191,7 +191,7 @@ try {
   assert(!!activeBadge, 'first profile is marked active');
   await shot('02-asr-list-one.png');
   // Close the overlay.
-  await page.$eval('.overlay-close', el => el.click());
+  await page.$eval('.overlay .card-close', el => el.click());
   await sleep(300);
   assert(await page.$('.me-page') === null, 'ASR overlay closed');
   console.log('ASR profile added');
@@ -303,8 +303,17 @@ try {
   assert((await taState()).disabled === false, 'input re-enabled after raw send');
   const afterRaw = await page.$eval(taSel, el => ({ v: el.value }));
   assert(afterRaw.v === typedValue, 'input untouched after raw send: ' + afterRaw.v);
-  const audioChip = await page.$('.message-media-chip');
-  assert(!!audioChip, 'UA echo rendered an audio chip');
+  // The UA echo must have produced the user message. User rows are
+  // COLLAPSED by default (Session/Types.defaultCollapsed: the core echoes
+  // back what the user just sent, so it is folded until asked for), so the
+  // media chip is not in the DOM until the row is expanded — assert the row,
+  // then expand it and assert the chip it carries.
+  const userRow = await page.$('.message-user');
+  assert(!!userRow, 'UA echo rendered a user message');
+  await page.$eval('.message-user .msg-header', el => el.click());
+  await sleep(300);
+  const audioChip = await page.$('.message-user .message-media-chip');
+  assert(!!audioChip, 'expanded user message shows the audio chip');
   const bodyText = await page.evaluate(() => document.body.textContent || '');
   assert(!bodyText.includes('describe this audio'), 'typed text NOT sent with the audio');
   await shot('06-raw-sent.png');

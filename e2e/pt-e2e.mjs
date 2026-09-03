@@ -149,18 +149,18 @@ try {
   await openGlobalMenu();
   assert(await clickMenuItem('ASR config'), 'menu: ASR config');
   await waitFor('.me-page');
-  await page.waitForSelector('.me-save-btn', { timeout: 10000 });
-  await page.$eval('.me-save-btn', el => el.click());
+  await page.waitForSelector('.me-actions .btn', { timeout: 10000 });
+  await page.$eval('.me-actions .btn', el => el.click());
   await waitFor('#asr-config-url');
   await sleep(200);
   await page.$eval('#asr-config-name', (el, v) => { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); }, 'Local whisper');
   await page.$eval('#asr-config-url', (el, url) => { el.value = url; el.dispatchEvent(new Event('input', { bubbles: true })); }, `http://127.0.0.1:${asrPort}/v1/audio/transcriptions`);
   await sleep(200);
-  await page.$eval('.me-save-btn', el => el.click());
+  await page.$eval('.me-actions .btn', el => el.click());
   await sleep(800);
   const rowCount = await page.$$eval('.asr-row', els => els.length);
   assert(rowCount === 1, 'profile list shows one row, got ' + rowCount);
-  await page.$eval('.overlay-close', el => el.click());
+  await page.$eval('.overlay .card-close', el => el.click());
   await sleep(300);
   console.log('ASR profile added');
 

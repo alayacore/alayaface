@@ -116,7 +116,7 @@ try {
     await waitFor('.session-panel');
     await sleep(600);
   };
-  const overlayButtons = () => page.$$eval('.overlay .confirm-page-btn', els => els.map(e => e.textContent || ''));
+  const overlayButtons = () => page.$$eval('.overlay .confirm-page-buttons button', els => els.map(e => e.textContent || ''));
 
   await page.goto(base + '/', { waitUntil: 'networkidle0', timeout: 30000 });
   await page.waitForSelector('.main-content', { timeout: 30000 });
@@ -145,7 +145,7 @@ try {
   await shot('01-confirm-open.png');
 
   // ── 4. Cancel keeps the session ──────────────────────────────────
-  const cancelBtn = await page.$$('.overlay .confirm-page-btn');
+  const cancelBtn = await page.$$('.overlay .confirm-page-buttons button');
   await cancelBtn[2].click();
   await sleep(300);
   assert(await page.$('.overlay .confirm-page-title') === null, 'overlay closed after Cancel');
@@ -156,7 +156,7 @@ try {
   await page.$eval('.session-bar-close', el => el.click());
   await waitFor('.overlay .confirm-page-title');
   await sleep(200);
-  const btns2 = await page.$$('.overlay .confirm-page-btn');
+  const btns2 = await page.$$('.overlay .confirm-page-buttons button');
   await btns2[1].click(); // Close and Delete
   await sleep(600);
   assert(await page.$('.overlay .confirm-page-title') === null, 'overlay closed after Close and Delete');
