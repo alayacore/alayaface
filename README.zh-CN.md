@@ -72,7 +72,7 @@ cd ../src-tauri && cargo run
 
 ## Go 后端（浏览器 / HTTP）
 
-同一套 Elm 客户端也可以运行在 Go 后端（`src-go/`）上：它托管前端，并以 HTTP API 的形式实现了与 Tauri 命令等价的功能。`bridge.js` 会自动检测运行环境：存在 `window.__TAURI__` 时使用 Tauri IPC，否则使用 `fetch` + WebSocket。
+同一套 Elm 客户端也可以运行在 Go 后端（`src-go/`）上：它托管前端，并以 HTTP API 的形式实现了与 Tauri 命令等价的功能。`transport.js` 会自动检测运行环境：存在 `window.__TAURI__` 时使用 Tauri IPC，否则使用 `fetch` + WebSocket。
 
 ```bash
 make run-go
@@ -178,9 +178,9 @@ TLV 帧日志会以 `[tlv]` 前缀打印到 stderr：
 
 ## 移植到 Web / VS Code
 
-Elm 核心与平台无关（`Session/` 模块没有 Tauri 依赖），`bridge.js` 已经抽象了后端传输：
+Elm 核心与平台无关（`Session/` 模块没有 Tauri 依赖），`transport.js` 已经抽象了后端传输：
 
 - 有 `window.__TAURI__` → Tauri IPC（`tauriTransport`）
 - 没有 → `fetch POST /rpc/{command}` + WebSocket `/ws`（`httpTransport`，Go 后端使用）
 
-要移植到其他目标（例如 VS Code postMessage），只需在 `bridge.js` 顶部增加一个传输实现；Elm ports 和 `Session/` 模块保持不变。
+要移植到其他目标（例如 VS Code postMessage），只需在 `transport.js` 顶部增加一个传输实现；Elm ports 和 `Session/` 模块保持不变。

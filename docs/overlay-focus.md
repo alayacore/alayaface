@@ -42,7 +42,7 @@ boundary, not the specific delay. `Process.sleep 0` is sufficient.
 ## Cursor Positioning
 
 Cursor position is handled separately via the `setCursorPos` port in
-`bridge.js`, which calls `el.setSelectionRange(el.value.length, el.value.length)` after focus. This is only called for overlay inputs (IDs
+`transport.js`, which calls `el.setSelectionRange(el.value.length, el.value.length)` after focus. This is only called for overlay inputs (IDs
 not starting with `msg-input-*`), preserving cursor position in the
 prompt textarea.
 
@@ -75,7 +75,7 @@ All three now use `focusAfterDelay` on open.
 |------|--------|
 | `src/Main.elm` | Added `focusAfterDelay`, `Process` import; changed all overlay open handlers to use `focusAfterDelay` + `Ports.setCursorPos`; changed `focusInput` to use `Dom.focus`; removed Escape-close for overlays (only the context menu dismisses via Escape) |
 | `src/Ports.elm` | Added `setCursorPos` port |
-| `bridge.js` | `focusElement` port deprecated (no-op); added `setCursorPos` handler; removed `requestAnimationFrame` wrapper from `scrollIntoView` |
+| `transport.js` | `focusElement` port deprecated (no-op); added `setCursorPos` handler; removed `requestAnimationFrame` wrapper from `scrollIntoView` |
 | `style.css` | Added `pointer-events: none` to `.overlay`, `pointer-events: auto` to `.overlay-page` |
 | `Overlay/FilePicker.elm` | Removed `Attr.autofocus True`; IDs now session-specific |
 | `Overlay/ModelSelector.elm` | Removed `Attr.autofocus True`; IDs now session-specific |

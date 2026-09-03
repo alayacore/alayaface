@@ -82,7 +82,7 @@ cd ../src-tauri && cargo run
 
 The same Elm client also runs against a Go backend (`src-go/`) that
 hosts the frontend and implements the equivalent of the Tauri commands as
-an HTTP API. `bridge.js` auto-detects the runtime: with `window.__TAURI__`
+an HTTP API. `transport.js` auto-detects the runtime: with `window.__TAURI__`
 present it uses Tauri IPC, otherwise it uses `fetch` + WebSocket.
 
 ```bash
@@ -297,12 +297,12 @@ These appear in the terminal when running `cargo run`.
 ## Porting to Web / VS Code
 
 The Elm core is platform-agnostic (`Session/` modules have no Tauri
-dependencies), and `bridge.js` already abstracts the backend transport:
+dependencies), and `transport.js` already abstracts the backend transport:
 
 - With `window.__TAURI__` → Tauri IPC (`tauriTransport`)
 - Without it → `fetch POST /rpc/{command}` + WebSocket `/ws`
   (`httpTransport`, used by the Go backend)
 
 To port to another target (e.g. VS Code postMessage), add another
-transport implementation at the top of `bridge.js`; the Elm ports and
+transport implementation at the top of `transport.js`; the Elm ports and
 `Session/` modules remain unchanged.

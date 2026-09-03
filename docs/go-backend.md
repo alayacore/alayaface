@@ -14,7 +14,7 @@ Shared boundary:
 |-------|---------|---------|
 | Elm application logic | `src-elm/src/**` (Main / App / Session / Ports) | ✅ Fully shared, zero changes |
 | Frontend static assets | `elm.js`, `index.html`, `style.css`, `homescreen.css` | ✅ Shared (served by Go) |
-| JS bridge layer | `src-elm/bridge.js` | 🔧 Minimal change: abstract `__TAURI__.invoke / listen` into a transport |
+| JS bridge layer | `src-elm/transport.js` | 🔧 Minimal change: abstract `__TAURI__.invoke / listen` into a transport |
 | Backend | `src-tauri/**` ↔ new `src-go/**` | ❌ Separate implementations, **behavior and JSON shapes must match** |
 
 Key conclusion: **the only contract between Elm and the backend is the JSON format**.
@@ -37,11 +37,11 @@ Rust/Tauri has two channels, each of which needs a Go counterpart:
 **RPC style is recommended over full REST**, because:
 
 1. **Lowest alignment cost**: a Tauri invoke is exactly `(command name, args object) → result`.
-   `POST /rpc/create_session` + JSON body maps 1:1; bridge.js changes are compressed
+   `POST /rpc/create_session` + JSON body maps 1:1; transport.js changes are compressed
    to "swap the invoke implementation", with no 30-entry command→URL/method table in JS.
 2. **Consistent validation**: Rust commands take snake_case param names (e.g. `binary_path`)
    converted by serde from camelCase at the invoke layer; Go aligns via `json:"binaryPath"`
-   tags matching the camelCase args bridge.js already sends.
+   tags matching the camelCase args transport.js already sends.
 3. A REST facade (`/api/...`) can be added later for curl/external tooling, but is not
    the primary channel, avoiding dual-API drift.
 
@@ -53,7 +53,7 @@ Protocol:
   value; `create_session` returns a bare string `"<sessionId>"`, `list_presets` returns
   an array, etc.).
 - Failure: `4xx/5xx`, body = `{"error": "..."}`, aligned with Tauri rejection semantics
-  (bridge.js's `.catch(err => String(err.message || err))` stays unchanged).
+  (transport.js's `.catch(err => String(err.message || err))` stays unchanged).
 - Void commands (e.g. `close_session`): `200` + empty body.
 
 ### 2.2 Event channel: WebSocket `GET /ws`
@@ -69,7 +69,7 @@ One-way push (server → client), message format:
 `payload` field names must match the Tauri event payloads byte-for-byte (see §4).
 
 - Multiple sessions share one WS connection, distinguished by `session_id` in the payload.
-- Reconnection is handled by bridge.js (exponential backoff); no server-side state
+- Reconnection is handled by transport.js (exponential backoff); no server-side state
   recovery is needed — sessions live in the Go process memory, and the Elm side
   reconciles via existing flows (`list_session_dirs` / `onStatus`) after reconnect.
 - Optional extension: `GET /ws?session=<id>` filtering, for future multi-tab/debugging.
@@ -286,12 +286,12 @@ presets / settings / fs are pure filesystem operations — direct ports;
 
 ---
 
-## 7. bridge.js Changes (the only frontend change)
+## 7. transport.js Changes (the only frontend change)
 
-Current state: bridge.js calls `__TAURI__.core.invoke` / `__TAURI__.event.listen`
+Current state: transport.js calls `__TAURI__.core.invoke` / `__TAURI__.event.listen`
 in ~40 places.
 
-Plan: a **transport abstraction** — bridge.js picks the implementation at the top
+Plan: a **transport abstraction** — transport.js picks the implementation at the top
 based on the environment; the remaining ~40 call sites change only to
 `transport.invoke(...)` / `transport.onEvent(...)`, zero logic changes:
 
@@ -312,7 +312,7 @@ var transport = (window.__TAURI__ && window.__TAURI__.core)
 - Window-maximize event: in browser mode degrade to
   `window.innerHeight >= screen.availHeight` + `resize` listener (Tauri branch unchanged).
 
-Thus **index.html doesn't change** (still loads the same bridge.js); the Tauri and Go
+Thus **index.html doesn't change** (still loads the same transport.js); the Tauri and Go
 runtimes auto-switch on the presence of `window.__TAURI__`, avoiding two bridge files.
 
 > Optional: override the backend URL via `window.ALAYA_BACKEND_URL` (default same-origin),
@@ -323,7 +323,7 @@ runtimes auto-switch on the presence of `window.__TAURI__`, avoiding two bridge 
 ## 8. Static Assets and Startup
 
 - The Go server serves `GET /` statically from `../src-elm/` (`elm.js`, `index.html`,
-  `bridge.js`, css, icons). Set correct MIME (`.js` → `text/javascript`) and
+  `transport.js`, css, icons). Set correct MIME (`.js` → `text/javascript`) and
   `Cache-Control: no-cache` for development; hash-based caching in production.
 - Startup flags:
   ```
@@ -381,7 +381,7 @@ runtimes auto-switch on the presence of `window.__TAURI__`, avoiding two bridge 
    → conversation main flow works (minimal viable).
 3. **P2 remaining commands**: cmd (model_set/model_sync/confirm/mcp_*) + fork + session-dir management.
 4. **P3 config domain**: presets, settings, models (incl. probes), mcp.conf, MCP OAuth.
-5. **P4 frontend wrap-up**: bridge.js transport abstraction, window-event degradation, reconnection.
+5. **P4 frontend wrap-up**: transport.js transport abstraction, window-event degradation, reconnection.
 6. **P5 wrap-up**: Makefile (`make run-go` / `make test-go`), README update, integration tests.
 
 ---
