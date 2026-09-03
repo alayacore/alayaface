@@ -257,6 +257,11 @@ fn run_temp_probe(
 /// index in the returned model list (null when none matches).
 #[tauri::command]
 pub async fn list_default_models(binary_path: String, preset: String) -> Result<serde_json::Value, String> {
+    // Ensure first so the seed presets exist on first run (preset is now a
+    // required argument, so nothing else triggers ensure) — mirrors Go.
+    // Without it, the model editor on a fresh install answered
+    // "Preset not found: Simple" while the Go backend seeded and listed.
+    dirs::ensure()?;
     let config_dir = dirs::resolve_config_dir(&preset)?;
     let config_path = config_dir.to_string_lossy().to_string();
     let bin = resolve_binary(&binary_path);
@@ -311,6 +316,11 @@ fn read_active_model_name(config_dir: &std::path::Path) -> Option<String> {
 /// under the preset copy runtime.conf and start on that model.
 #[tauri::command]
 pub async fn set_default_model(preset: String, model_id: u32) -> Result<serde_json::Value, String> {
+    // Ensure first so the seed presets exist on first run (preset is now a
+    // required argument, so nothing else triggers ensure) — mirrors Go.
+    // Without it, the model editor on a fresh install answered
+    // "Preset not found: Simple" while the Go backend seeded and listed.
+    dirs::ensure()?;
     let config_dir = dirs::resolve_config_dir(&preset)?;
     let config_path = config_dir.to_string_lossy().to_string();
     let bin = resolve_binary("");
@@ -409,6 +419,11 @@ pub async fn sync_default_models(
     preset: String,
     model_cache: State<'_, ModelCache>,
 ) -> Result<serde_json::Value, String> {
+    // Ensure first so the seed presets exist on first run (preset is now a
+    // required argument, so nothing else triggers ensure) — mirrors Go.
+    // Without it, the model editor on a fresh install answered
+    // "Preset not found: Simple" while the Go backend seeded and listed.
+    dirs::ensure()?;
     let config_dir = dirs::resolve_config_dir(&preset)?;
     let config_path = config_dir.to_string_lossy().to_string();
     let bin = resolve_binary(&binary_path);

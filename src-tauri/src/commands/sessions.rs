@@ -426,6 +426,19 @@ pub async fn delete_session_dir(
     Ok(())
 }
 
+/// Map a level persisted in session.spawn.json to an effective one: absent
+/// (a legacy session written before reasoning levels existed) or out of range
+/// (a hand-edited/corrupt file) falls back to 1, the same rule
+/// `effective_reasoning_level` applies to a preset setting. A fork must not
+/// forward a nonsense --reasoning-level to alayacore. Mirrors Go's
+/// `inheritedReasoningLevel`.
+pub(crate) fn inherited_reasoning_level(raw: Option<i64>) -> i64 {
+    match raw {
+        Some(v) if (0..=2).contains(&v) => v,
+        _ => 1,
+    }
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn fork_session(
@@ -529,8 +542,11 @@ pub async fn fork_session(
     // forks inherit the source session's persisted level; node forks
     // resolve the node's preset setting (default 1).
     let rl: i64 = match reasoning_level {
+        // An explicit override is REJECTED when out of range (never silently
+        // re-centred on 1) — mirrors Go's fork_session, which now returns the
+        // same "Reasoning level must be 0, 1 or 2" error create_session gives.
         Some(v) => crate::commands::normalize_reasoning_level(v)?,
-        _ if is_plain_fork => src_args.reasoning_level.unwrap_or(1),
+        _ if is_plain_fork => inherited_reasoning_level(src_args.reasoning_level),
         _ => crate::commands::effective_reasoning_level(&preset_name).unwrap_or_else(|e| {
             log::warn!("[settings] reasoning-level unavailable, spawning with default: {e}");
             1
@@ -592,6 +608,27 @@ mod tests {
     // We can't run a real fork in unit tests (needs alayacore), so this
     // test pins the persistence helper the command uses and asserts the
     // round-trip that resume_session relies on.
+    // Fork-path reasoning level: an explicit override is REJECTED when out
+    // of range (Go used to clamp it to 1 silently, so the same request
+    // succeeded on one backend and failed on the other), while a level read
+    // back from a legacy/corrupt session.spawn.json falls back to 1 instead
+    // of reaching alayacore as --reasoning-level=7. Mirrors Go's
+    // TestInheritedReasoningLevel.
+    #[test]
+    fn inherited_reasoning_level_falls_back_outside_range() {
+        assert_eq!(inherited_reasoning_level(None), 1);
+        assert_eq!(inherited_reasoning_level(Some(0)), 0);
+        assert_eq!(inherited_reasoning_level(Some(1)), 1);
+        assert_eq!(inherited_reasoning_level(Some(2)), 2);
+        assert_eq!(inherited_reasoning_level(Some(-1)), 1);
+        assert_eq!(inherited_reasoning_level(Some(7)), 1);
+        assert!(crate::commands::normalize_reasoning_level(7).is_err());
+        assert_eq!(
+            crate::commands::normalize_reasoning_level(7).unwrap_err(),
+            "Reasoning level must be 0, 1 or 2"
+        );
+    }
+
     #[test]
     fn spawn_args_persist_roundtrip_for_forked_session() {
         let dir = std::env::temp_dir().join(format!("alayaface-fork-spawn-test-{}", std::process::id()));

@@ -13,6 +13,37 @@ import (
 // AFTER the final chunk landed. The old one-tick logic returned right
 // after seeing chunk1's size and fork_session proceeded with a partial
 // session file.
+// TestInheritedReasoningLevel pins the fork path's handling of a level read
+// back from session.spawn.json. An explicit override is validated and
+// REJECTED when out of range (same as create_session); an inherited value
+// from a legacy or hand-edited spawn.json falls back to 1 rather than
+// reaching alayacore as --reasoning-level=7.
+func TestInheritedReasoningLevel(t *testing.T) {
+	lvl := func(v int) *int { return &v }
+	cases := []struct {
+		name string
+		in   *int
+		want int
+	}{
+		{"absent (legacy session)", nil, 1},
+		{"zero", lvl(0), 0},
+		{"balanced", lvl(1), 1},
+		{"max", lvl(2), 2},
+		{"negative (corrupt file)", lvl(-1), 1},
+		{"above range (corrupt file)", lvl(7), 1},
+	}
+	for _, tc := range cases {
+		if got := inheritedReasoningLevel(tc.in); got != tc.want {
+			t.Errorf("%s: inheritedReasoningLevel = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+
+	// The explicit override must fail loudly, not be re-centred.
+	if _, err := NormalizeReasoningLevel(7); err == nil || err.Error() != "Reasoning level must be 0, 1 or 2" {
+		t.Errorf("NormalizeReasoningLevel(7) = %v, want the range error", err)
+	}
+}
+
 func TestWaitForFileWaitsForStability(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fork.out")
 	final := "chunk1-chunk2"

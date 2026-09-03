@@ -133,10 +133,10 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	// (settings.conf) is used as --reasoning-level; default 1.
 	rl := 1
 	if args.ReasoningLevel != nil {
-		if *args.ReasoningLevel < 0 || *args.ReasoningLevel > 2 {
-			return fmt.Errorf("Reasoning level must be 0, 1 or 2")
+		var err error
+		if rl, err = NormalizeReasoningLevel(*args.ReasoningLevel); err != nil {
+			return err
 		}
-		rl = *args.ReasoningLevel
 	} else {
 		if eff, err := effectiveReasoningLevel(presetName); err != nil {
 			log.Printf("[settings] reasoning-level unavailable, spawning with default: %v", err)
@@ -629,21 +629,25 @@ func ForkSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	// the source session's persisted level; node forks resolve the
 	// node's preset setting (default 1).
 	rl := 1
-	if args.ReasoningLevel != nil {
-		rl = *args.ReasoningLevel
-	} else if isPlainFork {
-		if srcArgs.ReasoningLevel != nil {
-			rl = *srcArgs.ReasoningLevel
+	switch {
+	case args.ReasoningLevel != nil:
+		// An explicit override is validated, not clamped: Rust's fork
+		// rejects an out-of-range level with normalize_reasoning_level,
+		// and Go silently re-centred it on 1 — the same request succeeded
+		// on one backend and failed on the other, and the caller never
+		// learned its level was ignored.
+		var err error
+		if rl, err = NormalizeReasoningLevel(*args.ReasoningLevel); err != nil {
+			return err
 		}
-	} else {
+	case isPlainFork:
+		rl = inheritedReasoningLevel(srcArgs.ReasoningLevel)
+	default:
 		if eff, err := effectiveReasoningLevel(presetName); err != nil {
 			log.Printf("[settings] reasoning-level unavailable, spawning with default: %v", err)
 		} else {
 			rl = eff
 		}
-	}
-	if rl < 0 || rl > 2 {
-		rl = 1
 	}
 	wd := ""
 	if args.WorkDir != nil && strings.TrimSpace(*args.WorkDir) != "" {
@@ -722,4 +726,17 @@ func waitForFile(path string) error {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+// inheritedReasoningLevel maps a level persisted in session.spawn.json to an
+// effective one: absent (a legacy session written before reasoning levels
+// existed) or out of range (a hand-edited/corrupt file) falls back to 1,
+// the same rule effectiveReasoningLevel applies to a preset setting. A
+// fork must not forward a nonsense --reasoning-level to alayacore.
+// Mirrors Rust's inherited_reasoning_level.
+func inheritedReasoningLevel(v *int) int {
+	if v == nil || *v < 0 || *v > 2 {
+		return 1
+	}
+	return *v
 }
