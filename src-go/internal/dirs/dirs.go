@@ -208,12 +208,7 @@ func WritePresetOrder(names []string) error {
 	if err != nil {
 		return err
 	}
-	path := PresetOrderFile()
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, text, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return WriteFileAtomic(PresetOrderFile(), text)
 }
 
 // ListPresetNames returns preset names. The user's custom order

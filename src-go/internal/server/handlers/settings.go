@@ -247,16 +247,11 @@ func SyncGlobalSettings(h *Handler, w http.ResponseWriter, r *http.Request) erro
 		settings.ReasoningLevel = &rl
 	}
 
-	path := filepath.Join(configDir, "settings.conf")
-	tmp := filepath.Join(configDir, "settings.conf.tmp")
 	text, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(tmp, text, 0o644); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := dirs.WriteFileAtomic(filepath.Join(configDir, "settings.conf"), text); err != nil {
 		return err
 	}
 	return writeResult(w, nil)

@@ -154,14 +154,68 @@ pub fn read_preset_order() -> Vec<String> {
     out
 }
 
+/// Persist `text` to `path` via a UNIQUE temporary file in the same
+/// directory, then a rename (so a reader never sees a half-written config and
+/// a crash cannot leave the real file truncated).
+///
+/// The temp name has to be unique per write. Every config writer used to
+/// build one itself — `"{path}.tmp"`, `"settings.conf.tmp"`,
+/// `"mcp.conf.tmp"`, `"session.spawn.json.tmp"` — and this API is reachable
+/// from several clients at once (LAN / SSH-forwarded tabs; the Go backend is
+/// multi-client, which is why sessions carry an owner and
+/// close_all_sessions is per-client). Two concurrent syncs of the same file
+/// wrote the SAME temp: bytes interleaved and the first rename published a
+/// corrupt config while the loser failed with ENOENT.
+///
+/// Mirrors Go's dirs.WriteFileAtomic.
+pub fn write_file_atomic(path: &std::path::Path, text: &str) -> Result<(), String> {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let base = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("alayaface-conf");
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let tmp = dir.join(format!(
+        "{}.tmp-{}-{}-{}",
+        base,
+        std::process::id(),
+        nanos,
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+
+    let result = (|| -> Result<(), String> {
+        let mut f = std::fs::File::create(&tmp).map_err(|e| format!("Cannot write {}: {e}", base))?;
+        f.write_all(text.as_bytes())
+            .map_err(|e| format!("Cannot write {}: {e}", base))?;
+        f.sync_all().map_err(|e| format!("Cannot write {}: {e}", base))?;
+        drop(f);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o644));
+        }
+        std::fs::rename(&tmp, path).map_err(|e| format!("Cannot write {}: {e}", base))
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
 /// Atomically persist the custom preset display order.
 pub fn write_preset_order(names: &[String]) -> Result<(), String> {
     let text = serde_json::to_string_pretty(names)
         .map_err(|e| format!("Serialize preset order: {e}"))?;
-    let path = preset_order_file();
-    let tmp = PathBuf::from(format!("{}.tmp", path.to_string_lossy()));
-    std::fs::write(&tmp, text).map_err(|e| format!("Write preset order: {e}"))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("Commit preset order: {e}"))
+    write_file_atomic(&preset_order_file(), &text)
+        .map_err(|e| format!("Write preset order: {e}"))
 }
 
 /// List preset names. The user's custom order (preset_order.conf) is
@@ -596,13 +650,10 @@ impl SpawnArgs {
 
 /// Persist the spawn args atomically (tmp + rename).
 pub fn write_spawn_args(session_dir: &std::path::Path, args: &SpawnArgs) -> Result<(), String> {
-    let path = spawn_args_file(session_dir);
-    let tmp = session_dir.join("session.spawn.json.tmp");
     let text = serde_json::to_string_pretty(args)
         .map_err(|e| format!("Cannot serialize spawn args: {e}"))?;
-    std::fs::write(&tmp, text)
-        .map_err(|e| format!("Cannot write spawn args: {e}"))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("Cannot persist spawn args: {e}"))
+    write_file_atomic(&spawn_args_file(session_dir), &text)
+        .map_err(|e| format!("Cannot persist spawn args: {e}"))
 }
 
 /// Read the persisted spawn args. A missing or corrupt file yields
@@ -998,6 +1049,75 @@ mod tests {
                 "default $HOME/.alayaface must NOT exist when override is set"
             );
         });
+    }
+}
+
+#[cfg(test)]
+mod atomic_write_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // Mirrors Go's TestWriteFileAtomic. The per-site `"{path}.tmp"` names this
+    // helper replaced were SHARED between concurrent writers, and this API is
+    // reachable from several clients at once: the loser of the rename got
+    // ENOENT (surfacing as a sync failing at random) and the
+    // open-truncate-write sequence could interleave.
+    #[test]
+    fn concurrent_writes_never_share_a_temp() {
+        let dir = std::env::temp_dir().join(format!("alayaface-atomic-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("asr.conf");
+
+        write_file_atomic(&path, "first").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "first");
+
+        let writers = 12;
+        let failures = std::sync::Arc::new(AtomicUsize::new(0));
+        let mut threads = Vec::new();
+        for i in 0..writers {
+            let path = path.clone();
+            let failures = failures.clone();
+            threads.push(std::thread::spawn(move || {
+                // One repeated byte: any interleaving is detectable.
+                let payload = std::iter::repeat(b'a' + (i as u8 % 26))
+                    .take(4096)
+                    .collect::<Vec<u8>>();
+                let text = String::from_utf8(payload).unwrap();
+                if write_file_atomic(&path, &text).is_err() {
+                    failures.fetch_add(1, Ordering::SeqCst);
+                }
+            }));
+        }
+        for t in threads {
+            t.join().unwrap();
+        }
+        assert_eq!(
+            failures.load(Ordering::SeqCst),
+            0,
+            "concurrent writes failed — the temp name must be unique per write"
+        );
+
+        let final_bytes = std::fs::read(&path).unwrap();
+        assert_eq!(final_bytes.len(), 4096, "config is a mix of two writes");
+        assert!(
+            final_bytes.iter().all(|b| *b == final_bytes[0]),
+            "torn config"
+        );
+
+        // No temp left behind (the rename consumed it; failures clean up).
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .contains(".tmp")
+            })
+            .collect();
+        assert!(leftovers.is_empty(), "temp files leaked: {leftovers:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

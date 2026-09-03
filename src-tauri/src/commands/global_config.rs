@@ -68,12 +68,10 @@ pub async fn sync_global_config(config: String) -> Result<GlobalConfig, String> 
 
     let dir = crate::dirs::alayaface_dir();
     crate::dirs::ensure()?;
-    let path = dir.join("global.conf");
-    let tmp = path.with_extension("conf.tmp");
     let text = serde_json::to_string_pretty(&cfg)
         .map_err(|e| format!("Failed to serialize global config: {e}"))?;
-    std::fs::write(&tmp, text).map_err(|e| format!("Failed to write global.conf: {e}"))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("Failed to replace global.conf: {e}"))?;
+    crate::dirs::write_file_atomic(&dir.join("global.conf"), &text)
+        .map_err(|e| format!("Failed to write global.conf: {e}"))?;
     Ok(cfg)
 }
 

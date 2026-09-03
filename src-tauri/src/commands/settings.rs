@@ -160,11 +160,10 @@ pub async fn sync_global_settings(config: String, preset: String) -> Result<(), 
     }
 
     let path = config_dir.join("settings.conf");
-    let tmp = config_dir.join("settings.conf.tmp");
     let text = serde_json::to_string_pretty(&settings)
         .map_err(|e| format!("Failed to serialize settings: {e}"))?;
-    std::fs::write(&tmp, &text).map_err(|e| format!("Failed to write settings.conf: {e}"))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("Failed to replace settings.conf: {e}"))?;
+    crate::dirs::write_file_atomic(&path, &text)
+        .map_err(|e| format!("Failed to write settings.conf: {e}"))?;
     log::info!(
         "[settings] Wrote tool_confirm={:?} builtin_tools={:?} system_prompt={} chars reasoning_level={:?}",
         settings.tool_confirm,

@@ -88,16 +88,11 @@ func SyncGlobalConfig(h *Handler, w http.ResponseWriter, r *http.Request) error 
 	if _, err := dirs.Ensure(); err != nil {
 		return err
 	}
-	path := dirs.GlobalConfigFile()
-	tmp := path + ".tmp"
 	text, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(tmp, text, 0o644); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := dirs.WriteFileAtomic(dirs.GlobalConfigFile(), text); err != nil {
 		return err
 	}
 	return writeResult(w, cfg)

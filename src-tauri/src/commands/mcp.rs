@@ -428,9 +428,8 @@ pub async fn sync_default_mcp(config: String, preset: String) -> Result<(), Stri
     let text = write_mcp_conf(&servers);
     let config_dir = dirs::resolve_config_dir(&preset)?;
     let path = config_dir.join("mcp.conf");
-    let tmp = config_dir.join("mcp.conf.tmp");
-    std::fs::write(&tmp, &text).map_err(|e| format!("Failed to write mcp.conf: {e}"))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("Failed to replace mcp.conf: {e}"))?;
+    crate::dirs::write_file_atomic(&path, &text)
+        .map_err(|e| format!("Failed to write mcp.conf: {e}"))?;
     log::info!("[mcp] Wrote {} servers to mcp.conf", servers.len());
     Ok(())
 }

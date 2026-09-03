@@ -41,16 +41,11 @@ type SpawnArgs struct {
 
 // WriteSpawnArgs persists the spawn args atomically (tmp + rename).
 func WriteSpawnArgs(sessionDir string, args SpawnArgs) error {
-	path := SpawnArgsFile(sessionDir)
-	tmp := filepath.Join(sessionDir, "session.spawn.json.tmp")
 	text, err := json.MarshalIndent(args, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(tmp, text, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return WriteFileAtomic(SpawnArgsFile(sessionDir), text)
 }
 
 // ReadSpawnArgs reads the persisted spawn args. A missing or corrupt

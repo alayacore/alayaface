@@ -116,12 +116,7 @@ func SyncDefaultMcp(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(configDir, "mcp.conf")
-	tmp := filepath.Join(configDir, "mcp.conf.tmp")
-	if err := os.WriteFile(tmp, []byte(text), 0o644); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := dirs.WriteFileAtomic(filepath.Join(configDir, "mcp.conf"), []byte(text)); err != nil {
 		return err
 	}
 	return writeResult(w, nil)

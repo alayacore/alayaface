@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -434,5 +435,73 @@ func TestSafePathComponent(t *testing.T) {
 		if SafePathComponent(bad) {
 			t.Errorf("SafePathComponent(%q) = true, want false", bad)
 		}
+	}
+}
+
+// TestWriteFileAtomic covers the shared config writer. The per-site
+// `path + ".tmp"` names it replaces were SHARED between concurrent writers —
+// and this backend serves several clients at once — so two syncs of the same
+// file interleaved inside one temp and the rename published a corrupt config
+// (the loser then failed with ENOENT).
+func TestWriteFileAtomic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "asr.conf")
+
+	if err := WriteFileAtomic(path, []byte("first")); err != nil {
+		t.Fatalf("WriteFileAtomic: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != "first" {
+		t.Fatalf("content = %q, %v", got, err)
+	}
+	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o644 {
+		t.Errorf("mode = %v, want 0644", fi.Mode())
+	}
+
+	// Concurrent writers: with the old shared "<base>.tmp" name every writer
+	// raced on ONE file, so a loser's rename returned ENOENT (the winner had
+	// already moved it) — which surfaced to the user as a sync failing at
+	// random — and the open-truncate-write sequence could interleave. Each
+	// payload here is one repeated byte, so any mixing is detectable, and NO
+	// writer may report an error.
+	const n = 24
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		failures []string
+	)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if err := WriteFileAtomic(path, []byte(strings.Repeat(string(rune('a'+i%26)), 4096))); err != nil {
+				mu.Lock()
+				failures = append(failures, err.Error())
+				mu.Unlock()
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	if len(failures) > 0 {
+		t.Fatalf("%d/%d concurrent writes failed (a shared temp name loses the rename): %v",
+			len(failures), n, failures[0])
+	}
+	final, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read after concurrent writes: %v", err)
+	}
+	if len(final) != 4096 {
+		t.Fatalf("config is a mix of two writes (len %d)", len(final))
+	}
+	for _, c := range final {
+		if c != final[0] {
+			t.Fatalf("torn config: %q", final[:16])
+		}
+	}
+	// Every temp was consumed (rename moved it); nothing is left behind.
+	leftovers, _ := filepath.Glob(filepath.Join(dir, "*.tmp*"))
+	if len(leftovers) != 0 {
+		t.Errorf("%d temp files leaked: %v", len(leftovers), leftovers)
 	}
 }
