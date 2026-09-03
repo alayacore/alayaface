@@ -7,7 +7,7 @@ use std::io;
 use std::process::{Child, Command, Stdio};
 
 use std::io::{BufReader, Read, Write};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::tlv;
 
@@ -302,104 +302,96 @@ pub fn check_message_version(binary_path: &str) -> Result<(), String> {
         }
     };
 
-    // Take stdout; kill_child-style close + wait handled by the helper
-    // below. No stdin pipe (stdin closed above) — alayacore sees EOF
-    // immediately and exits as soon as it finishes emitting boot SMs.
+    // Take stdout; the probe is always reaped below. No stdin pipe (stdin
+    // null above) — alayacore sees EOF immediately and exits as soon as it
+    // finishes emitting boot SMs.
     let stdout = child
         .stdout
         .take()
         .ok_or_else(|| "failed to capture alayacore stdout".to_string())?;
-    let mut reader = BufReader::new(stdout);
+    let reader = BufReader::new(stdout);
 
-    let result = read_version_frame(&mut reader);
-    // Drain kill: close (already null) + SIGKILL + wait so we never
-    // leak a probe process. The probe is short-lived either way.
+    // Read the boot frame on a helper thread and wait for it with a
+    // deadline. A std pipe read has NO timeout: an alayacore that writes a
+    // PARTIAL first frame (or hangs before writing anything) blocked this
+    // call forever, so check_alayacore never returned, the home-screen
+    // "AlayaCore not found" banner never lit up, and the frontend waited on
+    // a Tauri invoke that can never resolve (the HTTP transport has a 60 s
+    // abort; Tauri IPC has none). Go arms SetReadDeadline on the pipe for
+    // exactly this reason — recv_timeout is the portable equivalent here.
+    // The helper thread cannot linger: the kill + wait below closes the read
+    // end, its read returns Err, and it exits.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(read_version_frame(&mut { reader }));
+    });
+    let result = match rx.recv_timeout(VERSION_PROBE_TIMEOUT) {
+        Ok(r) => r,
+        Err(_) => Err(format!(
+            "alayacore did not announce its protocol version within {}s",
+            VERSION_PROBE_TIMEOUT.as_secs()
+        )),
+    };
+    // Drain kill: SIGKILL + wait so we never leak a probe process. The probe
+    // is short-lived either way.
     let _ = child.kill();
     let _ = child.wait();
 
     result
 }
 
-/// Read TLV frames until the boot `SM {"type":"version",...}` arrives
-/// or `VERSION_PROBE_TIMEOUT` elapses. Returns Ok(()) if the version
-/// matches `SUPPORTED_MESSAGE_VERSION`, otherwise an Err naming the
-/// observed version (or the failure mode). Pulled out of
-/// `check_message_version` so unit tests can drive it with a
-/// synthetic `Read` (a real alayacore is awkward to mock — its
-/// version announcement requires running the actual binary).
+/// Read the FIRST TLV frame and validate it as the boot
+/// `SM {"type":"version",...}` announcement. Returns Ok(()) when the version
+/// matches `SUPPORTED_MESSAGE_VERSION`, otherwise an Err naming the observed
+/// version (or the failure mode).
+///
+/// Deliberately no loop: the version frame is by definition the very first
+/// thing alayacore writes, so anything else arriving here means a broken or
+/// mismatched core and is reported as such rather than skipped. The old
+/// `loop { … }` had no arm that continued (clippy's never_loop was right), and
+/// its internal elapsed-time check could never fire between frames anyway — the
+/// real deadline is the caller's recv_timeout. Pulled out so unit tests can
+/// drive it with a synthetic `Read` (a real alayacore is awkward to mock).
 fn read_version_frame<R: Read>(reader: &mut R) -> Result<(), String> {
-    let start = Instant::now();
-    loop {
-        let elapsed = start.elapsed();
-        if elapsed >= VERSION_PROBE_TIMEOUT {
-            return Err(format!(
-                "alayacore did not announce its protocol version within {}s",
-                VERSION_PROBE_TIMEOUT.as_secs()
-            ));
+    let frame = match tlv::read_frame(reader) {
+        Ok(Some(frame)) => frame,
+        // EOF before any version frame — alayacore exited without
+        // announcing itself.
+        Ok(None) => {
+            return Err("alayacore exited before announcing its protocol version".to_string())
         }
+        Err(e) => return Err(format!("failed to read alayacore's boot frames: {e}")),
+    };
 
-        // Per-read deadline via a background thread would be ideal, but
-        // TLV frames are short and alayacore's version frame is the
-        // FIRST one it writes — in practice the read either returns
-        // immediately or blocks on a hung binary. Guard the whole loop
-        // with the elapsed-time check and accept that the final blocked
-        // read is bounded by VERSION_PROBE_TIMEOUT via a short overall
-        // ceiling — the probe is killed by the caller when this fn
-        // returns, so a stuck read only delays shutdown by a few ms in
-        // the worst case.
-        match tlv::read_frame(reader) {
-            Ok(Some(frame)) => {
-                if frame.tag != "SM" {
-                    // The version SM is the very first boot frame;
-                    // anything else arriving before it means a broken
-                    // core. Report what we saw so the user can diagnose.
-                    return Err(format!(
-                        "unexpected boot frame before version announcement: tag={}, value={}",
-                        frame.tag,
-                        frame.value.chars().take(120).collect::<String>()
-                    ));
-                }
-                let env: tlv::SystemMsgEnvelope = match serde_json::from_str(&frame.value) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        return Err(format!(
-                            "alayacore sent a malformed version frame: {e}"
-                        ));
-                    }
-                };
-                if env.msg_type != "version" {
-                    return Err(format!(
-                        "expected alayacore's first frame to be 'version', got '{}'",
-                        env.msg_type
-                    ));
-                }
-                let observed = match env.data.get("message_version").and_then(|v| v.as_i64()) {
-                    Some(n) => n,
-                    None => {
-                        return Err(
-                            "alayacore's version frame is missing message_version".to_string()
-                        );
-                    }
-                };
-                if observed != SUPPORTED_MESSAGE_VERSION {
-                    return Err(format!(
-                        "alayacore message version {observed} is incompatible with expected version {SUPPORTED_MESSAGE_VERSION}. Please upgrade alayacore."
-                    ));
-                }
-                return Ok(());
-            }
-            Ok(None) => {
-                // EOF before any version frame — alayacore exited
-                // without announcing itself.
-                return Err(
-                    "alayacore exited before announcing its protocol version".to_string(),
-                );
-            }
-            Err(e) => {
-                return Err(format!("failed to read alayacore's boot frames: {e}"));
-            }
-        }
+    if frame.tag != "SM" {
+        // The version SM is the very first boot frame; anything else
+        // arriving before it means a broken core. Report what we saw so the
+        // user can diagnose.
+        return Err(format!(
+            "unexpected boot frame before version announcement: tag={}, value={}",
+            frame.tag,
+            frame.value.chars().take(120).collect::<String>()
+        ));
     }
+    let env: tlv::SystemMsgEnvelope = serde_json::from_str(&frame.value)
+        .map_err(|e| format!("alayacore sent a malformed version frame: {e}"))?;
+    if env.msg_type != "version" {
+        return Err(format!(
+            "expected alayacore's first frame to be 'version', got '{}'",
+            env.msg_type
+        ));
+    }
+    let observed = env
+        .data
+        .get("message_version")
+        .and_then(|v| v.as_i64())
+        .ok_or("alayacore's version frame is missing message_version")?;
+    if observed != SUPPORTED_MESSAGE_VERSION {
+        return Err(format!(
+            "alayacore message version {observed} is incompatible with expected version {SUPPORTED_MESSAGE_VERSION}. Please upgrade alayacore."
+        ));
+    }
+    Ok(())
 }
 
 /// Kill a child process with a 3-second timeout.
@@ -1195,6 +1187,49 @@ mod tests {
     }
 
     #[test]
+    /// A hung/partial boot frame must NOT hang the probe.
+    ///
+    /// std's pipe reads have no deadline: the previous implementation read
+    /// straight off the child's stdout, so an alayacore that emitted a
+    /// PARTIAL first frame (3 of the 6 header bytes) and then stalled blocked
+    /// `check_message_version` forever — verified, the test hung for the full
+    /// lifetime of its `sleep 60` child before this fix.
+    #[test]
+    fn check_message_version_bounds_a_stalled_probe() {
+        let dir = std::env::temp_dir().join(format!(
+            "alayaface-stalled-probe-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("alayacore");
+        // Emit 3 bytes of a TLV header, keep stdout open, then sit there.
+        std::fs::write(&bin, "#!/bin/sh\nprintf '\\001\\002\\003'\nsleep 60\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let started = std::time::Instant::now();
+        let err = check_message_version(bin.to_str().unwrap())
+            .expect_err("a stalled probe must report a timeout, not hang");
+        let took = started.elapsed();
+
+        assert!(
+            took < VERSION_PROBE_TIMEOUT + std::time::Duration::from_secs(2),
+            "probe took {took:?} — it blocked on the read instead of timing out"
+        );
+        assert!(
+            err.contains("did not announce its protocol version"),
+            "unexpected error: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn read_version_frame_skips_unknown_frames_after_version() {
         // Once the version frame passes, the helper returns Ok(()) and
         // stops reading — subsequent frames are the boot task /
