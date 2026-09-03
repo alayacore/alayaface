@@ -175,15 +175,14 @@ fn plan_session_dir_for(
     plan_id: &str,
     node_id: &str,
     session_id: &str,
-) -> std::path::PathBuf {
-    if !plan_id.trim().is_empty() {
-        return std::path::PathBuf::from(origin_session_dir)
-            .join("plans")
-            .join(dirs::sanitize_dir_component(plan_id))
-            .join(dirs::sanitize_dir_component(node_id))
-            .join(session_id);
-    }
-    sessions_root.join(session_id)
+) -> Result<std::path::PathBuf, String> {
+    // All layout rules — sanitized plan/node components, a bare origin id
+    // resolved against the root, one safe session component, and the
+    // sessions-root containment check — live in dirs::session_path and are
+    // shared with create_session_dir_nested, so create and resume/delete can
+    // never disagree about where a session lives (and a client cannot steer
+    // remove_dir_all outside the session store).
+    dirs::session_path(sessions_root, origin_session_dir, plan_id, node_id, session_id)
 }
 
 #[tauri::command]
@@ -210,7 +209,7 @@ pub async fn resume_session(
         plan_id.as_deref().unwrap_or(""),
         node_id.as_deref().unwrap_or(""),
         &session_id,
-    );
+    )?;
     let session_file = sessions_dir.join("session.alaya");
     let config_dir = sessions_dir.join("config");
 
@@ -399,7 +398,7 @@ pub async fn delete_session_dir(
         plan_id.as_deref().unwrap_or(""),
         node_id.as_deref().unwrap_or(""),
         &session_id,
-    );
+    )?;
     // Retry the removal: the concurrent graceful close (close_session)
     // can still be flushing alayacore's save while remove_dir_all
     // traverses — the save landing between readdir and rmdir makes the

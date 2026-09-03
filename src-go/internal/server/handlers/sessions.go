@@ -220,26 +220,13 @@ func CreateSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 // sessions never leak to the top level. Plain sessions (no planId) stay
 // at sessions/<sessionId>. The P28 layout is the ONLY layout — no
 // legacy fallbacks.
-func planSessionDirFor(sessionsRoot, originSessionDir, planId, nodeId, sessionId string) string {
-	if strings.TrimSpace(planId) != "" {
-		parentDir := originSessionDir
-		if parentDir == "" {
-			parentDir = sessionsRoot
-		}
-		// If parentDir is just a UUID (no separators), it's likely the originID from CreateSession.
-		// In that case, we should prepend sessionsRoot.
-		if parentDir != "" && !strings.Contains(parentDir, string(os.PathSeparator)) {
-			parentDir = filepath.Join(sessionsRoot, parentDir)
-		}
-		return filepath.Join(
-			parentDir,
-			"plans",
-			dirs.SanitizeDirComponent(planId),
-			dirs.SanitizeDirComponent(nodeId),
-			sessionId,
-		)
-	}
-	return filepath.Join(sessionsRoot, sessionId)
+func planSessionDirFor(sessionsRoot, originSessionDir, planId, nodeId, sessionId string) (string, error) {
+	// All of the layout rules — sanitized plan/node components, a bare origin
+	// id resolved against the root, one safe session component, and the
+	// sessions-root containment check — live in dirs.SessionPath and are
+	// shared with CreatePlanSessionDirFrom, so create and resume/delete can
+	// never disagree about where a session lives.
+	return dirs.SessionPath(sessionsRoot, originSessionDir, planId, nodeId, sessionId)
 }
 
 // ResumeSession resumes an on-disk session directory.
@@ -274,7 +261,10 @@ func ResumeSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	if args.NodeID != nil {
 		nodeID = *args.NodeID
 	}
-	sessionsDir := planSessionDirFor(sessionsRoot, originID, planID, nodeID, args.SessionID)
+	sessionsDir, err := planSessionDirFor(sessionsRoot, originID, planID, nodeID, args.SessionID)
+	if err != nil {
+		return err
+	}
 	sessionFile := filepath.Join(sessionsDir, "session.alaya")
 	configDir := filepath.Join(sessionsDir, "config")
 
@@ -465,7 +455,10 @@ func DeleteSessionDir(h *Handler, w http.ResponseWriter, r *http.Request) error 
 	if args.NodeID != nil {
 		nodeID = *args.NodeID
 	}
-	sessionDir := planSessionDirFor(sessionsRoot, originID, planID, nodeID, args.SessionID)
+	sessionDir, err := planSessionDirFor(sessionsRoot, originID, planID, nodeID, args.SessionID)
+	if err != nil {
+		return err
+	}
 	// Retry the removal: the concurrent graceful close (close_session)
 	// can still be flushing alayacore's save while RemoveAll traverses —
 	// the save landing between readdir and rmdir makes the final rmdir

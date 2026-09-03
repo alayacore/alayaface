@@ -373,3 +373,66 @@ func TestSpawnArgsRoundtrip(t *testing.T) {
 		t.Errorf("missing file = %+v, want zero values", got)
 	}
 }
+
+// TestSessionPathValidatesAndContains pins the guards on the ONE path rule
+// shared by create and resume/delete/fork. A client supplies sessionId,
+// originSessionDir, planId and nodeId, and delete_session_dir feeds the result
+// to os.RemoveAll — so a traversal must be refused, not silently folded away.
+func TestSessionPathValidatesAndContains(t *testing.T) {
+	root := filepath.Join(string(filepath.Separator), "cfg", "sessions")
+
+	// A plain session: root/<id>, whatever the origin says.
+	plain, err := SessionPath(root, "", "", "", "abc")
+	if err != nil || plain != filepath.Join(root, "abc") {
+		t.Fatalf("plain = %q, %v", plain, err)
+	}
+
+	// A traversal in the session id is rejected outright (this used to
+	// resolve to the sessions root itself, which RemoveAll would empty).
+	for _, bad := range []string{"..", ".", "a/b", `a\b`, ""} {
+		if _, err := SessionPath(root, "", "plan", "node", bad); err == nil {
+			t.Errorf("SessionPath accepted session id %q", bad)
+		}
+		if _, err := SessionPath(root, "", "", "", bad); err == nil {
+			t.Errorf("SessionPath accepted plain session id %q", bad)
+		}
+	}
+
+	// A nested origin that escapes the store is rejected.
+	if _, err := SessionPath(root, "/etc", "plan", "node", "abc"); err == nil {
+		t.Error("SessionPath accepted an origin directory outside the sessions root")
+	}
+
+	// A real origin directory stays inside and keeps its shape.
+	nested, err := SessionPath(root, filepath.Join(root, "sess-1"), "demo plan/x", "t1", "abc")
+	if err != nil {
+		t.Fatalf("nested: %v", err)
+	}
+	if want := filepath.Join(root, "sess-1", "plans", "demo_plan_x", "t1", "abc"); nested != want {
+		t.Errorf("nested = %q, want %q", nested, want)
+	}
+
+	// A BARE origin id resolves against the root — the rule Rust previously
+	// lacked (its create_session_dir_nested ignored the sessions root
+	// entirely), which put the same plan node session in different places.
+	bare, err := SessionPath(root, "sess-1", "p", "n", "abc")
+	if err != nil {
+		t.Fatalf("bare: %v", err)
+	}
+	if want := filepath.Join(root, "sess-1", "plans", "p", "n", "abc"); bare != want {
+		t.Errorf("bare origin id = %q, want %q", bare, want)
+	}
+}
+
+func TestSafePathComponent(t *testing.T) {
+	for _, ok := range []string{"abc", "a-b_c", "3f2a...", "with space.txt", "sess.1"} {
+		if !SafePathComponent(ok) {
+			t.Errorf("SafePathComponent(%q) = false, want true (single component)", ok)
+		}
+	}
+	for _, bad := range []string{"", ".", "..", "a/b", `a\b`, "a\x00b"} {
+		if SafePathComponent(bad) {
+			t.Errorf("SafePathComponent(%q) = true, want false", bad)
+		}
+	}
+}

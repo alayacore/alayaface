@@ -353,6 +353,81 @@ func SanitizeDirComponent(s string) string {
 	return out
 }
 
+// SafePathComponent reports whether s is a single, non-empty path component
+// that cannot escape its parent directory. Client-supplied ids that end up
+// inside a path (session ids in particular, which `delete_session_dir` feeds
+// to RemoveAll) are REJECTED rather than sanitized, so a buggy or hostile
+// client gets "Invalid session id" instead of the backend quietly touching a
+// different directory.
+//
+// Note this deliberately allows any other character (including dots and
+// spaces): session directories are uuids, but a hand-named session dir must
+// still be resolvable/deletable.
+func SafePathComponent(s string) bool {
+	if s == "" || s == "." || s == ".." {
+		return false
+	}
+	return !strings.ContainsAny(s, "/\\\x00")
+}
+
+// resolveOriginSessionDir maps the OWNING session's location to a directory.
+// The frontend hands back either form — the real on-disk directory
+// (sessionDirMap) or a bare session id — and a bare id resolves against the
+// sessions root. Both backends must map it identically or the same plan node
+// session lands in (and is deleted from) a different place depending on which
+// one is running.
+func resolveOriginSessionDir(sessionsRoot, originSessionDir string) string {
+	base := strings.TrimSpace(originSessionDir)
+	if base == "" {
+		return filepath.Clean(sessionsRoot)
+	}
+	if !strings.ContainsAny(base, `/\`) {
+		return filepath.Join(filepath.Clean(sessionsRoot), base)
+	}
+	return filepath.Clean(base)
+}
+
+// containedUnder returns path when it stays inside root. Without it a nested
+// session whose origin path escapes the sessions store would let
+// delete_session_dir RemoveAll arbitrary directories outside it.
+func containedUnder(root, path string) (string, error) {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("Session path escapes the sessions directory: %s", path)
+	}
+	return path, nil
+}
+
+// SessionPath builds the on-disk directory of a session and validates that it
+// is a path we are allowed to create/read/delete:
+//
+//	plain      → <sessionsRoot>/<sessionId>
+//	plan node  → <originDir>/plans/<planId>/<nodeId>/<sessionId>
+//
+// planId / nodeId go through SanitizeDirComponent (create applies the SAME
+// mapping, so resume still finds the directory it created); sessionId must be
+// a single safe component; and a nested path must stay inside sessionsRoot.
+// This is the ONE path rule — CreatePlanSessionDirFrom and the
+// resume/delete/fork handlers all call it, and it mirrors Rust's
+// dirs::session_path.
+func SessionPath(sessionsRoot, originSessionDir, planID, nodeID, sessionID string) (string, error) {
+	if !SafePathComponent(sessionID) {
+		return "", fmt.Errorf("Invalid session id: %q", sessionID)
+	}
+	root := filepath.Clean(sessionsRoot)
+	if strings.TrimSpace(planID) == "" {
+		return filepath.Join(root, sessionID), nil
+	}
+	path := filepath.Join(
+		resolveOriginSessionDir(root, originSessionDir),
+		"plans",
+		SanitizeDirComponent(planID),
+		SanitizeDirComponent(nodeID),
+		sessionID,
+	)
+	return containedUnder(root, path)
+}
+
 // CreatePlanSessionDirFrom creates a PLAN NODE session directory nested
 // under <originSessionDir>/plans/<planId>/<nodeId>/<uuid>/, where
 // originSessionDir is the owning session's REAL directory (the frontend
@@ -362,22 +437,13 @@ func SanitizeDirComponent(s string) string {
 // SanitizeDirComponent; preset selects the config template like
 // CreateSessionDirFrom.
 func CreatePlanSessionDirFrom(sessionsDir, originSessionDir, planId, nodeId, uuid, preset string) (string, error) {
-	parentDir := originSessionDir
-	if parentDir == "" {
-		parentDir = sessionsDir
+	// One rule with the resume/delete/fork side: build and validate the
+	// directory via SessionPath, then materialize it (copy the preset config).
+	dir, err := SessionPath(sessionsDir, originSessionDir, planId, nodeId, uuid)
+	if err != nil {
+		return "", err
 	}
-	// If parentDir is just a UUID (no separators), it's likely the originID from CreateSession.
-	// In that case, we should prepend sessionsDir.
-	if parentDir != "" && !strings.Contains(parentDir, string(os.PathSeparator)) {
-		parentDir = filepath.Join(sessionsDir, parentDir)
-	}
-	parent := filepath.Join(
-		parentDir,
-		"plans",
-		SanitizeDirComponent(planId),
-		SanitizeDirComponent(nodeId),
-	)
-	return createSessionDirIn(parent, uuid, preset)
+	return createSessionDirIn(filepath.Dir(dir), uuid, preset)
 }
 
 // createSessionDirIn copies the preset config into parent/<uuid>/config.

@@ -42,6 +42,23 @@ func ObjectPut(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	return writeResult(w, map[string]string{"hash": hash})
 }
 
+// validObjectHash reports whether hash is a sha256 hex digest as produced by
+// ObjectPut (64 lowercase hex chars). ObjectGet joins its argument straight
+// into ~/.alayaface/objects/<hash>/content.json, so without this a client (or
+// a LAN caller of the token-less server) could walk out of the object store
+// with "../../sessions/x/config" and read any file named content.json.
+func validObjectHash(hash string) bool {
+	if len(hash) != 64 {
+		return false
+	}
+	for _, c := range hash {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // ObjectGet reads an object by hash. Mirrors Rust object_get exactly.
 func ObjectGet(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	var args struct {
@@ -49,6 +66,9 @@ func ObjectGet(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	}
 	if err := decodeArgs(r, &args); err != nil {
 		return err
+	}
+	if !validObjectHash(args.Hash) {
+		return fmt.Errorf("Cannot read object: invalid hash %q", args.Hash)
 	}
 	path := filepath.Join(dirs.AlayafaceDir(), "objects", args.Hash, "content.json")
 	if err := checkFileSize(path, maxTextFileSize); err != nil {

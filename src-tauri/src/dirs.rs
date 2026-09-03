@@ -293,6 +293,83 @@ pub fn sanitize_dir_component(s: &str) -> String {
     out
 }
 
+/// Report whether s is a single, non-empty path component that cannot escape
+/// its parent directory. Client-supplied ids that end up inside a path
+/// (session ids in particular, which `delete_session_dir` feeds to
+/// `remove_dir_all`) are REJECTED rather than sanitized, so a buggy or hostile
+/// client gets "Invalid session id" instead of the backend quietly touching a
+/// different directory. Other characters (dots, spaces) stay allowed: session
+/// directories are uuids, but a hand-named one must still resolve.
+/// Mirrors Go's `SafePathComponent`.
+pub fn safe_path_component(s: &str) -> bool {
+    if s.is_empty() || s == "." || s == ".." {
+        return false;
+    }
+    !s.contains('/') && !s.contains('\\') && !s.contains('\0')
+}
+
+/// Map the OWNING session's location to a directory. The frontend hands back
+/// either form — the real on-disk directory (sessionDirMap) or a bare session
+/// id — and a bare id resolves against the sessions root. Both backends must
+/// map it identically or the same plan node session lands in (and is deleted
+/// from) a different place depending on which one is running.
+fn resolve_origin_session_dir(sessions_root: &std::path::Path, origin_session_dir: &str) -> PathBuf {
+    let base = origin_session_dir.trim();
+    if base.is_empty() {
+        return sessions_root.to_path_buf();
+    }
+    if !base.contains('/') && !base.contains('\\') {
+        return sessions_root.join(base);
+    }
+    PathBuf::from(base)
+}
+
+/// Return `path` when it stays inside `root`. Without this, a nested session
+/// whose origin path escapes the sessions store would let delete_session_dir
+/// remove arbitrary directories outside it.
+fn contained_under(root: &std::path::Path, path: &std::path::Path) -> Result<PathBuf, String> {
+    match path.strip_prefix(root) {
+        Ok(rel) if !rel.as_os_str().is_empty() => Ok(path.to_path_buf()),
+        _ => Err(format!("Session path escapes the sessions directory: {:?}", path)),
+    }
+}
+
+/// Build the on-disk directory of a session and validate that it is a path we
+/// are allowed to create/read/delete:
+///
+/// ```text
+/// plain      → <sessions_root>/<session_id>
+/// plan node  → <origin_dir>/plans/<plan_id>/<node_id>/<session_id>
+/// ```
+///
+/// plan_id / node_id go through `sanitize_dir_component` (create applies the
+/// SAME mapping, so resume still finds the directory it created); session_id
+/// must be a single safe component; and a nested path must stay inside the
+/// sessions root. This is the ONE path rule — `create_session_dir_nested` and
+/// the resume/delete/fork commands all call it. Mirrors Go's `dirs.SessionPath`
+/// (including its containment rule, which is why `sessions_root` is no longer
+/// unused here).
+pub fn session_path(
+    sessions_root: &std::path::Path,
+    origin_session_dir: &str,
+    plan_id: &str,
+    node_id: &str,
+    session_id: &str,
+) -> Result<PathBuf, String> {
+    if !safe_path_component(session_id) {
+        return Err(format!("Invalid session id: {:?}", session_id));
+    }
+    if plan_id.trim().is_empty() {
+        return Ok(sessions_root.join(session_id));
+    }
+    let path = resolve_origin_session_dir(sessions_root, origin_session_dir)
+        .join("plans")
+        .join(sanitize_dir_component(plan_id))
+        .join(sanitize_dir_component(node_id))
+        .join(session_id);
+    contained_under(sessions_root, &path)
+}
+
 /// Create a PLAN NODE session directory nested under
 /// <originSessionDir>/plans/<planId>/<nodeId>/<uuid>/, where
 /// originSessionDir is the owning session's REAL directory (the frontend
@@ -301,18 +378,20 @@ pub fn sanitize_dir_component(s: &str) -> String {
 /// plain sessions). All id components are sanitized with
 /// `sanitize_dir_component`. Mirrors Go CreatePlanSessionDirFrom.
 pub fn create_session_dir_nested(
-    _sessions_dir: &PathBuf,
+    sessions_dir: &PathBuf,
     origin_session_dir: &str,
     plan_id: &str,
     node_id: &str,
     uuid: &str,
     preset: &str,
 ) -> Result<PathBuf, String> {
-    let parent = PathBuf::from(origin_session_dir)
-        .join("plans")
-        .join(sanitize_dir_component(plan_id))
-        .join(sanitize_dir_component(node_id));
-    create_session_dir_in(&parent, uuid, preset)
+    // One rule with the resume/delete/fork side: build and validate the
+    // directory via session_path, then materialize it (copy the preset
+    // config). The param used to be unused (`_sessions_dir`) — Go has always
+    // resolved a bare origin id against it, which is the divergence that let
+    // the two backends disagree about where a plan node session lives.
+    let dir = session_path(sessions_dir, origin_session_dir, plan_id, node_id, uuid)?;
+    create_session_dir_in(&dir.parent().unwrap_or(sessions_dir), uuid, preset)
 }
 
 /// Shared body: copy the preset's config into parent/<uuid>/config.
@@ -919,5 +998,64 @@ mod tests {
                 "default $HOME/.alayaface must NOT exist when override is set"
             );
         });
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+    use std::path::Path;
+
+    // Mirrors Go's TestSessionPathValidatesAndContains: the ONE path rule
+    // shared by create and resume/delete/fork. A client supplies session_id,
+    // origin_session_dir, plan_id and node_id, and delete_session_dir feeds
+    // the result to remove_dir_all — so a traversal must be refused, not
+    // silently folded away.
+    #[test]
+    fn session_path_validates_and_contains() {
+        let root = Path::new("/cfg/sessions");
+
+        let plain = session_path(root, "", "", "", "abc").unwrap();
+        assert_eq!(plain, root.join("abc"));
+
+        // A traversal in the session id is rejected outright (it used to
+        // resolve to the sessions root itself, which remove_dir_all empties).
+        for bad in ["..", ".", "a/b", "a\\b", ""] {
+            assert!(
+                session_path(root, "", "plan", "node", bad).is_err(),
+                "accepted session id {bad:?}"
+            );
+            assert!(
+                session_path(root, "", "", "", bad).is_err(),
+                "accepted plain session id {bad:?}"
+            );
+        }
+
+        // A nested origin that escapes the store is rejected.
+        assert!(session_path(root, "/etc", "plan", "node", "abc").is_err());
+
+        // A real origin directory keeps its shape, plan id sanitized.
+        let nested =
+            session_path(root, "/cfg/sessions/sess-1", "demo plan/x", "t1", "abc").unwrap();
+        assert_eq!(
+            nested,
+            Path::new("/cfg/sessions/sess-1/plans/demo_plan_x/t1/abc")
+        );
+
+        // A BARE origin id resolves against the root — the rule Go had and
+        // Rust lacked (create_session_dir_nested ignored the sessions root),
+        // which put the same plan node session in different places.
+        let bare = session_path(root, "sess-1", "p", "n", "abc").unwrap();
+        assert_eq!(bare, Path::new("/cfg/sessions/sess-1/plans/p/n/abc"));
+    }
+
+    #[test]
+    fn safe_path_component_allows_names_rejects_traversal() {
+        for ok in ["abc", "a-b_c", "3f2a...", "with space.txt", "sess.1"] {
+            assert!(safe_path_component(ok), "{ok:?} must be allowed");
+        }
+        for bad in ["", ".", "..", "a/b", "a\\b", "a\0b"] {
+            assert!(!safe_path_component(bad), "{bad:?} must be rejected");
+        }
     }
 }

@@ -26,9 +26,24 @@ pub async fn object_put(content: String) -> Result<serde_json::Value, String> {
     Ok(json!({ "hash": hash }))
 }
 
+/// Report whether hash is a sha256 hex digest as produced by object_put (64
+/// lowercase hex chars). object_get joins its argument straight into
+/// ~/.alayaface/objects/<hash>/content.json, so without this a caller could
+/// walk out of the object store with "../../sessions/x/config" and read any
+/// file named content.json. Mirrors Go's validObjectHash.
+fn valid_object_hash(hash: &str) -> bool {
+    hash.len() == 64
+        && hash
+            .chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+}
+
 /// Read an object by hash.
 #[tauri::command]
 pub async fn object_get(hash: String) -> Result<String, String> {
+    if !valid_object_hash(&hash) {
+        return Err(format!("Cannot read object: invalid hash {:?}", hash));
+    }
     let path = crate::dirs::alayaface_dir()
         .join("objects")
         .join(&hash)
@@ -59,5 +74,28 @@ mod tests {
         let mut h3 = Sha256::new();
         h3.update(b"hello!");
         assert_ne!(h1, hex::encode(h3.finalize()), "different content must differ");
+
+        // object_get joins its argument straight into
+        // ~/.alayaface/objects/<hash>/content.json, so an unvalidated hash can
+        // walk out of the store with "../../sessions/x/config" and read any
+        // file named content.json. Mirrors Go's
+        // TestObjectGetRejectsNonHashPaths.
+        let sha = |s: &str| {
+            let mut h = Sha256::new();
+            h.update(s.as_bytes());
+            hex::encode(h.finalize())
+        };
+        assert!(valid_object_hash(&sha("x")));
+        let bad: Vec<String> = vec![
+            String::new(),
+            "..".to_string(),
+            "../../sessions/x/config".to_string(),
+            "ab".repeat(31) + "z", // 64 chars, not hex
+            "AB".repeat(32),       // 64 chars, wrong case (digests are lowercase)
+            "ab".repeat(32) + "0", // 65 chars
+        ];
+        for b in &bad {
+            assert!(!valid_object_hash(b), "accepted hash {b:?}");
+        }
     }
 }
