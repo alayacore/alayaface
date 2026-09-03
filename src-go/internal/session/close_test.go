@@ -112,3 +112,45 @@ func TestCloseGracefullyClosesStdinAfterInFlightWrite(t *testing.T) {
 	s.setConnected(false)
 	<-closeDone
 }
+
+// TestCloseGracefullyGivesUpOnStuckStdin pins the bound on waiting for the
+// stdin lock. A prompt write holds stdinMu for its whole duration, and that
+// write can be blocked forever in the OS pipe (an alayacore that stopped
+// draining stdin — the pipe holds ~64 KiB and a media prompt is far
+// larger). Blocking on the mutex then hangs close_session and the shutdown
+// sweep, with no grace period and no kill ever sent. Rust already bounds
+// this (10 × try_lock, then SIGKILL); Go must not drift back.
+func TestCloseGracefullyGivesUpOnStuckStdin(t *testing.T) {
+	pipe := newGatedPipe()
+	s := &Session{ID: "test", Stdin: pipe, PendingCmds: newPendingCmds()}
+	s.setConnected(true)
+
+	// A prompt write that never completes: it takes stdinMu and stays in
+	// its first Write (releaseWrite is never closed).
+	go func() {
+		_ = s.WriteFrames([]tlv.Frame{{Tag: tlv.TagUserText, Value: "wedged"}})
+	}()
+	<-pipe.writeStarted
+
+	closeDone := make(chan struct{})
+	go func() {
+		defer close(closeDone)
+		s.closeGracefully()
+	}()
+
+	select {
+	case <-closeDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("closeGracefully blocked forever on a stdin lock held by a stuck " +
+			"prompt write; a wedged alayacore must not hang close_session")
+	}
+
+	// It must have given up rather than cut the pipe out from under the
+	// in-flight write (a partial TLV frame on the wire).
+	pipe.mu.Lock()
+	closed := !pipe.closedAt.IsZero()
+	pipe.mu.Unlock()
+	if closed {
+		t.Fatal("closeGracefully closed stdin while a prompt write was still in flight")
+	}
+}

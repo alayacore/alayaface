@@ -301,7 +301,29 @@ func (s *Session) closeGracefully() {
 	// so a concurrent SendPrompt/WriteFrames can neither interleave
 	// between the CI frames nor be mid-write when the pipe closes
 	// (which would leave a partial TLV frame on the wire).
-	s.stdinMu.Lock()
+	//
+	// The wait for that lock is BOUNDED, mirroring Rust's
+	// close_child_gracefully_with_timeout (10 × try_lock with 50 ms
+	// sleeps): a prompt write can be stuck in a blocking pipe write to an
+	// alayacore that stopped draining stdin, and blocking on the mutex
+	// forever would hang close_session — and the shutdown sweep — with no
+	// grace period and no kill ever sent.
+	acquired := false
+	for i := 0; i < 10; i++ {
+		if s.stdinMu.TryLock() {
+			acquired = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !acquired {
+		// stdin is permanently busy (a prompt is mid-write to a wedged
+		// child): we cannot send EOF, so there is nothing to wait for —
+		// SIGKILL now rather than leaking the child.
+		log.Printf("[session] %s stdin is busy with an in-flight write; killing without cancel/save", s.ID)
+		s.kill()
+		return
+	}
 	// 1. Cancel the active task first (fire-and-forget — no CO wait;
 	//    errors ignored).
 	_, _ = s.sendCmdLocked("cancel", "")
