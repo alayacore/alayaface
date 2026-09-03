@@ -332,18 +332,32 @@ runtimes auto-switch on the presence of `window.__TAURI__`, avoiding two bridge 
     --static ../src-elm \
     [--alayacore-bin /path/to/alayacore] \
     [--token <random>]        # optional: validated on WS/fetch to protect against other local processes
+    [--allow-host <host>]     # pin the Host header (repeatable); the DNS-rebinding defense
   ```
 
   With `--token`, the server injects the token into the served index
-  document (`<meta name="alayaface-token">`); `bridge.js` reads it and
+  document (`<meta name="alayaface-token">`); `transport.js` reads it and
   attaches it to every RPC (`Authorization: Bearer`) and the WebSocket
   URL (`?token=`), so the shipped client works unchanged — no manual
   header configuration. Note the page itself is the credential: anyone
   who can fetch `/` also gets the token (fine for SSH-forwarded dev, not
   a substitute for TLS + real auth).
-- Bind to `127.0.0.1` only; CORS as needed (not needed for same-origin deployment).
-- Graceful shutdown: SIGINT/SIGTERM → close all sessions (killChild) →
-  `http.Server.Shutdown`.
+- Access policy for browser requests (`internal/server/authz.go`, enforced
+  in front of the router): a cross-origin or `Sec-Fetch-Site: cross-site`
+  call to `/rpc` or `/ws` gets 403, and a browser-originated RPC must post
+  `application/json`. A CORS "simple request" (e.g. `text/plain`) is sent
+  by the browser *before* CORS is consulted — CORS only hides the response
+  — so without this policy any page the user visits could invoke the
+  file-writing / session-deleting commands. Clients with no `Origin`,
+  `Referer` or `Sec-Fetch-Site` (curl, scripts, tests) are treated as
+  native and gated by `--token` only. Because the same-origin test compares
+  two attacker-controlled headers under DNS rebinding, `--allow-host` is
+  what actually pins it (it gates the `Host` header, static index included
+  — that is where the token leaks in a rebound session). The server logs a
+  warning when bound to a non-loopback address with no `--token`.
+- Graceful shutdown: SIGINT/SIGTERM → `http.Server.Shutdown` (stop accepting
+  so a racing `create_session` cannot slip past the sweep) → close all
+  sessions (cancel-first, then killChild).
 
 ---
 

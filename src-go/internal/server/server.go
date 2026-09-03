@@ -29,12 +29,28 @@ type Server struct {
 	Token       string
 	cachedIndex []byte
 
+	// allowHosts restricts which Host headers are served (see authz.go).
+	// Empty = any host, so a no-token server stays usable on the LAN as
+	// documented in README.md; set it (or use --token) when the address is
+	// reachable by people you do not trust.
+	allowHosts []string
+
 	upgrader websocket.Upgrader
+}
+
+// Option configures a Server at construction time.
+type Option func(*Server)
+
+// WithAllowedHosts sets the Host allowlist (see authz.go's hostAllowed).
+// Entries may carry a port ("192.168.1.20:8765"); a bare entry then matches
+// any port. The single entry "*" disables the restriction.
+func WithAllowedHosts(hosts []string) Option {
+	return func(s *Server) { s.allowHosts = hosts }
 }
 
 // New creates a server. token, when non-empty, is required on RPC calls
 // (Authorization: Bearer) and WS connections (?token=).
-func New(staticDir, token string) *Server {
+func New(staticDir, token string, opts ...Option) *Server {
 	h := hub.New()
 	mgr := session.NewManager()
 	cache := session.NewModelCache()
@@ -44,7 +60,7 @@ func New(staticDir, token string) *Server {
 		cachedIndex, _ = os.ReadFile(filepath.Join(staticDir, "index.html"))
 	}
 
-	return &Server{
+	s := &Server{
 		Hub:         h,
 		Sessions:    mgr,
 		Cache:       cache,
@@ -59,6 +75,11 @@ func New(staticDir, token string) *Server {
 			// (WebSocket bypasses CORS; without this check any origin
 			// could eavesdrop on conversations). Requests without an
 			// Origin header (curl, local tools) are allowed.
+			//
+			// NOTE: this alone does not stop DNS rebinding (where Origin
+			// and Host agree because both are attacker-supplied) —
+			// Server.checkAccess adds Sec-Fetch-Site, the Host
+			// allowlist and the RPC content-type rule on top.
 			CheckOrigin: func(r *http.Request) bool {
 				origin := r.Header.Get("Origin")
 				if origin == "" {
@@ -72,15 +93,28 @@ func New(staticDir, token string) *Server {
 			},
 		},
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
-// Routes returns the root HTTP handler.
+// Routes returns the root HTTP handler. Every request first passes the
+// access policy (authz.go), which is what keeps a drive-by browser page from
+// reaching the destructive RPC commands.
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /rpc/{command}", s.handleRPC)
 	mux.HandleFunc("GET /ws", s.handleWS)
 	mux.Handle("/", s.staticHandler())
-	return mux
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := s.checkAccess(r); err != nil {
+			s.logRequest(r)
+			writeRPCError(w, err)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
 
 // staticHandler serves the Elm frontend from StaticDir. When a token is

@@ -84,12 +84,16 @@ make run-go
 参数：
 
 ```
-alayaface-server --addr 0.0.0.0:8765 --static ../src-elm [--token <token>] [--config-path <dir>]
+alayaface-server --addr 0.0.0.0:8765 --static ../src-elm [--token <token>] [--config-path <dir>] [--allow-host <host>]
 ```
 
 `--config-path <dir>` 覆盖配置目录（通常为 `$HOME/.alayaface`）；预设、会话、全局/ASR 配置以及内容对象存储都位于 `<dir>` 下。便于在同一台机器上保留多个互相隔离的安装（例如每个客户端/服务端部署一份）。开头的 `~` 会按 `$HOME` 展开（即 `--config-path ~/.alayaface-test` 是绝对路径的简写形式）。两个后端均支持——Tauri 桌面应用接受同样的参数（`alayaface --config-path <dir>`）。
 
-> ⚠️ 使用 `0.0.0.0` 且不带 `--token` 时，任何能访问该端口的人都可以通过 API 创建会话、读取文件。当端口暴露在 localhost/SSH 之外时，请加上 `--token <t>`。令牌会被注入到所托管的页面中（`<meta name="alayaface-token">`），`bridge.js` 会自动附带它（RPC 用 `Authorization: Bearer`，WS 用 `?token=`），因此浏览器客户端无需改动；但任何能获取页面本身的人也会拿到令牌（页面本身就是凭证）。
+> ⚠️ 使用 `0.0.0.0` 且不带 `--token` 时，任何能访问该端口的人都可以通过 API 创建会话、读写文件。当端口暴露在 localhost/SSH 之外时，请加上 `--token <t>`。令牌会被注入到所托管的页面中（`<meta name="alayaface-token">`），`transport.js` 会自动附带它（RPC 用 `Authorization: Bearer`，WS 用 `?token=`），因此浏览器客户端无需改动；但任何能获取页面本身的人也会拿到令牌（页面本身就是凭证）。
+>
+> 来自浏览器的请求还会额外接受同源策略校验（`internal/server/authz.go`）：跨源或带 `Sec-Fetch-Site: cross-site` 的 `/rpc`、`/ws` 调用会以 403 拒绝，且浏览器发起的 RPC 必须以 `application/json` 提交。若不做这层校验，用户访问的任意网页都能以 CORS “简单请求” 驱动 API（浏览器会在查询 CORS 之前就把这类 POST 发出去，CORS 只会隐藏*响应*——命令仍然执行，而若干命令会写入或删除文件）。非浏览器客户端（curl、脚本）不发送 `Origin`，不受影响，仅由 `--token` 管控。
+>
+> 同源校验比较的是两个请求头，而 DNS 重绑定攻击页面（攻击者域名解析到 `127.0.0.1`）可以同时控制二者。`--allow-host` 会锁定 `Host` 头，这才是真正的防御：填入真实客户端使用的名称，例如 `--allow-host 192.168.1.20:8765`（可重复；只写主机名则匹配任意端口；`*` 表示不限制）。当服务端绑定到非回环地址且未设置 `--token` 时，启动日志会给出告警。
 
 - 命令：`POST /rpc/{command}`，JSON 参数（对应 Tauri 的 `invoke`）。
 - 事件：WebSocket `GET /ws` 推送 `{type, payload}` 消息（`tlv-delta`、`tlv-frame`、`core-status`）。

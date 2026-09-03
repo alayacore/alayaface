@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,12 +18,28 @@ import (
 	"alayaface/src-go/internal/server"
 )
 
+// hostList is a repeatable / comma-separated flag value (the Host allowlist).
+type hostList []string
+
+func (h *hostList) String() string { return strings.Join(*h, ",") }
+
+func (h *hostList) Set(v string) error {
+	for _, part := range strings.Split(v, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			*h = append(*h, part)
+		}
+	}
+	return nil
+}
+
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8765", "listen address")
 	static := flag.String("static", "../src-elm", "directory of the Elm frontend assets")
 	token := flag.String("token", "", "optional bearer token (RPC: Authorization header, WS: ?token=)")
 	bin := flag.String("alayacore-bin", "", "path to the alayacore binary (default: ALAYACORE_BIN env or PATH discovery)")
 	configPath := flag.String("config-path", "", "base directory for AlayaFace config (presets, sessions, etc.); overrides $HOME/.alayaface. Leading \"~\" is expanded against $HOME.")
+	var allowHosts hostList
+	flag.Var(&allowHosts, "allow-host", "restrict serving to this Host header (repeatable or comma-separated; \"*\" = any). Defeats DNS rebinding; needed when the client is reached by a name the operator controls, e.g. --allow-host 192.168.1.20:8765.")
 	flag.Parse()
 
 	// Install the override BEFORE anything reads the config dir
@@ -39,7 +56,7 @@ func main() {
 		_ = os.Setenv("ALAYACORE_BIN", *bin)
 	}
 
-	srv := server.New(*static, *token)
+	srv := server.New(*static, *token, server.WithAllowedHosts(allowHosts))
 	httpSrv := &http.Server{
 		Addr:    *addr,
 		Handler: srv.Routes(),
@@ -50,6 +67,13 @@ func main() {
 
 	go func() {
 		log.Printf("alayaface-server listening on http://%s (static: %s)", *addr, *static)
+		if server.IsExposedAddr(*addr) && *token == "" && len(allowHosts) == 0 {
+			// Cross-origin browser calls are refused regardless (authz.go),
+			// but anyone who can reach this port directly and load the page
+			// can use the whole API — including the file and session
+			// commands. Say so out loud; `make run-go` binds 0.0.0.0.
+			log.Printf("WARNING: listening on a non-loopback address with no --token: anyone who can reach the port can drive the API (sessions, fs_write_file_text, delete_session_dir). Add --token <t>, and --allow-host <name> to also pin the Host.")
+		}
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("server error: %v", err)
 		}

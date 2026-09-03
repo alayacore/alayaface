@@ -97,7 +97,7 @@ over SSH port forwarding (`ssh -L 8765:localhost:8765 <host>` then open
 Options:
 
 ```
-alayaface-server --addr 0.0.0.0:8765 --static ../src-elm [--token <token>] [--config-path <dir>]
+alayaface-server --addr 0.0.0.0:8765 --static ../src-elm [--token <token>] [--config-path <dir>] [--allow-host <host>]
 ```
 
 `--config-path <dir>` overrides the base config directory (normally
@@ -110,12 +110,29 @@ path). Available on both backends — the Tauri desktop app takes the
 same flag (`alayaface --config-path <dir>`).
 
 > ⚠️ With `0.0.0.0` and no `--token`, anyone who can reach the port can
-> create sessions and read files via the API. Add `--token <t>` when the
-> port is exposed beyond localhost/SSH. The token is injected into the
-> served page (`<meta name="alayaface-token">`) and `bridge.js` attaches
+> create sessions and read/write files via the API. Add `--token <t>` when
+> the port is exposed beyond localhost/SSH. The token is injected into the
+> served page (`<meta name="alayaface-token">`) and `transport.js` attaches
 > it automatically (RPC `Authorization: Bearer`, WS `?token=`), so the
 > browser client works unchanged; anyone who can fetch the page itself
 > also gets the token (the page is the credential).
+>
+> Requests that come from a browser are additionally checked against a
+> same-origin policy (`internal/server/authz.go`): a cross-origin or
+> `Sec-Fetch-Site: cross-site` call to `/rpc` or `/ws` is refused with 403,
+> and a browser-originated RPC must post `application/json`. Without this,
+> any page the user visits could drive the API as a CORS "simple request"
+> (the browser sends such a POST before CORS is consulted, and CORS only
+> hides the *response* — the command still runs, and several commands write
+> or delete files). Non-browser clients (curl, scripts) send no `Origin`,
+> are unaffected, and are governed by `--token` alone.
+>
+> Same-origin checks compare two headers, and a DNS-rebinding page (an
+> attacker domain resolving to `127.0.0.1`) controls both. `--allow-host`
+> pins the `Host` header and is the actual defense: pass the name(s) real
+> clients use, e.g. `--allow-host 192.168.1.20:8765` (repeatable; a bare
+> host matches any port; `*` disables the restriction). The server warns at
+> startup when it is bound to a non-loopback address with no `--token`.
 
 - Commands: `POST /rpc/{command}` with JSON args (mirrors Tauri `invoke`).
 - Events: WebSocket `GET /ws` pushes `{type, payload}` messages
