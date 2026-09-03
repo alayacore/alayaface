@@ -75,7 +75,7 @@ pub fn alayaface_dir() -> PathBuf {
 /// Expand a leading "~" or "~/" against $HOME. A bare "~" becomes
 /// $HOME; absolute and relative paths pass through unchanged (mirrors
 /// the Go side).
-fn expand_home(path: &PathBuf) -> PathBuf {
+fn expand_home(path: &std::path::Path) -> PathBuf {
     let s = path.to_string_lossy();
     if s == "~" {
         let home = std::env::var("HOME")
@@ -89,7 +89,7 @@ fn expand_home(path: &PathBuf) -> PathBuf {
             .unwrap_or_else(|_| ".".to_string());
         return PathBuf::from(home).join(rest);
     }
-    path.clone()
+    path.to_path_buf()
 }
 
 /// Directory holding all presets (~/.alayaface/presets).
@@ -319,7 +319,7 @@ pub fn is_seed_preset(name: &str) -> bool {
 /// REQUIRED). Used by Plan Mode so different DAG nodes can run under
 /// different presets. settings.conf is excluded.
 pub fn create_session_dir_from(
-    sessions_dir: &PathBuf,
+    sessions_dir: &std::path::Path,
     uuid: &str,
     preset: &str,
 ) -> Result<PathBuf, String> {
@@ -432,7 +432,7 @@ pub fn session_path(
 /// plain sessions). All id components are sanitized with
 /// `sanitize_dir_component`. Mirrors Go CreatePlanSessionDirFrom.
 pub fn create_session_dir_nested(
-    sessions_dir: &PathBuf,
+    sessions_dir: &std::path::Path,
     origin_session_dir: &str,
     plan_id: &str,
     node_id: &str,
@@ -445,7 +445,7 @@ pub fn create_session_dir_nested(
     // resolved a bare origin id against it, which is the divergence that let
     // the two backends disagree about where a plan node session lives.
     let dir = session_path(sessions_dir, origin_session_dir, plan_id, node_id, uuid)?;
-    create_session_dir_in(&dir.parent().unwrap_or(sessions_dir), uuid, preset)
+    create_session_dir_in(dir.parent().unwrap_or(sessions_dir), uuid, preset)
 }
 
 /// Shared body: copy the preset's config into parent/<uuid>/config.
@@ -577,7 +577,7 @@ fn copy_dir_excluding(
         if ty.is_dir() {
             copy_dir_excluding(&entry.path(), &dst.join(&name), exclude)?;
         } else {
-            std::fs::copy(&entry.path(), &dst.join(&name))
+            std::fs::copy(entry.path(), dst.join(name))
                 .map_err(|e| format!("Copy error: {}", e))?;
         }
     }

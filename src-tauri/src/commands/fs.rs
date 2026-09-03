@@ -59,8 +59,8 @@ pub async fn fs_list_dir(path: String) -> Result<Vec<DirEntry>, String> {
     }
 
     // Directories first (sorted), then files (sorted)
-    dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    dirs.sort_by_key(|a| a.name.to_lowercase());
+    files.sort_by_key(|a| a.name.to_lowercase());
 
     result.extend(dirs);
     result.extend(files);
@@ -87,11 +87,11 @@ pub struct ResolvedPath {
 
 #[command]
 pub async fn fs_resolve_path(path: String) -> Result<ResolvedPath, String> {
-    let resolved = if path.starts_with('~') {
+    let resolved = if let Some(rest) = path.strip_prefix('~') {
         let home = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
             .unwrap_or_else(|_| ".".to_string());
-        std::path::PathBuf::from(home).join(&path[1..])
+        std::path::PathBuf::from(home).join(rest)
     } else if path.starts_with('/') {
         std::path::PathBuf::from(&path)
     } else {

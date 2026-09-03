@@ -420,8 +420,8 @@ pub async fn sync_default_mcp(config: String, preset: String) -> Result<(), Stri
             if command.is_empty() {
                 return Err(format!("Server {name}: command is required for stdio servers"));
             }
-            validate_json_field(obj, &name, "args", true)?;
-            validate_json_field(obj, &name, "env", false)?;
+            validate_json_field(obj, name, "args", true)?;
+            validate_json_field(obj, name, "env", false)?;
         }
     }
 

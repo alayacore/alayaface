@@ -84,7 +84,7 @@ pub struct AsrProfile {
 }
 
 /// ASR config file: the profile list plus the active profile id.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct AsrConfig {
     /// Id of the profile used by asr_transcribe. Falls back to the
     /// first profile when it does not reference an existing one.
@@ -95,14 +95,6 @@ pub struct AsrConfig {
     pub profiles: Vec<AsrProfile>,
 }
 
-impl Default for AsrConfig {
-    fn default() -> Self {
-        Self {
-            active: String::new(),
-            profiles: Vec::new(),
-        }
-    }
-}
 
 /// Normalize one profile: assign a fresh id when empty, default the
 /// name to the URL, fix protocol/model/language defaults.

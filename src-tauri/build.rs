@@ -47,9 +47,10 @@ fn main() {
 
 /// Place alayacore at the Tauri-bundle source path. Mirrors the
 /// runtime's resolution order at build time:
-///   1. ALAYACORE_BIN env var (explicit override)
-///   2. `which` / `where` alayacore
-///   3. Common locations
+/// 1. ALAYACORE_BIN env var (explicit override)
+/// 2. `which` / `where` alayacore
+/// 3. Common locations
+///
 /// If found, copy it. If not, write a 0-byte stub so the Tauri
 /// build still succeeds — the runtime skips the stub and falls back
 /// to env-var / PATH at session-spawn time.

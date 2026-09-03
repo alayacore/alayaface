@@ -717,7 +717,7 @@ mod tests {
             String::from_utf8_lossy(&out.stdout).trim(),
             dir.to_str().unwrap()
         );
-        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -1186,7 +1186,6 @@ mod tests {
         );
     }
 
-    #[test]
     /// A hung/partial boot frame must NOT hang the probe.
     ///
     /// std's pipe reads have no deadline: the previous implementation read
@@ -1219,8 +1218,12 @@ mod tests {
             .expect_err("a stalled probe must report a timeout, not hang");
         let took = started.elapsed();
 
+        // Slack is deliberately generous: the defect this pins is an
+        // unbounded block (the pre-fix run hung for its child's full 60 s),
+        // so a few seconds of scheduler jitter on a loaded CI box must not
+        // turn it into a false failure.
         assert!(
-            took < VERSION_PROBE_TIMEOUT + std::time::Duration::from_secs(2),
+            took < VERSION_PROBE_TIMEOUT + std::time::Duration::from_secs(10),
             "probe took {took:?} — it blocked on the read instead of timing out"
         );
         assert!(
@@ -1230,6 +1233,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
     fn read_version_frame_skips_unknown_frames_after_version() {
         // Once the version frame passes, the helper returns Ok(()) and
         // stops reading — subsequent frames are the boot task /
