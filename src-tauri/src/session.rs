@@ -456,7 +456,7 @@ mod tests {
             .expect("spawn sleep");
         let (map, stdin) = map_with_session(child, "s1");
         // Hold stdin: any command for "s1" now parks waiting for it.
-        let mut stdin_guard = stdin.try_lock().unwrap();
+        let stdin_guard = stdin.try_lock().unwrap();
 
         let map_arc = map.0.clone();
         let sender = tokio::spawn(async move {

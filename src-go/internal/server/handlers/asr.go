@@ -94,11 +94,54 @@ func NormalizeAsrProfile(p *AsrProfile) {
 		p.Protocol = ProtocolTranscriptions
 	}
 	if strings.TrimSpace(p.Model) == "" {
-		p.Model = "whisper-1"
+		p.Model = DefaultAsrModel(p.Protocol)
 	}
 	if strings.TrimSpace(p.Language) == "" {
 		p.Language = "auto"
 	}
+}
+
+// errAsrNoURL is surfaced when a profile has no endpoint configured.
+const errAsrNoURL = "ASR not configured: set the endpoint URL in the ASR config"
+
+// asrEndpoint resolves the URL / model / language one transcribe call needs.
+//
+// Every profile reaching AsrTranscribe has been through NormalizeAsrConfig
+// (readAsrConfig does it), so this is a no-op there. It exists because the
+// transcribers are also called directly (tests, future callers): rather than
+// each re-implementing the defaults, they share this one, which defers to
+// DefaultAsrModel — the SINGLE definition of the protocol default. That is
+// the shape the old code lacked: normalize forced "whisper-1" while the
+// StepAudio transcriber carried an unreachable "stepaudio-2.5-asr" fallback,
+// so a StepAudio profile with no explicit model asked StepFun for a whisper
+// model.
+func asrEndpoint(p AsrProfile) (url, model, language string) {
+	url = strings.TrimSpace(p.URL)
+	model = strings.TrimSpace(p.Model)
+	if model == "" {
+		model = DefaultAsrModel(p.Protocol)
+	}
+	language = strings.TrimSpace(p.Language)
+	if language == "" {
+		language = "auto"
+	}
+	return url, model, language
+}
+
+// DefaultAsrModel is the model id a profile gets when it leaves `model`
+// empty. It is PROTOCOL-SPECIFIC: the OpenAI-shaped protocols speak
+// whisper-1, StepFun's realtime ASR has its own model family. The default
+// has to live here rather than in each transcriber because every profile is
+// normalized on both read and write — a fallback buried inside
+// asrTranscribeStepAudio could never be reached (it read as
+// "stepaudio-2.5-asr" while normalize had already stamped "whisper-1" on
+// the profile, so a StepAudio profile with no explicit model asked
+// StepFun for a whisper model).
+func DefaultAsrModel(protocol string) string {
+	if protocol == ProtocolStepAudio {
+		return "stepaudio-2.5-asr"
+	}
+	return "whisper-1"
 }
 
 // NormalizeAsrConfig fixes the whole config: every profile plus `active`
@@ -247,7 +290,7 @@ func AsrTranscribe(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		return writeResult(w, AsrTranscribeResult{Ok: false, Error: "ASR not configured: add an endpoint in the ASR config"})
 	}
 	if strings.TrimSpace(p.URL) == "" {
-		return writeResult(w, AsrTranscribeResult{Ok: false, Error: "ASR not configured: set the endpoint URL in the ASR config"})
+		return writeResult(w, AsrTranscribeResult{Ok: false, Error: errAsrNoURL})
 	}
 	var res AsrTranscribeResult
 	if p.Protocol == ProtocolChatCompletions {
@@ -262,16 +305,14 @@ func AsrTranscribe(h *Handler, w http.ResponseWriter, r *http.Request) error {
 
 // asrTranscribeMultipart POSTs the WAV as multipart to the profile's
 // endpoint URL (used verbatim) and parses {"text": ...}.
+// The profile arrives fully normalized (readAsrConfig → NormalizeAsrConfig),
+// and AsrTranscribe has already rejected an empty URL, so these read the
+// effective values with no further defaulting.
 func asrTranscribeMultipart(p AsrProfile, wav []byte) AsrTranscribeResult {
-	url := strings.TrimSpace(p.URL)
+	url, model, lang := asrEndpoint(p)
 	if url == "" {
-		return AsrTranscribeResult{Ok: false, Error: "ASR not configured: set the endpoint URL in the ASR config"}
+		return AsrTranscribeResult{Ok: false, Error: errAsrNoURL}
 	}
-	model := strings.TrimSpace(p.Model)
-	if model == "" {
-		model = "whisper-1"
-	}
-	lang := strings.TrimSpace(p.Language)
 
 	// The wire format is multipart/form-data; the hex head shows the WAV
 	// begins with "RIFF" (52 49 46 46) when the encoder produced a valid
@@ -331,17 +372,9 @@ func asrTranscribeMultipart(p AsrProfile, wav []byte) AsrTranscribeResult {
 // part, api-key header, streamed response. The transcript is read from
 // the SSE delta stream; a plain JSON response is accepted as a fallback.
 func asrTranscribeChat(p AsrProfile, audioBase64 string, wav []byte) AsrTranscribeResult {
-	url := strings.TrimSpace(p.URL)
+	url, model, lang := asrEndpoint(p)
 	if url == "" {
-		return AsrTranscribeResult{Ok: false, Error: "ASR not configured: set the endpoint URL in the ASR config"}
-	}
-	model := strings.TrimSpace(p.Model)
-	if model == "" {
-		model = "whisper-1"
-	}
-	lang := strings.TrimSpace(p.Language)
-	if lang == "" {
-		lang = "auto"
+		return AsrTranscribeResult{Ok: false, Error: errAsrNoURL}
 	}
 
 	body, err := json.Marshal(map[string]any{
@@ -398,9 +431,9 @@ func asrTranscribeChat(p AsrProfile, audioBase64 string, wav []byte) AsrTranscri
 // transcript.text.delta accumulates, transcript.text.done carries the
 // final text (fallback to accumulated deltas), error aborts.
 func asrTranscribeStepAudio(p AsrProfile, wav []byte) AsrTranscribeResult {
-	url := strings.TrimSpace(p.URL)
+	url, model, lang := asrEndpoint(p)
 	if url == "" {
-		return AsrTranscribeResult{Ok: false, Error: "ASR not configured: set the endpoint URL in the ASR config"}
+		return AsrTranscribeResult{Ok: false, Error: errAsrNoURL}
 	}
 	rate, channels, bits, dataOffset, dataSize, ok := wavParams(wav)
 	if !ok {
@@ -419,14 +452,6 @@ func asrTranscribeStepAudio(p AsrProfile, wav []byte) AsrTranscribeResult {
 	}
 	pcm := wav[dataOffset : dataOffset+dataSize]
 	pcmBase64 := base64.StdEncoding.EncodeToString(pcm)
-	model := strings.TrimSpace(p.Model)
-	if model == "" {
-		model = "stepaudio-2.5-asr"
-	}
-	lang := strings.TrimSpace(p.Language)
-	if lang == "" {
-		lang = "auto"
-	}
 
 	body, err := json.Marshal(map[string]any{
 		"audio": map[string]any{

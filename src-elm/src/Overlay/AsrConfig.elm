@@ -1,4 +1,4 @@
-module Overlay.AsrConfig exposing (ProfileRow, protocolDisplayName, view)
+module Overlay.AsrConfig exposing (ProfileRow, defaultModel, protocolDisplayName, view)
 
 import Html exposing (Html)
 import Html.Attributes as Attr
@@ -85,6 +85,23 @@ protocolDisplayName protocol =
 
         other ->
             other ++ " (unknown protocol)"
+
+
+{-| The model id the backend applies when the model field is left empty,
+per wire protocol (mirrors Go's `DefaultAsrModel` / Rust's
+`default_asr_model`). The edit form swaps this in when the protocol
+changes, so picking StepAudio does not keep sending a whisper model id to
+StepFun — the backend default alone cannot fix that, because the form
+prefills "whisper-1" (non-empty) and normalization keeps explicit values.
+-}
+defaultModel : String -> String
+defaultModel protocol =
+    case protocol of
+        "step_audio" ->
+            "stepaudio-2.5-asr"
+
+        _ ->
+            "whisper-1"
 
 
 -- ─── List view (entry point from the system menu) ──────────────────

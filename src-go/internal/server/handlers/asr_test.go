@@ -33,6 +33,35 @@ func TestNormalizeAsrProfile(t *testing.T) {
 	}
 }
 
+// TestDefaultAsrModelIsProtocolAware pins the bug where a step_audio
+// profile with no explicit model was handed "whisper-1": the per-protocol
+// fallback inside asrTranscribeStepAudio could never fire because every
+// profile is normalized on read AND write, so normalize's (transcription)
+// default always won. Mirrors Rust's default_model_is_protocol_aware.
+func TestDefaultAsrModelIsProtocolAware(t *testing.T) {
+	if got := DefaultAsrModel(ProtocolStepAudio); got != "stepaudio-2.5-asr" {
+		t.Errorf("step_audio default model = %q, want stepaudio-2.5-asr", got)
+	}
+	if got := DefaultAsrModel(ProtocolTranscriptions); got != "whisper-1" {
+		t.Errorf("transcriptions default model = %q, want whisper-1", got)
+	}
+	if got := DefaultAsrModel(ProtocolChatCompletions); got != "whisper-1" {
+		t.Errorf("chat_completions default model = %q, want whisper-1", got)
+	}
+
+	p := AsrProfile{Protocol: ProtocolStepAudio, URL: "https://api.stepfun.com/asr", Model: "  "}
+	NormalizeAsrProfile(&p)
+	if p.Model != "stepaudio-2.5-asr" {
+		t.Errorf("normalized step_audio model = %q, want stepaudio-2.5-asr", p.Model)
+	}
+	// An explicit model is never overwritten.
+	p2 := AsrProfile{Protocol: ProtocolStepAudio, URL: "u", Model: "my-model"}
+	NormalizeAsrProfile(&p2)
+	if p2.Model != "my-model" {
+		t.Errorf("explicit model was replaced: %q", p2.Model)
+	}
+}
+
 func TestNormalizeAsrConfigActiveFallback(t *testing.T) {
 	cfg := AsrConfig{
 		Active: "missing",

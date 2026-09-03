@@ -121,10 +121,26 @@ fn normalize_profile(p: &mut AsrProfile) {
         p.protocol = PROTOCOL_TRANSCRIPTIONS.to_string();
     }
     if p.model.trim().is_empty() {
-        p.model = "whisper-1".to_string();
+        p.model = default_asr_model(&p.protocol).to_string();
     }
     if p.language.trim().is_empty() {
         p.language = "auto".to_string();
+    }
+}
+
+/// The model id a profile gets when it leaves `model` empty. It is
+/// PROTOCOL-SPECIFIC: the OpenAI-shaped protocols speak whisper-1, StepFun's
+/// realtime ASR has its own model family. The default has to live here rather
+/// than in each transcriber because every profile is normalized on both read
+/// and write — a fallback buried inside `transcribe_step_audio` could never
+/// be reached (it read as "stepaudio-2.5-asr" while normalize had already
+/// stamped "whisper-1" on the profile, so a StepAudio profile with no
+/// explicit model asked StepFun for a whisper model). Mirrors Go's
+/// DefaultAsrModel.
+pub fn default_asr_model(protocol: &str) -> &'static str {
+    match protocol {
+        PROTOCOL_STEP_AUDIO => "stepaudio-2.5-asr",
+        _ => "whisper-1",
     }
 }
 
@@ -148,6 +164,41 @@ fn active_profile(cfg: &AsrConfig) -> Option<&AsrProfile> {
         .iter()
         .find(|p| p.id == cfg.active)
         .or_else(|| cfg.profiles.first())
+}
+
+/// Surfaced when a profile has no endpoint configured.
+const ERR_ASR_NO_URL: &str = "ASR not configured: set the endpoint URL in the ASR config";
+
+/// Resolve the URL / model / language one transcribe call needs.
+///
+/// Every profile reaching `asr_transcribe` has been through
+/// `normalize_asr_config` (`read_asr_config` does it), so this is a no-op
+/// there. It exists because the transcribers are also called directly
+/// (tests, future callers): rather than each re-implementing the defaults,
+/// they share this one, which defers to `default_asr_model` — the SINGLE
+/// definition of the protocol default. Mirrors Go's `asrEndpoint`.
+fn asr_endpoint(profile: &AsrProfile) -> (String, String, String) {
+    let url = profile.url.trim().to_string();
+    let model = if profile.model.trim().is_empty() {
+        default_asr_model(&profile.protocol).to_string()
+    } else {
+        profile.model.trim().to_string()
+    };
+    let language = if profile.language.trim().is_empty() {
+        "auto".to_string()
+    } else {
+        profile.language.trim().to_string()
+    };
+    (url, model, language)
+}
+
+/// The error result used when no endpoint is configured.
+fn asr_no_url() -> AsrTranscribeResult {
+    AsrTranscribeResult {
+        ok: false,
+        text: String::new(),
+        error: ERR_ASR_NO_URL.to_string(),
+    }
 }
 
 /// Read the ASR config; a missing/empty file yields defaults. Parse
@@ -235,11 +286,7 @@ pub async fn asr_transcribe(
         });
     };
     if profile.url.trim().is_empty() {
-        return Ok(AsrTranscribeResult {
-            ok: false,
-            text: String::new(),
-            error: "ASR not configured: set the endpoint URL in the ASR config".to_string(),
-        });
+        return Ok(asr_no_url());
     }
     if profile.protocol == PROTOCOL_CHAT_COMPLETIONS {
         transcribe_chat(profile, &audio_base64, &wav).await
@@ -255,9 +302,10 @@ async fn transcribe_multipart(
     profile: &AsrProfile,
     wav: &[u8],
 ) -> Result<AsrTranscribeResult, String> {
-    let url = profile.url.trim().to_string();
-    let model = profile.model.trim();
-    let lang = profile.language.trim();
+    let (url, model, lang) = asr_endpoint(profile);
+    if url.is_empty() {
+        return Ok(asr_no_url());
+    }
 
     let file = reqwest::multipart::Part::bytes(wav.to_vec())
         .file_name("audio.wav")
@@ -265,9 +313,9 @@ async fn transcribe_multipart(
         .map_err(|e| format!("Audio part error: {e}"))?;
     let mut form = reqwest::multipart::Form::new()
         .part("file", file)
-        .text("model", model.to_string());
+        .text("model", model.clone());
     if !lang.is_empty() && lang != "auto" {
-        form = form.text("language", lang.to_string());
+        form = form.text("language", lang.clone());
     }
 
     // The wire format is multipart/form-data; the hex head shows the WAV
@@ -336,17 +384,10 @@ async fn transcribe_chat(
     audio_base64: &str,
     wav: &[u8],
 ) -> Result<AsrTranscribeResult, String> {
-    let url = profile.url.trim().to_string();
-    let model = if profile.model.trim().is_empty() {
-        "whisper-1"
-    } else {
-        profile.model.trim()
-    };
-    let lang = if profile.language.trim().is_empty() {
-        "auto"
-    } else {
-        profile.language.trim()
-    };
+    let (url, model, lang) = asr_endpoint(profile);
+    if url.is_empty() {
+        return Ok(asr_no_url());
+    }
     let body = serde_json::json!({
         "model": model,
         "messages": [
@@ -424,15 +465,11 @@ async fn transcribe_step_audio(
     profile: &AsrProfile,
     wav: &[u8],
 ) -> Result<AsrTranscribeResult, String> {
-    let url = profile.url.trim().to_string();
+    let (url, model, lang) = asr_endpoint(profile);
     if url.is_empty() {
-        return Ok(AsrTranscribeResult {
-            ok: false,
-            text: String::new(),
-            error: "ASR not configured: set the endpoint URL in the ASR config".to_string(),
-        });
+        return Ok(asr_no_url());
     }
-    let (rate, channels, bits, data_offset) = wav_params(wav)
+    let (rate, channels, bits, pcm) = wav_params(wav)
         .ok_or_else(|| "Invalid WAV audio: expected 16-bit PCM mono (RIFF/WAVE)".to_string())?;
     if bits != 16 || channels != 1 {
         return Ok(AsrTranscribeResult {
@@ -441,18 +478,7 @@ async fn transcribe_step_audio(
             error: format!("StepAudio needs 16-bit mono PCM, got {bits}-bit x {channels} ch"),
         });
     }
-    let pcm = &wav[data_offset..];
     let pcm_b64 = base64::engine::general_purpose::STANDARD.encode(pcm);
-    let model = if profile.model.trim().is_empty() {
-        "stepaudio-2.5-asr"
-    } else {
-        profile.model.trim()
-    };
-    let lang = if profile.language.trim().is_empty() {
-        "auto"
-    } else {
-        profile.language.trim()
-    };
     let body = serde_json::json!({
         "audio": {
             "data": pcm_b64,
@@ -525,11 +551,19 @@ async fn transcribe_step_audio(
     }
 }
 
-/// Parse a standard PCM WAV header: returns (sample rate, channels,
-/// bits per sample, offset of the PCM data). Only uncompressed PCM
-/// (audio format 1) is accepted. Scans chunks so fmt extensions are
-/// handled.
-fn wav_params(wav: &[u8]) -> Option<(u32, u16, u16, usize)> {
+/// Parse a standard PCM WAV header: returns (sample rate, channels, bits
+/// per sample, the PCM payload). Only uncompressed PCM (audio format 1) is
+/// accepted; the `fmt ` chunk must precede `data`. Chunks are scanned so
+/// fmt extensions are handled.
+///
+/// The payload is exactly the `data` chunk — NOT everything after the
+/// header: a WAV may carry trailing chunks (LIST/ID3 metadata) past the
+/// audio, and shipping those as PCM corrupts the stream. A declared size
+/// that overruns the buffer is clamped rather than rejected, so a
+/// short-but-real recording still transcribes. Returning the slice (rather
+/// than an offset + size) keeps callers from re-deriving it wrongly; mirrors
+/// Go's `wavParams`.
+fn wav_params(wav: &[u8]) -> Option<(u32, u16, u16, &[u8])> {
     if wav.len() < 12 || &wav[0..4] != b"RIFF" || &wav[8..12] != b"WAVE" {
         return None;
     }
@@ -537,6 +571,7 @@ fn wav_params(wav: &[u8]) -> Option<(u32, u16, u16, usize)> {
     let mut rate = 0u32;
     let mut channels = 0u16;
     let mut bits = 0u16;
+    let mut have_fmt = false;
     while pos + 8 <= wav.len() {
         let id = &wav[pos..pos + 4];
         let size = u32::from_le_bytes(wav[pos + 4..pos + 8].try_into().ok()?) as usize;
@@ -548,8 +583,16 @@ fn wav_params(wav: &[u8]) -> Option<(u32, u16, u16, usize)> {
             channels = u16::from_le_bytes(wav[pos + 10..pos + 12].try_into().ok()?);
             rate = u32::from_le_bytes(wav[pos + 12..pos + 16].try_into().ok()?);
             bits = u16::from_le_bytes(wav[pos + 22..pos + 24].try_into().ok()?);
+            have_fmt = true;
         } else if id == b"data" {
-            return Some((rate, channels, bits, pos + 8));
+            // A data chunk before fmt means the header is malformed — the
+            // format fields would all be zero.
+            if !have_fmt {
+                return None;
+            }
+            let start = pos + 8;
+            let end = start.saturating_add(size).min(wav.len());
+            return Some((rate, channels, bits, &wav[start..end]));
         }
         pos += 8 + size + (size % 2);
     }
@@ -772,11 +815,94 @@ mod tests {
         wav.extend_from_slice(&2u16.to_le_bytes());
         wav.extend_from_slice(&16u16.to_le_bytes());
         wav.extend_from_slice(b"data");
-        wav.extend_from_slice(&0u32.to_le_bytes());
-        assert_eq!(wav_params(&wav), Some((16000, 1, 16, 44)));
+        wav.extend_from_slice(&4u32.to_le_bytes());
+        wav.extend_from_slice(&[1, 2, 3, 4]);
+        let (rate, channels, bits, pcm) = wav_params(&wav).unwrap();
+        assert_eq!((rate, channels, bits), (16000, 1, 16));
+        assert_eq!(pcm, &[1, 2, 3, 4]);
 
         // Non-WAV data is rejected.
-        assert_eq!(wav_params(b"not a wav file at all"), None);
+        assert_eq!(wav_params(b"not a wav file at all").map(|_| ()), None);
+    }
+
+    fn wav_with_data(data: u32, payload: &[u8], trailing: &[u8]) -> Vec<u8> {
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&0u32.to_le_bytes());
+        wav.extend_from_slice(b"WAVE");
+        wav.extend_from_slice(b"fmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+        wav.extend_from_slice(&16000u32.to_le_bytes());
+        wav.extend_from_slice(&32000u32.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data.to_le_bytes());
+        wav.extend_from_slice(payload);
+        wav.extend_from_slice(trailing);
+        wav
+    }
+
+    #[test]
+    fn wav_params_stops_at_the_data_chunk() {
+        // A LIST metadata chunk AFTER the audio must not be shipped as PCM:
+        // the data chunk's own size defines the payload (mirrors Go).
+        let payload = [9u8, 0, 8, 0, 7, 0];
+        let mut trailing = b"LIST".to_vec();
+        trailing.extend_from_slice(&4u32.to_le_bytes());
+        trailing.extend_from_slice(b"INFO");
+        let wav = wav_with_data(payload.len() as u32, &payload, &trailing);
+        let (_, _, _, pcm) = wav_params(&wav).unwrap();
+        assert_eq!(pcm, &payload, "trailing chunk leaked into the PCM payload");
+    }
+
+    #[test]
+    fn wav_params_clamps_a_truncated_data_chunk() {
+        // Declared size overruns the buffer: clamp rather than reject, so a
+        // short-but-real recording still transcribes.
+        let payload = [1u8, 2, 3, 4];
+        let wav = wav_with_data(1000, &payload, &[]);
+        let (_, _, _, pcm) = wav_params(&wav).unwrap();
+        assert_eq!(pcm, &payload[..]);
+    }
+
+    #[test]
+    fn wav_params_rejects_data_before_fmt() {
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&0u32.to_le_bytes());
+        wav.extend_from_slice(b"WAVE");
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&2u32.to_le_bytes());
+        wav.extend_from_slice(&[0, 0]);
+        assert_eq!(wav_params(&wav).map(|_| ()), None);
+    }
+
+    #[test]
+    fn default_model_is_protocol_aware() {
+        // The bug this pins: a step_audio profile with no explicit model
+        // used to be handed "whisper-1", because normalize ran before any
+        // per-protocol fallback could apply.
+        assert_eq!(default_asr_model(PROTOCOL_STEP_AUDIO), "stepaudio-2.5-asr");
+        assert_eq!(default_asr_model(PROTOCOL_TRANSCRIPTIONS), "whisper-1");
+        assert_eq!(default_asr_model(PROTOCOL_CHAT_COMPLETIONS), "whisper-1");
+
+        let mut cfg = AsrConfig {
+            active: String::new(),
+            profiles: vec![AsrProfile {
+                id: "p1".to_string(),
+                name: "step".to_string(),
+                protocol: PROTOCOL_STEP_AUDIO.to_string(),
+                url: "https://api.stepfun.com/asr".to_string(),
+                api_key: String::new(),
+                model: "  ".to_string(),
+                language: String::new(),
+            }],
+        };
+        normalize_asr_config(&mut cfg);
+        assert_eq!(cfg.profiles[0].model, "stepaudio-2.5-asr");
     }
 
     #[test]

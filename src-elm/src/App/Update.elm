@@ -38,6 +38,7 @@ import Plan.Meta as PM
 import Plan.Cascade as PC
 import Plan.Detect
 import Plan.Frames
+import Overlay.AsrConfig as AsrUI
 import Ports
 import Arch.Values as AV
 import Arch.Freeze as Freeze
@@ -5705,7 +5706,28 @@ update msg model =
             setAsrEditorField model (\ed -> { ed | name = val, error = Nothing })
 
         SetAsrProtocol val ->
-            setAsrEditorField model (\ed -> { ed | protocol = val, error = Nothing })
+            -- The default model id is protocol-specific, and the backend only
+            -- applies it when the field is EMPTY — so switching a prefilled
+            -- form to StepAudio used to keep sending "whisper-1" to StepFun.
+            -- Swap the default when the current value is still a default
+            -- (or empty); a model the user typed themselves is left alone.
+            setAsrEditorField model <|
+                \ed ->
+                    let
+                        untouched =
+                            String.trim ed.model == ""
+                                || List.member (String.trim ed.model) [ AsrUI.defaultModel "transcriptions", AsrUI.defaultModel "step_audio" ]
+                    in
+                    { ed
+                        | protocol = val
+                        , model =
+                            if untouched then
+                                AsrUI.defaultModel val
+
+                            else
+                                ed.model
+                        , error = Nothing
+                    }
 
         SetAsrUrl val ->
             setAsrEditorField model (\ed -> { ed | url = val, error = Nothing })
