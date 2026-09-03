@@ -2,6 +2,7 @@ module App.Update exposing
     ( update
     , SessionDir
     , decodeSessionDir
+    , decodeWarning
     , nextCopyName
     , movePreset
     , planFocusAboveSession
@@ -1092,12 +1093,10 @@ isLastMessage msgId s =
             False
 
 
-{-| Fixed plan mode (D2, R2): the planner hint injected via `--system`
-into EVERY session (user sessions and plan node sessions alike). No role
-lock — the model keeps its tools and may execute directly. For complex
-or multi-step tasks it should first emit a fenced ```json plan block
-(the framework auto-creates the plan); after outputting a plan it stops
-and waits for the plan to be executed and its result fed back.
+{-| Application message dispatcher. Feature logic lives in the focused
+modules this wires together (Plan/Update, App/Windows, Session/Handlers,
+App/Pointer…); keep new feature state in its own module rather than growing
+this case expression — see AGENTS.md "Architecture".
 -}
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
@@ -1429,8 +1428,10 @@ update msg model =
                             Nothing ->
                                 bufferPendingEvent model ev.sessionId raw
     
-                Err _ ->
-                    ( model, Cmd.none )
+                -- A malformed event here stops the transcript updating
+                -- while the window still looks alive — report it.
+                Err err ->
+                    ( model, Ports.logWarn (decodeWarning "DeltaEvent" err) )
 
         FrameEvent raw ->
             case D.decodeValue P.frameEventDecoder raw of
@@ -1677,8 +1678,10 @@ update msg model =
                             Nothing ->
                                 bufferPendingEvent model ev.sessionId raw
     
-                Err _ ->
-                    ( model, Cmd.none )
+                -- A malformed event here stops the transcript updating
+                -- while the window still looks alive — report it.
+                Err err ->
+                    ( model, Ports.logWarn (decodeWarning "FrameEvent" err) )
 
         StatusEvent raw ->
             case D.decodeValue P.statusEventDecoder raw of
@@ -1760,10 +1763,12 @@ update msg model =
                                 in
                                 ( model1, Cmd.batch [ cmds1, statusRunnerCmd ] )
     
-                Err _ ->
-                    ( model, Cmd.none )
+                -- A malformed event here stops the transcript updating
+                -- while the window still looks alive — report it.
+                Err err ->
+                    ( model, Ports.logWarn (decodeWarning "StatusEvent" err) )
 
-        -- Backend RPC failure (bridge.js catches invoke rejections and
+        -- Backend RPC failure (transport.js catches invoke rejections and
         -- forwards {kind, sessionId, message} via onRpcError). The
         -- critical case is send_prompt: the RPC can be rejected after
         -- the UI set sendPending=True (e.g. the session disconnected
@@ -6923,6 +6928,19 @@ pinchMove model =
 
 
 -- ─── Helpers ──────────────────────────────────────────────────────────
+
+{-| Console line for an inbound backend event whose JSON the decoder rejected.
+
+Kept as a pure function so the format is pinned by a test: these are the
+failures with no UI surface (AGENTS.md rule #1 — the app looks operational
+while the transcript has stopped updating), so the message is what a bug
+report has to go on. `label` names the port so the line points at the path
+that broke.
+-}
+decodeWarning : String -> D.Error -> String
+decodeWarning label err =
+    label ++ " decode failed: " ++ D.errorToString err
+
 
 updateAfterConfirm : Model -> String -> Model
 updateAfterConfirm model sid =

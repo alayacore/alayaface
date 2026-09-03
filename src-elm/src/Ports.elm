@@ -109,7 +109,7 @@ port module Ports exposing
     , onScroll
       -- Window state
     , onWindowMaximized
-      -- Canvas zoom (wheel from bridge.js, non-passive so the browser
+      -- Canvas zoom (wheel from transport.js, non-passive so the browser
       -- page zoom / scroll can be prevented)
     , onCanvasWheel
       -- Push-to-talk: the JS overlay captures the ` key (keydown with
@@ -125,6 +125,8 @@ port module Ports exposing
     , onPointerUp
     , onPointerCancel
     , longPressMenuOpened
+      -- Diagnostics
+    , logWarn
     )
 
 import Json.Encode as E
@@ -251,7 +253,7 @@ port deleteSessionDir : { sessionId : String, planId : Maybe String, nodeId : Ma
 -- The frontend fires this once on init (graceful close, history kept).
 port closeAllSessions : {} -> Cmd msg
 
--- Connection chain (P36/P39): Elm tells bridge.js EVERY segment of the
+-- Connection chain (P36/P39): Elm tells transport.js EVERY segment of the
 -- active connection path — from the focused session (or active plan
 -- window) up through each ancestor plan↔session pair to the TOP-LEVEL
 -- session — plus the CANVAS state needed to draw curves in CANVAS
@@ -344,7 +346,7 @@ port onScroll : ({ sessionId : String, scrollTop : Float, scrollHeight : Float, 
 port onWindowMaximized : (Bool -> msg) -> Sub msg
 
 
--- Canvas zoom: bridge.js forwards wheel events (with native scroll /
+-- Canvas zoom: transport.js forwards wheel events (with native scroll /
 -- browser zoom prevented) as { deltaY, clientX, clientY }.
 port onCanvasWheel : (E.Value -> msg) -> Sub msg
 
@@ -370,3 +372,18 @@ port onPointerCancel : (E.Value -> msg) -> Sub msg
 -- release click bubbles to .app and closes the menu it just opened.
 -- The 500ms threshold lives only in App/Pointer.longPressMs.
 port longPressMenuOpened : () -> Cmd msg
+
+
+{-| Outbound diagnostic channel for failures the UI has no surface for.
+
+AGENTS.md's first debugging rule exists because a swallowed decode failure
+leaves the app looking operational while tracking is dead — the user sees a
+normal window, the console sees nothing. Every place that used to be
+`Err _ -> ( model, Cmd.none )` on an INBOUND backend event should report
+through here instead: no dialog, no state change, just a line the developer
+(seeeing user included) can actually find. Remote/webview users can screenshot
+a banner; nobody can screenshot a console they were never told to open, so
+keep the truly user-facing failures on the status line / RpcError path and use
+this only for "the backend sent something we could not parse".
+-}
+port logWarn : String -> Cmd msg

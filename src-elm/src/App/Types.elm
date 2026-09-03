@@ -285,7 +285,7 @@ type alias Model =
     -- ancestor plan↔session pair to the TOP-LEVEL session (deep node
     -- sessions show their whole ancestor path, so the lines lead all
     -- the way up to the topmost session window). [] = nothing
-    -- connected. bridge.js draws one bezier per segment; Elm only
+    -- connected. transport.js draws one bezier per segment; Elm only
     -- tracks which segments are connected.
     , connectionChain : List NC.ChainSegment
     , homeDir : String

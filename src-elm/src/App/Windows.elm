@@ -181,7 +181,7 @@ both participants, since the plan sits directly above its owning
 session) — so no curve is buried. Returns the updated positions and the
 next free z index (rebased — z stays bounded, see `rebasePositions`).
 Windows without a recorded position (e.g. a closed plan) are skipped;
-bridge.js hides their segments anyway.
+transport.js hides their segments anyway.
 -}
 raiseChainWindows : Model -> List NC.ChainSegment -> ( Dict String WindowPos, Int )
 raiseChainWindows model chain =
@@ -381,7 +381,7 @@ dropChainSession chain sid =
 {-| Focus a session: raise it above everything else. If it belongs to a
 plan node, raise the whole connection chain (its plan window to the
 second layer, that plan's owning session below it, and so on up to the
-top-level session) and tell bridge.js to draw every segment — a deep
+top-level session) and tell transport.js to draw every segment — a deep
 node session's full path is visible. Otherwise hide any curves.
 -}
 originLiveId : Model -> String -> Maybe String
@@ -648,7 +648,7 @@ addPlanWindow key win model =
                 , planActiveId = Just key
                 , windowPositions = positions1
                 -- The new plan window is active: connect it to its owning
-                -- session (drawn by bridge.js via the setConnectionChain
+                -- session (drawn by transport.js via the setConnectionChain
                 -- port — PlanSaveReady emits the matching Cmd). For a
                 -- sub-plan the chain continues up to the top-level
                 -- session, so the whole ancestor path is visible.

@@ -1,6 +1,6 @@
 // ─── Overlay scrollbar (P37), canvas zoom, cursor/scroll ports ───────
 //
-// DOM-side concerns of the former bridge.js (M4/D5): the custom overlay
+// DOM-side concerns of the former transport.js (M4/D5): the custom overlay
 // scrollbar for .messages containers (native scrollbar hidden via CSS),
 // canvas zoom on wheel over the empty background (windows scroll
 // natively), and the cursor/scroll ports

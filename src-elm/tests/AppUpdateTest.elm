@@ -1,15 +1,59 @@
-module AppUpdateTest exposing (tests)
+module AppUpdateTest exposing (malformedEventTests, tests)
 
 import Dict
 import Set
 import Expect
+import Json.Decode as D
 import Json.Encode as E
 import App.Types as AT
 import App.Update
+import Session.Protocol as P
 import Plan.Update as PU
 import Test exposing (Test, describe, test)
 import TestHelpers exposing (initModelWithSession)
 import Arch.Values as AV
+
+
+{-| Inbound backend events whose JSON does not match the decoder are the
+AGENTS.md "app looks alive, tracking is dead" case: the old arms returned
+`( model, Cmd.none )`, discarding the reason. They now report through
+Ports.logWarn. Pinned here: the model must stay untouched (a malformed event
+must not half-apply) and the arm must produce a command (the diagnostic)
+instead of swallowing it silently.
+-}
+malformedEventTests : Test
+malformedEventTests =
+    let
+        -- A frame event missing `tag`, so the decoder rejects it.
+        brokenFrame =
+            E.object [ ( "session_id", E.string "s1" ), ( "content", E.string "x" ) ]
+
+        ignored name msg =
+            test name <|
+                \_ ->
+                    let
+                        ( m, _ ) =
+                            App.Update.update msg TestHelpers.initModelWithSession
+                    in
+                    Expect.equal 1 (Dict.size m.sessions)
+    in
+    describe "malformed inbound events are reported, not swallowed"
+        [ ignored "DeltaEvent leaves the model alone" (AT.DeltaEvent brokenFrame)
+        , ignored "FrameEvent leaves the model alone" (AT.FrameEvent brokenFrame)
+        , ignored "StatusEvent leaves the model alone" (AT.StatusEvent brokenFrame)
+        , test "the warning names the broken port and carries the decoder reason" <|
+            \_ ->
+                case D.decodeValue P.frameEventDecoder brokenFrame of
+                    Err err ->
+                        Expect.all
+                            [ String.startsWith "FrameEvent decode failed: " >> Expect.equal True
+                            , \w -> Expect.equal True (String.contains "tag" w)
+                            ]
+                            (App.Update.decodeWarning "FrameEvent" err)
+
+                    Ok _ ->
+                        Expect.fail "the fixture must be undecodable, or the test proves nothing"
+        ]
 
 
 tests : Test

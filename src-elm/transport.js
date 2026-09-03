@@ -13,7 +13,7 @@
 // backend event listeners. DOM/overlay concerns live in overlay.js
 // (scrollbar, canvas zoom, cursor/scroll ports) and chain.js
 // (connection-chain SVG overlays) — M4/D5 split of the former
-// bridge.js. The Elm port wiring is identical for both backends.
+// transport.js. The Elm port wiring is identical for both backends.
 
 (function () {
   "use strict";
@@ -204,6 +204,14 @@
       });
       console.error("[" + kind + "] failed:", message);
     }
+
+    // Diagnostic sink for Ports.logWarn: a backend event the client cannot
+    // parse otherwise vanishes, and the transcript looks alive while it has
+    // silently stopped updating (AGENTS.md debugging rule #1). No UI, no
+    // state — just a console line that survives a bug report.
+    on("logWarn", function (msg) {
+      console.warn("[alayaface] " + msg);
+    });
 
     // 2. Subscribe to all Elm ports SYNCHRONOUSLY
 
