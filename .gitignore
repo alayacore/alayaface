@@ -43,3 +43,9 @@ src-go/bin/
 # debugging the AppImage's bundled binaries.
 /squashfs-root/
 **/squashfs-root/
+
+# AlayaCore session files. Running a core (or an agent session) with the repo
+# as the working directory drops its session next to it — `a.alaya`, ~1 MB of
+# conversation. It is runtime state, never a repo input, and `git add -A` in
+# that directory would otherwise commit it.
+*.alaya
