@@ -166,6 +166,23 @@ mod tests {
     // everywhere. Per-module statics can't be initialised with a
     // borrow of a sibling module's static — hence the function.)
 
+    /// `check_alayacore()` against a stub this test just wrote, retrying the
+    /// transient ETXTBSY that execve can return for a freshly written file on
+    /// a loaded Linux runner (same race `alayacore::tests::spawn_stub` covers;
+    /// see the note there for why the retry stays in the tests and not in
+    /// production `check_alayacore`). On platforms that never report it, the
+    /// first result is returned unchanged.
+    fn check_alayacore_retrying() -> AlayacoreCheck {
+        for attempt in 0..20u32 {
+            let got = check_alayacore();
+            if got.ok || !got.error.contains("Text file busy") || attempt == 19 {
+                return got;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        unreachable!("the loop returns on its last iteration")
+    }
+
     /// Process-global counter so two parallel tests cannot pick the
     /// same temp dir name. Linux returns ETXTBSY ("Text file busy")
     /// when two tests concurrently write the same fake-alayacore
@@ -244,7 +261,7 @@ while True:
         let bin = write_fake_alayacore(&dir, crate::alayacore::SUPPORTED_MESSAGE_VERSION);
         std::env::set_var("ALAYACORE_BIN", &bin);
 
-        let got = check_alayacore();
+        let got = check_alayacore_retrying();
         assert!(got.ok, "ok=false for a real binary at {:?}", bin);
         assert_eq!(got.path, bin.to_string_lossy().to_string());
         assert!(got.error.is_empty(), "error must be empty on ok: {:?}", got.error);
@@ -276,6 +293,9 @@ while True:
         let orig_cwd = std::env::current_dir().unwrap();
         std::env::set_current_dir(&empty_path).unwrap();
 
+        // No retry here on purpose: nothing was written, so there is no
+        // busy-stub race to absorb — this test asserts the missing-binary
+        // path and must see whatever the real error is.
         let got = check_alayacore();
         // Restore env before any assertions so a failure leaves the
         // process in a sane state for the next test.
@@ -324,7 +344,7 @@ while True:
         // first; /usr/bin is the fallback for everything else.
         std::env::set_var("PATH", format!("{}:/usr/bin", dir.display()));
 
-        let got = check_alayacore();
+        let got = check_alayacore_retrying();
 
         // Restore env before any assertions so a failure leaves the
         // process in a sane state for the next test.
@@ -377,7 +397,7 @@ while True:
         // PATH so concurrent tests' PATH lookups don't race-fail.
         std::env::set_var("PATH", format!("{}:/usr/bin", dir.display()));
 
-        let got = check_alayacore();
+        let got = check_alayacore_retrying();
 
         std::env::set_var("PATH", orig_path);
         if orig_bin.is_empty() {

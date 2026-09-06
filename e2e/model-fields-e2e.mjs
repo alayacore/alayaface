@@ -19,15 +19,15 @@
 // fakecore records each model_sync payload in <preset>/model_sync.last.json,
 // which is what step 3 reads.
 import puppeteer from "puppeteer-core";
-import { spawn, execSync } from "child_process";
+import { spawn } from "child_process";
 import { mkdtempSync, rmSync, readFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { buildGoBinaries } from "./build-binaries.mjs";
 
 const CHROME = process.env.CHROME || "/usr/bin/google-chrome";
 const GO_DIR = join(process.cwd(), "..", "src-go");
-const FAKECORE = join(GO_DIR, "bin", "fakecore");
-const SERVER = join(GO_DIR, "bin", "alayaface-server");
+let FAKECORE, SERVER;
 const STATIC = join(process.cwd(), "..", "src-elm");
 
 const home = mkdtempSync(join(tmpdir(), "alayaface-mc-"));
@@ -37,9 +37,8 @@ console.log("HOME:", home, "port:", port);
 
 // Built here rather than inherited from whichever script ran first: this
 // suite asserts on fakecore's model_sync record, so it has to be THIS
-// checkout's fakecore, not a stale binary in bin/.
-execSync(`go build -o "${FAKECORE}" ./internal/fakecore`, { cwd: GO_DIR, stdio: "inherit" });
-execSync(`go build -o "${SERVER}" ./cmd/alayaface-server`, { cwd: GO_DIR, stdio: "inherit" });
+// checkout's fakecore, not a stale binary left in bin/.
+({ fakecore: FAKECORE, server: SERVER } = buildGoBinaries(join(process.cwd(), "..")));
 
 const server = spawn(SERVER, ["--addr", `127.0.0.1:${port}`, "--static", STATIC, "--alayacore-bin", FAKECORE], { env, stdio: "inherit" });
 

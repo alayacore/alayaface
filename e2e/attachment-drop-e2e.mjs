@@ -9,12 +9,14 @@ import { spawn } from "child_process";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { buildGoBinaries } from "./build-binaries.mjs";
 
 const CHROME = process.env.CHROME || "/usr/bin/google-chrome";
-const GO_DIR = join(process.cwd(), "..", "src-go");
-const FAKECORE = join(GO_DIR, "bin", "fakecore");
-const SERVER = join(GO_DIR, "bin", "alayaface-server");
 const STATIC = join(process.cwd(), "..", "src-elm");
+
+// Built here, not assumed: on a clean checkout src-go/bin does not exist,
+// and this script used to fail with `spawn ... ENOENT`.
+const { fakecore: FAKECORE, server: SERVER } = buildGoBinaries(join(process.cwd(), ".."));
 
 const home = mkdtempSync(join(tmpdir(), "alayaface-drop-"));
 const port = 9301 + Math.floor(Math.random() * 200);

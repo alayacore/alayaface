@@ -539,6 +539,65 @@ mod tests {
         ))
     }
 
+    /// `spawn()` a stub binary the test just wrote, retrying the transient
+    /// ETXTBSY a loaded Linux runner can return from execve of a file that
+    /// was written moments ago.
+    ///
+    /// The retry lives here rather than in production `spawn()`, on purpose.
+    /// ETXTBSY means some process still held the file open for writing at
+    /// execve time — and nothing in this repo can be that process: every
+    /// stub path is unique per test (see `temp_path`) and Rust opens files
+    /// CLOEXEC, so no child inherits a writer. That leaves the runner's own
+    /// tooling (shared CI images scan new files under /tmp). A real
+    /// alayacore binary is installed, not rewritten under a running app, so
+    /// `spawn()` must keep failing loudly there instead of masking a genuine
+    /// "someone is replacing my binary" error.
+    fn spawn_stub(bin: &std::path::Path) -> std::io::Result<CoreProcess> {
+        use std::io::ErrorKind;
+        let path = bin.to_str().expect("stub path is utf-8");
+        for attempt in 0..20u32 {
+            match spawn(path, "", "", "", None, "", 1, None) {
+                Err(e) if e.kind() == ErrorKind::ExecutableFileBusy && attempt < 19 => {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                other => return other,
+            }
+        }
+        unreachable!("the loop returns on its last iteration")
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn spawn_stub_recovers_while_the_stub_is_busy() {
+        // The retry in `spawn_stub` is the only thing standing between these
+        // PATH tests and a runner-level ETXTBSY, so it needs a case that
+        // actually provokes one: hold a write fd open on the stub (which is
+        // what makes execve fail — verified: `ExecutableFileBusy`, errno 26),
+        // release it from another thread, and require the spawn to land.
+        let dir = temp_path("stub-busy");
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("fake-alayacore");
+        std::fs::write(&bin, b"#!/bin/sh\necho \"$PATH\"\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let holder = std::fs::OpenOptions::new().write(true).open(&bin).unwrap();
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(250));
+            drop(holder);
+        });
+
+        let mut core = spawn_stub(&bin).expect("spawn_stub must survive a busy stub");
+        use std::io::Read;
+        let mut out = String::new();
+        core.stdout.read_to_string(&mut out).unwrap();
+        let _ = core.child.wait();
+        releaser.join().unwrap();
+
+        assert!(!out.trim().is_empty(), "the stub ran and printed its PATH");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn graceful_close_writes_save_frame_and_eof() {
         // Child copies stdin to a file and exits on EOF — mirrors
@@ -740,11 +799,7 @@ mod tests {
         std::fs::write(&bin, b"#!/bin/sh\necho \"$PATH\"\n").unwrap();
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        let mut core = spawn(
-            bin.to_str().unwrap(),
-            "", "", "", None, "", 1, None,
-        )
-        .expect("spawn");
+        let mut core = spawn_stub(&bin).expect("spawn");
         let mut out = String::new();
         use std::io::Read;
         core.stdout.read_to_string(&mut out).unwrap();
@@ -779,11 +834,7 @@ mod tests {
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         let original_path = std::env::var_os("PATH").unwrap_or_default();
-        let mut core = spawn(
-            bin.to_str().unwrap(),
-            "", "", "", None, "", 1, None,
-        )
-        .expect("spawn");
+        let mut core = spawn_stub(&bin).expect("spawn");
         let mut out = String::new();
         use std::io::Read;
         core.stdout.read_to_string(&mut out).unwrap();

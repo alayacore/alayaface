@@ -80,10 +80,14 @@ test-go:
 # Which scripts to run comes from e2e/scripts.txt — the SAME file CI reads.
 # Four scripts rotted for weeks because they were in neither runner's list
 # (and the lists had already drifted: CI ran 2, this target ran 7).
+# Every script runs even after a failure and the target fails if any did:
+# `|| exit 1` stops at the first and hides the rest.
 e2e: elm
 	cd e2e && $(NPM) install
-	cd e2e && for t in $$(grep -v '^\s*\#' scripts.txt | grep -v '^\s*$$'); do \
-		echo "== $$t-e2e.mjs"; node "$$t-e2e.mjs" || exit 1; done
+	cd e2e && failed=""; for t in $$(grep -v '^\s*\#' scripts.txt | grep -v '^\s*$$'); do \
+		echo "== $$t-e2e.mjs"; node "$$t-e2e.mjs" || failed="$$failed $$t"; done; \
+	if [ -n "$$failed" ]; then echo "FAILED e2e suites:$$failed"; exit 1; fi; \
+	echo "all e2e suites passed"
 
 # Clean Go build artifacts
 clean-go:
