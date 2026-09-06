@@ -18,8 +18,9 @@
 //	              replies CO ok with the path
 //	model_set     replies CO ok with the model id echoed
 //	model_load    emits SM model_list then replies CO ok
-//	model_sync    replies CO ok; if input contains `"invalid"` replies
-//	              CO with is_error=true ({"message":"invalid config"})
+//	model_sync    replies CO ok and records the payload in
+//	              <config-path>/model_sync.last.json; if input contains
+//	              `"invalid"` replies CO with is_error=true
 //	tool_confirm / tool_decline — replies CO ok with the tool id
 //	cancel        replies CO ok
 //	mcp_decline / mcp_cancel — replies CO ok
@@ -54,6 +55,11 @@ import (
 // emitted: prompts before it are rejected (MCP_NOT_READY).
 var sessionFile string
 var configDir string
+
+// modelSyncRecord is the file inside --config-path that holds the payload of
+// the last model_sync, for tests that assert what the client actually sent.
+const modelSyncRecord = "model_sync.last.json"
+
 var readySent bool
 
 // histMsg is one recorded message of this session's history. The fake
@@ -399,9 +405,25 @@ func coErr(id, message string) {
 }
 
 func smModelList() {
-	// Full ModelInfo shape (mirrors real alayacore's model_list so the
-	// Elm modelInfoDecoder accepts it): id, name, protocol_type,
-	// base_url, api_key, model_name, context_limit, max_tokens.
+	// Full ModelInfo shape, mirroring real alayacore's protocol.ModelInfo
+	// field for field: id, name, protocol_type, base_url, api_key,
+	// model_name, context_limit, max_tokens, reasoning_field,
+	// reasoning_0/1/2, serial_tool_calls.
+	//
+	// Two details of the real payload are reproduced on purpose, because
+	// AlayaFace rewrites model.conf from what it reads here:
+	//   - serial_tool_calls has no omitempty upstream, so it is ALWAYS
+	//     present, and fakecore always sends it too;
+	//   - the other optional fields appear only when set, so the client's
+	//     "absent means the provider default" path stays covered.
+	//
+	// fake-model-2 also carries `quantization`, a key AlayaFace does not
+	// model, to prove AlayaFace carries an unknown key back out in the
+	// :model_sync payload instead of dropping it. (What real alayacore then
+	// does with a key IT does not model is its own business: it parses into
+	// its struct and writes from that, so such a key never becomes a
+	// model.conf line either way — extras protects a key the core knows and
+	// this client build does not yet.)
 	//
 	// In --llm-url mode the canned fake-model-* entries (which point at
 	// a non-running localhost:11434) are replaced with a single entry
@@ -418,15 +440,23 @@ func smModelList() {
 			}
 		}
 		payload := fmt.Sprintf(
-			`{"type":"model_list","data":{"models":[{"id":1,"name":%q,"protocol_type":"openai","base_url":%q,"api_key":"","model_name":%q,"context_limit":262144,"max_tokens":0}]}}`,
+			`{"type":"model_list","data":{"models":[{"id":1,"name":%q,"protocol_type":"openai","base_url":%q,"api_key":"","model_name":%q,"context_limit":262144,"max_tokens":0,"serial_tool_calls":false}]}}`,
 			name, llmURL, llmModel,
 		)
 		writeFrame("SM", payload)
 		return
 	}
 	payload := `{"type":"model_list","data":{"models":[` +
-		`{"id":1,"name":"fake-model-1","protocol_type":"openai","base_url":"http://localhost:11434/v1","api_key":"fake","model_name":"model-1","context_limit":8192,"max_tokens":2048},` +
-		`{"id":2,"name":"fake-model-2","protocol_type":"openai","base_url":"http://localhost:11434/v1","api_key":"fake","model_name":"model-2","context_limit":16384,"max_tokens":4096}]}}`
+		// A plain entry: no optional field set, so the editor must show
+		// AlayaCore's defaults (reasoning_content, concurrent tool calls).
+		`{"id":1,"name":"fake-model-1","protocol_type":"openai","base_url":"http://localhost:11434/v1","api_key":"fake","model_name":"model-1","context_limit":8192,"max_tokens":2048,"serial_tool_calls":false},` +
+		// An entry configured the way a vLLM endpoint is: reasoning under
+		// the other key, per-level provider JSON, tool calls that must run
+		// one at a time.
+		`{"id":2,"name":"fake-model-2","protocol_type":"openai","base_url":"http://localhost:11434/v1","api_key":"fake","model_name":"model-2","context_limit":16384,"max_tokens":4096,"reasoning_field":"reasoning","reasoning_1":{"thinking":{"type":"enabled"}},"reasoning_2":{"thinking":{"type":"enabled"},"effort":"max"},"serial_tool_calls":true,` +
+		// A key AlayaFace has never heard of, which must come back out on
+		// the other side of an edit+sync.
+		`"quantization":"awq"}]}}`
 	writeFrame("SM", payload)
 }
 
@@ -508,6 +538,20 @@ func handleCmd(raw string) {
 		if strings.Contains(msg.Input, `"invalid"`) {
 			coErr(msg.ID, "invalid config")
 			return
+		}
+		// Real alayacore REWRITES model.conf from this payload, which is why
+		// a field the client drops is a field the user loses. Recording the
+		// payload verbatim gives the E2E suite something to assert on;
+		// modelSyncRecord is fakecore-only and no production code reads it.
+		if configDir != "" {
+			if err := os.MkdirAll(configDir, 0o755); err != nil {
+				coErr(msg.ID, "cannot write config dir")
+				return
+			}
+			if err := os.WriteFile(filepath.Join(configDir, modelSyncRecord), []byte(msg.Input), 0o644); err != nil {
+				coErr(msg.ID, "cannot write "+modelSyncRecord)
+				return
+			}
 		}
 		coOk(msg.ID, map[string]any{"message": "synced"})
 	case "tool_confirm", "tool_decline":

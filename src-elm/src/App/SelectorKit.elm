@@ -59,6 +59,11 @@ type alias Kit item draft =
     , draftIdOf : draft -> Int
     , itemOfDraft : draft -> item
     , updateDraftField : String -> String -> draft -> draft
+    -- Why a draft must not be saved, as (field key, message). An empty
+    -- list means the draft can be encoded without inventing a value.
+    -- Overlay.ModelEditor shows these and disables Save; `editSave`
+    -- refuses on them too so the view cannot be bypassed.
+    , problems : draft -> List ( String, String )
     , inputId : Model -> String
     , editorId : Model -> String
     , scrollItemId : Model -> Int -> String
@@ -170,11 +175,27 @@ editBack kit model =
 
 editSave : Kit item draft -> Model -> ( Model, Cmd Msg )
 editSave kit model =
-    ( kit.set
-        (Sel.saveItem kit.draftIdOf kit.itemOfDraft kit.idOf kit.setIdOf (kit.get model))
-        model
-    , focusAndCursor (kit.inputId model)
-    )
+    let
+        st =
+            kit.get model
+
+        blocked =
+            Maybe.map kit.problems st.draft |> Maybe.withDefault []
+    in
+    -- A draft carrying a value the codec cannot express (unparsable
+    -- provider JSON, a non-numeric token limit) must not enter `working`:
+    -- it would reach model.conf as a deleted line, the exact silent loss
+    -- the model editor exists to avoid. Stay on the edit page and say why.
+    case blocked of
+        ( _, message ) :: _ ->
+            ( kit.set (Sel.rejectDraft message st) model
+            , Cmd.none
+            )
+
+        [] ->
+            ( kit.set (Sel.saveItem kit.draftIdOf kit.itemOfDraft kit.idOf kit.setIdOf st) model
+            , focusAndCursor (kit.inputId model)
+            )
 
 
 editField : Kit item draft -> String -> String -> Model -> ( Model, Cmd Msg )

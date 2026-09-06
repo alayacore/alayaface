@@ -1,0 +1,18 @@
+# model.conf / :model_list field names, from AlayaCore
+# internal/protocol/protocol.go (type ModelInfo), as of the run of
+# scripts/check-model-schema.sh that last touched this file.
+# AlayaCore is a separate repo and is absent in CI, so this is what
+# the schema check compares against there.
+api_key
+base_url
+context_limit
+id
+max_tokens
+model_name
+name
+protocol_type
+reasoning_0
+reasoning_1
+reasoning_2
+reasoning_field
+serial_tool_calls

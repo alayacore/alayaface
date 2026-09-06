@@ -95,6 +95,7 @@ One-way push (server → client), message format:
 | `alayacore_mcp_decline` | `POST /rpc/alayacore_mcp_decline` | `sessionId`, `server` | — |
 | `alayacore_mcp_cancel` | `POST /rpc/alayacore_mcp_cancel` | `sessionId` | — |
 | `list_models` | `POST /rpc/list_models` | `binaryPath`, `configPath` | `[model]` |
+
 | `list_default_models` | `POST /rpc/list_default_models` | `binaryPath`, `preset` | `{models, active_id}` |
 | `sync_default_models` | `POST /rpc/sync_default_models` | `binaryPath`, `config`, `preset` | CO `output` |
 | `set_default_model` | `POST /rpc/set_default_model` | `preset`, `modelId` | CO `output` (probe `model_set` → persists `active_model` into the preset's runtime.conf) |
@@ -117,6 +118,15 @@ One-way push (server → client), message format:
 | `fs_delete_file` | `POST /rpc/fs_delete_file` | `path` | — |
 | `start_mcp_auth_flow` | `POST /rpc/start_mcp_auth_flow` | `sessionId`, `serverName`, `authUrl` | string filled URL |
 | `fill_mcp_auth_url` | `POST /rpc/fill_mcp_auth_url` | `sessionId`, `serverName`, `authUrl` | string filled URL |
+
+> **`model` is opaque to both backends.** They carry `model_list` /
+> `model_sync` payloads as raw JSON (`[]json.RawMessage` in Go,
+> `Vec<serde_json::Value>` in Rust) and never interpret a field — the
+> AlayaCore `model.conf` schema lives in exactly one place, the client's
+> `src-elm/src/Session/ModelConfig.elm` (see `AGENTS.md`; guarded by
+> `make check-schema`). Adding a model field to AlayaCore therefore needs
+> no backend change and DOES need a ModelConfig one, or the field is
+> deleted from `model.conf` on the next save.
 
 > Note: snake_case fields in Rust command returns (`tool_confirm`,
 > `builtin_tools`, `system_prompt`, `media_type`, ...) are serde defaults (no rename). Go JSON tags must

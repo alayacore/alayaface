@@ -1,4 +1,4 @@
-.PHONY: all elm run-tauri dev build-tauri test-tauri clean-tauri run-go build-go test-go e2e clean-go
+.PHONY: all elm run-tauri dev build-tauri test-tauri clean-tauri run-go build-go test-go check-parity check-schema e2e clean-go
 
 ELM       := elm
 CARGO     := cargo
@@ -57,6 +57,15 @@ build-go: elm
 .PHONY: check-parity
 check-parity:
 	./scripts/check-backend-parity.sh
+
+# Model-config schema check: AlayaFace must model every model.conf field —
+# :model_sync replaces the list, so an unmodelled key is deleted from the
+# user's model.conf. Compares src-elm/src/Session/ModelConfig.elm against
+# AlayaCore's protocol.ModelInfo (or the checked-in fixture when AlayaCore,
+# a separate repo, is not checked out).
+.PHONY: check-schema
+check-schema:
+	./scripts/check-model-schema.sh
 
 # Run Go backend test suites (-race: the backends are concurrent by design —
 # session readers, the hub, graceful close — and AGENTS.md requires -race

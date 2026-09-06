@@ -13,6 +13,7 @@ module Session.Selector exposing
     , backFromEdit
     , updateDraft
     , saveItem
+    , rejectDraft
     , requestDelete
     , confirmDeleteItem
     , cancelDelete
@@ -215,10 +216,24 @@ saveItem draftId draftToItem itemId setItemId st =
                 | page = ModelSelList
                 , working = working
                 , draft = Nothing
+                , syncError = Nothing
             }
 
         Nothing ->
             st
+
+
+{-| Keep the user on the edit page because the draft cannot be encoded
+without inventing a value (see `App.SelectorKit.editSave`). The reason
+goes in `syncError`, which the editor renders above the fields: a Save
+that silently did nothing would look like a lost click.
+-}
+rejectDraft : String -> State item draft -> State item draft
+rejectDraft reason st =
+    { st
+        | page = ModelSelEdit
+        , syncError = Just reason
+    }
 
 
 requestDelete : Int -> State item draft -> State item draft

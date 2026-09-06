@@ -111,6 +111,8 @@
 - [ ] Simple/Complex show a "built-in" tag with NO Rename and NO Delete button; copies (e.g. Simple-copy) have both
 - [ ] `rename_preset` / `delete_preset` on Simple or Complex are rejected by the backend even without the UI
 - [ ] Each seed preset's Settings editor shows a System prompt (the plan contract) which reaches the session as `--system`
+- [ ] Preset Models editor → Edit shows a control for **every** `model.conf` field (incl. `reasoning_field`, `reasoning_0/1/2`, `serial_tool_calls`); saving one edit leaves the others intact — `model_sync` rewrites the whole file, so a dropped field is a deleted line
+- [ ] Preset Models editor: typing broken JSON into a `reasoning_N` block names the field and disables Save (it must not be dropped silently)
 - [ ] Preset Models editor: click "Set Default" on a model → it becomes the preset's default (● marker + header `preset · model`), runtime.conf gains `active_model: <name>`, and a NEW session under that preset starts on that model
 - [ ] Global menu → New Session hover submenu lists the presets and creates the session under the chosen preset (spawn log shows `preset=...`)
 - [ ] Plan node sessions under the Complex preset get Complex's system_prompt (spawn log `--system` + `preset=Complex`)

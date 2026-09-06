@@ -174,6 +174,14 @@ for you:
   servers (`mcp.conf`) and AlayaFace-owned `settings.conf`
   (`tool_confirm`, `builtin_tools`, `reasoning_level` 0|1|2,
   `system_prompt`) — edit via **Preset Manager** → Edit → Settings.
+- The **model editor** shows every `model.conf` field AlayaCore knows —
+  `name`, `protocol_type`, `base_url`, `api_key`, `model_name`,
+  `context_limit`, `max_tokens`, `reasoning_field`, the per-level
+  `reasoning_0/1/2` provider JSON, and `serial_tool_calls` — because
+  `model_sync` *replaces* the list: a field the editor did not carry would
+  be deleted from your `model.conf` on the next save. Keys newer than this
+  build are carried through untouched rather than dropped
+  (`src-elm/src/Session/ModelConfig.elm`, checked by `make check-schema`).
 - `~/.alayaface/preset_order.conf` records the **display order** of the
   preset list (a JSON array of names) — reorder presets by dragging the
   ⠿ handle in **Preset Manager**; presets missing from the file are

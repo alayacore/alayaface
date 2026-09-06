@@ -39,6 +39,12 @@ jobs:
       - name: Unit tests
         run: elm-test
         working-directory: src-elm
+      # model.conf schema guard: AlayaFace has to model every field AlayaCore
+      # sends, or an edit deletes it from the user's model.conf. Uses
+      # testdata/alayacore-model-fields.txt here (AlayaCore is a separate
+      # repo, absent from CI).
+      - name: Model schema check
+        run: ./scripts/check-model-schema.sh
 
   rust:
     name: Tauri (Rust)

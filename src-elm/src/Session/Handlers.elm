@@ -1,7 +1,6 @@
 module Session.Handlers exposing
     ( handleDeltaEvent
     , handleFrameEvent
-    , modelInfoDecoder
     )
 
 import Dict exposing (Dict)
@@ -10,21 +9,7 @@ import Json.Decode as D
 import Json.Encode as E
 import Session.Types exposing (..)
 import Session.Protocol exposing (..)
-
-
--- Model Info Decoder
-
-modelInfoDecoder : D.Decoder ModelInfo
-modelInfoDecoder =
-    D.map8 ModelInfo
-        (D.field "id" D.int)
-        (D.field "name" D.string)
-        (D.field "protocol_type" D.string)
-        (D.field "base_url" D.string)
-        (D.field "api_key" D.string)
-        (D.field "model_name" D.string)
-        (D.oneOf [ D.field "context_limit" D.int, D.succeed 0 ])
-        (D.oneOf [ D.field "max_tokens" D.int, D.succeed 0 ])
+import Session.ModelConfig as MC
 
 
 -- Delta Event Handler (At/Ar)
@@ -499,7 +484,7 @@ handleSystemModelList : SessionState -> D.Value -> SessionState
 handleSystemModelList s data =
     let
         modelsResult =
-            D.decodeValue (D.field "models" (D.list modelInfoDecoder)) data
+            D.decodeValue (D.field "models" (D.list MC.modelInfoDecoder)) data
     in
     case modelsResult of
         Ok models ->

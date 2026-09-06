@@ -15,3 +15,4 @@ close-confirm
 cancel-confirm
 pt
 voice
+model-fields

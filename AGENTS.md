@@ -51,6 +51,22 @@ not). `scripts/check-backend-parity.sh` asserts the command names match
 spawn arguments (`--tool-confirm`, `--builtin-tools`, `--system`, work dir)
 and the config files (`model.conf`, `mcp.conf`, `settings.conf`, `global.conf`).
 
+**`model.conf`: the schema lives in ONE module.** `src-elm/src/Session/ModelConfig.elm`
+owns the field list, the `model_list` decoder, the `model_sync` encoder and the
+editor form (`Overlay.ModelEditor` renders `ModelConfig.fields` and names no
+field itself). This is not tidiness — `:model_sync` *replaces* the list and
+AlayaCore rewrites `model.conf` from what comes back, so any field AlayaFace
+does not carry is silently DELETED from the user's file on the next save. The
+symptom is two hops away ("the REASONING window never appears", "tool calls
+overlapped again") and nothing logs it; `reasoning_field`, `serial_tool_calls`
+and `reasoning_0/1/2` were each lost this way. When AlayaCore adds a model
+field: run `make check-schema` (it diffs `protocol.ModelInfo` against this
+repo and refreshes `testdata/alayacore-model-fields.txt`), add the field to
+`ModelConfig.fields` with its decode + encode, and `elm-test`
+(`tests/ModelConfigTest.elm` pins the round trip). Keys this build does not
+know survive via `ModelInfo.extras`, so an unupdated AlayaFace degrades to
+"cannot edit" instead of "deletes it".
+
 ## Verification (run before every commit)
 
 ```bash
@@ -58,6 +74,7 @@ make test-go                        # go vet + go test -race ./...
 cd src-elm && elm make src/Main.elm --output=/tmp/m.js && elm-test
 cd src-tauri && cargo test          # (and cargo clippy --lib: no errors)
 ./scripts/check-backend-parity.sh
+make check-schema                   # model.conf fields vs AlayaCore
 make e2e                            # every script in e2e/scripts.txt
 ```
 

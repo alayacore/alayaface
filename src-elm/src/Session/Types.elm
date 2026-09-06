@@ -22,7 +22,6 @@ module Session.Types exposing
     , latestMcpProtoVersion
     , mcpProtoVersions
     , emptySession
-    , emptyDraft
     , FilePickerState
     , emptyFilePicker
     , PendingConfirm
@@ -375,6 +374,15 @@ emptyFilePicker =
     }
 
 
+{-| One entry of AlayaCore's `model.conf`, as the UI knows it.
+
+The field set mirrors AlayaCore's `protocol.ModelInfo` (the `:model_list`
+payload) EXACTLY, and every field is editable in Overlay.ModelEditor.
+That is not cosmetic: `:model_sync` replaces the whole list and AlayaCore
+rewrites `model.conf` from it, so a field missing here is a field deleted
+from the user's config file. `extras` (see ModelConfig) catches keys newer
+than this record for the same reason.
+-}
 type alias ModelInfo =
     { id : Int
     , name : String
@@ -384,9 +392,20 @@ type alias ModelInfo =
     , modelName : String
     , contextLimit : Int
     , maxTokens : Int
+    , reasoningField : String
+    , reasoning0 : String
+    , reasoning1 : String
+    , reasoning2 : String
+    , serialToolCalls : Bool
+    , extras : Dict String String
     }
 
 
+{-| The edit-form draft of a `ModelInfo`: every value is the text as typed,
+so a half-finished input survives a keystroke instead of snapping to a
+number. `Session.ModelConfig.modelFromDraft` converts on save, and
+`draftProblems` blocks the save when the text cannot be converted.
+-}
 type alias ModelDraft =
     { id : Int
     , name : String
@@ -396,6 +415,12 @@ type alias ModelDraft =
     , modelName : String
     , contextLimit : String
     , maxTokens : String
+    , reasoningField : String
+    , reasoning0 : String
+    , reasoning1 : String
+    , reasoning2 : String
+    , serialToolCalls : String
+    , extras : Dict String String
     }
 
 
@@ -462,19 +487,6 @@ latestMcpProtoVersion =
 mcpProtoVersions : List String
 mcpProtoVersions =
     [ "2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25", latestMcpProtoVersion ]
-
-
-emptyDraft : ModelDraft
-emptyDraft =
-    { id = 0
-    , name = ""
-    , protocolType = "openai"
-    , baseUrl = ""
-    , apiKey = ""
-    , modelName = ""
-    , contextLimit = "0"
-    , maxTokens = "0"
-    }
 
 
 emptySession : String -> SessionState

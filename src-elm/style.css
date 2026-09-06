@@ -2365,6 +2365,16 @@ body {
   line-height: 1.4;
 }
 
+/* Why Save is disabled, attached to the field that caused it. An editor
+   that silently refuses to save reads as a lost click, so the reason has
+   to sit where the typo is. */
+.me-field-error {
+  font-size: 0.72rem;
+  color: #f87171;
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
 .me-field-input {
   padding: 6px 10px;
   border-radius: var(--r-sm);
@@ -2581,6 +2591,7 @@ body {
 
 @media (prefers-color-scheme: light) {
   .me-field-label { color: #666; }
+  .me-field-error { color: #dc2626; }
   .me-field-input { background: white; color: #1a1a2e; border-color: #d0d0d8; }
   .me-field-input:focus { border-color: #6366f1; }
   .me-field-select option { background: #fff; color: #1a1a2e; }

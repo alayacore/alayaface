@@ -19,6 +19,7 @@ import App.Types exposing (..)
 import App.Update exposing (SessionDir, decodeSessionDir, nextCopyName)
 import Icons
 import Session.Types as T
+import Session.ModelConfig as MC
 import Session.Selector as Sel exposing (Page(..))
 import Session.FilePicker as FP
 import Session.ToolView as ToolView
@@ -2371,9 +2372,9 @@ viewModelSelectorOverlay sid session =
                             Overlay.ModelEditor.view
                                 { sessionId = sid
                                 , draft = draft
-                                , isNew = draft.id == 0
                                 , onSave = ForSession sid ModelSelectorEditSave
                                 , onField = \field value -> ForSession sid (ModelSelectorEditField field value)
+                                , error = session.modelSelector.syncError
                                 }
 
                         Nothing ->
@@ -2415,7 +2416,7 @@ viewModelSelectorList sid session =
         , addTitle = "Add model"
         , itemId = \m -> m.id
         , itemTitle = \m -> m.name
-        , itemSubtitle = \_ -> ""
+        , itemSubtitle = MC.summaryOf
         , isActive = \m -> session.activeModelId == Just m.id
         , confirmOnClick = True
         , onActivate = Nothing
@@ -2515,9 +2516,9 @@ viewDefaultModelsEditorOverlay model =
                             Overlay.ModelEditor.view
                                 { sessionId = "default"
                                 , draft = draft
-                                , isNew = draft.id == 0
                                 , onSave = DefaultModelsEditSave
                                 , onField = DefaultModelsEditField
+                                , error = ed.state.syncError
                                 }
 
                         Nothing ->
@@ -2565,7 +2566,7 @@ viewDefaultModelsList ed =
         , addTitle = "Add model"
         , itemId = \m -> m.id
         , itemTitle = \m -> m.name
-        , itemSubtitle = \_ -> ""
+        , itemSubtitle = MC.summaryOf
         , isActive = \m -> ed.activeModelId == Just m.id
         , confirmOnClick = False
         , onActivate = Just DefaultModelsSetActive

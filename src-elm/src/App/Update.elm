@@ -31,6 +31,7 @@ import Plan.Update as PU exposing (..)
 import Session.Types as T
 import Session.Protocol as P
 import Session.Handlers as H
+import Session.ModelConfig as MC
 import Session.Selector as Sel exposing (Page(..))
 import Session.FilePicker as FP
 import Plan.Types as PT
@@ -7225,79 +7226,6 @@ encodeMcpServer s =
         ]
 
 
-draftFromModel : T.ModelInfo -> T.ModelDraft
-draftFromModel m =
-    { id = m.id
-    , name = m.name
-    , protocolType = m.protocolType
-    , baseUrl = m.baseUrl
-    , apiKey = m.apiKey
-    , modelName = m.modelName
-    , contextLimit = String.fromInt m.contextLimit
-    , maxTokens = String.fromInt m.maxTokens
-    }
-
-
-modelFromDraft : T.ModelDraft -> T.ModelInfo
-modelFromDraft d =
-    { id = d.id
-    , name = String.trim d.name
-    , protocolType = String.trim d.protocolType
-    , baseUrl = String.trim d.baseUrl
-    , apiKey = d.apiKey
-    , modelName = String.trim d.modelName
-    , contextLimit = String.toInt d.contextLimit |> Maybe.withDefault 0
-    , maxTokens = String.toInt d.maxTokens |> Maybe.withDefault 0
-    }
-
-
-updateDraftField : String -> String -> T.ModelDraft -> T.ModelDraft
-updateDraftField field value draft =
-    case field of
-        "name" ->
-            { draft | name = value }
-
-        "protocol_type" ->
-            { draft | protocolType = value }
-
-        "base_url" ->
-            { draft | baseUrl = value }
-
-        "api_key" ->
-            { draft | apiKey = value }
-
-        "model_name" ->
-            { draft | modelName = value }
-
-        "context_limit" ->
-            { draft | contextLimit = value }
-
-        "max_tokens" ->
-            { draft | maxTokens = value }
-
-        _ ->
-            draft
-
-
-encodeModels : List T.ModelInfo -> String
-encodeModels models =
-    E.encode 0 (E.list encodeModel models)
-
-
-encodeModel : T.ModelInfo -> E.Value
-encodeModel m =
-    E.object
-        [ ( "id", E.int m.id )
-        , ( "name", E.string m.name )
-        , ( "protocol_type", E.string m.protocolType )
-        , ( "base_url", E.string m.baseUrl )
-        , ( "api_key", E.string m.apiKey )
-        , ( "model_name", E.string m.modelName )
-        , ( "context_limit", E.int m.contextLimit )
-        , ( "max_tokens", E.int m.maxTokens )
-        ]
-
-
 -- Decode a model_sync CO result: Just ( isError, message ) when the frame
 -- is a CO for the model_sync command, Nothing otherwise.
 decodeSyncOutcome : E.Value -> Maybe ( Bool, String )
@@ -7344,7 +7272,7 @@ defaultModelsListResultDecoder =
     D.map4
         (\ok models activeId error -> { ok = ok, models = models, activeId = activeId, error = error })
         (D.field "ok" D.bool)
-        (D.field "models" (D.list H.modelInfoDecoder))
+        (D.field "models" (D.list MC.modelInfoDecoder))
         (D.field "active_id" (D.maybe D.int))
         (D.field "error" D.string)
 
@@ -7668,11 +7596,12 @@ sessionModelKit =
     , nameOf = modelName
     , idOf = \m -> m.id
     , setIdOf = \newId m -> { m | id = newId }
-    , draftOf = draftFromModel
-    , emptyDraft = T.emptyDraft
+    , draftOf = MC.draftFromModel
+    , emptyDraft = MC.emptyDraft
     , draftIdOf = \d -> d.id
-    , itemOfDraft = modelFromDraft
-    , updateDraftField = updateDraftField
+    , itemOfDraft = MC.modelFromDraft
+    , updateDraftField = MC.updateDraftField
+    , problems = MC.draftProblems
     , inputId = \model ->
         case model.activeId of
             Just sid ->
@@ -7723,7 +7652,7 @@ sessionModelKit =
             Just s ->
                 Ports.modelSync
                     { sessionId = PU.workCopyId model s.id
-                    , config = encodeModels s.modelSelector.working
+                    , config = MC.encodeModels s.modelSelector.working
                     }
 
             Nothing ->
@@ -7754,11 +7683,12 @@ defaultModelsKit =
     , nameOf = modelName
     , idOf = \m -> m.id
     , setIdOf = \newId m -> { m | id = newId }
-    , draftOf = draftFromModel
-    , emptyDraft = T.emptyDraft
+    , draftOf = MC.draftFromModel
+    , emptyDraft = MC.emptyDraft
     , draftIdOf = \d -> d.id
-    , itemOfDraft = modelFromDraft
-    , updateDraftField = updateDraftField
+    , itemOfDraft = MC.modelFromDraft
+    , updateDraftField = MC.updateDraftField
+    , problems = MC.draftProblems
     , inputId = \_ -> "model-selector-input-default"
     , editorId = \_ -> "model-editor-name-default"
     , scrollItemId = \_ id -> "model-selector-item-default-" ++ String.fromInt id
@@ -7781,7 +7711,7 @@ defaultModelsKit =
     , syncCmd = \model ->
         Ports.syncDefaultModels
             { preset = model.defaultModelsEditor.preset
-            , config = encodeModels model.defaultModelsEditor.state.working
+            , config = MC.encodeModels model.defaultModelsEditor.state.working
             }
     , syncSuccess = \model ->
         ( { model | defaultModelsEditor = emptyDefaultModelsEditor }
@@ -7814,6 +7744,7 @@ mcpKit =
     , draftIdOf = \d -> d.id
     , itemOfDraft = mcpFromDraft
     , updateDraftField = updateMcpDraftField
+    , problems = \_ -> []
     , inputId = \_ -> "mcp-selector-input-default"
     , editorId = \_ -> "mcp-editor-server-default"
     , scrollItemId = \_ id -> "mcp-selector-item-default-" ++ String.fromInt id
