@@ -11,7 +11,6 @@ import Test exposing (Test, describe, test)
 import Dict
 import App.Types as AT
 import App.Windows as W
-import App.Update as AU
 import App.NodeConnection as NC
 import Session.Types as T
 import TestHelpers exposing (initModelWithSession)
@@ -564,56 +563,72 @@ suite =
                         ( List.map .kind chain, List.map .planId chain, List.map .sessionId chain )
                         ( [ "plan" ], [ "p1" ], [ "s1" ] )
             ]
-        , describe "planFocusAboveSession (Ctrl+W close target)"
-            [ test "plan window on top → close the plan, not the session below" <|
+        , describe "soloTarget — which window a key-less command acts on"
+            [ test "the topmost of the active plan and the active session wins" <|
                 \_ ->
+                    -- p1 above s1, then the reverse. Written as two explicit
+                    -- boards rather than one with arithmetic on z, so a change
+                    -- to the comparison cannot silently satisfy both cases.
                     let
-                        m0 =
+                        board pz sz =
                             { initModelWithSession
                                 | planActiveId = Just "p1"
                                 , activeId = Just "s1"
+                                , planWindows = Dict.insert "p1" AT.emptyPlanWindow Dict.empty
                                 , windowPositions =
                                     Dict.fromList
-                                        [ ( "p1", { x = 0, y = 0, w = 100, h = 100, z = 10 } )
-                                        , ( "s1", { x = 0, y = 0, w = 100, h = 100, z = 9 } )
+                                        [ ( "p1", { x = 0, y = 0, w = 100, h = 100, z = pz } )
+                                        , ( "s1", { x = 0, y = 0, w = 100, h = 100, z = sz } )
                                         ]
                             }
                     in
-                    Expect.equal (AU.planFocusAboveSession m0) (Just "p1")
-            , test "session window on top → close the session" <|
+                    Expect.all
+                        [ \_ -> Expect.equal (W.soloTarget (board 10 9)) (Just "p1")
+                        , \_ -> Expect.equal (W.soloTarget (board 9 10)) (Just "s1")
+                        ]
+                        ()
+            , test "one-sided focus, and an empty board" <|
                 \_ ->
                     let
-                        m0 =
-                            { initModelWithSession
-                                | planActiveId = Just "p1"
-                                , activeId = Just "s1"
-                                , windowPositions =
-                                    Dict.fromList
-                                        [ ( "p1", { x = 0, y = 0, w = 100, h = 100, z = 9 } )
-                                        , ( "s1", { x = 0, y = 0, w = 100, h = 100, z = 10 } )
-                                        ]
-                            }
-                    in
-                    Expect.equal (AU.planFocusAboveSession m0) Nothing
-            , test "no active session → the plan is the close target" <|
-                \_ ->
-                    let
-                        m0 =
+                        rects =
+                            Dict.fromList
+                                [ ( "p1", { x = 0, y = 0, w = 680, h = 720, z = 1 } )
+                                , ( "s1", { x = 0, y = 0, w = 560, h = 640, z = 2 } )
+                                ]
+
+                        planOnly =
                             { initModelWithSession
                                 | planActiveId = Just "p1"
                                 , activeId = Nothing
+                                , windowPositions = rects
                             }
-                    in
-                    Expect.equal (AU.planFocusAboveSession m0) (Just "p1")
-            , test "no active plan → nothing (session fallback in the caller)" <|
-                \_ ->
-                    let
-                        m0 =
+
+                        sessionOnly =
                             { initModelWithSession
                                 | planActiveId = Nothing
                                 , activeId = Just "s1"
+                                , windowPositions = rects
+                            }
+
+                        none =
+                            { initModelWithSession
+                                | planActiveId = Nothing
+                                , activeId = Nothing
+                                , windowPositions = rects
                             }
                     in
-                    Expect.equal (AU.planFocusAboveSession m0) Nothing
+                    Expect.all
+                        [ \_ -> Expect.equal (W.soloTarget planOnly) (Just "p1")
+                        , \_ -> Expect.equal (W.soloTarget sessionOnly) (Just "s1")
+                        , \_ -> Expect.equal (W.soloTarget none) Nothing
+                        -- a focused id whose window does not exist is not a
+                        -- target either (INV2's reasoning, applied here)
+                        -- a focused id whose window is gone is NOT a target:
+                        -- focus is a habit, planActiveId/activeId can outlive
+                        -- the window, and acting on such an id would be a
+                        -- silent no-op
+                        , \_ -> Expect.equal (W.soloTarget { planOnly | windowPositions = Dict.empty }) Nothing
+                        ]
+                        ()
             ]
         ]

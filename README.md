@@ -244,7 +244,7 @@ viewport, and every other window stops being drawn.
 | | |
 |---|---|
 | Enter | `⤢` in a window's title bar (sessions and plans both), the global menu's **Solo window**, or `Ctrl+Shift+F` for the window you are looking at |
-| Leave | the same button (`⤡`), `Esc`, or the global menu's **Exit solo** |
+| Leave | the same button (`⤡`), `Esc`, `Ctrl+W`, or the global menu's **Exit solo** |
 | What stops | panning, window dragging, resizing, wheel zoom, the plan info window — the panel is the viewport, so those gestures have nothing to act on |
 | What does **not** stop | everything else. Streaming, running tasks, tool confirmations, MCP authorisation, plan execution, version freezes all keep going: solo hides windows, it never closes one |
 
@@ -256,10 +256,14 @@ a session blocked on an invisible dialog would otherwise stall unnoticed;
 `running` counts hidden windows with a task in flight. Clicking the control
 returns to the canvas, where that prompt is waiting.
 
-`Ctrl+W` never closes a session from inside solo — it exits solo instead (the
-reflex that would otherwise cost you a window). Closing the solo window with its
-own `✕` closes that window and then leaves solo, so the view can never point at
-a window that is gone.
+**`Ctrl+W` closes nothing.** It used to close the topmost window (the active
+plan, else the active session's confirmation), which made a reflex borrowed from
+the browser a way to lose a session; today it is inert outside solo and returns
+to the canvas inside it — the one action the chord may still take, because it
+destroys nothing. Closing a window is the `✕` button's alone: visible, per
+window, and always asking first (Close keeps the conversation on disk and
+resumable; Close and Delete removes the files). Closing the solo window with its
+`✕` also leaves solo, so the view can never point at a window that is gone.
 
 Solo stores nothing: the layout it returns to is exactly the layout it came
 from, and it is not persisted (a restart shows the canvas). Persisting the board

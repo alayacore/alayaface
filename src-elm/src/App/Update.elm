@@ -7,7 +7,6 @@ module App.Update exposing
     , decodeWarning
     , nextCopyName
     , movePreset
-    , planFocusAboveSession
     )
 
 {-| Application update logic. Message dispatch plus session/overlay
@@ -139,40 +138,6 @@ objectGetResultDecoder =
         (D.field "ok" D.bool)
         (D.field "content" D.string)
         (D.field "error" D.string)
-
-
-{-| Which window the user is actually focused on (Ctrl+W close target):
-the active PLAN when its window is on top of the active session's
-window, or when no session is focused; Nothing when a session is focused
-(or neither — fall back to activeId/planActiveId in the caller).
--}
-planFocusAboveSession : Model -> Maybe String
-planFocusAboveSession model =
-    case ( model.planActiveId, model.activeId ) of
-        ( Just pid, Just sid ) ->
-            let
-                pz =
-                    winRect model pid |> Maybe.map .z
-
-                sz =
-                    winRect model sid |> Maybe.map .z
-            in
-            case ( pz, sz ) of
-                ( Just p, Just s ) ->
-                    if p > s then
-                        Just pid
-
-                    else
-                        Nothing
-
-                _ ->
-                    Nothing
-
-        ( Just pid, Nothing ) ->
-            Just pid
-
-        ( Nothing, _ ) ->
-            Nothing
 
 
 focusInput : Model -> Cmd Msg
@@ -6349,7 +6314,7 @@ update msg model =
                                                         -- here and never before
                                                         -- an overlay had its turn
                                                         -- (SD12).
-                                                        exitSoloLast model
+                                                        exitSoloIfSolo model
 
                                                 Nothing ->
                                                     ( model, Cmd.none )
@@ -6358,44 +6323,22 @@ update msg model =
                                             -- No session at all (a solo plan
                                             -- with its owner closed): the chain
                                             -- has nothing left to close.
-                                            exitSoloLast model
+                                            exitSoloIfSolo model
 
-            -- Ctrl+W closes the FOCUSED window. Both a session
-            -- (activeId) and a plan (planActiveId) can be "active" at
-            -- once — clicking a plan raises it (top z) without clearing
-            -- the session focus, so closing must follow the TOPMOST
-            -- window. Otherwise "closing the plan" would close the
-            -- session still focused below it (its OWNING session —
-            -- the one above the plan — closing instead of the plan).
+            -- Ctrl+W closes NOTHING (user decision, revising SD10). It used to
+            -- close the topmost window — first the active plan when it sat
+            -- above the active session, else the active session's confirmation
+            -- — which made the "close my window" reflex a way to lose a
+            -- session. Closing is the ✕ button's, and only the ✕ button's: it
+            -- is visible, per-window, and always asks first.
             --
-            -- SD10: while solo, Ctrl+W exits solo and closes NOTHING. It is
-            -- the classic "close my app window" reflex, and the one view that
-            -- looks most like a whole application must be the one that cannot
-            -- lose a session to it. (The ✕ button still closes, and closing
-            -- the solo window then exits solo — SD9.)
+            -- In solo the key still returns to the canvas, because there the
+            -- reflex and the intent agree (the user wants the big view gone) —
+            -- and it is the one thing Ctrl+W can do that destroys nothing.
+            -- Outside solo it is inert, so the browser/OS keeps its own
+            -- meaning for the chord.
             else if key == "w" && ctrl then
-                if isSolo model then
-                    update ExitSolo model
-
-                else
-                    case planFocusAboveSession model of
-                        Just pid ->
-                            update (PlanClose pid) model
-
-                        Nothing ->
-                            case model.activeId of
-                                Just sid ->
-                                    -- User-initiated close: confirm first
-                                    -- (Close / Close and Delete / Cancel).
-                                    update (RequestCloseSession sid) model
-
-                                Nothing ->
-                                    case model.planActiveId of
-                                        Just pid2 ->
-                                            update (PlanClose pid2) model
-
-                                        Nothing ->
-                                            ( model, Cmd.none )
+                exitSoloIfSolo model
 
             -- Ctrl+G requests a cancel-task confirmation for the active
             -- session's running task — the keyboard equivalent of the
@@ -6777,15 +6720,21 @@ update msg model =
             ( model, Cmd.none )
 
 
-{-| The LAST step of the Escape chain (SD12): every overlay has already had
-its turn, and the tool-confirmation dialog is still untouched (it needs an
-explicit Allow/Deny, so Escape has never closed it and never will). Returns to
-the canvas instead — and only when something really is solo, because the
-`ExitSolo` branch re-sends the chain payload and an Escape press in an already
-canvas-view app must not start talking to the bridge.
+{-| Leave solo if something is in it; otherwise change nothing. Two chords
+want exactly this and nothing more:
+
+  - `Escape`, as the LAST step of the overlay chain (SD12) — every overlay has
+    had its turn first, and the tool-confirmation dialog still cannot be
+    dismissed by Escape (it needs an explicit Allow/Deny);
+  - `Ctrl+W`, which closes nothing at all now — the "close my window" reflex
+    gets the one action that is safe in every view: go back to the canvas.
+
+The guard on `isSolo` is not cosmetic: `ExitSolo` re-sends the chain payload, so
+without it an Escape or Ctrl+W in a canvas-view app would start talking to the
+bridge and rewrite `connectionChain` for no visible reason.
 -}
-exitSoloLast : Model -> ( Model, Cmd Msg )
-exitSoloLast model =
+exitSoloIfSolo : Model -> ( Model, Cmd Msg )
+exitSoloIfSolo model =
     if isSolo model then
         update ExitSolo model
 

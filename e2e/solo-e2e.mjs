@@ -460,9 +460,26 @@ try {
   await sleep(300);
   assert((await overlayIn(hiddenId)) === false, 'the picker is still open — later sections would miscount');
 
-  // ── 10. SD10 + SD12 ─────────────────────────────────────────────
-  console.log('== 10. Ctrl+W exits solo instead of closing; Esc exits last');
+  // ── 10. SD10 (revised): Ctrl+W closes NOTHING, in either view ───
+  // Canvas view first: the chord must be inert — no panel disappears, no
+  // confirmation opens. That binding used to close the topmost window, which
+  // made a reflex borrowed from the browser a way to lose a session.
+  console.log('== 10. Ctrl+W closes nothing; Esc exits solo last');
   const enterSoloOn = id => clickEl(`.session-panel[data-session="${id}"] .session-bar-solo`);
+  const rectsNow = await panelRects();
+  await page.keyboard.down('Control');
+  await page.keyboard.press('KeyW');
+  await page.keyboard.up('Control');
+  await sleep(400);
+  s = await shell();
+  let overlays = await page.evaluate(() => document.querySelectorAll('.overlay').length);
+  assert(s.panels === ids.length, `Ctrl+W closed a window in canvas view (panels: ${s.panels})`);
+  assert(overlays === 0, `Ctrl+W opened a confirmation in canvas view (${overlays} overlay(s))`);
+  assert(JSON.stringify(await panelRects()) === JSON.stringify(rectsNow), 'Ctrl+W moved the layout in canvas view');
+  console.log('  canvas view: Ctrl+W did nothing at all');
+
+  // In solo it is still allowed to do the one thing that destroys nothing:
+  // return to the canvas.
   assert(await enterSoloOn(soloId), 'setup: no solo button');
   assert((await shell()).panels === 1, 'Ctrl+W setup: not solo');
   await page.keyboard.down('Control');
@@ -470,10 +487,10 @@ try {
   await page.keyboard.up('Control');
   await sleep(400);
   s = await shell();
-  const overlays = await page.evaluate(() => document.querySelectorAll('.overlay').length);
+  overlays = await page.evaluate(() => document.querySelectorAll('.overlay').length);
   assert(s.panels === ids.length, `Ctrl+W closed the window instead of exiting solo (panels: ${s.panels})`);
   assert(overlays === 0, `Ctrl+W in solo opened a close confirmation (${overlays} overlay(s))`);
-  console.log('  Ctrl+W exited solo and closed nothing');
+  console.log('  solo: Ctrl+W returned to the canvas and closed nothing');
 
   // Escape exits solo, but only as the LAST step of the overlay chain: with a
   // confirmation open on the solo window itself, the first Escape dismisses

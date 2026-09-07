@@ -74,7 +74,7 @@ import Session.Types as T
 -- not always the stored one: solo view (F1) derives a full-viewport
 -- rect for the topmost window and makes every other window invisible.
 -- Reading the dict directly in the view layer would leave half the model
--- (chainPayload, armDrag, bringIntoView, planFocusAboveSession, the
+-- (chainPayload, armDrag, bringIntoView, soloTarget, the
 -- placement rules) describing a screen that no longer exists.
 --
 -- Enforced by scripts/check-layout-invariants.sh: no
@@ -357,32 +357,50 @@ window sits on the session's, else the active session, else the active plan.
 -}
 soloTarget : Model -> Maybe String
 soloTarget model =
-    case ( model.planActiveId, model.activeId ) of
-        ( Just pid, Just sid ) ->
-            case ( layoutRect model pid, layoutRect model sid ) of
-                ( Just p, Just s ) ->
-                    if p.z > s.z then
-                        Just pid
+    let
+        top =
+            case ( model.planActiveId, model.activeId ) of
+                ( Just pid, Just sid ) ->
+                    case ( layoutRect model pid, layoutRect model sid ) of
+                        ( Just p, Just s ) ->
+                            if p.z > s.z then
+                                Just pid
 
-                    else
-                        Just sid
+                            else
+                                Just sid
 
-                ( Just _, Nothing ) ->
+                        ( Just _, Nothing ) ->
+                            Just pid
+
+                        ( Nothing, Just _ ) ->
+                            Just sid
+
+                        ( Nothing, Nothing ) ->
+                            Nothing
+
+                ( Just pid, Nothing ) ->
                     Just pid
 
-                ( Nothing, Just _ ) ->
+                ( Nothing, Just sid ) ->
                     Just sid
 
                 ( Nothing, Nothing ) ->
                     Nothing
+    in
+    -- Focus is a habit, not a fact: `planActiveId` stays set after its window
+    -- closes (and `activeId` can outlive a session that never got a window).
+    -- Acting on such an id is a silent no-op at best, so the target has to be a
+    -- window — the same reasoning that makes `soloKey` derive rather than
+    -- trust.
+    case top of
+        Just key ->
+            if layoutRect model key /= Nothing then
+                Just key
 
-        ( Just pid, Nothing ) ->
-            Just pid
+            else
+                Nothing
 
-        ( Nothing, Just sid ) ->
-            Just sid
-
-        ( Nothing, Nothing ) ->
+        Nothing ->
             Nothing
 
 

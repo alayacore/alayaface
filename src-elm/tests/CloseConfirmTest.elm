@@ -3,7 +3,7 @@ module CloseConfirmTest exposing (tests)
 -- Close-session confirmation — PER-SESSION: the pending state lives on
 -- SessionState.closeConfirm and the overlay renders inside the session's
 -- panel (like the tool-confirm overlay). Clicking a session window's ✕
--- or pressing Ctrl+W offers Close (keep the conversation on disk) /
+-- or pressing the ✕ offers Close (keep the conversation on disk) /
 -- Close and Delete (remove files) / Cancel, with Close as the default.
 -- Internal closes (plans, runners) still go through CloseSession
 -- directly and never prompt.
@@ -31,7 +31,7 @@ tests : Test
 tests =
     describe "close-session confirmation (per-session)"
         [ describe "request opens the overlay (no close yet)"
-            [ test "window ✕ / Ctrl+W opens the session's confirmation, session stays open" <|
+            [ test "window ✕ opens the session's confirmation, session stays open" <|
                 \_ ->
                     let
                         ( m1, _ ) =
@@ -49,22 +49,31 @@ tests =
                                     Expect.fail "s1 must still be open"
                         ]
                         m1
-            , test "Ctrl+W requests confirmation instead of closing" <|
+            -- The user's decision, revising SD10: Ctrl+W is NOT a close key at
+            -- all anymore. The old binding asked "close the topmost window"
+            -- (the active plan when it was on top, else the active session's
+            -- confirmation), so a reflex borrowed from the browser could take a
+            -- session out of the board — with the windows now cascading in the
+            -- same shape as browser tabs, that accident stopped being rare.
+            , test "Ctrl+W closes nothing and confirms nothing in canvas view" <|
                 \_ ->
                     let
                         ( m1, _ ) =
                             App.Update.update (AT.KeyDown "w" True False False False) initModelWithSession
                     in
                     Expect.all
-                        [ \mm -> Expect.equal True (sessionCloseConfirm "s1" mm)
+                        [ \mm -> Expect.equal False (sessionCloseConfirm "s1" mm)
                         , \mm -> Expect.equal True (Dict.member "s1" mm.sessions)
+                        -- the whole model is untouched: Ctrl+W has no meaning
+                        -- outside solo, so the browser/OS keeps its own
+                        , \mm -> Expect.equal mm initModelWithSession
                         ]
                         m1
-            -- SD10: solo looks like a whole application, so Ctrl+W — the
-            -- "close my window" reflex — must leave the view and close
-            -- NOTHING. Not even the confirmation may open: a pending
-            -- close-confirm behind the solo view is precisely the hidden-modal
-            -- state SD11 exists to avoid.
+            -- SD10's surviving half: in solo, Ctrl+W goes back to the canvas.
+            -- It is the one thing the chord may still do, because it destroys
+            -- nothing and there the reflex and the intent agree. Not even the
+            -- confirmation may open: a pending close-confirm behind the solo
+            -- view is precisely the hidden-modal state SD11 exists to avoid.
             , test "Ctrl+W in solo exits solo and opens no confirmation" <|
                 \_ ->
                     let
