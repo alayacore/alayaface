@@ -1,4 +1,4 @@
-.PHONY: all elm run-tauri dev build-tauri test-tauri clean-tauri run-go build-go test-go check-parity check-schema e2e clean-go
+.PHONY: all elm run-tauri dev build-tauri test-tauri clean-tauri run-go build-go test-go check-parity check-invariants check-schema e2e clean-go
 
 ELM       := elm
 CARGO     := cargo
@@ -57,6 +57,14 @@ build-go: elm
 .PHONY: check-parity
 check-parity:
 	./scripts/check-backend-parity.sh
+
+# Layout invariants: windowPositions may only be READ through
+# App/Windows' winRect/winRectList/hasWin (INV1), and the JS bridge stays
+# free of solo behavior (SD7). The Elm client draws, drags and chains off
+# geometry; a second read path means two models of what is on screen.
+.PHONY: check-invariants
+check-invariants:
+	./scripts/check-layout-invariants.sh
 
 # Model-config schema check: AlayaFace must model every model.conf field —
 # :model_sync replaces the list, so an unmodelled key is deleted from the

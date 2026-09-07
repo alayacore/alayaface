@@ -19,8 +19,137 @@ import TestHelpers exposing (initModelWithSession)
 
 suite : Test
 suite =
+    let
+        -- Expect.all takes a LIST of checks over ONE subject; this is the
+        -- mirror image — one check over a LIST of subjects.
+        eachOf : (a -> Expect.Expectation) -> List a -> Expect.Expectation
+        eachOf check subjects =
+            Expect.all (List.map (\s -> \() -> check s) subjects) ()
+    in
     describe "App/Windows (direct)"
-        [ describe "applyZoom"
+        [ describe "winRect / winRectList / hasWin (INV1 accessors)"
+            [ test "agree with the raw dicts for 3 sessions + 2 plans" <|
+                \_ ->
+                    let
+                        -- Mixed key space: session ids AND plan ids live in the
+                        -- same dict (SD2), so the accessors must not care which
+                        -- kind a key is.
+                        rects =
+                            Dict.fromList
+                                [ ( "s1", { x = 0, y = 0, w = 560, h = 640, z = 1 } )
+                                , ( "s2", { x = 600, y = 0, w = 560, h = 640, z = 2 } )
+                                , ( "s3", { x = 0, y = 700, w = 560, h = 640, z = 3 } )
+                                , ( "p1", { x = 1200, y = 0, w = 680, h = 720, z = 4 } )
+                                , ( "p2", { x = 1200, y = 800, w = 680, h = 720, z = 5 } )
+                                ]
+
+                        m0 =
+                            { initModelWithSession
+                                | sessions =
+                                    [ "s1", "s2", "s3" ]
+                                        |> List.map (\k -> ( k, T.emptySession k ))
+                                        |> Dict.fromList
+                                , sessionOrder = [ "s1", "s2", "s3" ]
+                                , planWindows =
+                                    Dict.fromList
+                                        [ ( "p1", AT.emptyPlanWindow )
+                                        , ( "p2", AT.emptyPlanWindow )
+                                        ]
+                                , planOrder = [ "p1", "p2" ]
+                                , windowPositions = rects
+                            }
+
+                        keys =
+                            Dict.keys rects
+                    in
+                    Expect.all
+                        -- F0: the accessors are the raw dict, exactly. They are a
+                        -- read PATH, not a read CHANGE — solo (F1) is what makes
+                        -- the effective geometry differ, and only through these.
+                        [ \_ ->
+                            eachOf
+                                (\k ->
+                                    Expect.all
+                                        [ \() -> Expect.equal (W.winRect m0 k) (Dict.get k rects)
+                                        , \() -> Expect.equal (W.hasWin m0 k) True
+                                        ]
+                                        ()
+                                )
+                                keys
+                        , \_ -> Expect.equal (W.winRectList m0) (Dict.toList rects)
+                        , \_ -> Expect.equal (List.length (W.winRectList m0)) 5
+                        , \_ -> eachOf (\k -> Expect.equal (W.winRect m0 k) Nothing) [ "", "s9", "p9", "s1/p1" ]
+                        , \_ -> eachOf (\k -> Expect.equal (W.hasWin m0 k) False) [ "", "s9", "p9", "s1/p1" ]
+                        ]
+                        ()
+            , test "a plan that was never placed has no rect — callers fall back as before" <|
+                \_ ->
+                    -- p1 exists in planWindows/planMetas (a plan scanned from
+                    -- disk, not opened as a window yet), so windowPositions has
+                    -- no entry for it. Every geometry consumer must degrade to
+                    -- the same behavior it had before the accessors existed:
+                    -- raiseWindow a no-op, placement → viewport-centered.
+                    let
+                        base =
+                            initModelWithSession
+
+                        m0 =
+                            { base
+                                | planWindows = Dict.insert "p1" AT.emptyPlanWindow Dict.empty
+                                , planOrder = [ "p1" ]
+                                , planMetas =
+                                    Dict.fromList
+                                        [ ( "p1", { origin = { sessionId = "s1", planIndex = 0 }, feedbacks = [], depth = 1, createdAt = 0, name = "p1", lastStatus = "", parentPlanId = Nothing } )
+                                        ]
+                                , windowPositions =
+                                    Dict.insert "s1" { x = 100, y = 200, w = 560, h = 640, z = 1 } Dict.empty
+                            }
+
+                        -- raiseWindow on a key with no rect must not invent one,
+                        -- must not touch the order lists, and must not spend a z.
+                        raised =
+                            W.raiseWindow m0 "p1"
+
+                        -- Rule 1 with NO live source rect → viewport fallback.
+                        orphan =
+                            W.planPositionBelowSession { m0 | windowPositions = Dict.empty } "s1"
+
+                        -- Rule 2 with NO live plan rect → viewport fallback.
+                        orphanNode =
+                            W.nodeSessionPositionBesidePlan { m0 | windowPositions = Dict.empty } "p1"
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal (W.winRect m0 "p1") Nothing
+                        , \_ -> Expect.equal (W.hasWin m0 "p1") False
+                        , \_ -> Expect.equal (W.hasWin m0 "s1") True
+                        -- raiseWindow: unchanged model (a no-op, not a fresh rect)
+                        , \_ -> Expect.equal raised.planOrder m0.planOrder
+                        , \_ -> Expect.equal raised.nextZIndex m0.nextZIndex
+                        , \_ -> Expect.equal raised.windowPositions m0.windowPositions
+                        -- placement: the viewport-centered fallback, checked
+                        -- against the function that computes it (F0 must not
+                        -- change the fallback — an inline literal would pin a
+                        -- number instead of pinning the behavior).
+                        , \_ -> Expect.equal orphan (W.centeredPlanPos { m0 | windowPositions = Dict.empty })
+                        , \_ -> Expect.equal orphanNode (W.centeredSessionPos { m0 | windowPositions = Dict.empty })
+                        , \_ -> Expect.equal ( orphan.w, orphan.h ) ( W.planDefaultWinW, W.planDefaultWinH )
+                        , \_ -> Expect.equal ( orphanNode.w, orphanNode.h ) ( W.defaultWinW, W.defaultWinH )
+                        -- and the positive case: with a source rect, rule 1 still
+                        -- reads through the accessor and anchors below the session
+                        -- (+ one planStepY cascade: p1 already belongs to s1).
+                        , \_ ->
+                            Expect.equal
+                                (W.planPositionBelowSession m0 "s1")
+                                { x = 100
+                                , y = 200 + 640 + W.canvasGapY + W.planStepY
+                                , w = W.planDefaultWinW
+                                , h = W.planDefaultWinH
+                                , z = m0.nextZIndex
+                                }
+                        ]
+                        ()
+            ]
+        , describe "applyZoom"
             [ test "clamps to the canvas scale bounds" <|
                 \_ ->
                     let

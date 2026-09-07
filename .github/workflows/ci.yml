@@ -39,6 +39,12 @@ jobs:
       - name: Unit tests
         run: elm-test
         working-directory: src-elm
+      # Layout invariants (INV1/SD7): windowPositions is read only through
+      # App/Windows' accessors, and the JS bridge carries no behavior
+      # decision. Pure grep over the Elm sources — runs where elm-test runs,
+      # because it guards the same files.
+      - name: Layout invariants check
+        run: ./scripts/check-layout-invariants.sh
       # model.conf schema guard: AlayaFace has to model every field AlayaCore
       # sends, or an edit deletes it from the user's model.conf. Uses
       # testdata/alayacore-model-fields.txt here (AlayaCore is a separate

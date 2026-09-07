@@ -17,6 +17,7 @@ import Time
 import Markdown
 import App.Types exposing (..)
 import App.Update exposing (SessionDir, decodeSessionDir, nextCopyName)
+import App.Windows as Win
 import Icons
 import Session.Types as T
 import Session.ModelConfig as MC
@@ -147,7 +148,7 @@ viewSessionPanel model id =
                         Nothing -> 0
 
                 winPos =
-                    Dict.get id model.windowPositions
+                    Win.winRect model id
 
                 positionStyles =
                     case winPos of
@@ -753,7 +754,7 @@ viewPlanPanel model planId =
                     model.planActiveId == Just planId
 
                 winPos =
-                    Dict.get planId model.windowPositions
+                    Win.winRect model planId
 
                 positionStyles =
                     case winPos of

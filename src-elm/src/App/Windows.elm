@@ -28,6 +28,9 @@ module App.Windows exposing
     , applyZoom
     , bringIntoView
     , addPlanWindow
+    , winRect
+    , winRectList
+    , hasWin
     , chainCtx
     , chainPayload
     , connectionChainForSession
@@ -49,6 +52,48 @@ import Dict exposing (Dict)
 import App.Types exposing (..)
 import App.NodeConnection as NC
 import Plan.Meta as PM
+
+
+-- ─── Effective window geometry (INV1) ───────────────────────────────
+--
+-- THESE THREE ACCESSORS ARE THE SOLE READ PATH FOR "WHERE IS A WINDOW".
+-- `windowPositions` stays the single source of truth for canvas layout
+-- (SD4) — it is the store, and writes to it remain direct. But a *read*
+-- must go through here, because the geometry a window is drawn with is
+-- not always the stored one: solo view (F1) derives a full-viewport
+-- rect for the topmost window and makes every other window invisible.
+-- Reading the dict directly in the view layer would leave half the model
+-- (chainPayload, armDrag, bringIntoView, planFocusAboveSession, the
+-- placement rules) describing a screen that no longer exists.
+--
+-- Enforced by scripts/check-layout-invariants.sh: no
+-- `Dict.get|Dict.member|Dict.toList` on `windowPositions` outside this
+-- module, and the in-module count can only shrink. See TODO.md INV1.
+
+
+{-| Where a window effectively is, by window key (session id or plan id).
+`Nothing` means "not rendered" — no such window, or (from F1 on) hidden
+because another window is solo.
+-}
+winRect : Model -> String -> Maybe WindowPos
+winRect model key =
+    Dict.get key model.windowPositions
+
+
+{-| Every window with its effective rect. Feeds the connection-chain
+payload and anything else that has to walk the whole board.
+-}
+winRectList : Model -> List ( String, WindowPos )
+winRectList model =
+    Dict.toList model.windowPositions
+
+
+{-| Is there a window under this key at all? Distinguishes "no window"
+from "window at some rect" for the create/close paths.
+-}
+hasWin : Model -> String -> Bool
+hasWin model key =
+    Dict.member key model.windowPositions
 
 
 defaultWinW : Int
@@ -297,7 +342,7 @@ unknown keys (no window) are a no-op.
 -}
 raiseWindow : Model -> String -> Model
 raiseWindow model key =
-    if Dict.member key model.windowPositions then
+    if hasWin model key then
         let
             m1 =
                 if Dict.member key model.sessions then
@@ -344,7 +389,7 @@ chainPayload : Model -> List NC.ChainSegment -> { segments : List NC.ChainSegmen
 chainPayload model segments =
     { segments = segments
     , positions =
-        Dict.toList model.windowPositions
+        winRectList model
             |> List.map
                 (\( id, p ) ->
                     { id = id
@@ -489,7 +534,7 @@ same session.
 -}
 planPositionBelowSession : Model -> String -> WindowPos
 planPositionBelowSession model liveOriginId =
-    case Dict.get liveOriginId model.windowPositions of
+    case winRect model liveOriginId of
         Just sp ->
             { x = sp.x
             , y = sp.y + sp.h + canvasGapY + openPlansForOrigin model liveOriginId * planStepY
@@ -508,7 +553,7 @@ offset as more node sessions open for the same plan.
 -}
 nodeSessionPositionBesidePlan : Model -> String -> WindowPos
 nodeSessionPositionBesidePlan model planId =
-    case Dict.get planId model.windowPositions of
+    case winRect model planId of
         Just pp ->
             let
                 n =
@@ -620,7 +665,7 @@ addPlanWindow : String -> PlanWindow -> Model -> Model
 addPlanWindow key win model =
     let
         positions1 =
-            if Dict.member key model.windowPositions then
+            if hasWin model key then
                 model.windowPositions
 
             else
@@ -661,7 +706,7 @@ addPlanWindow key win model =
         m1 =
             raiseWindow m0 key
     in
-    case Dict.get key positions1 of
+    case winRect m1 key of
         Just p ->
             bringIntoView m1 p
 

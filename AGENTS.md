@@ -74,6 +74,7 @@ make test-go                        # go vet + go test -race ./...
 cd src-elm && elm make src/Main.elm --output=/tmp/m.js && elm-test
 cd src-tauri && cargo test          # (and cargo clippy --lib: no errors)
 ./scripts/check-backend-parity.sh
+make check-invariants               # windowPositions read path + JS-bridge freeze
 make check-schema                   # model.conf fields vs AlayaCore
 make e2e                            # every script in e2e/scripts.txt
 ```

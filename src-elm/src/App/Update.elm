@@ -150,10 +150,10 @@ planFocusAboveSession model =
         ( Just pid, Just sid ) ->
             let
                 pz =
-                    Dict.get pid model.windowPositions |> Maybe.map .z
+                    winRect model pid |> Maybe.map .z
 
                 sz =
-                    Dict.get sid model.windowPositions |> Maybe.map .z
+                    winRect model sid |> Maybe.map .z
             in
             case ( pz, sz ) of
                 ( Just p, Just s ) ->
@@ -801,7 +801,7 @@ resumeSessionCreated liveId model =
 
         -- Window closed (the usual case): create window entries (key = Session.id).
         m1 =
-            if Dict.member sessionId model.windowPositions then
+            if hasWin base sessionId then
                 base
 
             else
@@ -945,7 +945,7 @@ createSessionWindow id model =
                         Nothing ->
                             model.planMessageCounts
                 , windowPositions =
-                    if Dict.member id model.windowPositions then
+                    if hasWin model id then
                         model.windowPositions
                     else
                         let
@@ -1011,7 +1011,7 @@ createSessionWindow id model =
         -- Pan the canvas so the fresh window is visible (its
         -- source window may be far off-screen).
         baseModel =
-            case Dict.get id baseModel0.windowPositions of
+            case winRect baseModel0 id of
                 Just p ->
                     bringIntoView baseModel0 p
 
@@ -6658,7 +6658,7 @@ armDrag model pe =
                     dragKindKey kind
 
                 pos =
-                    Dict.get key model.windowPositions
+                    winRect model key
 
                 winX =
                     pos |> Maybe.map .x |> Maybe.withDefault 0
