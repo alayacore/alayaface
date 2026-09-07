@@ -535,10 +535,16 @@ body {
   margin-left: 6px;
 }
 
-/* Solo button (F1): the same slot and weight as the close button, one
-   notch calmer — it is a view change, not a destruction. SVG glyph, so
-   it inherits the color and stays crisp at any canvas scale. */
-.session-bar-solo {
+/* Solo button (F1): the same slot and weight as the close button, one notch
+   calmer — it is a view change, not a destruction. SVG glyph, so it inherits
+   the bar's color and stays crisp at any canvas scale.
+
+   In solo the SAME button is the exit control and carries the SD11 counts of
+   what is BEHIND the view; `.solo-attention` marks the case that matters — a
+   hidden window blocked on an answer nobody can see. `⋯` puts the canvas
+   right-click back, because in solo the panel covers the canvas. */
+.session-bar-solo,
+.session-bar-menu {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
@@ -552,10 +558,29 @@ body {
   transition: color 0.12s, background 0.12s;
   margin-left: 6px;
 }
-.session-bar-solo:hover {
+.session-bar-solo:hover,
+.session-bar-menu:hover {
   color: #6366f1;
   background: rgba(99,102,241,0.1);
 }
+.solo-exit-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.solo-exit-label {
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+.session-bar-solo.solo-attention {
+  color: #e9a23b;
+  background: rgba(233,162,59,0.14);
+}
+.session-bar-solo.solo-attention:hover {
+  color: #f0b559;
+  background: rgba(233,162,59,0.22);
+}
+
 .session-bar-close:hover {
   color: #e94560;
   background: rgba(233,69,96,0.1);

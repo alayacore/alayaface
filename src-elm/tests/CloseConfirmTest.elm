@@ -60,6 +60,31 @@ tests =
                         , \mm -> Expect.equal True (Dict.member "s1" mm.sessions)
                         ]
                         m1
+            -- SD10: solo looks like a whole application, so Ctrl+W — the
+            -- "close my window" reflex — must leave the view and close
+            -- NOTHING. Not even the confirmation may open: a pending
+            -- close-confirm behind the solo view is precisely the hidden-modal
+            -- state SD11 exists to avoid.
+            , test "Ctrl+W in solo exits solo and opens no confirmation" <|
+                \_ ->
+                    let
+                        solo =
+                            { initModelWithSession
+                                | soloWin = Just "s1"
+                                , windowPositions =
+                                    Dict.insert "s1" { x = 0, y = 0, w = 1400, h = 900, z = 1 } Dict.empty
+                            }
+
+                        ( m1, _ ) =
+                            App.Update.update (AT.KeyDown "w" True False False False) solo
+                    in
+                    Expect.all
+                        [ \mm -> Expect.equal mm.soloWin Nothing
+                        , \mm -> Expect.equal False (sessionCloseConfirm "s1" mm)
+                        , \mm -> Expect.equal True (Dict.member "s1" mm.sessions)
+                        , \mm -> Expect.equal 1 (Dict.size mm.sessions)
+                        ]
+                        m1
             , test "a second request on the same session is idempotent" <|
                 \_ ->
                     let

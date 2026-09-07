@@ -13,15 +13,23 @@
 //   1. build fakecore + Go server (fresh HOME), start both
 //   2. create three sessions (global menu → New Session → first preset)
 //   3. capture every panel's stored canvas rect + the canvas transform
-//   4. ⤢ on the topmost panel → exactly ONE .session-panel, its client rect
-//      == #main-content's, ZERO .resize-handle, no visible .connection-seg,
+//   4. ⤢ on a panel → exactly ONE .session-panel, its client rect ==
+//      #main-content's, ZERO .resize-handle, no visible .connection-seg,
 //      #main-content carries .main-content-solo
-//   5. wheel does not zoom; dragging the bar does not move the window; both
-//      leave the canvas transform and the stored rect untouched
+//   5. wheel does not zoom and the bar cannot be dragged — and neither writes
+//      anything into the layout store or the canvas transform
 //   6. ⤡ → every panel is back at its pre-solo coordinates, transform intact
-//   7. Ctrl+Shift+F does the same thing from the keyboard, twice (toggle)
-//   8. the global menu's "Solo window" item reaches solo with no panel click
-//      (the ⋯ path, which is also the only way in when the bar scrolls off)
+//   6b. the CONTROL for 5: the same synthetic wheel DOES zoom outside solo
+//       (without it, "the wheel did nothing" would also be satisfied by a
+//       listener that never fires)
+//   7. Ctrl+Shift+F toggles both ways; plain Ctrl+F is not hijacked
+//   8. the global menu's item reaches solo and back with no panel click
+//   9. closing the solo window exits solo (SD9) and leaves the others intact
+//  10. SD11: a file picker left open in a window that solo hides makes the exit
+//      control read "Canvas · 1 waiting" (highlighted); clicking it returns to
+//      the canvas with that prompt reachable — and SD10/SD12: Ctrl+W exits
+//      solo instead of opening a close confirmation, Escape closes an overlay
+//      first and solo second
 //
 // ALL PASS printed on success. Screenshots land in the artifact dir.
 
@@ -363,6 +371,126 @@ try {
   assert(JSON.stringify(left) === JSON.stringify(rest), 'the surviving windows moved when the solo one closed');
 
   await shot('08-final.png');
+
+  // ── 9. SD11: a hidden window stalled on the user is reported ────
+  // The overlay is rendered INSIDE the session panel, so when that panel is
+  // hidden the prompt vanishes with it and the session waits forever with
+  // nothing on screen to say so. The exit control has to carry that number.
+  console.log('== 9. a hidden modal is reported by the exit control');
+  const ids = Object.keys(await panelRects());
+  assert(ids.length >= 2, 'need two windows for the reachability test');
+
+  // Click by ELEMENT, not by pixel, for anything that may sit under another
+  // window: panels cascade 50×40, so an older window's footer is covered and a
+  // coordinate click would land on the window above it. (Entering/leaving solo
+  // is then clicked for real — in solo nothing can be in the way.)
+  //
+  // WHICH panel ends up hosting the picker is read back from the DOM rather
+  // than assumed: the mousedown that comes with the click activates and RAISES
+  // that session, and raising reorders the panels, so "the first panel" is not
+  // a stable identity mid-test. Same for the solo target.
+  const clickEl = async selector => {
+    const ok = await page.evaluate(sel => {
+      const el = document.querySelector(sel);
+      if (!el) return false;
+      el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+      el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      return true;
+    }, selector);
+    await sleep(450);
+    return ok;
+  };
+  const overlayIn = id =>
+    page.evaluate(sel => !!document.querySelector(`${sel} .overlay`), `.session-panel[data-session="${id}"]`);
+
+  // `.footer-btn` #1 is the paperclip → OpenFilePicker for that session.
+  assert(await clickEl('.session-panel .footer-btn'), 'no attach button in the first panel');
+  const hiddenId = await page.evaluate(() => {
+    const o = document.querySelector('.overlay');
+    const host = o && o.closest('.session-panel');
+    return host ? host.getAttribute('data-session') : null;
+  });
+  assert(hiddenId, 'the file picker did not open anywhere');
+  const soloId = ids.find(id => id !== hiddenId);
+  assert(soloId, 'no second window to solo');
+  console.log(`  picker waits in ${hiddenId}; solo will cover it with ${soloId}`);
+
+  // Now solo the OTHER window: the picker — and the session waiting on it —
+  // disappear with the panel.
+  assert(await clickEl(`.session-panel[data-session="${soloId}"] .session-bar-solo`), 'no solo button on the other panel');
+  s = await shell();
+  assert(s.panels === 1, `expected solo on ${soloId}, panels: ${s.panels}`);
+  assert(!(await overlayIn(hiddenId)), 'the hidden panel is still rendered (SD6)');
+  const badge = await page.evaluate(() => {
+    const el = document.querySelector('.session-bar-solo');
+    return el
+      ? {
+          text: (el.textContent || '').trim(),
+          hot: el.classList.contains('solo-attention'),
+          title: el.getAttribute('title') || '',
+          menu: !!document.querySelector('.session-bar-menu'),
+        }
+      : null;
+  });
+  console.log('  exit control:', JSON.stringify(badge));
+  assert(badge, 'the solo bar has no exit control');
+  assert(/1 waiting/.test(badge.text), `the exit control does not report the hidden prompt: "${badge.text}"`);
+  assert(badge.hot, 'waiting > 0 must be highlighted (it means something is blocked on you)');
+  assert(/waiting for an answer/.test(badge.title), `the tooltip does not explain the number: "${badge.title}"`);
+  assert(badge.menu, 'no ⋯ menu button in the solo bar (SD11: the canvas has no right-click here)');
+  await shot('09-attention.png');
+
+  // …and clicking IT leaves solo with the prompt reachable again. This one IS
+  // a real pointer click: the control is on screen by definition.
+  const badgePos = await page.evaluate(() => {
+    const r = document.querySelector('.session-bar-solo').getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  });
+  await clickAt(badgePos.x, badgePos.y);
+  await sleep(400);
+  s = await shell();
+  assert(s.panels === ids.length, `the exit control did not return to the canvas (${s.panels} panels)`);
+  assert(await overlayIn(hiddenId), 'after exiting solo the hidden session\'s picker is still unreachable');
+  console.log('  hidden prompt reported, then reached: OK');
+  // Close the picker so it stops counting in the next section (Escape is the
+  // chain's own file-picker step, so this also proves the picker is the active
+  // session's overlay and not a stray element).
+  await page.keyboard.press('Escape');
+  await sleep(300);
+  assert((await overlayIn(hiddenId)) === false, 'the picker is still open — later sections would miscount');
+
+  // ── 10. SD10 + SD12 ─────────────────────────────────────────────
+  console.log('== 10. Ctrl+W exits solo instead of closing; Esc exits last');
+  const enterSoloOn = id => clickEl(`.session-panel[data-session="${id}"] .session-bar-solo`);
+  assert(await enterSoloOn(soloId), 'setup: no solo button');
+  assert((await shell()).panels === 1, 'Ctrl+W setup: not solo');
+  await page.keyboard.down('Control');
+  await page.keyboard.press('KeyW');
+  await page.keyboard.up('Control');
+  await sleep(400);
+  s = await shell();
+  const overlays = await page.evaluate(() => document.querySelectorAll('.overlay').length);
+  assert(s.panels === ids.length, `Ctrl+W closed the window instead of exiting solo (panels: ${s.panels})`);
+  assert(overlays === 0, `Ctrl+W in solo opened a close confirmation (${overlays} overlay(s))`);
+  console.log('  Ctrl+W exited solo and closed nothing');
+
+  // Escape exits solo, but only as the LAST step of the overlay chain: with a
+  // confirmation open on the solo window itself, the first Escape dismisses
+  // THAT and solo survives (SD12).
+  await enterSoloOn(soloId);
+  assert((await shell()).panels === 1, 'Esc setup: not solo');
+  assert(await clickEl(`.session-panel[data-session="${soloId}"] .session-bar-close`), 'no ✕ on the solo panel');
+  assert(await overlayIn(soloId), 'setup: the solo window\'s close confirmation did not open');
+  await page.keyboard.press('Escape');
+  await sleep(300);
+  assert((await shell()).panels === 1, 'Escape closed the confirmation AND exited solo at once');
+  assert((await overlayIn(soloId)) === false, 'the close confirmation survived its Escape');
+  await page.keyboard.press('Escape');
+  await sleep(300);
+  assert((await shell()).panels === ids.length, 'Escape did not exit solo as the LAST step');
+  console.log('  Escape ordering: overlay first, solo second');
+
   console.log('ALL PASS');
 } catch (err) {
   console.error('E2E FAILED:', err.message);

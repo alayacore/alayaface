@@ -130,13 +130,58 @@ tests =
                     |> escape
                     |> (\m -> Dict.get "s1" m.sessions)
                     |> Maybe.map (\s -> ( s.filePicker.show, s.mediaPreview ))
-                    |> Expect.equal (Just ( False, Just { mediaType = T.Image, uri = "x", name = Nothing } ))
-        , test "does NOT close the tool-confirm dialog" <|
+                    |> Expect.equal (Just ( False, Just { mediaType = T.Image, uri = "x", name = Nothing } ))        , test "does NOT close the tool-confirm dialog" <|
+                \_ ->
+                    initModelWithSession
+                        |> setSession (\s -> { s | pendingConfirm = [ { id = "p1", toolName = Just "edit_file", toolInput = Nothing } ] })
+                        |> escape
+                        |> (\m -> Dict.get "s1" m.sessions)
+                        |> Maybe.map (.pendingConfirm >> List.length)
+                        |> Expect.equal (Just 1)
+        -- SD12: solo is the LAST thing this chain closes. The ordering test
+        -- below is the point — an Escape with a media preview open must not
+        -- jump past it to solo.
+        , test "exits solo only after every overlay has had its turn" <|
             \_ ->
-                initModelWithSession
-                    |> setSession (\s -> { s | pendingConfirm = [ { id = "p1", toolName = Just "edit_file", toolInput = Nothing } ] })
-                    |> escape
-                    |> (\m -> Dict.get "s1" m.sessions)
-                    |> Maybe.map (.pendingConfirm >> List.length)
-                    |> Expect.equal (Just 1)
+                let
+                    soloWithPreview =
+                        setSession (\s -> { s | mediaPreview = Just { mediaType = T.Image, uri = "x", name = Nothing } })
+                            { initModelWithSession
+                                | soloWin = Just "s1"
+                                , windowPositions = Dict.insert "s1" { x = 0, y = 0, w = 560, h = 640, z = 1 } Dict.empty
+                            }
+
+                    first =
+                        escape soloWithPreview
+
+                    second =
+                        escape first
+                in
+                Expect.all
+                    [ \_ -> Expect.equal first.soloWin (Just "s1")
+                    , \_ ->
+                        Dict.get "s1" first.sessions
+                            |> Maybe.map .mediaPreview
+                            |> Expect.equal (Just Nothing)
+                    , \_ -> Expect.equal second.soloWin Nothing
+                    ]
+                    ()
+        , test "Escape with nothing open exits solo (and alone does not touch it)" <|
+            \_ ->
+                let
+                    solo =
+                        { initModelWithSession
+                            | soloWin = Just "s1"
+                            , windowPositions = Dict.insert "s1" { x = 0, y = 0, w = 560, h = 640, z = 1 } Dict.empty
+                        }
+                in
+                Expect.all
+                    [ \_ -> Expect.equal (escape solo).soloWin Nothing
+                    -- the pre-existing behaviour of the chain's last branch:
+                    -- an Escape with nothing open in canvas view changes
+                    -- nothing at all (in particular it does not go talking to
+                    -- the bridge through ExitSolo's chain re-send)
+                    , \_ -> Expect.equal (escape initModelWithSession) initModelWithSession
+                    ]
+                    ()
         ]

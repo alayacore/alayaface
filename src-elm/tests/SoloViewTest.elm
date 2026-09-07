@@ -216,6 +216,30 @@ suite =
                             AU.update (AT.PlanClose "p1") (W.enterSolo "p1" board)
                     in
                     Expect.equal m1.soloWin Nothing
+            -- F2.4: the empty state and solo are mutually exclusive, so
+            -- `viewNoSessionPanel`'s "right-click the canvas" tagline is never
+            -- shown over a view where the canvas is covered. Closing the LAST
+            -- window must clear solo (SD9) and leave the shell in canvas view —
+            -- otherwise the advice would be a lie exactly when it is read.
+            , test "closing the only window leaves canvas view, not solo (F2.4)" <|
+                \_ ->
+                    let
+                        only =
+                            { initModelWithSession
+                                | windowPositions =
+                                    Dict.insert "s1" { x = 0, y = 0, w = 1400, h = 900, z = 1 } Dict.empty
+                                , soloWin = Just "s1"
+                            }
+
+                        ( m1, _ ) =
+                            AU.update (AT.CloseSession "s1") only
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal m1.soloWin Nothing
+                        , \_ -> Expect.equal (W.isSolo m1) False
+                        , \_ -> Expect.equal (m1.sessionOrder /= [] || m1.planOrder /= []) False
+                        ]
+                        ()
             ]
         , describe "SD8 — who may take the solo view"
             [ test "a session the USER created follows solo" <|
@@ -502,6 +526,76 @@ suite =
                         ]
                         ()
             ]
+        , describe "SD11 — attentionCounts (what the exit control reports)"
+            [ test "canvas view counts nothing: no window is hidden" <|
+                \_ ->
+                    let
+                        busy =
+                            { board
+                                | sessions =
+                                    Dict.map (\_ s -> { s | taskRunning = True, closeConfirm = True }) board.sessions
+                            }
+                    in
+                    Expect.equal (W.attentionCounts busy) { waiting = 0, running = 0 }
+            , test "a hidden window stalled on the user is counted, running separately" <|
+                \_ ->
+                    -- s2 sits behind the solo s1 with a tool confirmation open
+                    -- and a task running: the run is stalled and NOTHING on
+                    -- screen says so. That is the bug this count exists for.
+                    let
+                        hidden =
+                            hideSession "s2" (\s -> { s | pendingConfirm = [ { id = "t1", toolName = Just "edit_file", toolInput = Nothing } ], taskRunning = True }) soloS1
+                    in
+                    Expect.equal (W.attentionCounts hidden) { waiting = 1, running = 1 }
+            , test "the VISIBLE solo window is never counted (it is on screen)" <|
+                \_ ->
+                    let
+                        soloBlocked =
+                            hideSession "s1" (\s -> { s | closeConfirm = True, taskRunning = True }) soloS1
+                    in
+                    Expect.equal (W.attentionCounts soloBlocked) { waiting = 0, running = 0 }
+            , test "every waiting condition the view can render is covered" <|
+                \_ ->
+                    -- One entry per overlay renderer in App/View.elm. A new
+                    -- modal added there without a matching field here means
+                    -- solo stops reporting a stalled session — the exact
+                    -- failure SD11 exists to prevent — so the list is pinned
+                    -- field by field instead of by counting entries.
+                    let
+                        conditions =
+                            [ ( "closeConfirm", \s -> { s | closeConfirm = True } )
+                            , ( "cancelTaskConfirm", \s -> { s | cancelTaskConfirm = True } )
+                            , ( "pendingConfirm", \s -> { s | pendingConfirm = [ { id = "t", toolName = Nothing, toolInput = Nothing } ] } )
+                            , ( "pendingMcpAuths", \s -> { s | pendingMcpAuths = [ { server = "srv", url = "" } ] } )
+                            , ( "mcpAuthRunning", \s -> { s | mcpAuthRunning = Just "srv" } )
+                            , ( "mcpStatus", \s -> { s | mcpStatus = Just "auth_required" } )
+                            , ( "filePicker"
+                              , \s ->
+                                    let
+                                        fp =
+                                            s.filePicker
+                                    in
+                                    { s | filePicker = { fp | show = True } }
+                              )
+                            , ( "showModelSelector", \s -> { s | showModelSelector = True } )
+                            , ( "mediaPreview", \s -> { s | mediaPreview = Just { mediaType = T.Image, uri = "x", name = Nothing } } )
+                            ]
+
+                        missed =
+                            conditions
+                                |> List.filter
+                                    (\( _, fn ) ->
+                                        (W.attentionCounts (hideSession "s2" fn soloS1)).waiting /= 1
+                                    )
+                                |> List.map Tuple.first
+                    in
+                    Expect.equal missed []
+            , test "a stale soloWin counts nothing (INV2b again)" <|
+                \_ ->
+                    Expect.equal
+                        (W.attentionCounts { board | soloWin = Just "gone" })
+                        { waiting = 0, running = 0 }
+            ]
         , describe "INV3 — soloWin is only written by the three helpers"
             -- Enforced mechanically by scripts/check-layout-invariants.sh
             -- (`soloWin =` outside App/Windows.elm fails the build). Pinned
@@ -538,4 +632,18 @@ layoutOf m =
     , sessions = m.sessionOrder
     , plans = m.planOrder
     , nextZ = m.nextZIndex
+    }
+
+
+{-| Put a session's state through `fn` (leaving every other field alone) —
+the test's own fixture helper, because `Session.Types` has no update lens.
+-}
+hideSession : String -> (T.SessionState -> T.SessionState) -> AT.Model -> AT.Model
+hideSession key fn model =
+    { model
+        | sessions =
+            Dict.insert
+                key
+                (fn (Dict.get key model.sessions |> Maybe.withDefault (T.emptySession key)))
+                model.sessions
     }

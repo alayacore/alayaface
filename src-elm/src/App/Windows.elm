@@ -40,6 +40,7 @@ module App.Windows exposing
     , followSolo
     , soloTarget
     , visibleWindows
+    , attentionCounts
     , chainCtx
     , chainPayload
     , connectionChainForSession
@@ -61,6 +62,7 @@ import Dict exposing (Dict)
 import App.Types exposing (..)
 import App.NodeConnection as NC
 import Plan.Meta as PM
+import Session.Types as T
 
 
 -- ─── Effective window geometry (INV1) ───────────────────────────────
@@ -283,6 +285,68 @@ disagree about what is visible: both ask `winRect`.
 visibleWindows : Model -> List String -> List String
 visibleWindows model keys =
     List.filter (\key -> winRect model key /= Nothing) keys
+
+
+{-| The two counts the solo view's exit control carries (SD11): hidden
+windows that are BLOCKED on the user, and hidden windows that are merely
+busy.
+
+Solo hides a window, and a window can be waiting for an answer — a tool
+confirmation you never saw, an MCP auth prompt, a close confirmation. That is
+not a cosmetic problem: a hidden modal stops its session's whole run, and the
+user has no way to notice. So the control that leaves solo says what is
+behind it.
+
+`waiting` is exactly "this session would render an overlay", i.e. the same
+conditions `App/View.elm`'s overlay renderers test — `viewCloseConfirmOverlay`,
+`viewCancelTaskConfirmOverlay`, `viewConfirmOverlay`, `viewMcpInitOverlay`,
+`viewFilePickerOverlay`, `viewModelSelectorOverlay`,
+`viewMediaPreviewOverlay`. Change a renderer's guard and change this with it;
+the two lists are one fact about the UI expressed twice because one of them is
+spread over seven view functions that must not import each other. (`mcpStatus`
+is deliberately ` /= Nothing` rather than a copy of the init overlay's
+per-status filter: any MCP state worth showing the overlay for is also worth
+interrupting solo for, and "connecting" with an empty server list resolves to
+Nothing anyway.)
+-}
+attentionCounts : Model -> { waiting : Int, running : Int }
+attentionCounts model =
+    let
+        -- Hidden = no effective rect (SD6's own definition). Only sessions
+        -- are counted: a plan window has no modal state of its own, and a
+        -- plan that needs the user surfaces through its session.
+        hidden =
+            model.sessionOrder
+                |> List.filter (\key -> winRect model key == Nothing)
+                |> List.filterMap (\key -> Dict.get key model.sessions)
+
+        step s acc =
+            { waiting = acc.waiting + (if sessionIsWaiting s then 1 else 0)
+            , running = acc.running + (if s.taskRunning then 1 else 0)
+            }
+    in
+    List.foldl step { waiting = 0, running = 0 } hidden
+
+
+{-| Would this session render a blocking overlay right now? The list must
+match `App/View.elm`'s overlay renderers — `viewConfirmOverlay`,
+`viewCloseConfirmOverlay`, `viewCancelTaskConfirmOverlay`,
+`viewMcpInitOverlay`, `viewFilePickerOverlay`, `viewModelSelectorOverlay`,
+`viewMediaPreviewOverlay` — and those carry a comment pointing back here. If a
+new modal appears in the view and not here, solo stops reporting it and the
+user never learns their run is stalled.
+-}
+sessionIsWaiting : T.SessionState -> Bool
+sessionIsWaiting s =
+    s.closeConfirm
+        || s.cancelTaskConfirm
+        || not (List.isEmpty s.pendingConfirm)
+        || not (List.isEmpty s.pendingMcpAuths)
+        || s.mcpAuthRunning /= Nothing
+        || s.mcpStatus /= Nothing
+        || s.filePicker.show
+        || s.showModelSelector
+        || s.mediaPreview /= Nothing
 
 
 {-| The topmost window — what "solo this window" means when the command has

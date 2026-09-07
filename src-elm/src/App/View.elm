@@ -185,6 +185,9 @@ viewSessionPanel model id =
                 soloHere =
                     Win.soloKey model == Just id
 
+                counts =
+                    Win.attentionCounts model
+
             in
             Html.div
                 ([ Attr.class panelClasses
@@ -212,7 +215,7 @@ viewSessionPanel model id =
                     [ Attr.class "session-bar"
                     , Attr.title "Drag to move"
                     ]
-                    [ Html.span [ Attr.class "session-bar-title" ]
+                    ([ Html.span [ Attr.class "session-bar-title" ]
                         [ Html.text
                             ((case Dict.get id model.planNodeSessions of
                                 Just lbl ->
@@ -266,36 +269,114 @@ viewSessionPanel model id =
                             ]
                             [ Html.text speedLabel ]
                     , Html.button
-                        [ Attr.class "session-bar-solo"
+                        [ Attr.class
+                            ("session-bar-solo"
+                                -- SD11: while solo, this IS the exit control,
+                                -- and it carries what the hidden windows are
+                                -- doing. Highlighted when something behind us
+                                -- is blocked on the user.
+                                ++ (if soloHere && counts.waiting > 0 then " solo-attention" else "")
+                            )
                         , Ev.stopPropagationOn "mousedown" (D.succeed ( NoOp, True ))
                         , Ev.stopPropagationOn "click" (D.succeed ( ToggleSolo id, True ))
                         , Attr.title
                             (if soloHere then
-                                "Exit solo (Esc)"
+                                soloExitTitle counts
 
                              else
                                 "Solo: fill the screen with this session (Ctrl+Shift+F)"
                             )
                         ]
                         [ if soloHere then
-                            Icons.compress
+                            Html.div [ Attr.class "solo-exit-inner" ]
+                                [ Icons.compress
+                                , Html.span [ Attr.class "solo-exit-label" ] [ Html.text (soloExitLabel counts) ]
+                                ]
 
                           else
                             Icons.expand
                         ]
-                    , Html.button
-                        [ Attr.class "session-bar-close"
-                        , Ev.stopPropagationOn "mousedown" (D.succeed ( NoOp, True ))
-                        , Ev.stopPropagationOn "click" (D.succeed ( RequestCloseSession id, True ))
-                        , Attr.title "Close session"
-                        ]
-                        [ Icons.cross ]
                     ]
+                        ++ soloOnlyControls model soloHere
+                        ++ [Html.button
+                                [ Attr.class "session-bar-close"
+                                , Ev.stopPropagationOn "mousedown" (D.succeed ( NoOp, True ))
+                                , Ev.stopPropagationOn "click" (D.succeed ( RequestCloseSession id, True ))
+                                , Attr.title "Close session"
+                                ]
+                                [ Icons.cross ]
+                           ]
+                    )
                 , viewChatArea model session
                 ]
 
         Nothing ->
             Html.text ""
+
+
+{-| The label on the exit-solo control: the counts of what is BEHIND the solo
+view (SD11). Zero counts collapse to plain "Canvas" — the control must not
+shout when nothing is waiting, and it must not grow either.
+-}
+soloExitLabel : { waiting : Int, running : Int } -> String
+soloExitLabel counts =
+    let
+        parts =
+            [ ( "waiting", counts.waiting )
+            , ( "running", counts.running )
+            ]
+                |> List.filter (Tuple.second >> (\n -> n > 0))
+                |> List.map (\( word, n ) -> String.fromInt n ++ " " ++ word)
+    in
+    "Canvas" ++ (if List.isEmpty parts then "" else " · " ++ String.join " · " parts)
+
+
+{-| The same fact as `soloExitLabel`, spelled out: a bare number on a button
+means nothing unless it says what is blocked and where.
+-}
+soloExitTitle : { waiting : Int, running : Int } -> String
+soloExitTitle counts =
+    if counts.waiting > 0 then
+        "Back to the canvas (Esc) — " ++ String.fromInt counts.waiting ++ " hidden window(s) are waiting for an answer"
+
+    else if counts.running > 0 then
+        "Back to the canvas (Esc) — " ++ String.fromInt counts.running ++ " hidden task(s) running"
+
+    else
+        "Back to the canvas (Esc)"
+
+
+{-| The control that exists ONLY while this window is the solo one (SD11).
+
+Solo covers the canvas, so the canvas's own affordance is gone: there is no
+empty background to right-click, and therefore no way to reach the session
+manager, the preset editors or New Session from inside solo. This button puts
+that menu back. It is positioned under the bar rather than at a pointer
+position — in solo there is no meaningful pointer position, and `appWidth` is
+the model's own number for where the bar is.
+
+The attention counts are deliberately NOT a control here: they ride on the ⤡
+button, which is the thing the user has to click to get back, so the number and
+the action are one control instead of a badge to be noticed beside it.
+
+Both come from `Win.attentionCounts`, the same predicate the overlay renderers
+apply (`viewCloseConfirmOverlay` … `viewMediaPreviewOverlay`, which carry a
+comment pointing back) — one fact about the UI, two presentations.
+-}
+soloOnlyControls : Model -> Bool -> List (Html Msg)
+soloOnlyControls model soloHere =
+    if not soloHere then
+        []
+
+    else
+        [ Html.button
+            [ Attr.class "session-bar-menu"
+            , Ev.stopPropagationOn "mousedown" (D.succeed ( NoOp, True ))
+            , Ev.stopPropagationOn "click" (D.succeed ( ShowGlobalMenuAt (max 8 (model.appWidth - 220)) 44, True ))
+            , Attr.title "Menu — the canvas cannot be right-clicked in solo view"
+            ]
+            [ Icons.menu ]
+        ]
 
 
 viewNoSessionPanel : Model -> Html Msg
@@ -824,6 +905,14 @@ viewPlanPanel model planId =
                 winPos =
                     Win.winRect model planId
 
+                -- See `soloHere` in viewSessionPanel: the bar's own state,
+                -- not "is anything solo".
+                planSoloHere =
+                    Win.soloKey model == Just planId
+
+                counts =
+                    Win.attentionCounts model
+
                 positionStyles =
                     case winPos of
                         Just p ->
@@ -884,7 +973,7 @@ viewPlanPanel model planId =
                     [ Attr.class "session-bar plan-bar"
                     , Attr.title "Drag to move"
                     ]
-                    [ Html.span [ Attr.class "session-bar-title" ]
+                    ([ Html.span [ Attr.class "session-bar-title" ]
                         [ Html.span
                             [ Attr.class ("plan-run-dot plan-run-dot-" ++ runStatusClassOf win)
                             , Attr.title (runStatusLabelOf win)
@@ -900,31 +989,40 @@ viewPlanPanel model planId =
                         ]
                         [ Icons.warning ]
                     , Html.button
-                        [ Attr.class "session-bar-solo"
-                        , Ev.stopPropagationOn "mousedown" (D.succeed ( NoOp, True ))
+                        [ Ev.stopPropagationOn "mousedown" (D.succeed ( NoOp, True ))
                         , Ev.stopPropagationOn "click" (D.succeed ( ToggleSolo planId, True ))
+                        , Attr.class
+                            ("session-bar-solo"
+                                ++ (if planSoloHere && counts.waiting > 0 then " solo-attention" else "")
+                            )
                         , Attr.title
-                            (if Win.soloKey model == Just planId then
-                                "Exit solo (Esc)"
+                            (if planSoloHere then
+                                soloExitTitle counts
 
                              else
                                 "Solo: fill the screen with this plan (Ctrl+Shift+F)"
                             )
                         ]
-                        [ if Win.soloKey model == Just planId then
-                            Icons.compress
+                        [ if planSoloHere then
+                            Html.div [ Attr.class "solo-exit-inner" ]
+                                [ Icons.compress
+                                , Html.span [ Attr.class "solo-exit-label" ] [ Html.text (soloExitLabel counts) ]
+                                ]
 
                           else
                             Icons.expand
                         ]
-                    , Html.button
-                        [ Attr.class "session-bar-close"
-                        , Ev.stopPropagationOn "mousedown" (D.succeed ( NoOp, True ))
-                        , Ev.stopPropagationOn "click" (D.succeed ( PlanClose planId, True ))
-                        , Attr.title "Close plan window"
-                        ]
-                        [ Icons.cross ]
                     ]
+                        ++ soloOnlyControls model planSoloHere
+                        ++ [Html.button
+                                [ Attr.class "session-bar-close"
+                                , Ev.stopPropagationOn "mousedown" (D.succeed ( NoOp, True ))
+                                , Ev.stopPropagationOn "click" (D.succeed ( PlanClose planId, True ))
+                                , Attr.title "Close plan window"
+                                ]
+                                [ Icons.cross ]
+                           ]
+                    )
                 , Html.div [ Attr.class "plan-panel-body" ]
                     [ case pv.errors of
                         err :: _ ->
@@ -1484,6 +1582,12 @@ viewChatArea model session =
           else
             Html.text ""
         , viewInputBar model session
+        -- KEEP IN SYNC (SD11): the seven renderers below ARE the definition of
+        -- "this session is waiting on the user". `App.Windows.sessionIsWaiting`
+        -- tests the same fields so the solo view can report a hidden window
+        -- that is stalled behind it — add a modal here and add its condition
+        -- there, or solo will hide a prompt nobody can reach.
+        -- `tests/SoloViewTest.elm` walks one case per field.
         , viewCloseConfirmOverlay session
         , viewCancelTaskConfirmOverlay session
         , viewConfirmOverlay session.id session

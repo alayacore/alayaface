@@ -6273,16 +6273,28 @@ update msg model =
                                                     else if sess.showModelSelector then
                                                         update (ForSession sid CloseModelSelector) model
 
-                                                    else
+                                                    else if sess.mediaPreview /= Nothing then
                                                         ( updateActiveSession model (\s -> { s | mediaPreview = Nothing })
                                                         , Cmd.none
                                                         )
+
+                                                    else
+                                                        -- Nothing open after all
+                                                        -- of those: LAST in the
+                                                        -- chain, so solo exits
+                                                        -- here and never before
+                                                        -- an overlay had its turn
+                                                        -- (SD12).
+                                                        exitSoloLast model
 
                                                 Nothing ->
                                                     ( model, Cmd.none )
 
                                         Nothing ->
-                                            ( model, Cmd.none )
+                                            -- No session at all (a solo plan
+                                            -- with its owner closed): the chain
+                                            -- has nothing left to close.
+                                            exitSoloLast model
 
             -- Ctrl+W closes the FOCUSED window. Both a session
             -- (activeId) and a plan (planActiveId) can be "active" at
@@ -6291,25 +6303,35 @@ update msg model =
             -- window. Otherwise "closing the plan" would close the
             -- session still focused below it (its OWNING session —
             -- the one above the plan — closing instead of the plan).
+            --
+            -- SD10: while solo, Ctrl+W exits solo and closes NOTHING. It is
+            -- the classic "close my app window" reflex, and the one view that
+            -- looks most like a whole application must be the one that cannot
+            -- lose a session to it. (The ✕ button still closes, and closing
+            -- the solo window then exits solo — SD9.)
             else if key == "w" && ctrl then
-                case planFocusAboveSession model of
-                    Just pid ->
-                        update (PlanClose pid) model
+                if isSolo model then
+                    update ExitSolo model
 
-                    Nothing ->
-                        case model.activeId of
-                            Just sid ->
-                                -- User-initiated close: confirm first
-                                -- (Close / Close and Delete / Cancel).
-                                update (RequestCloseSession sid) model
+                else
+                    case planFocusAboveSession model of
+                        Just pid ->
+                            update (PlanClose pid) model
 
-                            Nothing ->
-                                case model.planActiveId of
-                                    Just pid2 ->
-                                        update (PlanClose pid2) model
+                        Nothing ->
+                            case model.activeId of
+                                Just sid ->
+                                    -- User-initiated close: confirm first
+                                    -- (Close / Close and Delete / Cancel).
+                                    update (RequestCloseSession sid) model
 
-                                    Nothing ->
-                                        ( model, Cmd.none )
+                                Nothing ->
+                                    case model.planActiveId of
+                                        Just pid2 ->
+                                            update (PlanClose pid2) model
+
+                                        Nothing ->
+                                            ( model, Cmd.none )
 
             -- Ctrl+G requests a cancel-task confirmation for the active
             -- session's running task — the keyboard equivalent of the
@@ -6689,6 +6711,22 @@ update msg model =
 
         NoOp ->
             ( model, Cmd.none )
+
+
+{-| The LAST step of the Escape chain (SD12): every overlay has already had
+its turn, and the tool-confirmation dialog is still untouched (it needs an
+explicit Allow/Deny, so Escape has never closed it and never will). Returns to
+the canvas instead — and only when something really is solo, because the
+`ExitSolo` branch re-sends the chain payload and an Escape press in an already
+canvas-view app must not start talking to the bridge.
+-}
+exitSoloLast : Model -> ( Model, Cmd Msg )
+exitSoloLast model =
+    if isSolo model then
+        update ExitSolo model
+
+    else
+        ( model, Cmd.none )
 
 
 -- ─── Pointer gesture FSM helpers (D4/D5) ────────────────────────────

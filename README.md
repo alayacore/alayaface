@@ -231,6 +231,40 @@ aborted (history kept up to the cancel point), not allowed to finish.
 SIGKILL only after a 5s grace period. (AlayaCore itself is untouched;
 `cancel` and `save` are its own commands.)
 
+## Windows and solo view
+
+Every session and every plan is a window on one infinite canvas: drag a title
+bar to move it, drag an edge to resize it, right-click the empty background for
+the global menu, wheel on the background to zoom (the whole board scales, the
+windows reflow with it).
+
+**Solo view** is a presentation mode for one window at a time: it fills the
+viewport, and every other window stops being drawn.
+
+| | |
+|---|---|
+| Enter | `⤢` in a window's title bar (sessions and plans both), the global menu's **Solo window**, or `Ctrl+Shift+F` for the window you are looking at |
+| Leave | the same button (`⤡`), `Esc`, or the global menu's **Exit solo** |
+| What stops | panning, window dragging, resizing, wheel zoom, the plan info window — the panel is the viewport, so those gestures have nothing to act on |
+| What does **not** stop | everything else. Streaming, running tasks, tool confirmations, MCP authorisation, plan execution, version freezes all keep going: solo hides windows, it never closes one |
+
+While a window is solo the title bar shows what is behind it — `Canvas · 2
+running · 1 waiting`. The numbers count *hidden* windows: `waiting` is one with
+an open prompt (a tool confirmation, a close or cancel confirmation, the file
+picker, the model selector, MCP init/auth, a media preview), highlighted because
+a session blocked on an invisible dialog would otherwise stall unnoticed;
+`running` counts hidden windows with a task in flight. Clicking the control
+returns to the canvas, where that prompt is waiting.
+
+`Ctrl+W` never closes a session from inside solo — it exits solo instead (the
+reflex that would otherwise cost you a window). Closing the solo window with its
+own `✕` closes that window and then leaves solo, so the view can never point at
+a window that is gone.
+
+Solo stores nothing: the layout it returns to is exactly the layout it came
+from, and it is not persisted (a restart shows the canvas). Persisting the board
+itself is planned as a separate step (see `docs/`).
+
 ## Automated E2E (headless browser, no real model)
 
 `make e2e` runs a full Plan Mode browser test — no GUI, no real model:
