@@ -121,7 +121,15 @@ done
 # So outside the module that owns it (plus the type declaration and the two
 # places that must initialise every field of the record), the name must not
 # appear at all — `isSolo` / `soloKey` are the questions to ask.
-allowed="src-elm/src/App/Windows.elm src-elm/src/App/Types.elm src-elm/src/Main.elm"
+#
+# App/UiConfig.elm is on the list for a different reason and it is worth being
+# explicit about it, because this file's own rule is "no exceptions in prose":
+# its `soloWin` is the NAME OF A KEY IN ui.conf, not the Model field. The wire
+# format has to spell it the way both backends and the file do; renaming it to
+# dodge this grep would rename the user's config key. What the check protects
+# against — reading or writing the live Model field off the accessor — is
+# impossible there: UiConfig imports nothing from the app.
+allowed="src-elm/src/App/Windows.elm src-elm/src/App/Types.elm src-elm/src/Main.elm src-elm/src/App/UiConfig.elm"
 : > "$tmp/solowin"
 for f in $(find src-elm/src -name '*.elm' | sort); do
   case " $allowed " in *" $f "*) continue ;; esac
@@ -132,6 +140,15 @@ done
 if [ -s "$tmp/solowin" ]; then
   echo "✗ INV2b/INV3: these files touch soloWin directly — ask Win.isSolo / Win.soloKey instead:"
   sed 's/^/      /' "$tmp/solowin"
+  fail=1
+fi
+
+# The one premise that makes UiConfig.elm's presence on that list safe: it can
+# only name the config key if it cannot reach the Model. Check it, so the
+# allow-list cannot rot into a hole the day someone imports the app record.
+if grep -qE '^import App\.Types' src-elm/src/App/UiConfig.elm; then
+  echo "✗ INV2b/INV3: src-elm/src/App/UiConfig.elm now imports App.Types — it can read Model.soloWin, so its"
+  echo "    exemption above is no longer sound. Move the codec behind an accessor, do not extend the list."
   fail=1
 fi
 
