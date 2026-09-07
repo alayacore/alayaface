@@ -337,13 +337,13 @@ means nothing unless it says what is blocked and where.
 soloExitTitle : { waiting : Int, running : Int } -> String
 soloExitTitle counts =
     if counts.waiting > 0 then
-        "Back to the canvas (Esc) — " ++ String.fromInt counts.waiting ++ " hidden window(s) are waiting for an answer"
+        "Back to the canvas — " ++ String.fromInt counts.waiting ++ " hidden window(s) are waiting for an answer"
 
     else if counts.running > 0 then
-        "Back to the canvas (Esc) — " ++ String.fromInt counts.running ++ " hidden task(s) running"
+        "Back to the canvas — " ++ String.fromInt counts.running ++ " hidden task(s) running"
 
     else
-        "Back to the canvas (Esc)"
+        "Back to the canvas"
 
 
 {-| The control that exists ONLY while this window is the solo one (SD11).
@@ -487,21 +487,35 @@ viewGlobalMenu model =
                     ]
                 , Html.div
                     [ Attr.class "global-menu-item"
-                    -- Solo is a TOGGLE on the window the user is looking at
-                    -- (`soloTarget`), so one item covers both directions and
-                    -- the label says what the click does. This is also the
-                    -- only way into solo that needs no panel of its own — the
-                    -- canvas context menu disappears with the canvas in solo,
-                    -- which is why SD11 keeps it reachable from the bar.
+                    -- The two halves of this item are two different actions,
+                    -- and only one of them may ask "which window is on top?".
+                    --
+                    -- In canvas view that question is the right one: the item
+                    -- says "Solo window", so it needs a target.
+                    --
+                    -- In solo it would be wrong: `soloTarget` reads the layout
+                    -- store, where a HIDDEN window can easily be topmost — the
+                    -- solo e2e §10 provokes exactly that by raising a window
+                    -- before hiding it. Resolving a target there turns
+                    -- "Exit solo" into "switch solo onto a window you cannot
+                    -- see", which is the opposite of what the label promised.
+                    -- So the exit half names no target at all: `ExitSolo`
+                    -- leaves whatever is solo, which is the only thing the
+                    -- user can have meant. (SD18: this is also the only way out
+                    -- besides the ⤡ button, since no chord leaves solo.)
                     , Ev.onClick
-                        (case Win.soloTarget model of
-                            Just k ->
-                                ToggleSolo k
+                        (if Win.isSolo model then
+                            ExitSolo
 
-                            Nothing ->
-                                NoOp
+                         else
+                            case Win.soloTarget model of
+                                Just k ->
+                                    SoloWindow k
+
+                                Nothing ->
+                                    NoOp
                         )
-                    , Attr.title "Solo view: one window filling the screen (Ctrl+Shift+F)"
+                    , Attr.title "Solo view: one window filling the screen (Ctrl+Shift+F to enter)"
                     ]
                     [ Html.span [ Attr.class "global-menu-icon" ]
                         [ if Win.isSolo model then

@@ -69,12 +69,12 @@ tests =
                         , \mm -> Expect.equal mm initModelWithSession
                         ]
                         m1
-            -- SD10's surviving half: in solo, Ctrl+W goes back to the canvas.
-            -- It is the one thing the chord may still do, because it destroys
-            -- nothing and there the reflex and the intent agree. Not even the
-            -- confirmation may open: a pending close-confirm behind the solo
-            -- view is precisely the hidden-modal state SD11 exists to avoid.
-            , test "Ctrl+W in solo exits solo and opens no confirmation" <|
+            -- SD18: no keyboard chord leaves solo. The revised SD10 kept this
+            -- one, then the user removed it too — the argument that settled it
+            -- is that in solo the panel IS the window, so "Ctrl+W changed what
+            -- I was looking at" is indistinguishable from "Ctrl+W closed my
+            -- window" no matter which one the code did.
+            , test "Ctrl+W in solo leaves solo alone (and closes nothing)" <|
                 \_ ->
                     let
                         solo =
@@ -88,10 +88,8 @@ tests =
                             App.Update.update (AT.KeyDown "w" True False False False) solo
                     in
                     Expect.all
-                        [ \mm -> Expect.equal mm.soloWin Nothing
-                        , \mm -> Expect.equal False (sessionCloseConfirm "s1" mm)
-                        , \mm -> Expect.equal True (Dict.member "s1" mm.sessions)
-                        , \mm -> Expect.equal 1 (Dict.size mm.sessions)
+                        [ \mm -> Expect.equal mm.soloWin (Just "s1")
+                        , \_ -> Expect.equal m1 solo
                         ]
                         m1
             , test "a second request on the same session is idempotent" <|

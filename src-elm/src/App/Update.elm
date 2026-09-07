@@ -6214,18 +6214,30 @@ update msg model =
             if defaultPrevented then
                 ( model, Cmd.none )
 
-            -- Ctrl+Shift+F: toggle solo on the window the user is looking at
-            -- (soloTarget). BEFORE the Escape block on purpose: the
-            -- Escape chain is long (SD12) and a chord that opens a
-            -- presentation mode must not be swallowed by an overlay that
-            -- happens to be open. The prompt textarea's own keydown handler
-            -- only preventDefaults plain Enter, so the chord still reaches us
-            -- while the input has focus — which is where a user is when they
-            -- want more screen.
+            -- Ctrl+Shift+F: ENTER solo view on the window the user is looking
+            -- at (soloTarget), and nothing else.
+            --
+            -- SD18: only a pointer control leaves solo — the ⤡ button, the
+            -- menu item. No chord does. This one used to `ToggleSolo`, so a
+            -- second press dropped the user out of the big view, which is the
+            -- same accident as Ctrl+W from the other direction: the keyboard
+            -- is where typing and reflexes live, and leaving a presentation
+            -- should never be a side effect of one.
+            --
+            -- Placed BEFORE the Escape block on purpose: the Escape chain is
+            -- long (SD12) and a chord that opens a presentation mode must not
+            -- be swallowed by an overlay that happens to be open. The prompt
+            -- textarea's own keydown handler only preventDefaults plain Enter,
+            -- so the chord reaches us while the input has focus — which is
+            -- where a user is when they want more screen.
             else if (key == "F" || key == "f") && ctrl && shift then
                 case soloTarget model of
                     Just key0 ->
-                        update (ToggleSolo key0) model
+                        if isSolo model then
+                            ( model, Cmd.none )
+
+                        else
+                            update (SoloWindow key0) model
 
                     Nothing ->
                         ( model, Cmd.none )
@@ -6309,36 +6321,34 @@ update msg model =
 
                                                     else
                                                         -- Nothing open after all
-                                                        -- of those: LAST in the
-                                                        -- chain, so solo exits
-                                                        -- here and never before
-                                                        -- an overlay had its turn
-                                                        -- (SD12).
-                                                        exitSoloIfSolo model
+                                                        -- of those. Solo does
+                                                        -- NOT exit here (SD18):
+                                                        -- Escape is a reflex key
+                                                        -- and leaving the
+                                                        -- presentation is the
+                                                        -- ⤡ button's job.
+                                                        ( model, Cmd.none )
 
                                                 Nothing ->
                                                     ( model, Cmd.none )
 
                                         Nothing ->
-                                            -- No session at all (a solo plan
-                                            -- with its owner closed): the chain
-                                            -- has nothing left to close.
-                                            exitSoloIfSolo model
+                                            ( model, Cmd.none )
 
-            -- Ctrl+W closes NOTHING (user decision, revising SD10). It used to
-            -- close the topmost window — first the active plan when it sat
-            -- above the active session, else the active session's confirmation
-            -- — which made the "close my window" reflex a way to lose a
-            -- session. Closing is the ✕ button's, and only the ✕ button's: it
-            -- is visible, per-window, and always asks first.
-            --
-            -- In solo the key still returns to the canvas, because there the
-            -- reflex and the intent agree (the user wants the big view gone) —
-            -- and it is the one thing Ctrl+W can do that destroys nothing.
-            -- Outside solo it is inert, so the browser/OS keeps its own
-            -- meaning for the chord.
+            -- Ctrl+W is not bound at all (SD10 as revised, then narrowed by
+            -- SD18). It used to close the topmost window — first the active
+            -- plan when it sat above the active session, else the active
+            -- session's confirmation — which made the "close my window"
+            -- reflex a way to lose a session; it then kept one job, leaving
+            -- solo view, until the user ruled that no keyboard chord may
+            -- leave it either. Closing is the ✕ button's, and leaving solo is
+            -- the ⤡ button's. This branch stays in the chain, doing nothing,
+            -- so the next reader finds the decision here rather than
+            -- re-deriving it — and note that matching the chord costs nothing:
+            -- the KeyDown subscription never preventDefaults, so the
+            -- browser/OS still gets its own Ctrl+W either way.
             else if key == "w" && ctrl then
-                exitSoloIfSolo model
+                ( model, Cmd.none )
 
             -- Ctrl+G requests a cancel-task confirmation for the active
             -- session's running task — the keyboard equivalent of the
@@ -6718,28 +6728,6 @@ update msg model =
 
         NoOp ->
             ( model, Cmd.none )
-
-
-{-| Leave solo if something is in it; otherwise change nothing. Two chords
-want exactly this and nothing more:
-
-  - `Escape`, as the LAST step of the overlay chain (SD12) — every overlay has
-    had its turn first, and the tool-confirmation dialog still cannot be
-    dismissed by Escape (it needs an explicit Allow/Deny);
-  - `Ctrl+W`, which closes nothing at all now — the "close my window" reflex
-    gets the one action that is safe in every view: go back to the canvas.
-
-The guard on `isSolo` is not cosmetic: `ExitSolo` re-sends the chain payload, so
-without it an Escape or Ctrl+W in a canvas-view app would start talking to the
-bridge and rewrite `connectionChain` for no visible reason.
--}
-exitSoloIfSolo : Model -> ( Model, Cmd Msg )
-exitSoloIfSolo model =
-    if isSolo model then
-        update ExitSolo model
-
-    else
-        ( model, Cmd.none )
 
 
 -- ─── Pointer gesture FSM helpers (D4/D5) ────────────────────────────

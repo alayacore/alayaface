@@ -492,32 +492,42 @@ suite =
                         , \_ -> Expect.equal (W.soloTarget none) Nothing
                         ]
                         ()
-            , test "Ctrl+Shift+F toggles the topmost window" <|
+            , test "Ctrl+Shift+F enters solo and cannot leave it (SD18)" <|
                 \_ ->
-                    -- board's planActiveId is Nothing (initModelWithSession's),
-                    -- so the topmost question would answer with s1. Make p1 the
-                    -- active plan: its z (3) is above s1's (1).
+                    -- The chord used to `ToggleSolo`, so a second press
+                    -- dropped out of the big view. Entering is a deliberate
+                    -- request; leaving by the same keys is the accident the
+                    -- user ruled out — the ⤡ button is the only way back.
                     let
                         focused =
                             { board | planActiveId = Just "p1" }
 
-                        ( m1, _ ) =
-                            AU.update (AT.KeyDown "F" True False True False) focused
+                        press m =
+                            Tuple.first (AU.update (AT.KeyDown "F" True False True False) m)
 
-                        ( m2, _ ) =
-                            AU.update (AT.KeyDown "F" True False True False) m1
+                        once =
+                            press focused
+
+                        twice =
+                            press once
+
+                        thrice =
+                            press twice
                     in
                     Expect.all
-                        [ \_ -> Expect.equal m1.soloWin (Just "p1")
-                        , \_ -> Expect.equal m2.soloWin Nothing
-                        -- plain Ctrl+F (browser find) must not trigger it
+                        [ \_ -> Expect.equal once.soloWin (Just "p1")
+                        , \_ -> Expect.equal twice.soloWin (Just "p1")
+                        , \_ -> Expect.equal thrice.soloWin (Just "p1")
+                        -- and the layout never moved while it was pressed
+                        , \_ -> Expect.equal (layoutOf thrice) (layoutOf focused)
+                        -- plain Ctrl+F (browser find) still does nothing
                         , \_ ->
                             AU.update (AT.KeyDown "f" True False False False) focused
                                 |> Tuple.first
                                 |> .soloWin
                                 |> Expect.equal Nothing
-                        -- …nor Ctrl+Shift+F once something already handled the
-                        -- key (the early return is the first branch).
+                        -- Ctrl+Shift+F with the chord already handled elsewhere
+                        -- is still swallowed by the early return
                         , \_ ->
                             AU.update (AT.KeyDown "F" True False True True) focused
                                 |> Tuple.first
@@ -525,76 +535,47 @@ suite =
                                 |> Expect.equal Nothing
                         ]
                         ()
-            ]
-        , describe "SD11 — attentionCounts (what the exit control reports)"
-            [ test "canvas view counts nothing: no window is hidden" <|
+            -- SD18 as a rule, not as three fixes: no chord in the app leaves
+            -- solo. Every keyboard message the update knows about is driven
+            -- against the same solo model, and `soloWin` has to survive all of
+            -- them. A new chord that exits solo fails this test, which is the
+            -- point — the button-only rule is the kind of thing that comes back
+            -- as "helpful" later.
+            , test "no keyboard chord leaves solo" <|
                 \_ ->
                     let
-                        busy =
-                            { board
-                                | sessions =
-                                    Dict.map (\_ s -> { s | taskRunning = True, closeConfirm = True }) board.sessions
-                            }
-                    in
-                    Expect.equal (W.attentionCounts busy) { waiting = 0, running = 0 }
-            , test "a hidden window stalled on the user is counted, running separately" <|
-                \_ ->
-                    -- s2 sits behind the solo s1 with a tool confirmation open
-                    -- and a task running: the run is stalled and NOTHING on
-                    -- screen says so. That is the bug this count exists for.
-                    let
-                        hidden =
-                            hideSession "s2" (\s -> { s | pendingConfirm = [ { id = "t1", toolName = Just "edit_file", toolInput = Nothing } ], taskRunning = True }) soloS1
-                    in
-                    Expect.equal (W.attentionCounts hidden) { waiting = 1, running = 1 }
-            , test "the VISIBLE solo window is never counted (it is on screen)" <|
-                \_ ->
-                    let
-                        soloBlocked =
-                            hideSession "s1" (\s -> { s | closeConfirm = True, taskRunning = True }) soloS1
-                    in
-                    Expect.equal (W.attentionCounts soloBlocked) { waiting = 0, running = 0 }
-            , test "every waiting condition the view can render is covered" <|
-                \_ ->
-                    -- One entry per overlay renderer in App/View.elm. A new
-                    -- modal added there without a matching field here means
-                    -- solo stops reporting a stalled session — the exact
-                    -- failure SD11 exists to prevent — so the list is pinned
-                    -- field by field instead of by counting entries.
-                    let
-                        conditions =
-                            [ ( "closeConfirm", \s -> { s | closeConfirm = True } )
-                            , ( "cancelTaskConfirm", \s -> { s | cancelTaskConfirm = True } )
-                            , ( "pendingConfirm", \s -> { s | pendingConfirm = [ { id = "t", toolName = Nothing, toolInput = Nothing } ] } )
-                            , ( "pendingMcpAuths", \s -> { s | pendingMcpAuths = [ { server = "srv", url = "" } ] } )
-                            , ( "mcpAuthRunning", \s -> { s | mcpAuthRunning = Just "srv" } )
-                            , ( "mcpStatus", \s -> { s | mcpStatus = Just "auth_required" } )
-                            , ( "filePicker"
-                              , \s ->
-                                    let
-                                        fp =
-                                            s.filePicker
-                                    in
-                                    { s | filePicker = { fp | show = True } }
-                              )
-                            , ( "showModelSelector", \s -> { s | showModelSelector = True } )
-                            , ( "mediaPreview", \s -> { s | mediaPreview = Just { mediaType = T.Image, uri = "x", name = Nothing } } )
+                        solo =
+                            { board | soloWin = Just "s1", planActiveId = Just "p1" }
+
+                        chords =
+                            [ ( "Ctrl+W", AT.KeyDown "w" True False False False )
+                            , ( "Ctrl+Shift+F", AT.KeyDown "F" True False True False )
+                            , ( "Escape", AT.KeyDown "Escape" False False False False )
+                            , ( "Ctrl+[", AT.KeyDown "[" True False False False )
+                            , ( "Ctrl+G", AT.KeyDown "g" True False False False )
                             ]
 
-                        missed =
-                            conditions
-                                |> List.filter
-                                    (\( _, fn ) ->
-                                        (W.attentionCounts (hideSession "s2" fn soloS1)).waiting /= 1
-                                    )
-                                |> List.map Tuple.first
+                        survivors =
+                            List.map
+                                (\( name, msg ) ->
+                                    ( name, (AU.update msg solo |> Tuple.first).soloWin )
+                                )
+                                chords
                     in
-                    Expect.equal missed []
-            , test "a stale soloWin counts nothing (INV2b again)" <|
-                \_ ->
-                    Expect.equal
-                        (W.attentionCounts { board | soloWin = Just "gone" })
-                        { waiting = 0, running = 0 }
+                    Expect.all
+                        [ \_ ->
+                            Expect.equal survivors
+                                [ ( "Ctrl+W", Just "s1" )
+                                , ( "Ctrl+Shift+F", Just "s1" )
+                                , ( "Escape", Just "s1" )
+                                , ( "Ctrl+[", Just "s1" )
+                                , ( "Ctrl+G", Just "s1" )
+                                ]
+                        -- while the pointer controls still do leave it
+                        , \_ -> Expect.equal (Tuple.first (AU.update (AT.ToggleSolo "s1") solo)).soloWin Nothing
+                        , \_ -> Expect.equal (Tuple.first (AU.update AT.ExitSolo solo)).soloWin Nothing
+                        ]
+                        ()
             ]
         , describe "INV3 — soloWin is only written by the three helpers"
             -- Enforced mechanically by scripts/check-layout-invariants.sh

@@ -138,10 +138,12 @@ tests =
                         |> (\m -> Dict.get "s1" m.sessions)
                         |> Maybe.map (.pendingConfirm >> List.length)
                         |> Expect.equal (Just 1)
-        -- SD12: solo is the LAST thing this chain closes. The ordering test
-        -- below is the point — an Escape with a media preview open must not
-        -- jump past it to solo.
-        , test "exits solo only after every overlay has had its turn" <|
+        -- SD18: Escape is not a solo exit. The revised SD12 kept it as the
+        -- LAST step of this chain; the user then ruled that no keyboard chord
+        -- may leave solo at all, so the chain ends where it ended before solo
+        -- existed. Both cases are pinned: an overlay in solo still gets closed
+        -- first, and a chain that reaches its end in solo stops there.
+        , test "in solo, Escape closes an open overlay and stays in solo" <|
             \_ ->
                 let
                     soloWithPreview =
@@ -151,22 +153,18 @@ tests =
                                 , windowPositions = Dict.insert "s1" { x = 0, y = 0, w = 560, h = 640, z = 1 } Dict.empty
                             }
 
-                    first =
+                    after =
                         escape soloWithPreview
-
-                    second =
-                        escape first
                 in
                 Expect.all
-                    [ \_ -> Expect.equal first.soloWin (Just "s1")
-                    , \_ ->
-                        Dict.get "s1" first.sessions
+                    [ \_ ->
+                        Dict.get "s1" after.sessions
                             |> Maybe.map .mediaPreview
                             |> Expect.equal (Just Nothing)
-                    , \_ -> Expect.equal second.soloWin Nothing
+                    , \_ -> Expect.equal after.soloWin (Just "s1")
                     ]
                     ()
-        , test "Escape with nothing open exits solo (and alone does not touch it)" <|
+        , test "in solo with nothing open, Escape changes nothing at all" <|
             \_ ->
                 let
                     solo =
@@ -176,11 +174,11 @@ tests =
                         }
                 in
                 Expect.all
-                    [ \_ -> Expect.equal (escape solo).soloWin Nothing
-                    -- the pre-existing behaviour of the chain's last branch:
-                    -- an Escape with nothing open in canvas view changes
-                    -- nothing at all (in particular it does not go talking to
-                    -- the bridge through ExitSolo's chain re-send)
+                    [ \_ -> Expect.equal (escape (escape solo)).soloWin (Just "s1")
+                    -- two presses and it is still there. Also pins that the
+                    -- chain's end is not secretly an ExitSolo: that branch
+                    -- re-sends the chain payload, so an idle Escape in canvas
+                    -- view must leave the model byte-identical too.
                     , \_ -> Expect.equal (escape initModelWithSession) initModelWithSession
                     ]
                     ()
