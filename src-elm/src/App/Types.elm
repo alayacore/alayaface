@@ -77,6 +77,12 @@ type alias Model =
     , inputRows : Int
     , cursorMsgId : Maybe String
     , pendingEvents : Dict String (List E.Value)
+    -- H1: the keys `bufferPendingEvent` has already reported an overflow for.
+    -- `pendingEvents` is bounded per key (pendingEventsCap) but "log once, not
+    -- per frame" needs to remember that it logged, and the buffer itself cannot
+    -- tell you: once a key sits at the cap, every further frame looks exactly
+    -- like the first dropped one. Pruned with the buffer it describes.
+    , pendingOverflow : Set String
     , sessionNums : Dict String Int
     , nextSessionNum : Int
     , windowPositions : Dict String WindowPos

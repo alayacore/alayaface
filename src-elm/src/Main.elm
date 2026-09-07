@@ -47,6 +47,7 @@ init _ =
       , inputRows = 1
       , cursorMsgId = Nothing
       , pendingEvents = Dict.empty
+      , pendingOverflow = Set.empty
       , sessionNums = Dict.empty
       , nextSessionNum = 1
       , windowPositions = Dict.empty

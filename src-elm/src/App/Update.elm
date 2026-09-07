@@ -1,5 +1,7 @@
 module App.Update exposing
     ( update
+    , pendingEventsCap
+    , bufferPendingEvent
     , SessionDir
     , decodeSessionDir
     , decodeWarning
@@ -414,14 +416,73 @@ appendErrorMsg s text =
 -- Buffer an inbound event for a session that has not been registered
 -- yet (e.g. transport events racing session creation). The buffered
 -- events are flushed when the session appears (see SessionCreated).
+{-| Frames that arrive for a session this client has not created yet are
+buffered and replayed when it appears (`SessionCreated` → `applyPendingEvent`).
+Without a bound the buffer is a leak: the Go backend broadcasts every frame to
+every client, so a second tab, an SSH session, or any core this UI never opened
+keeps appending to a key that will never be drained — for the lifetime of the
+page. 512 frames is far more than a session start can be waiting for (a
+replay-long enough to matter would already be on screen), and dropping the
+OLDEST keeps the newest state, which is the part the replay needs: `taskRunning
+= True` or the final `model` frame is worthless without the messages that came
+before it.
+
+One `logWarn` per session, not per frame: `pendingOverflow` records that this
+key already said so. Without it a runaway core writes the log at frame rate —
+and the point of the warning is a human reading it, not the disc it lands on.
+-}
+pendingEventsCap : Int
+pendingEventsCap =
+    512
+
+
 bufferPendingEvent : Model -> String -> E.Value -> ( Model, Cmd Msg )
 bufferPendingEvent model sessionId raw =
     let
         existing =
             Dict.get sessionId model.pendingEvents |> Maybe.withDefault []
+
+        queued =
+            existing ++ [ raw ]
+
+        over =
+            List.length queued - pendingEventsCap
+
+        alreadyLogged =
+            Set.member sessionId model.pendingOverflow
+
+        kept =
+            if over > 0 then
+                List.drop over queued
+
+            else
+                queued
+
+        warnCmd =
+            -- over > 0 on the FIRST frame that pushes a key past the cap; every
+            -- later frame sees the flag already set, so this fires once.
+            if over > 0 && not alreadyLogged then
+                Ports.logWarn
+                    ("dropping oldest buffered events for unknown session "
+                        ++ sessionId
+                        ++ " (buffer capped at "
+                        ++ String.fromInt pendingEventsCap
+                        ++ ")"
+                    )
+
+            else
+                Cmd.none
     in
-    ( { model | pendingEvents = Dict.insert sessionId (existing ++ [ raw ]) model.pendingEvents }
-    , Cmd.none
+    ( { model
+        | pendingEvents = Dict.insert sessionId kept model.pendingEvents
+        , pendingOverflow =
+            if over > 0 then
+                Set.insert sessionId model.pendingOverflow
+
+            else
+                model.pendingOverflow
+      }
+    , warnCmd
     )
 
 
@@ -709,6 +770,7 @@ forkSessionCreated forkId model =
                             model.planMessageCounts
                 , planReplaySessions = Set.insert sessionId model.planReplaySessions
                 , pendingEvents = Dict.remove forkId model.pendingEvents
+                , pendingOverflow = Set.remove forkId model.pendingOverflow
             }
 
         cmds =
@@ -795,6 +857,7 @@ resumeSessionCreated liveId model =
                 , planMessageCounts = planCounts1
                 , planReplaySessions = Set.insert sessionId model.planReplaySessions
                 , pendingEvents = Dict.remove liveId model.pendingEvents
+                , pendingOverflow = Set.remove liveId model.pendingOverflow
                 , planResumeFrom = Nothing
                 , planResumeOwner = Nothing
                 , activeId = Just sessionId
@@ -1012,6 +1075,7 @@ createSessionWindow id model =
                         (sessionDirForCreate model id)
                         model.sessionDirMap
                 , pendingEvents = Dict.remove id model.pendingEvents
+                , pendingOverflow = Set.remove id model.pendingOverflow
             }
 
         -- Pan the canvas so the fresh window is visible (its
@@ -1238,7 +1302,7 @@ update msg model =
             let
                 m0 =
                     if model.planResumeFrom == Nothing && model.planCascadeFork == Nothing then
-                        { model | pendingEvents = Dict.empty }
+                        { model | pendingEvents = Dict.empty, pendingOverflow = Set.empty }
 
                     else
                         model
