@@ -13,6 +13,7 @@ import Json.Encode as E
 import Test exposing (Test, describe, test)
 import App.Update as AU
 import App.Types as AT
+import App.Windows as W
 import App.Pointer as P
 import TestHelpers exposing (initModelWithSession)
 
@@ -342,12 +343,58 @@ tests =
             [ test "toDragKind maps targets + ids to drag kinds" <|
                 \_ ->
                     Expect.all
-                        [ \_ -> Expect.equal (AT.toDragKind P.TCanvas "" "" "") (Just AT.Pan)
-                        , \_ -> Expect.equal (AT.toDragKind P.TSessionBar "s1" "" "") (Just (AT.WindowMove "s1"))
-                        , \_ -> Expect.equal (AT.toDragKind P.TPlanBar "" "p1" "") (Just (AT.PlanMove "p1"))
-                        , \_ -> Expect.equal (AT.toDragKind P.TSessionHandle "s1" "" "nw") (Just (AT.WindowResize "s1" AT.NW))
-                        , \_ -> Expect.equal (AT.toDragKind P.TPlanHandle "" "p1" "s") (Just (AT.PlanResize "p1" AT.S))
-                        , \_ -> Expect.equal (AT.toDragKind P.TContent "" "" "") Nothing
+                        [ \_ -> Expect.equal (AT.toDragKind False P.TCanvas "" "" "") (Just AT.Pan)
+                        , \_ -> Expect.equal (AT.toDragKind False P.TSessionBar "s1" "" "") (Just (AT.WindowMove "s1"))
+                        , \_ -> Expect.equal (AT.toDragKind False P.TPlanBar "" "p1" "") (Just (AT.PlanMove "p1"))
+                        , \_ -> Expect.equal (AT.toDragKind False P.TSessionHandle "s1" "" "nw") (Just (AT.WindowResize "s1" AT.NW))
+                        , \_ -> Expect.equal (AT.toDragKind False P.TPlanHandle "" "p1" "s") (Just (AT.PlanResize "p1" AT.S))
+                        , \_ -> Expect.equal (AT.toDragKind False P.TContent "" "" "") Nothing
+                        ]
+                        ()
+            -- F1.4/SD7: solo refuses every draggable surface, and it is
+            -- refused HERE (the classification), not in the JS pipe.
+            , test "solo arms no pan, no window move and no resize" <|
+                \_ ->
+                    Expect.all
+                        [ \_ -> Expect.equal (AT.toDragKind True P.TCanvas "" "" "") Nothing
+                        , \_ -> Expect.equal (AT.toDragKind True P.TSessionBar "s1" "" "") Nothing
+                        , \_ -> Expect.equal (AT.toDragKind True P.TPlanBar "" "p1" "") Nothing
+                        , \_ -> Expect.equal (AT.toDragKind True P.TSessionHandle "s1" "" "nw") Nothing
+                        , \_ -> Expect.equal (AT.toDragKind True P.TPlanHandle "" "p1" "s") Nothing
+                        -- the surfaces that were never draggable stay that way
+                        , \_ -> Expect.equal (AT.toDragKind True P.TContent "" "" "") Nothing
+                        , \_ -> Expect.equal (AT.toDragKind True P.TMenu "" "" "") Nothing
+                        ]
+                        ()
+            , test "the FSM arms nothing while a window is solo" <|
+                \_ ->
+                    let
+                        solo =
+                            { withSessionWindow | soloWin = Just "s1" }
+
+                        -- A mouse down on the title bar: the canvas-view
+                        -- answer is an armed WindowMove (see the tests above).
+                        bar =
+                            down (pev 1 "mouse" 0 200 60 "session-bar" "s1" "" "") solo
+
+                        -- Two fingers on the canvas: the canvas-view answer
+                        -- is a pinch.
+                        two =
+                            down (pev 2 "touch" 0 300 700 "canvas" "" "" "")
+                                (down (pev 3 "touch" 0 400 700 "canvas" "" "" "") solo)
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal bar.drag Nothing
+                        , \_ -> Expect.equal bar.longPress Nothing
+                        , \_ -> Expect.equal bar.pinch Nothing
+                        , \_ -> Expect.equal two.pinch Nothing
+                        , \_ -> Expect.equal two.drag Nothing
+                        -- The pointer map still fills up: a drag that starts
+                        -- AFTER solo ends must see the right finger states,
+                        -- and PointerUp only clears ids it still holds.
+                        , \_ -> Expect.equal (Dict.size bar.activePointers) 1
+                        , \_ -> Expect.equal (Dict.size two.activePointers) 2
+                        , \_ -> Expect.equal (W.winRect bar "s1") (Just (W.soloRect solo "s1"))
                         ]
                         ()
             ]

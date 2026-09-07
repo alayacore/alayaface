@@ -80,6 +80,15 @@ type alias Model =
     , sessionNums : Dict String Int
     , nextSessionNum : Int
     , windowPositions : Dict String WindowPos
+    -- SOLO VIEW (F1): the key of the one window that fills the viewport,
+    -- in the SAME key space as windowPositions (a session id or a plan id
+    -- — SD2, no new identity type). Presentation only: every other window
+    -- stays alive and simply is not rendered (SD1/SD6). Nothing writes it
+    -- except App/Windows' enterSolo/exitSolo/follow helpers (INV3), and
+    -- `winRect` de-risks a stale key by returning Nothing for it (INV2), so
+    -- a missed cleanup degrades to "canvas view", never to a blank screen.
+    -- Never persisted in F1–F2 (SD14); that is F3's ui.conf.
+    , soloWin : Maybe String
     , nextZIndex : Int
     -- Infinite canvas: the viewport (main-content) shows a slice of an
     -- unbounded canvas. Windows are positioned in CANVAS coordinates;
@@ -426,6 +435,12 @@ type Msg
     | DeleteWorkCopyDir String String String String
       -- Window
     | WindowMaximized Bool
+      -- Solo view (F1). SoloWindow/ExitSolo are the two directions;
+      -- ToggleSolo flips the topmost one (the ⤢ button and the shortcut
+      -- both go through it, so the button never needs to know the state).
+    | SoloWindow String
+    | ExitSolo
+    | ToggleSolo String
     | GotContainerSize (Result Dom.Error Dom.Element)
     | RequerySize
       -- Model Selector
@@ -637,7 +652,7 @@ type Msg
     | SetPresetSubmenu Bool
       -- Internal
     | NoOp
-    | KeyDown String Bool Bool Bool
+    | KeyDown String Bool Bool Bool Bool
     | ScrollPosition String Float Float Float
 
 
@@ -708,27 +723,39 @@ type alias LongPress =
 {-| Map a pointerdown target to the drag kind it arms (D5). Returns
 Nothing for targets that cannot drag. Requires the ids that only the
 DOM knows: sessionId/planId for bars and handles.
+
+The `solo` flag is the ONE exception (F1/SD7): while a window is solo there
+is no canvas to pan, no bar to move and no handle to resize — the panel IS
+the viewport, and every draggable surface's drag kind is refused. This is a
+*gesture classification* decision, so it lives here in pure Elm where
+`tests/PointerFsmTest.elm` and `tests/SoloViewTest.elm` pin it, not as a
+behavior check in the JS pipe (which keeps forwarding pointerdowns
+regardless — see SD7).
 -}
-toDragKind : P.TargetKind -> String -> String -> String -> Maybe DragKind
-toDragKind target sessionId planId handle =
-    case target of
-        P.TCanvas ->
-            Just Pan
+toDragKind : Bool -> P.TargetKind -> String -> String -> String -> Maybe DragKind
+toDragKind solo target sessionId planId handle =
+    if solo then
+        Nothing
 
-        P.TSessionBar ->
-            Just (WindowMove sessionId)
+    else
+        case target of
+            P.TCanvas ->
+                Just Pan
 
-        P.TPlanBar ->
-            Just (PlanMove planId)
+            P.TSessionBar ->
+                Just (WindowMove sessionId)
 
-        P.TSessionHandle ->
-            Maybe.map (WindowResize sessionId) (handleFromString handle)
+            P.TPlanBar ->
+                Just (PlanMove planId)
 
-        P.TPlanHandle ->
-            Maybe.map (PlanResize planId) (handleFromString handle)
+            P.TSessionHandle ->
+                Maybe.map (WindowResize sessionId) (handleFromString handle)
 
-        _ ->
-            Nothing
+            P.TPlanHandle ->
+                Maybe.map (PlanResize planId) (handleFromString handle)
+
+            _ ->
+                Nothing
 
 
 handleFromString : String -> Maybe ResizeHandle

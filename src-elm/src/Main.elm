@@ -50,6 +50,7 @@ init _ =
       , sessionNums = Dict.empty
       , nextSessionNum = 1
       , windowPositions = Dict.empty
+      , soloWin = Nothing
       , nextZIndex = 1
       , canvasOffset = { x = 0, y = 0 }
       , canvasScale = 1.0
@@ -202,10 +203,11 @@ subscriptions model =
         , Ports.onWindowMaximized (\v -> WindowMaximized v)
         , Evts.onResize (\_ _ -> RequerySize)
         , Evts.onKeyDown <|
-            D.map4 KeyDown
+            D.map5 KeyDown
                 (D.field "key" D.string)
                 (D.field "ctrlKey" D.bool)
                 (D.field "altKey" D.bool)
+                (D.field "shiftKey" D.bool)
                 (D.field "defaultPrevented" D.bool)
         , Ports.onPointerDown (\raw -> PointerDown raw)
         , Ports.onPointerMove (\raw -> PointerMove raw)

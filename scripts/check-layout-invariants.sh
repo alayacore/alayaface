@@ -70,14 +70,17 @@ done
 
 # ─── 2. Ratchet inside App/Windows.elm (reads may only shrink) ───────
 #
-# The maximum is the count of the three accessor BODIES themselves. Raising it
-# is a deliberate act: it means a new read path was added, which has to be the
-# one true accessor, not a bypass.
+# The maximum is the count of the primitive reads the accessors are BUILT ON:
+# layoutRect (the store), hasWin (membership) and winRectList's own toList.
+# Everything else — winRect's solo override, soloKey, soloRect, the chain
+# payload — goes through those three, so a new read here means a second read
+# path was added. Raising the number is a deliberate act; the pre-F0 baseline
+# was 5, so 4 or fewer is always a shrink.
 WIN_READS_MAX=3
 WIN_READS=$(geometry_reads src-elm/src/App/Windows.elm)
 if [ "$WIN_READS" -gt "$WIN_READS_MAX" ]; then
   echo "✗ INV1: src-elm/src/App/Windows.elm has $WIN_READS raw windowPositions reads; maximum is $WIN_READS_MAX"
-  echo "    (baseline pre-F0 was 5; the 3 that remain are winRect/winRectList/hasWin themselves)"
+  echo "    (the reads that are allowed: layoutRect, hasWin, winRectList)"
   geometry_lines src-elm/src/App/Windows.elm | sed 's/^/      /'
   fail=1
 elif [ "$WIN_READS" -eq 0 ]; then
@@ -92,7 +95,47 @@ elif [ "$WIN_READS" -eq 0 ]; then
   done
 fi
 
-# ─── 3. No solo logic in the JS bridge (SD7) ─────────────────────────
+# ─── 3. soloWin is written only by App/Windows (INV3) ────────────────
+#
+# INV3 asks for "exactly three update helpers" — a rule about code shape that
+# prose can satisfy and a reader cannot check. The checkable form is narrower
+# and stronger: `soloWin` is a field of the Model record, so ANY write to it
+# is a `soloWin =` inside a record update, and those are legal in exactly three
+# files: the type declaration (App/Types.elm) and the two places that must
+# initialise the whole record (Main.elm's init, tests/TestHelpers.elm). Every
+# write in App/Update.elm or App/View.elm is an ad-hoc one, which is what the
+# invariant forbids.
+
+for f in src-elm/src/App/Update.elm src-elm/src/App/View.elm src-elm/src/Plan/*.elm src-elm/src/Session/*.elm src-elm/src/Overlay/*.elm src-elm/src/Arch/*.elm; do
+  [ -e "$f" ] || continue
+  n=$(sed -e 's/[[:space:]]*--.*$/ /' "$f" | grep -cE '(^|[,{ ])soloWin = ' || true)
+  if [ "$n" -ne 0 ]; then
+    echo "✗ INV3: $f writes soloWin directly ($n site(s)) — use Win.enterSolo / exitSolo / followSolo"
+    grep -nE '(^|[,{ ])soloWin = ' "$f" | sed 's/^/      /'
+    fail=1
+  fi
+done
+
+# …and READS of the raw field are just as bad: `soloWin` may point at a window
+# that no longer exists, and only App/Windows.soloKey de-risks that (INV2b).
+# So outside the module that owns it (plus the type declaration and the two
+# places that must initialise every field of the record), the name must not
+# appear at all — `isSolo` / `soloKey` are the questions to ask.
+allowed="src-elm/src/App/Windows.elm src-elm/src/App/Types.elm src-elm/src/Main.elm"
+: > "$tmp/solowin"
+for f in $(find src-elm/src -name '*.elm' | sort); do
+  case " $allowed " in *" $f "*) continue ;; esac
+  # Through elm_code: a comment explaining the invariant names the field, and
+  # that is not a violation (several of the files below quote it on purpose).
+  elm_code "$f" | grep -qE 'soloWin' && echo "$f" >> "$tmp/solowin"
+done
+if [ -s "$tmp/solowin" ]; then
+  echo "✗ INV2b/INV3: these files touch soloWin directly — ask Win.isSolo / Win.soloKey instead:"
+  sed 's/^/      /' "$tmp/solowin"
+  fail=1
+fi
+
+# ─── 4. No solo logic in the JS bridge (SD7) ─────────────────────────
 #
 # The bridge is a dumb pipe: transport.js / chain.js / overlay.js classify by
 # DOM and move bytes, and every behavior decision lives in Elm. Solo is a
@@ -122,4 +165,4 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 
-echo "✓ layout invariants OK — windowPositions reads: Windows.elm $WIN_READS/$WIN_READS_MAX, View.elm + Update.elm 0; JS bridge free of solo logic"
+echo "✓ layout invariants OK — windowPositions reads: Windows.elm $WIN_READS/$WIN_READS_MAX, View.elm + Update.elm 0; soloWin confined to App/Windows; JS bridge free of solo logic"

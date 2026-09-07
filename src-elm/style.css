@@ -534,6 +534,28 @@ body {
   transition: color 0.12s, background 0.12s;
   margin-left: 6px;
 }
+
+/* Solo button (F1): the same slot and weight as the close button, one
+   notch calmer — it is a view change, not a destruction. SVG glyph, so
+   it inherits the color and stays crisp at any canvas scale. */
+.session-bar-solo {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  background: none;
+  border: none;
+  color: #888;
+  cursor: pointer;
+  padding: 2px 4px;
+  line-height: 1;
+  border-radius: 2px;
+  transition: color 0.12s, background 0.12s;
+  margin-left: 6px;
+}
+.session-bar-solo:hover {
+  color: #6366f1;
+  background: rgba(99,102,241,0.1);
+}
 .session-bar-close:hover {
   color: #e94560;
   background: rgba(233,69,96,0.1);
@@ -3593,6 +3615,24 @@ body {
 }
 .main-content.panning {
   cursor: grabbing;
+}
+
+/* SOLO (F1): the shell class. The viewport-filling rect is derived in Elm
+   (winRect/soloRect) and the hidden windows are simply not rendered, so all
+   CSS owns here is the cursor: panning and wheel-zoom are refused in Elm
+   (SD7), and a grab cursor that promises a gesture which will not happen is
+   a lie about the state. */
+.main-content-solo {
+  cursor: default;
+}
+
+/* The solo panel IS the viewport, so the furniture that says "floating
+   window on a board" goes: rounded corners, the outer border and the drop
+   shadow. Specificity (0,2,0) beats .session-panel-active's (0,1,0), so the
+   active-window glow does not re-appear on it. */
+.main-content-solo .session-panel {
+  border-radius: 0;
+  box-shadow: none;
 }
 
 /* The canvas layer: zero-size origin that windows anchor to; the whole

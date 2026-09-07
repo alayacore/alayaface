@@ -502,13 +502,14 @@ minimalCloseSession id model =
         -- so `chainPayload model model.connectionChain` would re-emit
         -- the stale payload containing the closing session's segment).
         m1 =
-            { model
-                | sessions = Dict.remove id model.sessions
-                , sessionOrder = List.filter (\k -> k /= id) model.sessionOrder
-                , sessionNums = Dict.remove id model.sessionNums
-                , windowPositions = Dict.remove id model.windowPositions
-                , planNodeSessions = Dict.remove id model.planNodeSessions
-                , planTaskStarted = Set.remove id model.planTaskStarted
+            followSolo (SoloClosed id)
+                { model
+                    | sessions = Dict.remove id model.sessions
+                    , sessionOrder = List.filter (\k -> k /= id) model.sessionOrder
+                    , sessionNums = Dict.remove id model.sessionNums
+                    , windowPositions = Dict.remove id model.windowPositions
+                    , planNodeSessions = Dict.remove id model.planNodeSessions
+                    , planTaskStarted = Set.remove id model.planTaskStarted
                 , connectionChain = dropChainSession model.connectionChain id
                 , sessionWorkCopies = Dict.remove id model.sessionWorkCopies
                 -- C2b: on close, drop the session's temporary resume-live marker (the live is dead).
@@ -587,12 +588,17 @@ minimalPlanClose planId model =
     in
     -- 3. Drop queued creates for this plan too (their sessions would
     --    only be created and immediately orphan-closed), remove the
-    --    plan window.
-    ( { m2
-        | planWindows = Dict.remove planId m2.planWindows
-        , planOrder = List.filter (\k -> k /= planId) m2.planOrder
-        , windowPositions = Dict.remove planId m2.windowPositions
-        , planCreateQueue =
+    --    plan window. SD9: solo cannot outlive the window it points at.
+    --    This and `minimalCloseSession` are the ONLY two places a window
+    --    key leaves the layout store, so clearing solo here covers ✕,
+    --    Ctrl+W, DeleteSession and the cascade teardown — one guard at the
+    --    chokepoint instead of five at the call sites that reach it.
+    ( followSolo (SoloClosed planId)
+        { m2
+            | planWindows = Dict.remove planId m2.planWindows
+            , planOrder = List.filter (\k -> k /= planId) m2.planOrder
+            , windowPositions = Dict.remove planId m2.windowPositions
+            , planCreateQueue =
             List.filter
                 (\task ->
                     case task of
@@ -1045,8 +1051,20 @@ createSessionWindow id model =
 
                 _ ->
                     ( settledModel, Cmd.none )
+
+        -- SD8: a session the USER created while solo takes the solo view
+        -- with it — they asked for a window while looking at one window, and
+        -- dropping them back on the board is not what they asked for. A
+        -- RUNNER-created node session must not steal it: it joins the board
+        -- and (from F2) the attention badge counts it.
+        finalModel =
+            if isRunnerCreate then
+                drainedModel
+
+            else
+                followSolo (SoloCreated id) drainedModel
     in
-    ( drainedModel
+    ( finalModel
     , Cmd.batch
         [ cmds
         , drainCmd
@@ -1054,7 +1072,7 @@ createSessionWindow id model =
         -- resumed session's full ancestor path, or [] for a
         -- plain/runner-created session (runner keeps the
         -- existing chain, which is already in the model).
-        , Ports.setConnectionChain (chainPayload drainedModel drainedModel.connectionChain)
+        , Ports.setConnectionChain (chainPayload finalModel finalModel.connectionChain)
         -- C2b: initialize the Session root refs (session.refs.json,
         -- empty head) — having refs marks a Session root (the manager
         -- listing / restart-recovery basis). The lineage
@@ -6162,10 +6180,26 @@ update msg model =
             , Cmd.none
             )
 
-        KeyDown key ctrl alt defaultPrevented ->
+        KeyDown key ctrl alt shift defaultPrevented ->
             -- If another handler already processed this key (e.g. textarea), skip
             if defaultPrevented then
                 ( model, Cmd.none )
+
+            -- Ctrl+Shift+F: toggle solo on the window the user is looking at
+            -- (soloTarget). BEFORE the Escape block on purpose: the
+            -- Escape chain is long (SD12) and a chord that opens a
+            -- presentation mode must not be swallowed by an overlay that
+            -- happens to be open. The prompt textarea's own keydown handler
+            -- only preventDefaults plain Enter, so the chord still reaches us
+            -- while the input has focus — which is where a user is when they
+            -- want more screen.
+            else if (key == "F" || key == "f") && ctrl && shift then
+                case soloTarget model of
+                    Just key0 ->
+                        update (ToggleSolo key0) model
+
+                    Nothing ->
+                        ( model, Cmd.none )
 
             -- Escape or Ctrl+[ closes the TOPMOST open overlay: context
             -- menu → global overlays (session manager, version browsing,
@@ -6320,12 +6354,22 @@ update msg model =
                         m1 =
                             { model | activePointers = Dict.insert pe.id pe model.activePointers }
                     in
-                    -- Pinch: when a SECOND canvas pointer lands and no
-                    -- drag is in motion (and any armed drag is itself a
-                    -- canvas pan — a bar grab plus a canvas finger is a
-                    -- bar drag, not a pinch), switch to the two-pointer
-                    -- zoom: a lone canvas finger never pans alone.
-                    if canvasPointerCount m1 >= 2 && not (dragInMotion m1) && isPanArm m1.drag then
+                    -- SOLO (F1.5): the bookkeeping MUST keep running (an
+                    -- `activePointers` map that still thinks a released
+                    -- finger is down breaks the next gesture after solo
+                    -- ends), but everything the map feeds is refused — no
+                    -- armDrag, no pinch, no long-press menu.
+                    if isSolo m1 then
+                        ( m1, Cmd.none )
+
+                    else if
+                        -- Pinch: when a SECOND canvas pointer lands and no
+                        -- drag is in motion (and any armed drag is itself a
+                        -- canvas pan — a bar grab plus a canvas finger is a
+                        -- bar drag, not a pinch), switch to the two-pointer
+                        -- zoom: a lone canvas finger never pans alone.
+                        canvasPointerCount m1 >= 2 && not (dragInMotion m1) && isPanArm m1.drag
+                    then
                         startPinch m1
 
                     else if m1.drag == Nothing && P.isDraggableTarget pe.target && pe.button == 0 then
@@ -6550,23 +6594,90 @@ update msg model =
             -- emit many small deltas, wheels ~±100 per notch).
             -- Re-emit the chain: curve stroke-width is compensated by
             -- canvasScale (3 / scale), so a zoom changes the drawing.
-            let
-                m1 =
-                    applyZoom (e ^ (-deltaY * 0.0015)) mouseX mouseY model
-            in
-            ( m1
-            , Ports.setConnectionChain (chainPayload m1 m1.connectionChain)
-            )
+            --
+            -- SOLO (SD7): transport.js keeps forwarding the wheel — the pipe
+            -- decides nothing — and the message is dropped here. Zooming a
+            -- window that IS the viewport would resize the derived rect and
+            -- move the canvas the user will return to, for no visible gain.
+            if isSolo model then
+                ( model, Cmd.none )
+
+            else
+                let
+                    m1 =
+                        applyZoom (e ^ (-deltaY * 0.0015)) mouseX mouseY model
+                in
+                ( m1
+                , Ports.setConnectionChain (chainPayload m1 m1.connectionChain)
+                )
 
         CanvasZoomReset ->
             -- Reset to 100% keeping the viewport center fixed.
+            if isSolo model then
+                ( model, Cmd.none )
+
+            else
+                let
+                    m1 =
+                        applyZoom (1 / model.canvasScale) (toFloat model.appWidth / 2) (toFloat model.appHeight / 2) model
+                in
+                ( m1
+                , Ports.setConnectionChain (chainPayload m1 m1.connectionChain)
+                )
+
+        SoloWindow key ->
+            -- Entering solo writes nothing but soloWin (INV4): the layout
+            -- store, the order lists and the canvas transform stay exactly as
+            -- they were, which is what makes exiting free. A key with no
+            -- window cannot go solo — `hasWin` asks the store, and the
+            -- alternative is a viewport-filling window that exists only in
+            -- `soloWin`.
+            if hasWin model key then
+                let
+                    m1 =
+                        enterSolo key { model | showGlobalMenu = False, ctxVisible = False }
+                in
+                -- SD13: the chain is a canvas feature, so the overlays have to
+                -- be told to clear. chainPayload derives the emptiness from
+                -- the model it is handed, so no call site needs to know.
+                ( m1, Ports.setConnectionChain (chainPayload m1 m1.connectionChain) )
+
+            else
+                ( model, Cmd.none )
+
+        ExitSolo ->
             let
+                -- The canvas is back: rebuild the chain for whatever the user
+                -- is focused on, exactly as activateSessionModel does — but
+                -- WITHOUT raising, because a raise writes z into
+                -- windowPositions and entering/leaving solo must leave the
+                -- layout alone (INV4). The stacking the user had before solo
+                -- is what they get back.
                 m1 =
-                    applyZoom (1 / model.canvasScale) (toFloat model.appWidth / 2) (toFloat model.appHeight / 2) model
+                    exitSolo model
+
+                chain =
+                    case ( m1.activeId, m1.planActiveId ) of
+                        ( Just sid, _ ) ->
+                            connectionChainForSession m1 sid
+
+                        ( Nothing, Just pid ) ->
+                            connectionChainForPlan m1 pid
+
+                        ( Nothing, Nothing ) ->
+                            []
+
+                m2 =
+                    { m1 | connectionChain = chain }
             in
-            ( m1
-            , Ports.setConnectionChain (chainPayload m1 m1.connectionChain)
-            )
+            ( m2, Ports.setConnectionChain (chainPayload m2 chain) )
+
+        ToggleSolo key ->
+            if soloKey model == Just key then
+                update ExitSolo model
+
+            else
+                update (SoloWindow key) model
 
         ActivateSession id ->
             -- Always re-raise + rebuild the chain, even when this
@@ -6651,7 +6762,7 @@ slop crossing or on a bar tap's pointerup.
 -}
 armDrag : Model -> P.PointerInfo -> ( Model, Cmd Msg )
 armDrag model pe =
-    case toDragKind pe.target pe.sessionId pe.planId pe.handle of
+    case toDragKind (isSolo model) pe.target pe.sessionId pe.planId pe.handle of
         Just kind ->
             let
                 key =

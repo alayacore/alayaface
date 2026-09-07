@@ -16,3 +16,4 @@ cancel-confirm
 pt
 voice
 model-fields
+solo

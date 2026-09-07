@@ -16,7 +16,7 @@ import Session.Types as T
 
 escape : AT.Model -> AT.Model
 escape model =
-    AU.update (AT.KeyDown "Escape" False False False) model |> Tuple.first
+    AU.update (AT.KeyDown "Escape" False False False False) model |> Tuple.first
 
 
 setSession : (T.SessionState -> T.SessionState) -> AT.Model -> AT.Model

@@ -29,6 +29,7 @@ initModelWithSession =
     , sessionNums = Dict.empty
     , nextSessionNum = 1
     , windowPositions = Dict.empty
+    , soloWin = Nothing
     , nextZIndex = 1
     , canvasOffset = { x = 0, y = 0 }
     , canvasScale = 1.0

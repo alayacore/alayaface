@@ -45,7 +45,7 @@ tests =
                         { initModelWithSession | activeId = Nothing }
 
                     ( m1, _ ) =
-                        App.Update.update (AT.KeyDown "g" True False False) m0
+                        App.Update.update (AT.KeyDown "g" True False False False) m0
                 in
                 Expect.equal m0 m1
         , test "no-op when the active session has no running task (never sends)" <|
@@ -55,14 +55,14 @@ tests =
                         initModelWithSession
 
                     ( m1, _ ) =
-                        App.Update.update (AT.KeyDown "g" True False False) m0
+                        App.Update.update (AT.KeyDown "g" True False False False) m0
                 in
                 Expect.equal m0 m1
         , test "opens the cancel confirmation when a task is running" <|
             \_ ->
                 let
                     ( m1, _ ) =
-                        App.Update.update (AT.KeyDown "g" True False False) (withTaskRunning initModelWithSession)
+                        App.Update.update (AT.KeyDown "g" True False False False) (withTaskRunning initModelWithSession)
                 in
                 Expect.all
                     [ \mm -> Expect.equal True (sessionCancelConfirm "s1" mm)
@@ -117,7 +117,7 @@ tests =
                         App.Update.update (AT.RequestCancelTask "s1") (withTaskRunning initModelWithSession)
 
                     ( m2, _ ) =
-                        App.Update.update (AT.KeyDown "Escape" False False False) m1
+                        App.Update.update (AT.KeyDown "Escape" False False False False) m1
                 in
                 Expect.all
                     [ \mm -> Expect.equal False (sessionCancelConfirm "s1" mm)
@@ -131,7 +131,7 @@ tests =
                         initModelWithSession
 
                     ( m1, _ ) =
-                        App.Update.update (AT.KeyDown "g" False False False) m0
+                        App.Update.update (AT.KeyDown "g" False False False False) m0
                 in
                 Expect.equal m0 m1
         ]

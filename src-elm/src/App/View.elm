@@ -72,6 +72,11 @@ view model =
             , Attr.class
                 ("main-content"
                     ++ (if model.drag == Nothing then "" else " panning")
+                    -- SOLO (F1.3): a class on the SHELL only. #main-content
+                    -- and .canvas keep existing in solo because transport.js
+                    -- measures them for the scrollbar/scale math (INV5); the
+                    -- presentation is content + geometry, never a new tree.
+                    ++ (if Win.isSolo model then " main-content-solo" else "")
                 )
             -- Right-clicking the canvas (or the empty background) opens
             -- the global menu at the pointer position. Window panels
@@ -97,8 +102,14 @@ view model =
                     [ Attr.class "canvas"
                     , Attr.style "transform" (canvasTransform model)
                     ]
-                    (List.map (\id -> viewSessionPanel model id) model.sessionOrder
-                        ++ List.map (\pid -> viewPlanPanel model pid) model.planOrder
+                    -- SOLO (SD6/INV1): the filter IS `winRect` — a window
+                    -- with no effective rect is not rendered at all, never
+                    -- `display:none`. The pointer pipe classifies by DOM
+                    -- class, so a hidden-but-present panel eventually
+                    -- produces a drag on a window the model says is not
+                    -- there.
+                    (List.map (\id -> viewSessionPanel model id) (Win.visibleWindows model model.sessionOrder)
+                        ++ List.map (\pid -> viewPlanPanel model pid) (Win.visibleWindows model model.planOrder)
                     )
                 ]
             )
@@ -168,6 +179,12 @@ viewSessionPanel model id =
                     "session-panel"
                         ++ (if isActive then " session-panel-active" else "")
 
+                -- THIS window is the solo one — not merely "something is
+                -- solo". It picks the button's glyph and tooltip, so the
+                -- control always reads as its own opposite.
+                soloHere =
+                    Win.soloKey model == Just id
+
             in
             Html.div
                 ([ Attr.class panelClasses
@@ -183,14 +200,14 @@ viewSessionPanel model id =
                  ]
                     ++ positionStyles
                 )
-                [ viewResizeHandle id NW
-                , viewResizeHandle id N
-                , viewResizeHandle id NE
-                , viewResizeHandle id W
-                , viewResizeHandle id E
-                , viewResizeHandle id SW
-                , viewResizeHandle id S
-                , viewResizeHandle id SE
+                [ viewResizeHandle model id NW
+                , viewResizeHandle model id N
+                , viewResizeHandle model id NE
+                , viewResizeHandle model id W
+                , viewResizeHandle model id E
+                , viewResizeHandle model id SW
+                , viewResizeHandle model id S
+                , viewResizeHandle model id SE
                 , Html.div
                     [ Attr.class "session-bar"
                     , Attr.title "Drag to move"
@@ -248,6 +265,24 @@ viewSessionPanel model id =
                                 )
                             ]
                             [ Html.text speedLabel ]
+                    , Html.button
+                        [ Attr.class "session-bar-solo"
+                        , Ev.stopPropagationOn "mousedown" (D.succeed ( NoOp, True ))
+                        , Ev.stopPropagationOn "click" (D.succeed ( ToggleSolo id, True ))
+                        , Attr.title
+                            (if soloHere then
+                                "Exit solo (Esc)"
+
+                             else
+                                "Solo: fill the screen with this session (Ctrl+Shift+F)"
+                            )
+                        ]
+                        [ if soloHere then
+                            Icons.compress
+
+                          else
+                            Icons.expand
+                        ]
                     , Html.button
                         [ Attr.class "session-bar-close"
                         , Ev.stopPropagationOn "mousedown" (D.succeed ( NoOp, True ))
@@ -368,6 +403,39 @@ viewGlobalMenu model =
                     ]
                     [ Html.span [ Attr.class "global-menu-icon" ] [ Icons.mic ]
                     , Html.text "ASR config"
+                    ]
+                , Html.div
+                    [ Attr.class "global-menu-item"
+                    -- Solo is a TOGGLE on the window the user is looking at
+                    -- (`soloTarget`), so one item covers both directions and
+                    -- the label says what the click does. This is also the
+                    -- only way into solo that needs no panel of its own — the
+                    -- canvas context menu disappears with the canvas in solo,
+                    -- which is why SD11 keeps it reachable from the bar.
+                    , Ev.onClick
+                        (case Win.soloTarget model of
+                            Just k ->
+                                ToggleSolo k
+
+                            Nothing ->
+                                NoOp
+                        )
+                    , Attr.title "Solo view: one window filling the screen (Ctrl+Shift+F)"
+                    ]
+                    [ Html.span [ Attr.class "global-menu-icon" ]
+                        [ if Win.isSolo model then
+                            Icons.compress
+
+                          else
+                            Icons.expand
+                        ]
+                    , Html.text
+                        (if Win.isSolo model then
+                            " Exit solo"
+
+                         else
+                            " Solo window"
+                        )
                     ]
                 , Html.div
                     [ Attr.class "global-menu-item"
@@ -804,14 +872,14 @@ viewPlanPanel model planId =
                  ]
                     ++ positionStyles
                 )
-                [ viewPlanResizeHandle planId NW
-                , viewPlanResizeHandle planId N
-                , viewPlanResizeHandle planId NE
-                , viewPlanResizeHandle planId W
-                , viewPlanResizeHandle planId E
-                , viewPlanResizeHandle planId SW
-                , viewPlanResizeHandle planId S
-                , viewPlanResizeHandle planId SE
+                [ viewPlanResizeHandle model planId NW
+                , viewPlanResizeHandle model planId N
+                , viewPlanResizeHandle model planId NE
+                , viewPlanResizeHandle model planId W
+                , viewPlanResizeHandle model planId E
+                , viewPlanResizeHandle model planId SW
+                , viewPlanResizeHandle model planId S
+                , viewPlanResizeHandle model planId SE
                 , Html.div
                     [ Attr.class "session-bar plan-bar"
                     , Attr.title "Drag to move"
@@ -831,6 +899,24 @@ viewPlanPanel model planId =
                         , Attr.title "Plan description (goal, tasks, run log)"
                         ]
                         [ Icons.warning ]
+                    , Html.button
+                        [ Attr.class "session-bar-solo"
+                        , Ev.stopPropagationOn "mousedown" (D.succeed ( NoOp, True ))
+                        , Ev.stopPropagationOn "click" (D.succeed ( ToggleSolo planId, True ))
+                        , Attr.title
+                            (if Win.soloKey model == Just planId then
+                                "Exit solo (Esc)"
+
+                             else
+                                "Solo: fill the screen with this plan (Ctrl+Shift+F)"
+                            )
+                        ]
+                        [ if Win.soloKey model == Just planId then
+                            Icons.compress
+
+                          else
+                            Icons.expand
+                        ]
                     , Html.button
                         [ Attr.class "session-bar-close"
                         , Ev.stopPropagationOn "mousedown" (D.succeed ( NoOp, True ))
@@ -853,7 +939,14 @@ viewPlanPanel model planId =
                                 [ Html.div [ Attr.class "plan-page-canvas" ]
                                     [ Plan.View.viewDag nodeClick runStates plan ]
                                 , viewPlanRunStrip win
-                                , if win.infoOpen then
+                                -- SOLO (SD6): the plan info window is not
+                                -- rendered. It is absolutely positioned
+                                -- against the panel and brings its own drag
+                                -- surface, so in a full-viewport plan it would
+                                -- float over a layout the model no longer
+                                -- describes. `infoOpen` survives: the ⤡ button
+                                -- is back where the user left it.
+                                , if win.infoOpen && not (Win.isSolo model) then
                                     viewPlanInfoWindow planId win plan
 
                                   else
@@ -869,17 +962,18 @@ viewPlanPanel model planId =
             Html.text ""
 
 
-viewPlanResizeHandle : String -> ResizeHandle -> Html Msg
-viewPlanResizeHandle planId handle =
-    let
-        className =
-            "resize-handle resize-handle-" ++ resizeHandleString handle
-    in
-    Html.div
-        [ Attr.class className
-        , Attr.attribute "data-handle" (resizeHandleString handle)
-        ]
-        []
+viewPlanResizeHandle : Model -> String -> ResizeHandle -> Html Msg
+viewPlanResizeHandle model planId handle =
+    -- SOLO (SD6): see viewResizeHandle — the plan twin of the same rule.
+    if Win.isSolo model then
+        Html.text ""
+
+    else
+        Html.div
+            [ Attr.class ("resize-handle resize-handle-" ++ resizeHandleString handle)
+            , Attr.attribute "data-handle" (resizeHandleString handle)
+            ]
+            []
 
 
 runStatusClassOf : PlanWindow -> String
@@ -2179,17 +2273,22 @@ resizeHandleString handle =
         SE -> "se"
 
 
-viewResizeHandle : String -> ResizeHandle -> Html Msg
-viewResizeHandle sid handle =
-    let
-        className =
-            "resize-handle resize-handle-" ++ resizeHandleString handle
-    in
-    Html.div
-        [ Attr.class className
-        , Attr.attribute "data-handle" (resizeHandleString handle)
-        ]
-        []
+viewResizeHandle : Model -> String -> ResizeHandle -> Html Msg
+viewResizeHandle model sid handle =
+    -- SOLO (SD6): no handle element at all. A `.resize-handle` that exists in
+    -- the DOM is a pointer target transport.js will classify, so CSS-hiding
+    -- the handles would leave eight grabbable corners on a window the model
+    -- says has no size to change. `Html.text ""` renders no element, which is
+    -- what "not rendered" has to mean for the pipe.
+    if Win.isSolo model then
+        Html.text ""
+
+    else
+        Html.div
+            [ Attr.class ("resize-handle resize-handle-" ++ resizeHandleString handle)
+            , Attr.attribute "data-handle" (resizeHandleString handle)
+            ]
+            []
 
 
 viewOverlay :

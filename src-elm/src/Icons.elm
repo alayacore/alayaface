@@ -1,6 +1,7 @@
 module Icons exposing
     ( paperclip, chip, chevron, check, cross, running, send, mic, bulb, stop, audio
     , back, plus, menu, layers, gear, folder, file, copy, clip, grip, search, circle, warning
+    , expand, compress
     )
 
 {-| Hand-drawn SVG icons for the input-bar footer (replacing the old
@@ -41,6 +42,8 @@ Unified overlay icons (Phase 7):
 - search    — magnifying glass (replaces 🔍)
 - circle    — filled dot, "active" marker (replaces ●)
 - warning   — triangle + exclamation (replaces ⏳ / ⚠)
+- expand    — corner brackets pushing out: enter solo view (F1)
+- compress  — the same brackets pulling in: exit solo view (F1)
 
 Rendered with elm/svg: the root `Svg.svg` is the HTML-embedding bridge
 (returns `Html msg`), inner shapes get the proper SVG namespace.
@@ -466,4 +469,32 @@ warning =
         , path
             [ SAttr.d "M12 17 V17.5" ]
             []
+        ]
+
+
+{-| Solo view — the button in a window bar that fills the viewport with
+that window. Four corner brackets pushing OUTWARD (the ⛶/⤢ glyph family,
+drawn as strokes so it inherits the bar's color and hover state).
+-}
+expand : Html msg
+expand =
+    icon [ SAttr.strokeWidth "2.4" ]
+        [ path [ SAttr.d "M4 9 V4 H9" ] []
+        , path [ SAttr.d "M15 4 H20 V9" ] []
+        , path [ SAttr.d "M20 15 V20 H15" ] []
+        , path [ SAttr.d "M9 20 H4 V15" ] []
+        ]
+
+
+{-| Solo view — the same button while the window IS solo, so the control
+reads as its own opposite (brackets pulling INWARD, ⤡). One button, two
+glyphs, one message (`ToggleSolo`); the state decides which to show.
+-}
+compress : Html msg
+compress =
+    icon [ SAttr.strokeWidth "2.4" ]
+        [ path [ SAttr.d "M9 4 V9 H4" ] []
+        , path [ SAttr.d "M15 4 V9 H20" ] []
+        , path [ SAttr.d "M15 20 V15 H20" ] []
+        , path [ SAttr.d "M9 20 V15 H4" ] []
         ]

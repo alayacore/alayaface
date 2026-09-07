@@ -53,7 +53,7 @@ tests =
                 \_ ->
                     let
                         ( m1, _ ) =
-                            App.Update.update (AT.KeyDown "w" True False False) initModelWithSession
+                            App.Update.update (AT.KeyDown "w" True False False False) initModelWithSession
                     in
                     Expect.all
                         [ \mm -> Expect.equal True (sessionCloseConfirm "s1" mm)
@@ -139,7 +139,7 @@ tests =
                             App.Update.update (AT.RequestCloseSession "s1") initModelWithSession
 
                         ( m2, _ ) =
-                            App.Update.update (AT.KeyDown "Escape" False False False) m1
+                            App.Update.update (AT.KeyDown "Escape" False False False False) m1
                     in
                     Expect.all
                         [ \mm -> Expect.equal False (sessionCloseConfirm "s1" mm)
@@ -163,7 +163,7 @@ tests =
                             App.Update.update (AT.SwitchSession "s2") m1
 
                         ( m3, _ ) =
-                            App.Update.update (AT.KeyDown "Escape" False False False) m2
+                            App.Update.update (AT.KeyDown "Escape" False False False False) m2
                     in
                     Expect.all
                         [ \mm -> Expect.equal False (sessionCloseConfirm "s1" mm)
@@ -175,7 +175,7 @@ tests =
                 \_ ->
                     let
                         ( m1, _ ) =
-                            App.Update.update (AT.KeyDown "Escape" False False False) initModelWithSession
+                            App.Update.update (AT.KeyDown "Escape" False False False False) initModelWithSession
                     in
                     Expect.all
                         [ \mm -> Expect.equal False (sessionCloseConfirm "s1" mm)
