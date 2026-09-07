@@ -1,0 +1,66 @@
+{
+  "_comment": [
+    "Shared truth table for the ~/.alayaface/ui.conf store (F3). One table, three",
+    "readers: src-tauri/src/commands/ui_config.rs (ui_config_validation_matches_shared_fixture),",
+    "src-go/internal/server/handlers/ui_config_test.go, and the equivalent cases",
+    "inlined in src-elm/tests/UiConfigTest.elm (elm-test cannot open files).",
+    "",
+    "It pins STRUCTURE ONLY. The backends deliberately do not model the layout",
+    "schema — sync_ui_config replaces the file, so a backend that deserialised it",
+    "into a struct would silently delete any key it has never heard of, which is",
+    "the model.conf trap in AGENTS.md. The schema lives in",
+    "src-elm/src/App/UiConfig.elm; 'input' here is the document, 'accept' whether",
+    "sync_ui_config may write it."
+  ],
+  "cases": [
+    { "name": "empty document", "input": {}, "accept": true },
+    { "name": "version only", "input": { "version": 1 }, "accept": true },
+    {
+      "name": "full layout",
+      "input": {
+        "version": 1,
+        "soloWin": "sess-1",
+        "canvasOffset": { "x": 0, "y": 0 },
+        "canvasScale": 1.0,
+        "windows": { "sess-1": { "x": 40, "y": 60, "w": 560, "h": 640, "t": 3 } }
+      },
+      "accept": true
+    },
+    {
+      "name": "null soloWin is a value, not an absent key",
+      "input": { "version": 1, "soloWin": null },
+      "accept": true
+    },
+    {
+      "name": "a key from a newer client is carried, not deleted",
+      "input": { "version": 1, "windowOrder": ["a", "b"], "future": { "deep": true } },
+      "accept": true
+    },
+    {
+      "name": "integral float version (JSON 1.0)",
+      "input": { "version": 1.0 },
+      "accept": true
+    },
+    { "name": "no version key at all", "input": { "canvasScale": 2.5 }, "accept": true },
+    {
+      "name": "windows object of plain rects",
+      "input": { "windows": { "a": { "x": 0, "y": 0, "w": 300, "h": 200, "t": 1 }, "b": { "x": 1, "y": 2, "w": 3, "h": 4, "t": 2 } } },
+      "accept": true
+    },
+    {
+      "name": "unknown field inside a window entry",
+      "input": { "windows": { "a": { "x": 0, "y": 0, "w": 300, "h": 200, "t": 1, "maximized": true } } },
+      "accept": true
+    },
+    { "name": "version as a string", "input": { "version": "one" }, "accept": false },
+    { "name": "version zero", "input": { "version": 0 }, "accept": false },
+    { "name": "version negative", "input": { "version": -3 }, "accept": false },
+    { "name": "version fractional", "input": { "version": 1.5 }, "accept": false },
+    { "name": "version null", "input": { "version": null }, "accept": false },
+    { "name": "version as an object", "input": { "version": { "major": 1 } }, "accept": false },
+    { "name": "windows as a list", "input": { "windows": [] }, "accept": false },
+    { "name": "windows as a string", "input": { "windows": "a,b" }, "accept": false },
+    { "name": "windows null", "input": { "windows": null }, "accept": false },
+    { "name": "canvasOffset as an array", "input": { "canvasOffset": [1, 2] }, "accept": true }
+  ]
+}

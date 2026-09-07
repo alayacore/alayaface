@@ -222,6 +222,45 @@ check_scalar "fs text cap" \
   "$(shift_expr 'MAX_TEXT_FILE_SIZE' "$R_FS")" \
   "$(shift_expr 'maxTextFileSize' "$G_FS")"
 
+# 2c-bis. ui.conf (the F3 layout store) — the two constants shared by three
+#     files. The CLIENT owns the schema (src-elm/src/App/UiConfig.elm) and the
+#     backends are deliberately opaque storage, so these numbers are the ONLY
+#     duplication by design — which is exactly why all three are compared.
+#     DEFAULT_UI_CONF_VERSION decides what an absent file reports;
+#     MAX_STORED_WINDOWS bounds the file's growth. A mismatch means one
+#     deployment silently stops saving the layout while the other keeps going.
+R_UI=src-tauri/src/commands/ui_config.rs
+G_UI=src-go/internal/server/handlers/ui_config.go
+E_UI=src-elm/src/App/UiConfig.elm
+
+# elm_num <name> <file> — an Elm constant's value sits on the line AFTER
+# `name =` (the 4-space continuation is the house style here), so the helpers
+# above, which want `name = <digits>` on one line, cannot see it.
+elm_num() { sed -nE "/^$1 =\$/{n;s/[^0-9-]*([0-9-]+).*/\1/p}" "$2" | head -1; }
+
+check_scalar "ui.conf document version (Rust vs Go)" \
+  "$(plain_num 'DEFAULT_UI_CONF_VERSION' "$R_UI")" \
+  "$(plain_num 'DefaultUiConfVersion' "$G_UI")"
+
+check_scalar "ui.conf document version (Rust vs Elm)" \
+  "$(plain_num 'DEFAULT_UI_CONF_VERSION' "$R_UI")" \
+  "$(elm_num 'version' "$E_UI")"
+
+check_scalar "ui.conf max stored windows (Rust vs Go)" \
+  "$(plain_num 'MAX_STORED_WINDOWS' "$R_UI")" \
+  "$(plain_num 'MaxStoredWindows' "$G_UI")"
+
+check_scalar "ui.conf max stored windows (Rust vs Elm)" \
+  "$(plain_num 'MAX_STORED_WINDOWS' "$R_UI")" \
+  "$(elm_num 'maxStoredWindows' "$E_UI")"
+
+# The shared accept/refuse table: both backends run the SAME fixture, and a
+# missing file is a failure, not a skip.
+if [ ! -f testdata/serialization/ui_cases.json ]; then
+  echo "✗ parity check broken: testdata/serialization/ui_cases.json is gone (both backends' fixture tests read it)"
+  fail=1
+fi
+
 # 2d. Seeded presets: the plan contract in the seeded system_prompt names them
 #     by string, so a divergence breaks rename guards and plan detection.
 #     (Rust calls the list SEED_PRESETS, Go SeedPresets — the NAMES may

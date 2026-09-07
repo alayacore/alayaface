@@ -127,6 +127,15 @@ func GlobalConfigFile() string {
 	return filepath.Join(AlayafaceDir(), "global.conf")
 }
 
+// UiConfigFile returns the UI-layout file (~/.alayaface/ui.conf): window
+// rects, canvas pan/zoom and the solo window. AlayaFace-owned like
+// global.conf / asr.conf, so it follows the --config-path override and each
+// profile keeps its own board. The schema is the client's (src-elm's
+// App/UiConfig.elm); the backends only store and validate the shape.
+func UiConfigFile() string {
+	return filepath.Join(AlayafaceDir(), "ui.conf")
+}
+
 // AsrConfigFile returns the voice-input ASR config file
 // (~/.alayaface/asr.conf). Like global.conf it is global (cross-preset):
 // an OpenAI-compatible /audio/transcriptions endpoint URL (local or

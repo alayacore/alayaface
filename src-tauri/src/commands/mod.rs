@@ -13,6 +13,7 @@ pub mod settings;
 pub mod global_config;
 pub mod asr;
 pub mod objects;
+pub mod ui_config;
 
 pub use crate::session::SessionMap;
 pub use sessions::*;
@@ -26,6 +27,7 @@ pub use settings::*;
 pub use global_config::*;
 pub use asr::*;
 pub use objects::*;
+pub use ui_config::*;
 
 use crate::alayacore;
 use crate::tlv;

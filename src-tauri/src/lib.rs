@@ -215,6 +215,8 @@ pub fn run() {
             commands::sync_global_settings,
             commands::get_global_config,
             commands::sync_global_config,
+            commands::get_ui_config,
+            commands::sync_ui_config,
             commands::get_asr_config,
             commands::sync_asr_config,
             commands::asr_transcribe,
