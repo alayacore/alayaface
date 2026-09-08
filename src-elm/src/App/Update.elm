@@ -32,6 +32,7 @@ import Plan.Update as PU exposing (..)
 import Session.Types as T
 import Session.Protocol as P
 import Session.Handlers as H
+import Session.Voice as Voice
 import Session.ModelConfig as MC
 import Session.Selector as Sel exposing (Page(..))
 import Session.FilePicker as FP
@@ -1957,43 +1958,22 @@ update msg model =
                     ( model, Cmd.none )
 
         VoiceInput ->
-            -- Toggle voice recording: click starts the mic (recording
-            -- state persists), click again stops it and transcribes.
-            -- The state is visible on the mic button itself (red pulse
-            -- while recording; while transcribing the button turns into
-            -- a red cancel — see CancelAsr).
+            -- Toggle voice recording (see Session/Voice.micToggle for the
+            -- state machine): click starts the mic (recording state
+            -- persists), click again stops it and transcribes. While
+            -- transcribing the mic button is a cancel (CancelAsr), so
+            -- VoiceInput only arrives in the other two states.
             case getActiveSession model of
                 Just s ->
-                    if s.asrBusy then
-                        -- A transcription is in flight; the mic button
-                        -- is a cancel now (CancelAsr), so VoiceInput
-                        -- only arrives from the other two states.
-                        ( model, Cmd.none )
+                    case Voice.micToggle s of
+                        ( s1, Voice.Start ) ->
+                            ( updateSession model s.id (always s1), Ports.voiceStart { sessionId = s.id } )
 
-                    else if s.voiceActive then
-                        ( { model
-                            | sessions =
-                                Dict.insert s.id
-                                    { s
-                                        | voiceActive = False
-                                        , asrBusy = True
-                                    }
-                                    model.sessions
-                          }
-                        , Ports.voiceStop { sessionId = s.id }
-                        )
+                        ( s1, Voice.Stop ) ->
+                            ( updateSession model s.id (always s1), Ports.voiceStop { sessionId = s.id } )
 
-                    else
-                        ( { model
-                            | sessions =
-                                Dict.insert s.id
-                                    { s
-                                        | voiceActive = True
-                                    }
-                                    model.sessions
-                          }
-                        , Ports.voiceStart { sessionId = s.id }
-                        )
+                        _ ->
+                            ( model, Cmd.none )
 
                 Nothing ->
                     ( model, Cmd.none )
@@ -2002,8 +1982,9 @@ update msg model =
             -- Abandon a pending transcription: the input stays locked
             -- until the ASR result arrives, so the mic button becomes a
             -- cancel. The backend call cannot be aborted mid-flight, so
-            -- we just mark the session and drop the result when it
-            -- shows up (AsrResult checks asrDiscard).
+            -- the session is marked asrDiscard and the result is dropped
+            -- when it shows up (Session/Voice.asrResult). A pending
+            -- voice insert for this session is dropped too.
             case getActiveSession model of
                 Just s ->
                     if s.asrBusy then
@@ -2020,13 +2001,7 @@ update msg model =
                                     Nothing ->
                                         Nothing
                             , sessions =
-                                Dict.insert s.id
-                                    { s
-                                        | voiceActive = False
-                                        , asrBusy = False
-                                        , asrDiscard = True
-                                    }
-                                    model.sessions
+                                Dict.insert s.id (Voice.cancelAsr s) model.sessions
                           }
                         , Cmd.none
                         )
@@ -2038,37 +2013,23 @@ update msg model =
                     ( model, Cmd.none )
 
         RawAudioInput ->
-            -- Toggle raw audio recording: click records the mic, click
-            -- again stops and sends the audio to AlayaCore as a UA
-            -- (user audio) frame. While recording, the input box, the
-            -- send button and the ASR mic button are disabled (the raw
-            -- button itself stays clickable to stop).
+            -- Toggle raw audio recording (see Session/Voice.rawToggle):
+            -- click records the mic, click again stops and sends the
+            -- audio to AlayaCore as a UA (user audio) frame. While
+            -- recording, the input box, the send button and the ASR mic
+            -- button are disabled (the raw button itself stays clickable
+            -- to stop).
             case getActiveSession model of
                 Just s ->
-                    if s.asrBusy || s.voiceActive then
-                        -- ASR is recording/transcribing; the raw button
-                        -- is disabled in that state (mutual exclusion).
-                        ( model, Cmd.none )
+                    case Voice.rawToggle s of
+                        ( s1, Voice.RawStart ) ->
+                            ( updateSession model s.id (always s1), Ports.rawAudioStart { sessionId = s.id } )
 
-                    else if s.rawRecording then
-                        ( { model
-                            | sessions =
-                                Dict.insert s.id
-                                    { s | rawRecording = False }
-                                    model.sessions
-                          }
-                        , Ports.rawAudioStop { sessionId = s.id }
-                        )
+                        ( s1, Voice.RawStop ) ->
+                            ( updateSession model s.id (always s1), Ports.rawAudioStop { sessionId = s.id } )
 
-                    else
-                        ( { model
-                            | sessions =
-                                Dict.insert s.id
-                                    { s | rawRecording = True }
-                                    model.sessions
-                          }
-                        , Ports.rawAudioStart { sessionId = s.id }
-                        )
+                        _ ->
+                            ( model, Cmd.none )
 
                 Nothing ->
                     ( model, Cmd.none )
@@ -2133,7 +2094,7 @@ update msg model =
                                         , ptSessionId = Just sid
                                         , sessions =
                                             Dict.insert sid
-                                                { s | voiceActive = True }
+                                                (Voice.micStart s)
                                                 model.sessions
                                       }
                                     , Ports.voiceStart { sessionId = sid }
@@ -2170,10 +2131,16 @@ update msg model =
                         case Dict.get sid m1.sessions of
                             Just s ->
                                 if s.voiceActive then
-                                    -- Reuse the VoiceInput toggle: it turns
-                                    -- voiceActive off, marks asrBusy and
-                                    -- sends voiceStop (transcribe).
-                                    update (ForSession sid VoiceInput) { m1 | ptSessionId = Nothing }
+                                    -- Mirrors what ForSession sid VoiceInput
+                                    -- used to do here: stop + transcribe and
+                                    -- re-activate the recording session.
+                                    ( { m1
+                                        | ptSessionId = Nothing
+                                        , activeId = Just sid
+                                        , sessions = Dict.insert sid (Voice.micStop s) m1.sessions
+                                      }
+                                    , Ports.voiceStop { sessionId = sid }
+                                    )
 
                                 else
                                     ( { m1 | ptSessionId = Nothing }, Cmd.none )
@@ -2224,7 +2191,7 @@ update msg model =
                                 | sessions =
                                     Dict.insert sessionId
                                         (appendErrorMsg
-                                            { s | rawRecording = False }
+                                            (Voice.rawError s)
                                             ("Audio input error: " ++ message)
                                         )
                                         model.sessions
@@ -2240,22 +2207,15 @@ update msg model =
 
         CaptureAutoStop raw ->
             -- The JS capture timer hit the 60s cap and auto-stopped a
-            -- recorder. Sync Elm's state so the buttons/input unlock;
-            -- the finish path (ASR transcribe / raw encode+send) runs
-            -- on the JS side and reports back through the usual ports.
+            -- recorder. Sync Elm's state so the buttons/input unlock
+            -- (see Session/Voice.captureStopped); the finish path (ASR
+            -- transcribe / raw encode+send) runs on the JS side and
+            -- reports back through the usual ports.
             case D.decodeValue captureAutoStopDecoder raw of
                 Ok { sessionId, kind } ->
                     case Dict.get sessionId model.sessions of
                         Just s ->
-                            let
-                                s1 =
-                                    if kind == "asr" then
-                                        { s | voiceActive = False, asrBusy = True }
-
-                                    else
-                                        { s | rawRecording = False }
-                            in
-                            ( { model | sessions = Dict.insert sessionId s1 model.sessions }
+                            ( { model | sessions = Dict.insert sessionId (Voice.captureStopped kind s) model.sessions }
                             , Cmd.none
                             )
 
@@ -2268,7 +2228,8 @@ update msg model =
         VoiceError raw ->
             -- Mic/recording failure surfaced from the JS bridge
             -- (permission denied, webview unsupported, …). Shown as an
-            -- error message in the session display.
+            -- error message in the session display; all recording flags
+            -- are released (Session/Voice.voiceError).
             case D.decodeValue voiceErrorDecoder raw of
                 Ok { sessionId, message } ->
                     case Dict.get sessionId model.sessions of
@@ -2277,11 +2238,7 @@ update msg model =
                                 | sessions =
                                     Dict.insert sessionId
                                         (appendErrorMsg
-                                            { s
-                                                | voiceActive = False
-                                                , asrBusy = False
-                                                , asrDiscard = False
-                                            }
+                                            (Voice.voiceError s)
                                             ("Voice input error: " ++ message)
                                         )
                                         model.sessions
@@ -2305,7 +2262,8 @@ update msg model =
                     ( model, Cmd.none )
 
         AsrResult raw ->
-            -- Transcription finished. On success, read the textarea
+            -- Transcription finished (state machine in
+            -- Session/Voice.asrResult): on success read the textarea
             -- caret and insert the text there; failures are appended to
             -- the message display as error messages. A result for a
             -- cancelled session (asrDiscard) is dropped silently.
@@ -2313,68 +2271,38 @@ update msg model =
                 Ok { sessionId, ok, text, error } ->
                     case Dict.get sessionId model.sessions of
                         Just s ->
-                            if s.asrDiscard then
-                                -- User cancelled this transcription;
-                                -- ignore the result entirely.
-                                ( { model
-                                    | sessions =
-                                        Dict.insert sessionId
-                                            { s
-                                                | asrDiscard = False
-                                                , asrBusy = False
-                                                , voiceActive = False
-                                            }
-                                            model.sessions
-                                  }
-                                , Cmd.none
-                                )
+                            case Voice.asrResult ok text error s of
+                                ( s1, Voice.AsrDiscarded ) ->
+                                    ( { model | sessions = Dict.insert sessionId s1 model.sessions }, Cmd.none )
 
-                            else if ok then
-                                if String.isEmpty text then
+                                ( s1, Voice.AsrEmpty ) ->
                                     ( { model
                                         | sessions =
                                             Dict.insert sessionId
-                                                (appendErrorMsg
-                                                    { s
-                                                        | asrBusy = False
-                                                        , voiceActive = False
-                                                    }
-                                                    "No speech recognized"
-                                                )
+                                                (appendErrorMsg s1 "No speech recognized")
                                                 model.sessions
                                       }
                                     , Cmd.none
                                     )
 
-                                else
+                                ( s1, Voice.AsrText transcript ) ->
                                     ( { model
-                                        | pendingVoiceInsert = Just { sessionId = sessionId, text = text }
+                                        | pendingVoiceInsert = Just { sessionId = sessionId, text = transcript }
                                         , sessions =
-                                            Dict.insert sessionId
-                                                { s
-                                                    | asrBusy = False
-                                                    , voiceActive = False
-                                                }
-                                                model.sessions
+                                            Dict.insert sessionId s1 model.sessions
                                       }
                                     , Ports.getCursorPos { sessionId = sessionId }
                                     )
 
-                            else
-                                ( { model
-                                    | sessions =
-                                        Dict.insert sessionId
-                                            (appendErrorMsg
-                                                { s
-                                                    | asrBusy = False
-                                                    , voiceActive = False
-                                                }
-                                                ("Voice input failed: " ++ error)
-                                            )
-                                            model.sessions
-                                  }
-                                , Cmd.none
-                                )
+                                ( s1, Voice.AsrFailed err ) ->
+                                    ( { model
+                                        | sessions =
+                                            Dict.insert sessionId
+                                                (appendErrorMsg s1 ("Voice input failed: " ++ err))
+                                                model.sessions
+                                      }
+                                    , Cmd.none
+                                    )
 
                         Nothing ->
                             ( model, Cmd.none )
@@ -2384,7 +2312,8 @@ update msg model =
 
         CursorPosResult raw ->
             -- Caret position for a pending voice transcript: insert the
-            -- text at that position and place the caret AFTER it.
+            -- text at that position and place the caret AFTER it (see
+            -- Session/Voice.insertTranscript).
             case D.decodeValue cursorPosResultDecoder raw of
                 Ok { sessionId, pos } ->
                     case model.pendingVoiceInsert of
@@ -2393,24 +2322,13 @@ update msg model =
                                 case Dict.get sessionId model.sessions of
                                     Just s ->
                                         let
-                                            before =
-                                                String.left pos s.input
-
-                                            after =
-                                                String.dropLeft pos s.input
-
-                                            newInput =
-                                                before ++ pending.text ++ after
+                                            ( s1, caret ) =
+                                                Voice.insertTranscript s pos pending.text
                                         in
                                         ( { model
                                             | pendingVoiceInsert = Nothing
                                             , sessions =
-                                                Dict.insert sessionId
-                                                    { s
-                                                        | input = newInput
-                                                        , asrDiscard = False
-                                                    }
-                                                    model.sessions
+                                                Dict.insert sessionId s1 model.sessions
                                           }
                                         -- Focus the input and place the
                                         -- caret after the insert (voice
@@ -2419,7 +2337,7 @@ update msg model =
                                         -- right away.
                                         , Ports.setCursorPos
                                             { id = "msg-input-" ++ sessionId
-                                            , pos = Just (pos + String.length pending.text)
+                                            , pos = Just caret
                                             }
                                         )
 
