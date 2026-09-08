@@ -238,6 +238,14 @@ bar to move it, drag an edge to resize it, right-click the empty background for
 the global menu, wheel on the background to zoom (the whole board scales, the
 windows reflow with it).
 
+What a window shows always spans the window: messages, message blocks and the
+input box grow as you drag it wider, with no reading-column cap that leaves the
+text at its old width inside a bigger frame — the width is yours to choose, by
+resizing. A block is bounded by a rule above and below it, never down its
+sides, and its text sits on that rule's edge: the horizontal padding that kept
+text off a side border went with the border. Only the window's own inset from
+its frame stays.
+
 **Solo view** is a presentation mode for one window at a time: it fills the
 viewport, and every other window stops being drawn.
 

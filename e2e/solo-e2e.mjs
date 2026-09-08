@@ -253,6 +253,47 @@ try {
   });
   assert(near(fit.pw, fit.sw) && near(fit.ph, fit.sh), `solo panel is not the viewport: ${JSON.stringify(fit)}`);
   assert(near(fit.px, 0) && near(fit.py, 0), `solo panel is not at the viewport origin: ${JSON.stringify(fit)}`);
+
+  // CONTENT SPANS THE WINDOW (user decision, 2026-09): nothing inside a
+  // window is capped to a viewport-derived reading column, and a block is
+  // bounded by a top and a bottom rule only. Solo is where this is loudest —
+  // the window IS the 1440px viewport, so the old 864px cap would show up as
+  // a strip of chat floating in the middle of the screen.
+  const span = await page.evaluate(() => {
+    const px = el => (el ? parseFloat(getComputedStyle(el).width) : null);
+    const left = sel => {
+      const el = document.querySelector(sel);
+      return el ? +el.getBoundingClientRect().left.toFixed(1) : null;
+    };
+    const panel = document.querySelector('.session-panel');
+    const bar = document.querySelector('.session-input-bar');
+    const bubble = document.querySelector('.input-bubble');
+    const s = bubble ? getComputedStyle(bubble) : null;
+    return {
+      panel: px(panel),
+      bar: px(bar),
+      bubble: px(bubble),
+      bl: s ? parseFloat(s.borderLeftWidth) : null,
+      br: s ? parseFloat(s.borderRightWidth) : null,
+      bt: s ? parseFloat(s.borderTopWidth) : null,
+      bb: s ? parseFloat(s.borderBottomWidth) : null,
+      // One left edge: the block's rule, its text and the footer row under it.
+      rule: left('.input-bubble'),
+      text: left('.input-text'),
+      footer: left('.footer-btn'),
+    };
+  });
+  console.log('  window content:', JSON.stringify(span));
+  assert(span.bar !== null && span.bubble !== null, 'the input column is not rendered');
+  // panel (1440) − the chat area's 10px padding on each side.
+  assert(span.bar >= span.panel - 24 && span.bubble >= span.bar - 2,
+    `the input column does not span the window: ${JSON.stringify(span)}`);
+  assert(span.bl === 0 && span.br === 0 && span.bt > 0 && span.bb > 0,
+    `the input block is not a pair of horizontal rules: ${JSON.stringify(span)}`);
+  // The side padding went with the side borders: text sits ON the rule's end,
+  // not 14px inside it. (The window's own inset — .chat-area's 10px — stays.)
+  assert(span.rule === span.text && span.rule === span.footer,
+    `a block's text is indented away from its own rule: ${JSON.stringify(span)}`);
   await shot('02-solo.png');
 
   // ── 4. gestures refused, and nothing written ─────────────────────

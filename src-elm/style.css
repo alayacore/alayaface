@@ -441,6 +441,23 @@ body {
   box-shadow: 0 4px 24px rgba(0,0,0,0.4), 0 1px 4px rgba(0,0,0,0.2);
   overflow: visible;
   transition: box-shadow 0.15s;
+
+  /* CONTENT SPANS THE WINDOW (user decision, 2026-09). `--content-width` is
+     a reading-column cap derived from the VIEWPORT (`App/View.elm`:
+     min 864, max 400 — see the `.app` style tag), and every content rule in
+     a window reads it as its `max-width`. Inside a window that cap is the
+     wrong measure twice over: the width to fill is the WINDOW's, and the
+     user picks it by resizing. A capped window therefore grew its frame
+     without growing its text — the wide-window bug the user asked to remove.
+     Redefining the property here covers all twelve consumers at once
+     (messages, message blocks, the input bar, the input container and the
+     per-session overlays, which render inside the panel) instead of editing
+     each of them — one source of truth for the cap, per panel.
+     App-level surfaces keep the viewport-derived column: the no-session
+     welcome screen and the global overlays ARE the viewport, not a window
+     the user sizes. (Plan panels share this class, and `.plan-page` already
+     sets `max-width: none`.) */
+  --content-width: 100%;
 }
 .session-panel-active {
   box-shadow: 0 4px 32px rgba(99,102,241,0.2), 0 0 0 1px rgba(99,102,241,0.3);
@@ -734,7 +751,9 @@ body {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  padding: 2px 4px;
+  /* 0 horizontal: the title row, the block's two rules and the body text
+     share ONE left edge (see .msg-body). */
+  padding: 2px 0;
   cursor: pointer;
   user-select: none;
   font-size: 0.72rem;
@@ -832,14 +851,29 @@ body {
 .msg-status-icon.icon-cross { color: #fca5a5; }
 
 /* The body box: exists only while expanded. Role borders/backgrounds
-   attach here (see the role rules below), so the collapsed title row
-   stays borderless. */
+   attach here (see the rules below), so the collapsed title row stays
+   borderless.
+
+   A MESSAGE BLOCK IS A PAIR OF RULES, NOT A FRAME (user decision, 2026-09):
+   the top and bottom edges carry the role's line, the left and right edges
+   carry nothing — the block spans the window (see .session-panel's
+   --content-width), so a side border would sit at the panel's edge and say
+   "window", not "this message". Hence the role rules below set
+   border-top/-bottom only, and the radius is zero: a rounded corner on a box
+   with no side borders reads as a line with two hooks on the end, not as a
+   curve. */
 .msg-window {
-  border-radius: 6px;
+  border-radius: 0;
 }
 
 .msg-body {
-  padding: 8px 14px 10px;
+  /* Vertical only. The 14px of horizontal padding was there to keep text off
+     the block's side borders; with those gone (see .msg-window) it became a
+     silent indent between a block's rule and its own text, and it broke the
+     single left edge the title row above already sits on. The window's own
+     inset is `.chat-area`'s padding — that one stays: it is the margin from
+     the FRAME, not from a block border. */
+  padding: 8px 0 10px;
 }
 
 /* Collapsed: title row only, visually lighter. Drop the header's
@@ -859,16 +893,22 @@ body {
 }
 
 .message-user .msg-window {
-  border: 2px solid #2563eb;
+  border-top: 2px solid #2563eb;
+  border-bottom: 2px solid #2563eb;
 }
 
 .message-assistant .msg-window {
   background: rgba(255,255,255,0.04);
-  border: 2px solid transparent;
+  /* transparent, not `none`: the assistant block must occupy the same
+     vertical space as a bordered one, or replies would shift relative to
+     the messages around them (see the .msg-window note). */
+  border-top: 2px solid transparent;
+  border-bottom: 2px solid transparent;
 }
 
 .message-reasoning .msg-window {
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.18);
 }
 .message-reasoning .msg-body {
   color: #aaa;
@@ -878,7 +918,8 @@ body {
   color: #aaa;
 }
 .message-tool .msg-window {
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.18);
 }
 .message-tool .msg-body {
   color: #aaa;
@@ -893,8 +934,11 @@ body {
 }
 
 .tool-input {
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 6px;
+  /* A block inside a tool message — same flat treatment as the message
+     itself: two rules, no side borders (see .msg-window). */
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0;
   overflow: hidden;
 }
 
@@ -968,7 +1012,9 @@ body {
   font-size: 0.74rem;
   white-space: pre-wrap;
   color: #9ca3af;
-  padding: 8px 10px;
+  /* No background of its own, so no horizontal inset either: it sits on the
+     same left edge as the tool block's rules (see .msg-body). */
+  padding: 8px 0;
 }
 
 .tool-output {
@@ -1003,7 +1049,8 @@ body {
 }
 .message-notify .msg-window {
   background: rgba(250, 204, 21, 0.12);
-  border: 2px solid rgba(250, 204, 21, 0.35);
+  border-top: 2px solid rgba(250, 204, 21, 0.35);
+  border-bottom: 2px solid rgba(250, 204, 21, 0.35);
 }
 
 .message-error {
@@ -1012,7 +1059,8 @@ body {
 }
 .message-error .msg-window {
   background: rgba(239, 68, 68, 0.12);
-  border: 2px solid rgba(239, 68, 68, 0.4);
+  border-top: 2px solid rgba(239, 68, 68, 0.4);
+  border-bottom: 2px solid rgba(239, 68, 68, 0.4);
 }
 
 .message-content {
@@ -1784,13 +1832,18 @@ body {
 }
 
 .input-bubble {
-  padding: 10px 14px;
+  /* Vertical only — the 14px cleared a side border that no longer exists
+     (see .msg-body / .msg-window). */
+  padding: 10px 0;
   /* The prompt input reuses the `message message-user` classes (it
      renders as a user-style bubble), but the message border now lives
      on .msg-window — give the input bubble its own border/radius so it
-     keeps the user-blue frame. */
-  border: 2px solid #2563eb;
-  border-radius: var(--r-md);
+     keeps the user-blue frame. Like every other block it is bounded by a
+     TOP and a BOTTOM rule only (see .msg-window): the input spans the
+     window, so a side border would draw the window's own edge twice. */
+  border-top: 2px solid #2563eb;
+  border-bottom: 2px solid #2563eb;
+  border-radius: 0;
 }
 
 /* Attachment drag-drop: files dragged over the input container
@@ -1833,7 +1886,9 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 4px 0;
+  /* 0 horizontal: the footer buttons sit on the same left/right edge as the
+     input's rules (see .input-bubble). */
+  padding: 6px 0 0;
 }
 
 .input-footer-left {
