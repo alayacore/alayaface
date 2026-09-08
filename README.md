@@ -266,9 +266,13 @@ request, leaving is a button.
 
 So closing a window is the `✕` button's alone: visible, per window, always asking
 first (Close keeps the conversation on disk and resumable; Close and Delete
-removes the files). Leaving solo is the `⤡` button's or the menu item's. Closing
-the solo window with its `✕` also leaves solo, so the view can never point at a
-window that is gone.
+removes the files). Leaving solo is the `⤡` button's or the menu item's — and in
+solo there is no `✕` at all: the bar carries only those two controls, because
+closing the session you are looking at while the rest of the board is invisible
+is the one accident this view must not offer. Leave solo and the `✕` is back
+where you left it. A window can still die under solo (a delete from the Session
+Manager, an ownership-graph cascade), and the view then exits itself, so it can
+never point at a window that is gone.
 
 Solo stores nothing: the layout it returns to is exactly the layout it came
 from, and it is not persisted (a restart shows the canvas). Persisting the board

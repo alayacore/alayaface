@@ -298,14 +298,7 @@ viewSessionPanel model id =
                         ]
                     ]
                         ++ soloOnlyControls model soloHere
-                        ++ [Html.button
-                                [ Attr.class "session-bar-close"
-                                , Ev.stopPropagationOn "mousedown" (D.succeed ( NoOp, True ))
-                                , Ev.stopPropagationOn "click" (D.succeed ( RequestCloseSession id, True ))
-                                , Attr.title "Close session"
-                                ]
-                                [ Icons.cross ]
-                           ]
+                        ++ barCloseButton soloHere (RequestCloseSession id) "Close session"
                     )
                 , viewChatArea model session
                 ]
@@ -376,6 +369,40 @@ soloOnlyControls model soloHere =
             , Attr.title "Menu — the canvas cannot be right-clicked in solo view"
             ]
             [ Icons.menu ]
+        ]
+
+
+{-| The window bar's ✕ — the only control that closes a window, and one that
+does not EXIST while that window is solo (SD19).
+
+Solo is a presentation state: the panel covers the board, and the ⤡ button is
+the only way back to it (SD18). A ✕ in the same bar is one click from closing
+the session behind that presentation with nothing on screen left to show what
+else was running or waiting — so closing a window belongs to canvas view:
+leave solo first, and the ✕ is where the user left it.
+
+Not rendered rather than styled away, per SD6 (the DOM matches the model), and
+`RequestCloseSession`/`PlanClose` have no other sender, so the absent button IS
+the whole rule — there is no second gate to keep in sync.
+
+SD9 (solo cannot outlive its window) stays in force regardless: the closes that
+do not come from this button — the Session Manager's Delete, an
+ownership-graph cascade, the plan runner dropping a node session — still clear
+`soloWin` through `followSolo (SoloClosed key)`.
+-}
+barCloseButton : Bool -> Msg -> String -> List (Html Msg)
+barCloseButton soloHere msg title =
+    if soloHere then
+        []
+
+    else
+        [ Html.button
+            [ Attr.class "session-bar-close"
+            , Ev.stopPropagationOn "mousedown" (D.succeed ( NoOp, True ))
+            , Ev.stopPropagationOn "click" (D.succeed ( msg, True ))
+            , Attr.title title
+            ]
+            [ Icons.cross ]
         ]
 
 
@@ -1028,14 +1055,7 @@ viewPlanPanel model planId =
                         ]
                     ]
                         ++ soloOnlyControls model planSoloHere
-                        ++ [Html.button
-                                [ Attr.class "session-bar-close"
-                                , Ev.stopPropagationOn "mousedown" (D.succeed ( NoOp, True ))
-                                , Ev.stopPropagationOn "click" (D.succeed ( PlanClose planId, True ))
-                                , Attr.title "Close plan window"
-                                ]
-                                [ Icons.cross ]
-                           ]
+                        ++ barCloseButton planSoloHere (PlanClose planId) "Close plan window"
                     )
                 , Html.div [ Attr.class "plan-panel-body" ]
                     [ case pv.errors of

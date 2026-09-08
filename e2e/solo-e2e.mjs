@@ -23,7 +23,9 @@
 //      removed by SD18.                                              (SD18)
 //   7. plain Ctrl+F is still the browser's
 //   8. the global menu path, entered and left with no panel click
-//   9. closing the solo window exits solo (SD9) and leaves the others intact
+//   9. SD19: solo renders NO ✕ at all — the bar's only controls are the exit
+//      button and the menu button. Leaving solo brings the ✕ back, and closing
+//      there leaves the other windows exactly where they were.
 //  10. SD11: a file picker left open in a window that solo hides makes the exit
 //      control read "Canvas · 1 waiting", highlighted; clicking it returns to
 //      the canvas with that prompt reachable
@@ -32,6 +34,9 @@
 //      pointer exits — ⤡ and the ⋯ menu's "Exit solo" — with the topmost window
 //      deliberately NOT the solo one, which is how the menu's target bug was
 //      found: leaving must leave, not jump solo onto an invisible window.
+//  12. SD9 from inside solo: the window can still die with no ✕ involved
+//      (deleted from the Session Manager, which the ⋯ button keeps reachable),
+//      and the view must not outlive it.
 //
 // Two things this harness learned the hard way and keeps doing, because both
 // silently produced false results:
@@ -348,22 +353,36 @@ try {
   assert(JSON.stringify(await panelRects()) === JSON.stringify(before), 'the menu path moved the layout');
   console.log('  menu enters and leaves, layout untouched');
 
-  // ── 9. SD9: closing the solo window exits solo ───────────────────
-  console.log('== 8. closing the solo window exits solo');
+  // ── 9. SD19: solo has no ✕, and closing is a canvas-view act ─────
+  console.log('== 8. no close button while solo');
   const b3 = await soloBtn(topId);
   await clickAt(b3.x, b3.y);
   assert((await shell()).panels === 1, 'did not enter solo before the close test');
+  // The whole rule is one element's absence: in solo the bar carries ⤡ and ⋯
+  // and nothing that destroys a window. Closing the session you are looking
+  // at — with the board invisible behind it — is the accident SD18/SD10 have
+  // been steering around since solo shipped; the user removed the last of it.
+  assert(!(await hasEl('.session-bar-close')), 'a solo window still renders a ✕ (SD19)');
+  assert(await hasEl('.session-bar-solo'), 'solo lost its exit control');
+  assert(await hasEl('.session-bar-menu'), 'solo lost its ⋯ menu button (SD11)');
+  console.log('  the solo bar offers no ✕');
+  // Leaving solo brings it back — the ✕ is the canvas's control, not gone.
+  const b3exit = await soloBtn(topId);
+  await clickAt(b3exit.x, b3exit.y);
+  assert((await shell()).panels === 3, 'setup: did not leave solo before the close test');
+  assert(await hasEl(`.session-panel[data-session="${topId}"] .session-bar-close`),
+    'exiting solo did not restore the ✕');
   await clickEl(`.session-panel[data-session="${topId}"] .session-bar-close`);
   await waitFor('.overlay .confirm-page-buttons button');
   await page.keyboard.press('Enter');   // "Close" is the autofocused default
   await sleep(900);
   s = await shell();
   const left = await panelRects();
-  console.log(`  after closing the solo window — panels: ${s.panels}, cls: ${s.cls}`);
-  assert(s.panels === 2, `closing the solo window must leave 2 panels, got ${s.panels}`);
+  console.log(`  after closing the window from canvas view — panels: ${s.panels}, cls: ${s.cls}`);
+  assert(s.panels === 2, `closing a window must leave 2 panels, got ${s.panels}`);
   assert(!/main-content-solo/.test(s.cls), 'solo survived the death of its window (SD9)');
   const survivors = Object.fromEntries(Object.entries(before).filter(k => k[0] in left));
-  assert(JSON.stringify(left) === JSON.stringify(survivors), 'the surviving windows moved when the solo one closed');
+  assert(JSON.stringify(left) === JSON.stringify(survivors), 'the surviving windows moved when one closed');
 
   // ── 10. SD11: a hidden prompt is reported, then reachable ────────
   console.log('== 9. a hidden modal is reported by the exit control');
@@ -467,6 +486,38 @@ try {
   console.log('  both pointer controls leave solo, and nothing else does');
 
   await shot('11-final.png');
+
+  // ── 12. SD9 from INSIDE solo: the window can still die, and solo goes ─
+  // The ✕ is gone in solo (SD19), but solo must still not outlive its window:
+  // the delete that reaches it is the Session Manager's, which SD11 keeps
+  // reachable through the ⋯ button. This is the only remaining path from a
+  // solo window to a closed window, so it is the only one SD9 can be shown on.
+  console.log('== 11. deleting the solo session from the Session Manager exits solo (SD9)');
+  const ids3 = Object.keys(await panelRects());
+  assert(ids3.length >= 2, `setup: need two windows, got ${ids3.length}`);
+  const victim = ids3[ids3.length - 1];
+  assert(await clickEl(`.session-panel[data-session="${victim}"] .session-bar-solo`), 'no solo button to enter solo');
+  assert((await shell()).panels === 1, 'setup: not solo');
+  assert(!(await hasEl('.session-bar-close')), 'the solo bar grew a ✕ after all (SD19)');
+  assert(await clickEl('.session-bar-menu'), 'the ⋯ button did not open the menu');
+  assert(await clickMenuItem('Session Manager'), 'the global menu lost its Session Manager item');
+  await waitFor('.overlay .sel-page-item');
+  const deleted = await page.evaluate((id) => {
+    const rows = [...document.querySelectorAll('.sel-page-item')];
+    const row = rows.find(r => (r.querySelector('.sel-page-item-name')?.textContent || '').trim() === id.slice(0, 8));
+    const btn = row && [...row.querySelectorAll('button')].find(b => (b.textContent || '').includes('Delete'));
+    if (!btn) return false;
+    btn.click();
+    return true;
+  }, victim);
+  assert(deleted, `the Session Manager has no Delete button for the solo session ${victim}`);
+  await sleep(1200);
+  s = await shell();
+  assert(s.panels === ids3.length - 1,
+    `deleting the solo window left ${s.panels} panels, expected ${ids3.length - 1}`);
+  assert(!/main-content-solo/.test(s.cls), 'solo outlived its window (SD9)');
+  console.log(`  the solo window died with no ✕ involved, and solo went with it — ${s.panels} panels left`);
+  await shot('12-deleted-in-solo.png');
   console.log('ALL PASS');
 } catch (err) {
   console.error('E2E FAILED:', err.message);

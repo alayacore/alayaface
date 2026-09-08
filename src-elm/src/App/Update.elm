@@ -1315,7 +1315,8 @@ update msg model =
                     ( m0b, Cmd.none )
 
         RequestCloseSession id ->
-            -- User-initiated close (window ✕ or Ctrl+W): show THIS
+            -- User-initiated close (this window's ✕ — the only sender it
+            -- has, and solo does not render one: SD19): show THIS
             -- session's confirm overlay instead of closing — Close
             -- (keep the conversation on disk) / Close and Delete
             -- (remove files) / Cancel. The pending state lives on the
