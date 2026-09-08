@@ -75,6 +75,15 @@ check-invariants:
 check-schema:
 	./scripts/check-model-schema.sh
 
+# Stylesheet parse check: a CSS rule the browser cannot read is dropped with
+# no error at all. style.css carried exactly that — `//` prose above :root ate
+# the whole design-token block, so 133 var(--token) declarations applied
+# nothing (and two "drop orphaned CSS" commits left selector-less bodies).
+# Node only, no browser: it guards the same files elm-test runs on.
+.PHONY: check-css
+check-css:
+	node scripts/check-css-parse.mjs
+
 # Run Go backend test suites (-race: the backends are concurrent by design —
 # session readers, the hub, graceful close — and AGENTS.md requires -race
 # before every commit; CI passes it too, so the target must not be the one

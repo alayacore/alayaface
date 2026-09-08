@@ -1,23 +1,38 @@
-/* ─── Layout ───────────────────────────────────────────────────────── */
-//
-// Auto-scroll depends on `html` being the single scroll container.
-// html { overflow: auto } ensures scroll events fire on window.
-// body and #root use min-height so they grow with content without
-// becoming scroll containers themselves. The app container uses
-// min-height: 100vh to fill the viewport when content is short.
-//
-// Auto-scroll logic in App.tsx:
-//   atBottom = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight
-// This works correctly when html is the scroll container.
+/* ─── Layout ──────────────────────────────────────────────────────────
+   Auto-scroll depends on `html` being the single scroll container:
+   `html { overflow: auto }` ensures scroll events fire on window, body
+   and #root use min-height so they grow with content without becoming
+   scroll containers themselves, and the app container fills the viewport
+   when content is short. The gate itself is `session.atBottom`
+   (App/Update.elm), which is only correct while html is that container.
+
+   CSS comments are block comments here, never a leading double slash:
+   a `//` line is not a comment in a stylesheet, and the parser eats it
+   together with the NEXT rule. This file opened that way for months,
+   which silently deleted the whole `:root` token block below — every
+   `var(--accent)`, `var(--surface-*)`, `var(--r-*)` … in 133
+   declarations resolved to nothing (the selected list row in the
+   overlays came out unpainted as a result). */
 
 :root {
   font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 20px;
+  /* NOT the 20px this line asks for: this rule never parsed (see the
+     header comment), so every `rem` in the file — every font-size, most of
+     the padding — has always been measured against the browser default of
+     16px. Honouring 20px now would inflate the entire UI by a quarter in
+     one commit that is about borders; make that a decision of its own. */
+  font-size: 16px;
   line-height: 1.5;
   font-weight: 400;
 
-  color: #0f0f0f;
-  background-color: #f6f6f6;
+  /* The app is a dark card on a dark canvas; the light scheme overrides
+     both below (see the `:root` rule in the light media block). These
+     carried the Tauri template's light defaults (`#0f0f0f` on `#f6f6f6`)
+     for as long as the file has existed — invisible while the `//` header
+     comment ate this rule, and near-black-on-near-black user text once
+     it parsed. */
+  color: var(--fg-default);
+  background-color: #0f0f1a;
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -1683,10 +1698,13 @@ body {
 }
 .fp-page-item-selected:hover,
 .sel-page-item-selected:hover { background: var(--accent-hover); }
-  font-family: inherit;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
+
+/* The `.fp-page-item*` selectors above are legacy aliases: the file
+   picker emits `.list-row` / `.list-row-name` now (Overlay/FilePicker.elm).
+   What used to sit under the last rule was the tail of a
+   `.fp-page-item-name` block whose selector line commit 4d2b890 deleted —
+   three dangling declarations, parsed as a rule with a garbage selector
+   and dropped. `.list-row-name` carries the same font hardening. */
 
 @media (prefers-color-scheme: light) {
   .fp-page-input { background: white; color: #1a1a2e; border-color: #d0d0d8; }
@@ -2198,8 +2216,11 @@ body {
 .sel-page-item-selected { background: #6366f1; color: white; }
 .sel-page-item-selected:hover { background: #5558e6; }
 /* The DEFAULT row gets a clearly visible green tint + left accent so the
-   active model stands out at a glance (not just the tiny ● marker). */
-.sel-page-item-active:not(.sel-page-item-selected) {
+   active model stands out at a glance (not just the tiny ● marker).
+   Scoped to the ROW: the Session Manager puts `.sel-page-item-active` on
+   its "· active" sub-span (App/View.elm), and an unscoped rule painted a
+   green band behind that label instead of the row. */
+.sel-page-item.sel-page-item-active:not(.sel-page-item-selected) {
   background: rgba(74, 222, 128, 0.16);
   box-shadow: inset 3px 0 0 #4ade80;
 }
@@ -2402,7 +2423,7 @@ body {
   .sel-page-item-selected:hover { background: #5558e6; }
   .sel-page-item-id { color: rgba(0,0,0,0.3); }
   .sel-page-item-selected .sel-page-item-id { color: rgba(255,255,255,0.7); }
-  .sel-page-item-active:not(.sel-page-item-selected) {
+  .sel-page-item.sel-page-item-active:not(.sel-page-item-selected) {
     background: rgba(22, 163, 74, 0.14);
     box-shadow: inset 3px 0 0 #16a34a;
   }
@@ -2819,18 +2840,13 @@ body {
   font-size: 0.75rem;
   color: #f87171;
 }
-  padding: 3px 10px;
-  min-width: 56px;
-  text-align: center;
-  border-radius: 4px;
-  border: 1px solid #555;
-  background: transparent;
-  color: #aaa;
-  font-size: 0.72rem;
-  cursor: pointer;
-  transition: border-color 0.15s, color 0.15s;
-  flex-shrink: 0;
-}
+
+/* The old `.pm-btn` base rule lived here. Commit 523ca7a ("drop orphaned
+   CSS") deleted its selector line and left the declarations dangling — a
+   block with no selector, dropped by the parser, its closing brace
+   matching nothing. `.pm-btn` is a documented legacy alias of `.btn` now
+   (see the alias group above the button family), so the body is gone. */
+
 .pm-btn:hover:not(:disabled) { border-color: #818cf8; color: #a5b4fc; }
 .pm-btn-primary {
   border-color: #6366f1;

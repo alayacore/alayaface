@@ -76,6 +76,7 @@ cd src-tauri && cargo test          # (and cargo clippy --lib: no errors)
 ./scripts/check-backend-parity.sh
 make check-invariants               # windowPositions read path + JS-bridge freeze
 make check-schema                   # model.conf fields vs AlayaCore
+make check-css                      # stylesheets the browser can actually parse
 make e2e                            # every script in e2e/scripts.txt
 ```
 

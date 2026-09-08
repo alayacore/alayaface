@@ -51,6 +51,11 @@ jobs:
       # repo, absent from CI).
       - name: Model schema check
         run: ./scripts/check-model-schema.sh
+      # Stylesheet parse guard: a rule the browser cannot read is dropped
+      # silently, so a whole palette can be dead with a green build. Runs
+      # where elm-test runs — it is node-only, no Chrome needed.
+      - name: CSS parse check
+        run: node scripts/check-css-parse.mjs
 
   rust:
     name: Tauri (Rust)
