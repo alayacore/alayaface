@@ -1819,6 +1819,7 @@ viewPlanStatusBar model sid planIndex =
             Html.div [ Attr.class "plan-offer" ]
                 [ Html.button
                     [ Attr.class ("plan-offer-btn plan-status-" ++ statusClass)
+                    , Attr.attribute "data-plan-id" planId
                     , Ev.onClick (PlanStatusOpen planId)
                     , Attr.title ("Open plan " ++ planId)
                     ]
@@ -2139,6 +2140,7 @@ viewTextWithPlanLinks model text =
                                 link =
                                     Html.button
                                         [ Attr.class "plan-link"
+                                        , Attr.attribute "data-plan-id" planId
                                         , Ev.onClick (PlanStatusOpen planId)
                                         , Attr.title ("Open plan " ++ planId)
                                         ]

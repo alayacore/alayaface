@@ -103,26 +103,28 @@
         return slot;
       }
 
+      // Node card by data-node-id (Elm renders the id as an attribute on
+      // the .plan-node element itself — no text matching, no dependence
+      // on the .plan-node-id label staying in sync with the id).
       function connNodeEl(planPanel, nodeId) {
         if (!planPanel) return null;
         var nodes = planPanel.querySelectorAll(".plan-node");
         for (var i = 0; i < nodes.length; i++) {
-          var idEl = nodes[i].querySelector(".plan-node-id");
-          if (idEl && idEl.textContent === nodeId) return nodes[i];
+          if (nodes[i].getAttribute("data-node-id") === nodeId) return nodes[i];
         }
         return null;
       }
 
       // The [Plan: <planId>] button inside the owning session (the
-      // status bar under the plan message, or a feedback link). Returns
-      // the button element if visible, else null (caller falls back to
-      // the session window edge).
+      // status bar under the plan message, or a feedback link), found by
+      // data-plan-id — the visible "[Plan: …]" text is display-only and
+      // must not be matched. Returns the button element if visible, else
+      // null (caller falls back to the session window edge).
       function connPlanButton(sessionPanel, planId) {
         if (!sessionPanel) return null;
-        var marker = "[Plan: " + planId + "]";
-        var btns = sessionPanel.querySelectorAll("button");
+        var btns = sessionPanel.querySelectorAll("button[data-plan-id]");
         for (var i = 0; i < btns.length; i++) {
-          if ((btns[i].textContent || "").indexOf(marker) === -1) continue;
+          if (btns[i].getAttribute("data-plan-id") !== planId) continue;
           var r = btns[i].getBoundingClientRect();
           var sr = sessionPanel.getBoundingClientRect();
           // Visible = intersects the session panel's content area.

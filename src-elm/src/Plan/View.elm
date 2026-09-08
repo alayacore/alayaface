@@ -93,6 +93,7 @@ viewNode onNodeClick runStates tasksById pos =
     in
     Html.div
         [ Attr.class ("plan-node plan-node-" ++ statusClass status)
+        , Attr.attribute "data-node-id" pos.id
         , Attr.style "left" (px pos.x)
         , Attr.style "top" (px pos.y)
         , Attr.style "width" (px L.nodeW)
