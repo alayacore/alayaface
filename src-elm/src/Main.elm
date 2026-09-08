@@ -16,6 +16,7 @@ import Task
 import App.Types exposing (..)
 import App.Update
 import App.View
+import Plan.MetaScan as MetaScan
 import Ports
 
 
@@ -83,17 +84,8 @@ init _ =
       , alayacoreCheck = Nothing
       , planWindows = Dict.empty
       , planMetas = Dict.empty
-      , planMetaLoading = False
-      , planMetaScanPending = False
-      , planMetaDirQueue = []
-      , planMetaDirListing = Nothing
-      , planMetaReading = Nothing
-      , planMetaReadQueue = []
-      , planMetaScanReqId = Nothing
-      , planMetaReadReqId = Nothing
-      , planMetaSessionQueue = []
-      , planMetaNodeRefsQueue = []
-    , sessionDirMap = Dict.empty
+      , planMetaScan = MetaScan.init
+      , sessionDirMap = Dict.empty
       , fsReqCounter = 0
       , planRunStatuses = Dict.empty
       , planCascadePreview = Nothing

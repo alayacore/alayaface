@@ -15,6 +15,7 @@ import Test exposing (Test, describe, test)
 import App.Update
 import App.Types as AT
 import Dict
+import Plan.MetaScan as MetaScan
 import TestHelpers exposing (initModelWithSession)
 
 
@@ -77,12 +78,19 @@ pickerError model =
 -- past 1, so the next allocation is "fs-2").
 scanInFlight : AT.Model
 scanInFlight =
+    let
+        baseScan =
+            MetaScan.init
+    in
     { initModelWithSession
-        | planMetaLoading = True
-        , planMetaScanReqId = Just "fs-1"
-        , planMetaDirListing = Just "/home/u/.alayaface/sessions/s1/plans"
-        , planMetaDirQueue = [ "/home/u/.alayaface/sessions/s2/plans" ]
-        , fsReqCounter = 1
+        | fsReqCounter = 1
+        , planMetaScan =
+            { baseScan
+                | loading = True
+                , scanReqId = Just "fs-1"
+                , dirListing = Just "/home/u/.alayaface/sessions/s1/plans"
+                , dirQueue = [ "/home/u/.alayaface/sessions/s2/plans" ]
+            }
     }
 
 
@@ -101,7 +109,7 @@ suite =
                 -- The scan consumed the listing and queued the next dir
                 -- (its in-flight reqId is now the freshly allocated one).
                 Expect.equal
-                    ( updated.planMetaDirListing, updated.planMetaScanReqId, updated.planMetaLoading )
+                    ( updated.planMetaScan.dirListing, updated.planMetaScan.scanReqId, updated.planMetaScan.loading )
                     ( Just "/home/u/.alayaface/sessions/s2/plans", Just "fs-2", True )
         , test "a picker listing racing the scan is NOT swallowed by it" <|
             \_ ->
@@ -118,7 +126,7 @@ suite =
                 -- untouched (no corruption).
                 Expect.all
                     [ \m -> Expect.equal (pickerEntries m) [ "Documents", "work" ]
-                    , \m -> Expect.equal ( m.planMetaDirListing, m.planMetaScanReqId )
+                    , \m -> Expect.equal ( m.planMetaScan.dirListing, m.planMetaScan.scanReqId )
                             ( Just "/home/u/.alayaface/sessions/s1/plans", Just "fs-1" )
                     ]
                     updated
@@ -139,10 +147,16 @@ suite =
         , test "meta read is routed to the meta chain by reqId match" <|
             \_ ->
                 let
+                    baseScan =
+                        MetaScan.init
+
                     model =
                         { initModelWithSession
-                            | planMetaReadReqId = Just "fs-3"
-                            , planMetaReading = Just "/home/u/.alayaface/sessions/s1/plans/plan-a/plan-a.meta.json"
+                            | planMetaScan =
+                                { baseScan
+                                    | readReqId = Just "fs-3"
+                                    , reading = Just "/home/u/.alayaface/sessions/s1/plans/plan-a/plan-a.meta.json"
+                                }
                         }
 
                     metaJson =
@@ -155,7 +169,7 @@ suite =
                         App.Update.update (AT.FsReadResult raw) model
                 in
                 Expect.equal
-                    ( Dict.keys updated.planMetas, updated.planMetaReadReqId )
+                    ( Dict.keys updated.planMetas, updated.planMetaScan.readReqId )
                     ( [ "plan-a" ], Nothing )
         , test "a plan open during the meta scan is not swallowed by it" <|
             \_ ->
@@ -163,10 +177,16 @@ suite =
                 -- flight AND the user opens a plan file; the read result
                 -- must reach the plan-open flow, not the meta chain.
                 let
+                    baseScan =
+                        MetaScan.init
+
                     model =
                         { initModelWithSession
-                            | planMetaReadReqId = Just "fs-3"
-                            , planMetaReading = Just "/home/u/.alayaface/sessions/s1/plans/plan-a/plan-a.meta.json"
+                            | planMetaScan =
+                                { baseScan
+                                    | readReqId = Just "fs-3"
+                                    , reading = Just "/home/u/.alayaface/sessions/s1/plans/plan-a/plan-a.meta.json"
+                                }
                             , planReadTarget =
                                 Just
                                     { reqId = "fs-9"
@@ -191,7 +211,7 @@ suite =
                 -- arrive later with reqId fs-3).
                 Expect.all
                     [ \m -> Expect.equal (Dict.member "plan-b" m.planWindows) True
-                    , \m -> Expect.equal m.planMetaReadReqId (Just "fs-3")
+                    , \m -> Expect.equal m.planMetaScan.readReqId (Just "fs-3")
                     ]
                     updated
         , test "a stale read result (no matching target) is ignored" <|

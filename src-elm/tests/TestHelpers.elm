@@ -6,6 +6,7 @@ module TestHelpers exposing (initModelWithSession)
 import Dict
 import Set
 import App.Types as AT
+import Plan.MetaScan as MetaScan
 import Session.Types as T
 
 
@@ -62,16 +63,7 @@ initModelWithSession =
     , alayacoreCheck = Nothing
     , planWindows = Dict.empty
     , planMetas = Dict.empty
-    , planMetaLoading = False
-    , planMetaScanPending = False
-    , planMetaDirQueue = []
-    , planMetaDirListing = Nothing
-    , planMetaReading = Nothing
-    , planMetaReadQueue = []
-    , planMetaScanReqId = Nothing
-    , planMetaReadReqId = Nothing
-    , planMetaSessionQueue = []
-    , planMetaNodeRefsQueue = []
+    , planMetaScan = MetaScan.init
     , sessionDirMap = Dict.empty
     , fsReqCounter = 0
     , planRunStatuses = Dict.empty

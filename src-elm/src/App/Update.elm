@@ -41,6 +41,7 @@ import Plan.Meta as PM
 import Plan.Cascade as PC
 import Plan.Detect
 import Plan.Frames
+import Plan.MetaScan as MetaScan
 import Overlay.AsrConfig as AsrUI
 import Ports
 import Arch.Values as AV
@@ -1146,6 +1147,70 @@ modules this wires together (Plan/Update, App/Windows, Session/Handlers,
 App/Pointer…); keep new feature state in its own module rather than growing
 this case expression — see AGENTS.md "Architecture".
 -}
+
+-- ─── Plan-meta scan glue (Plan/MetaScan) ───────────────────────────
+-- The pure scan machine returns effects (data); these helpers apply
+-- them to the model and translate the request effects into port
+-- commands. The case arms stay one-liners.
+
+applyMetaScanEffects : Model -> MetaScan.Scan -> Int -> List MetaScan.Effect -> ( Model, Cmd Msg )
+applyMetaScanEffects model scan counter effects =
+    List.foldl applyMetaScanEffect ( { model | planMetaScan = scan, fsReqCounter = counter }, Cmd.none ) effects
+
+
+applyMetaScanEffect : MetaScan.Effect -> ( Model, Cmd Msg ) -> ( Model, Cmd Msg )
+applyMetaScanEffect eff ( m, cmds ) =
+    case eff of
+        MetaScan.ListDir reqId path ->
+            ( m, Cmd.batch [ cmds, Ports.fsListDir { reqId = reqId, path = path } ] )
+
+        MetaScan.ReadText reqId path ->
+            ( m, Cmd.batch [ cmds, Ports.fsReadFileText { reqId = reqId, path = path } ] )
+
+        MetaScan.GetObject hash ->
+            ( m, Cmd.batch [ cmds, Ports.objectGet { reqId = hash, hash = hash } ] )
+
+        MetaScan.RememberDir sid dir ->
+            ( { m | sessionDirMap = Dict.insert sid dir m.sessionDirMap }, cmds )
+
+        MetaScan.RememberMeta planId meta ->
+            ( { m | planMetas = Dict.insert planId meta m.planMetas }, cmds )
+
+        MetaScan.RememberRefs refs ->
+            ( { m | sessionRefs = Dict.insert refs.id refs m.sessionRefs }, cmds )
+
+
+{-| Request-only effects (begin returns no model writes) -> one batched
+port command.
+-}
+applyMetaScanCmd : List MetaScan.Effect -> Cmd Msg
+applyMetaScanCmd effects =
+    Cmd.batch (List.map metaScanEffectCmd effects)
+
+
+metaScanEffectCmd : MetaScan.Effect -> Cmd Msg
+metaScanEffectCmd eff =
+    case eff of
+        MetaScan.ListDir reqId path ->
+            Ports.fsListDir { reqId = reqId, path = path }
+
+        MetaScan.ReadText reqId path ->
+            Ports.fsReadFileText { reqId = reqId, path = path }
+
+        MetaScan.GetObject hash ->
+            Ports.objectGet { reqId = hash, hash = hash }
+
+        MetaScan.RememberDir _ _ ->
+            Cmd.none
+
+        MetaScan.RememberMeta _ _ ->
+            Cmd.none
+
+        MetaScan.RememberRefs _ ->
+            Cmd.none
+
+
+
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
@@ -3076,223 +3141,21 @@ update msg model =
                     -- through to the file picker — so the scan can
                     -- neither swallow a user listing that races it nor
                     -- be corrupted by one.
-                    if model.planMetaScanReqId == Just res.reqId then
-                        if not res.ok then
-                            -- Scan listing failed (backend error): abandon
-                            -- the rebuild rather than stalling. planMetas
-                            -- stays empty this session; plan links still
-                            -- resolve from the on-disk files.
-                            ( { model
-                                | planMetaScanReqId = Nothing
-                                , planMetaDirListing = Nothing
-                                , planMetaLoading = False
-                              }
-                            , Cmd.none
-                            )
+                    if model.planMetaScan.scanReqId == Just res.reqId then
+                        -- A listing for the planMetas rebuild (B3): feed
+                        -- the pure scan machine (Plan/MetaScan) and apply
+                        -- the requests / model writes it returns. Routing
+                        -- is by reqId, never by global state — a user
+                        -- listing racing the scan can neither be swallowed
+                        -- nor parsed as plan dirs.
+                        let
+                            entries =
+                                List.filterMap (\v -> D.decodeValue PU.planDirEntryDecoder v |> Result.toMaybe) res.entries
 
-                        else
-                            let
-                                parsed =
-                                    List.filterMap (\v -> D.decodeValue planDirEntryDecoder v |> Result.toMaybe) res.entries
-                            in
-                            case model.planMetaDirListing of
-                                Just dir ->
-                                    -- Directory levels (each listed in
-                                    -- turn via planMetaDirQueue):
-                                    --   sessions/<origin>/plans          → subdirs are PLANS
-                                    --   sessions/<origin>/plans/<planId> → subdirs are NODE dirs (+ work/)
-                                    --   .../plans/<planId>/<nodeId>      → subdirs are node SESSION dirs (<uuid>/)
-                                    -- The plans level queues each plan's
-                                    -- meta read AND lists the plan dir;
-                                    -- the plan level queues its node dirs;
-                                    -- the node level queues the nested
-                                    -- session.meta.json reads (P39/Phase B
-                                    -- — forked node sessions' lineage must
-                                    -- survive restart).
-                                    let
-                                        dirsIn =
-                                            parsed
-                                                |> List.filter (\e -> e.isDir && e.name /= ".." && e.name /= ".")
-                                                |> List.map .name
-
-                                        segs =
-                                            String.split "/" dir |> List.filter ((/=) "")
-
-                                        listNext m =
-                                            case m.planMetaDirQueue of
-                                                next :: rest ->
-                                                    let
-                                                        ( reqId, m1 ) =
-                                                            nextFsReq m
-                                                    in
-                                                    ( { m1
-                                                        | planMetaDirQueue = rest
-                                                        , planMetaDirListing = Just next
-                                                        , planMetaScanReqId = Just reqId
-                                                      }
-                                                    , Ports.fsListDir { reqId = reqId, path = next }
-                                                    )
-
-                                                [] ->
-                                                    -- All directories
-                                                    -- listed: start reading
-                                                    -- — session refs (C) +
-                                                    -- every plan meta.
-                                                    let
-                                                        readQueue =
-                                                            m.planMetaSessionQueue
-                                                                ++ m.planMetaNodeRefsQueue
-                                                                ++ m.planMetaReadQueue
-                                                    in
-                                                    case readQueue of
-                                                        r :: rs ->
-                                                            let
-                                                                ( reqId, m1 ) =
-                                                                    nextFsReq m
-                                                            in
-                                                            ( { m1
-                                                                | planMetaDirListing = Nothing
-                                                                , planMetaScanReqId = Nothing
-                                                                , planMetaReading = Just r
-                                                                , planMetaReadReqId = Just reqId
-                                                                , planMetaSessionQueue = []
-                                                                , planMetaNodeRefsQueue = []
-                                                                , planMetaReadQueue = rs
-                                                                , planMetaLoading = False
-                                                              }
-                                                            , Ports.fsReadFileText { reqId = reqId, path = r }
-                                                            )
-
-                                                        [] ->
-                                                            ( { m | planMetaDirListing = Nothing, planMetaScanReqId = Nothing, planMetaLoading = False }
-                                                            , Cmd.none
-                                                            )
-                                    in
-                                    case List.reverse segs of
-                                        "plans" :: _ ->
-                                            -- A sessions/<uuid>/plans
-                                            -- listing: each subdir is a
-                                            -- plan (P28 nests plan files in
-                                            -- their own dir), so queue the
-                                            -- plan meta read AND the plan
-                                            -- dir listing (to reach nested
-                                            -- node sessions).
-                                            let
-                                                newReadQueue =
-                                                    model.planMetaReadQueue
-                                                        ++ List.map (\p -> dir ++ "/" ++ p ++ "/" ++ p ++ ".meta.json") dirsIn
-
-                                                newDirQueue =
-                                                    model.planMetaDirQueue
-                                                        ++ List.map (\p -> dir ++ "/" ++ p) dirsIn
-                                            in
-                                            listNext { model | planMetaReadQueue = newReadQueue, planMetaDirQueue = newDirQueue }
-
-                                        _ :: "plans" :: _ ->
-                                            -- A plan dir listing: subdirs
-                                            -- are node dirs (and work/) —
-                                            -- queue them for listing (the
-                                            -- node level yields the nested
-                                            -- session.meta.json paths).
-                                            listNext
-                                                { model
-                                                    | planMetaDirQueue =
-                                                        model.planMetaDirQueue
-                                                            ++ List.map (\n -> dir ++ "/" ++ n) (List.filter ((/=) "work") dirsIn)
-                                                }
-
-                                        _ ->
-                                            -- A node dir listing: subdirs
-                                            -- are node session dirs (<uuid>)
-                                            -- — record each session's REAL
-                                            -- (nested) directory so plans it
-                                            -- creates stay in this subtree
-                                            -- (P28 layout fix) AND queue
-                                            -- their session.refs.json (C3-2:
-                                            -- node cascade fork's work-copy record).
-                                            listNext
-                                                { model
-                                                    | planMetaNodeRefsQueue =
-                                                        model.planMetaNodeRefsQueue
-                                                            ++ List.map (\n -> dir ++ "/" ++ n ++ "/session.refs.json") dirsIn
-                                                    , sessionDirMap =
-                                                        List.foldl
-                                                            (\n acc -> Dict.insert n (dir ++ "/" ++ n) acc)
-                                                            model.sessionDirMap
-                                                            dirsIn
-                                                }
-
-                                Nothing ->
-                                    -- The sessions/ listing: queue every
-                                    -- session's plans/ subdir (missing
-                                    -- plans dirs list empty; ".." from
-                                    -- the listing is skipped) AND every
-                                    -- session's version refs
-                                    -- (sessions/<uuid>/session.refs.json —
-                                    -- C architecture: Session ROOT refs;
-                                    -- work-copy directories have no refs
-                                    -- and are never registered).
-                                    let
-                                        sessionDirs =
-                                            parsed
-                                                |> List.filter (\e -> e.isDir && e.name /= ".." && e.name /= ".")
-                                                |> List.map .name
-
-                                        planDirs =
-                                            List.map (\n -> sessionsDir model.homeDir ++ "/" ++ n ++ "/plans") sessionDirs
-
-                                        sessionMetaQueue =
-                                            List.map
-                                                (\n -> sessionsDir model.homeDir ++ "/" ++ n ++ "/session.refs.json")
-                                                sessionDirs
-                                    in
-                                    case planDirs of
-                                        next :: rest ->
-                                            let
-                                                ( reqId, m1 ) =
-                                                    nextFsReq model
-                                            in
-                                            ( { m1
-                                                | planMetaDirQueue = rest
-                                                , planMetaDirListing = Just next
-                                                , planMetaSessionQueue = sessionMetaQueue
-                                                , planMetaScanReqId = Just reqId
-                                                -- P28 layout fix: record the
-                                                -- top-level session dirs.
-                                                , sessionDirMap =
-                                                    List.foldl
-                                                        (\n acc -> Dict.insert n (sessionsDir model.homeDir ++ "/" ++ n) acc)
-                                                        model.sessionDirMap
-                                                        sessionDirs
-                                              }
-                                            , Ports.fsListDir { reqId = reqId, path = next }
-                                            )
-
-                                        [] ->
-                                            -- No plans dirs anywhere: go
-                                            -- straight to reading the
-                                            -- session lineage metas.
-                                            case sessionMetaQueue of
-                                                r :: rs ->
-                                                    let
-                                                        ( reqId2, m2 ) =
-                                                            nextFsReq model
-                                                    in
-                                                    ( { m2
-                                                        | planMetaScanReqId = Nothing
-                                                        , planMetaReading = Just r
-                                                        , planMetaReadReqId = Just reqId2
-                                                        , planMetaSessionQueue = rs
-                                                        , planMetaReadQueue = []
-                                                        , planMetaLoading = False
-                                                      }
-                                                    , Ports.fsReadFileText { reqId = reqId2, path = r }
-                                                    )
-
-                                                [] ->
-                                                    ( { model | planMetaScanReqId = Nothing, planMetaLoading = False }
-                                                    , Cmd.none
-                                                    )
+                            ( scan, counter, effects ) =
+                                MetaScan.onListResult model.planMetaScan model.fsReqCounter res.ok (PU.sessionsDir model.homeDir) entries
+                        in
+                        applyMetaScanEffects model scan counter effects
 
                     else
                         -- File picker listing (or any other non-scan
@@ -3307,17 +3170,13 @@ update msg model =
                                 List.filter (\e -> e.name /= "..") parsed
 
                             ( m0, scanCmd ) =
-                                if model.planMetaScanPending then
+                                if model.planMetaScan.pending then
                                     let
-                                        ( reqId, m1 ) =
-                                            nextFsReq model
+                                        ( scan, counter, effects ) =
+                                            MetaScan.begin model.planMetaScan model.fsReqCounter (PU.sessionsDir model.homeDir)
                                     in
-                                    ( { m1
-                                        | planMetaScanPending = False
-                                        , planMetaLoading = True
-                                        , planMetaScanReqId = Just reqId
-                                      }
-                                    , Ports.fsListDir { reqId = reqId, path = sessionsDir m1.homeDir }
+                                    ( { model | planMetaScan = scan, fsReqCounter = counter }
+                                    , applyMetaScanCmd effects
                                     )
 
                                 else
@@ -3397,7 +3256,7 @@ update msg model =
                         -- a restart (plans unreachable via the status-bar
                         -- link). The reqId routing makes the two flows
                         -- distinguishable even if they did overlap.
-                        |> (\( m, c ) -> ( { m | planMetaScanPending = True }, c ))
+                        |> (\( m, c ) -> ( { m | planMetaScan = MetaScan.arm m.planMetaScan }, c ))
 
                     else
                         -- Home dir could not be resolved (no HOME env /
@@ -3655,83 +3514,16 @@ update msg model =
                     -- the plan read target belongs to an open/load/
                     -- restore flow; anything else is stale (raced a newer
                     -- request) and is ignored.
-                    if model.planMetaReadReqId == Just res.reqId then
+                    if model.planMetaScan.readReqId == Just res.reqId then
+                        -- A read for the planMetas rebuild (B3): feed the
+                        -- pure scan machine (meta.json / session.refs.json
+                        -- handling + the serialized read chain) and apply
+                        -- its requests / writes.
                         let
-                            path =
-                                Maybe.withDefault "" model.planMetaReading
-
-                            ( m1, extraCmd ) =
-                                if res.ok then
-                                    if String.endsWith "/session.refs.json" path then
-                                        -- C architecture: session version refs
-                                        -- (sessions/<uuid>/session.refs.json) —
-                                        -- load into sessionRefs and trigger the
-                                        -- head version content load (the status
-                                        -- bar resolves by version).
-                                        case D.decodeString AV.decodeSessionRefs res.content of
-                                            Ok refs ->
-                                                let
-                                                    m2 =
-                                                        { model | sessionRefs = Dict.insert refs.id refs model.sessionRefs }
-                                                in
-                                                if refs.head /= "" && not (Dict.member refs.head model.versionCache) then
-                                                    ( m2, Ports.objectGet { reqId = refs.head, hash = refs.head } )
-
-                                                else
-                                                    ( m2, Cmd.none )
-
-                                            Err _ ->
-                                                ( model, Cmd.none )
-
-                                    else
-                                        case D.decodeString PM.decodeMeta res.content of
-                                            Ok meta ->
-                                                let
-                                                    -- planId = the meta
-                                                    -- file name minus
-                                                    -- ".meta.json" (paths
-                                                    -- are
-                                                    -- sessions/<origin>/plans/<planId>/<planId>.meta.json).
-                                                    planId =
-                                                        String.split "/" path
-                                                            |> List.reverse
-                                                            |> List.head
-                                                            |> Maybe.withDefault path
-                                                            |> String.dropRight (String.length ".meta.json")
-                                                in
-                                                ( { model | planMetas = Dict.insert planId meta model.planMetas }
-                                                , Cmd.none
-                                                )
-
-                                            Err _ ->
-                                                ( model, Cmd.none )
-
-                                else
-                                    -- A failed meta read (missing/corrupt
-                                    -- file): skip it, keep the chain going.
-                                    ( model, Cmd.none )
+                            ( scan, counter, effects ) =
+                                MetaScan.onReadResult model.planMetaScan model.fsReqCounter model.versionCache res.ok res.content
                         in
-                        case m1.planMetaReadQueue of
-                            next :: rest ->
-                                let
-                                    ( reqId2, m2 ) =
-                                        nextFsReq m1
-                                in
-                                ( { m2
-                                    | planMetaReading = Just next
-                                    , planMetaReadQueue = rest
-                                    , planMetaReadReqId = Just reqId2
-                                  }
-                                , Cmd.batch
-                                    [ Ports.fsReadFileText { reqId = reqId2, path = next }
-                                    , extraCmd
-                                    ]
-                                )
-
-                            [] ->
-                                ( { m1 | planMetaReading = Nothing, planMetaReadReqId = Nothing }
-                                , extraCmd
-                                )
+                        applyMetaScanEffects model scan counter effects
 
                     else
                         case model.planReadTarget of

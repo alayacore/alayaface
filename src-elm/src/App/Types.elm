@@ -57,6 +57,7 @@ import App.NodeConnection as NC
 import App.Pointer as P
 import Arch.Values as AV
 import Arch.Freeze as Freeze
+import Plan.MetaScan as MetaScan
 
 
 type alias Flags =
@@ -162,46 +163,13 @@ type alias Model =
     -- on session open (R3): sessions/ is listed, then each session's
     -- plans/ dir, then every *.meta.json is read.
     , planMetas : Dict String PM.PlanMeta
-    -- Loading state for planMetas: a dedicated fs_list_dir/fs_read chain
-    -- that bypasses planReadTarget (single-slot) and the manager UI.
-    , planMetaLoading : Bool
-    -- Set by FsHomeDirResult; the meta scan starts only AFTER the
-    -- session file-picker's home listing has been consumed (both are
-    -- fs_list_dir results with no path tag — firing them in the same
-    -- batch lets the home listing be misrouted into the scan and
-    -- desynchronize it, leaving planMetas empty after a restart).
-    , planMetaScanPending : Bool
-    -- Directory scan: planMetaDirQueue holds the remaining directories
-    -- to list across ALL levels (sessions/<uuid>/plans, then each
-    -- <planId>/, then each <nodeId>/); planMetaDirListing is the dir
-    -- whose listing the next FsListDirResult belongs to (Nothing + empty
-    -- queue while loading = waiting for the sessions/ listing).
-    , planMetaDirQueue : List String
-    , planMetaDirListing : Maybe String
-    -- The meta.json path currently being read (head of the rebuild
-    -- chain); planMetaReadQueue holds the remaining paths.
-    , planMetaReading : Maybe String
-    , planMetaReadQueue : List String
-    -- reqId of the scan's in-flight fs_list_dir (sessions/ listing or a
-    -- plans/ dir listing). fs_list_dir responses are routed by reqId:
-    -- a response whose reqId matches this is a scan listing; anything
-    -- else belongs to the file picker — so the scan can never swallow
-    -- (or be corrupted by) a user-initiated listing that races it.
-    , planMetaScanReqId : Maybe String
-    -- reqId of the scan's in-flight meta.json read. fs_read_file_text
-    -- responses are routed by reqId: matching here = the meta rebuild
-    -- chain; matching planReadTarget = an open/load read; neither = a
-    -- stale response (ignored).
-    , planMetaReadReqId : Maybe String
-    -- C architecture: session.refs.json paths (sessions/<uuid>/session.refs.json),
-    -- collected from the sessions/ listing, read one at a time to
-    -- register each session's root refs.
-    , planMetaSessionQueue : List String
-    -- C3-2: nested node-session session.refs.json paths (sessions/<origin>/
-    -- plans/<planId>/<nodeId>/<uuid>/session.refs.json) — after a node
-    -- cascade fork records a workCopy, restart DAG recovery restores
-    -- from the work-copy directory.
-    , planMetaNodeRefsQueue : List String
+    -- The rebuild's state machine (R3/C): a dedicated fs_list_dir/
+    -- fs_read_file_text chain that bypasses planReadTarget (single-slot)
+    -- and the manager UI. Owned by Plan/MetaScan (pure); App/Update
+    -- feeds it the fs_list_dir / fs_read_file_text results routed by
+    -- reqId and applies its effects. See Plan/MetaScan for the walk's
+    -- directory levels and queue fields.
+    , planMetaScan : MetaScan.Scan
     -- P28 layout fix: every known session id → its ON-DISK DIRECTORY.
     -- Top-level sessions live at sessions/<id>; plan NODE sessions are
     -- NESTED at sessions/<origin>/plans/<planId>/<nodeId>/<id>. Plans
