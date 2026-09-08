@@ -1880,6 +1880,18 @@ body {
 }
 
 .input-text {
+  /* BLOCK, not inline. A <textarea> is an inline-level replaced element, so
+     as the only child of the (block) bubble it sits on the baseline of an
+     anonymous line box — and that box must reach below the baseline by the
+     font's descent. Measured: the bubble was 56px tall for a 24px textarea,
+     12px above it and 20px below, so the caret's box sat high and the text
+     looked like it had more air under it than the user echo above it (which
+     has none of this: its text lives in a block `div`). `width: 100%` meant
+     a block was always the intent; as a block the bubble is 48px, 12 above
+     and 12 below, matching the echo's symmetry. `vertical-align: bottom`
+     fixes the gap too but keeps the textarea in an inline context it does
+     not use. */
+  display: block;
   width: 100%;
   padding: 0;
   border: none;
