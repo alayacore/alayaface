@@ -850,19 +850,27 @@ body {
 .msg-status-icon.icon-running { color: #fbbf24; }
 .msg-status-icon.icon-cross { color: #fca5a5; }
 
-/* The body box: exists only while expanded. Role borders/backgrounds
-   attach here (see the rules below), so the collapsed title row stays
-   borderless.
+/* The body box: exists only while expanded. Role borders attach here (see
+   the rules below), so the collapsed title row stays borderless.
 
-   A MESSAGE BLOCK IS A PAIR OF RULES, NOT A FRAME (user decision, 2026-09):
-   the top and bottom edges carry the role's line, the left and right edges
-   carry nothing — the block spans the window (see .session-panel's
-   --content-width), so a side border would sit at the panel's edge and say
-   "window", not "this message". Hence the role rules below set
-   border-top/-bottom only, and the radius is zero: a rounded corner on a box
-   with no side borders reads as a line with two hooks on the end, not as a
-   curve. */
+   A MESSAGE BLOCK IS A PAIR OF COLOURED RULES, NOTHING ELSE (user decision,
+   2026-09): the top and bottom edges carry the role's line, the left and
+   right edges carry nothing — the block spans the window (see
+   .session-panel's --content-width), so a side border would sit at the
+   panel's edge and say "window", not "this message". Hence the role rules
+   below set border-top/-bottom only, and the radius is zero: a rounded corner
+   on a box with no side borders reads as a line with two hooks on the end,
+   not as a curve.
+
+   NO FILL: the role's colour lives in the two rules alone. The blocks used to
+   tint their whole body too (assistant grey, notify amber, error red) and a
+   chat full of tinted slabs is louder than the same chat as rules — and the
+   tint duplicated what the rule already says. So: one signal per block, and
+   it is the border. That also means no role may fall back to a transparent
+   rule (the assistant used to): with no fill behind it a colourless line
+   would leave the block with no edge at all. */
 .msg-window {
+  background: transparent;
   border-radius: 0;
 }
 
@@ -898,12 +906,11 @@ body {
 }
 
 .message-assistant .msg-window {
-  background: rgba(255,255,255,0.04);
-  /* transparent, not `none`: the assistant block must occupy the same
-     vertical space as a bordered one, or replies would shift relative to
-     the messages around them (see the .msg-window note). */
-  border-top: 2px solid transparent;
-  border-bottom: 2px solid transparent;
+  /* Neutral, not `transparent` as it used to be: the assistant block lost
+     its grey fill, so a colourless rule would leave a reply with no edge at
+     all. Lighter than the user's blue, heavier than a hairline. */
+  border-top: 2px solid rgba(255, 255, 255, 0.22);
+  border-bottom: 2px solid rgba(255, 255, 255, 0.22);
 }
 
 .message-reasoning .msg-window {
@@ -1034,7 +1041,6 @@ body {
 }
 /* System rows stay borderless (a status line, not a window). */
 .message-system .msg-window {
-  background: transparent;
   border: none;
 }
 .message-system .msg-body {
@@ -1048,9 +1054,11 @@ body {
   color: #fde68a;
 }
 .message-notify .msg-window {
-  background: rgba(250, 204, 21, 0.12);
-  border-top: 2px solid rgba(250, 204, 21, 0.35);
-  border-bottom: 2px solid rgba(250, 204, 21, 0.35);
+  /* No fill (see .msg-window): the amber rule is the whole signal, so it is
+     drawn stronger than the 0.35 it was when the background carried weight
+     too. */
+  border-top: 2px solid rgba(250, 204, 21, 0.65);
+  border-bottom: 2px solid rgba(250, 204, 21, 0.65);
 }
 
 .message-error {
@@ -1058,9 +1066,8 @@ body {
   color: #fca5a5;
 }
 .message-error .msg-window {
-  background: rgba(239, 68, 68, 0.12);
-  border-top: 2px solid rgba(239, 68, 68, 0.4);
-  border-bottom: 2px solid rgba(239, 68, 68, 0.4);
+  border-top: 2px solid rgba(239, 68, 68, 0.65);
+  border-bottom: 2px solid rgba(239, 68, 68, 0.65);
 }
 
 .message-content {
@@ -2007,13 +2014,14 @@ body {
   .input-text { background: transparent; color: #1a1a2e; }
 }
 @media (prefers-color-scheme: light) {
-  .message-assistant .msg-window { background: #e2e8f0; }
+  /* Rules only, no fills (see .msg-window): each role keeps its line colour,
+     darkened where it was picked to sit on a tinted background. */
+  .message-assistant .msg-window { border-color: rgba(0, 0, 0, 0.22); }
   .message-assistant { color: #1a202c; }
-  .message-system .msg-window { background: #fef9c3; }
   .message-system { color: #854d0e; }
-  .message-notify .msg-window { background: #fef9c3; border-color: #fde68a; }
+  .message-notify .msg-window { border-color: #b45309; }
   .message-notify { color: #854d0e; }
-  .message-error .msg-window { background: #fee2e2; border-color: #fecaca; }
+  .message-error .msg-window { border-color: #dc2626; }
   .message-error { color: #991b1b; }
   .message-user .msg-window { border-color: #2563eb; }
   .message-reasoning .msg-window, .message-tool .msg-window { border-color: rgba(0, 0, 0, 0.2); }
