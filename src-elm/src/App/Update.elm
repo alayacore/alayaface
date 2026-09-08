@@ -1149,6 +1149,25 @@ App/Pointer…); keep new feature state in its own module rather than growing
 this case expression — see AGENTS.md "Architecture".
 -}
 
+-- ─── File-picker op glue (Session/FilePicker) ─────────────────────
+-- Transitions return an Op (data); this maps it to the fs port.
+fpCmd : FP.Op -> Cmd Msg
+fpCmd op =
+    case op of
+        FP.None ->
+            Cmd.none
+
+        FP.FetchHome ->
+            Ports.fsHomeDir {}
+
+        FP.Resolve path ->
+            Ports.fsResolvePath { path = path }
+
+        FP.ReadDataUri path ->
+            Ports.fsReadFileDataUri { path = path }
+
+
+
 -- ─── Plan-meta scan glue (Plan/MetaScan) ───────────────────────────
 -- The pure scan machine returns effects (data); these helpers apply
 -- them to the model and translate the request effects into port
@@ -2704,27 +2723,18 @@ update msg model =
 
         -- File Picker
         OpenFilePicker ->
+            -- Reset and show the picker, then resolve the home dir
+            -- (reset is pure — Session/FilePicker.openPicker; the arm
+            -- keeps the focus commands).
             case getActiveSession model of
                 Just s ->
-                    ( updateActiveSession model (\sess ->
-                        let
-                            fp =
-                                sess.filePicker
-                        in
-                        { sess
-                            | filePicker =
-                                { fp
-                                    | show = True
-                                    , mode = T.Local
-                                    , input = ""
-                                    , filter = ""
-                                    , selected = 0
-                                    , loading = True
-                                }
-                        }
-                      )
+                    let
+                        ( fp1, op ) =
+                            FP.openPicker s.filePicker
+                    in
+                    ( updateActiveSession model (\sess -> { sess | filePicker = fp1 })
                     , Cmd.batch
-                        [ Ports.fsHomeDir {}
+                        [ fpCmd op
                         , focusAfterDelay ("fp-page-input-" ++ s.id)
                         , Ports.setCursorPos { id = "fp-page-input-" ++ s.id, pos = Nothing }
                         ]
@@ -2734,90 +2744,42 @@ update msg model =
                     ( model, Cmd.none )
 
         CloseFilePicker ->
-            ( updateActiveSession model (\s ->
-                let
-                    fp =
-                        s.filePicker
-                in
-                { s | filePicker = { fp | show = False, savedLocalPath = "", savedUrlPath = "" } }
-              )
+            -- Hide the picker and drop the saved cross-mode paths (pure
+            -- — Session/FilePicker.closePicker); focus returns to the
+            -- input.
+            ( updateActiveSession model (\s -> { s | filePicker = FP.closePicker s.filePicker })
             , focusInput model
             )
 
         SetFilePickerInput val ->
+            -- Parse the typed path (pure — Session/FilePicker.setInput):
+            -- URL mode stores it verbatim; local mode splits the
+            -- directory part from the filter text and resolves when the
+            -- path changed. The returned op becomes the resolve request.
             case getActiveSession model of
                 Just s ->
                     let
-                        fp =
-                            s.filePicker
+                        ( fp1, op ) =
+                            FP.setInput val s.filePicker
                     in
-                    if fp.mode == T.Url then
-                        -- URL mode: just update input, no path parsing
-                        ( updateActiveSession model (\sess ->
-                            { sess | filePicker = { fp | input = val } }
-                          )
-                        , Cmd.none
-                        )
-
-                    else
-                        -- If input was cleared (select-all + delete, etc.),
-                        -- restore to current directory path
-                        let
-                            safeVal =
-                                if val == "" then
-                                    "/"
-                                else
-                                    val
-                        in
-                        -- Local mode: parse input as path, extract filter text,
-                        -- navigate directory if needed
-                        let
-                            ( needsResolve, resolvePath, filterText ) =
-                                FP.parsePathInput safeVal fp.dir fp.baseDir
-
-                            cmd =
-                                if needsResolve then
-                                    Ports.fsResolvePath { path = resolvePath }
-                                else
-                                    Cmd.none
-
-                            -- Clamp selection to filtered list length
-                            previewFp =
-                                { fp | input = safeVal, filter = filterText }
-
-                            filteredLen =
-                                List.length (FP.filterEntries previewFp)
-
-                            clampedIdx =
-                                if fp.selected >= filteredLen then
-                                    max 0 (filteredLen - 1)
-                                else
-                                    fp.selected
-                        in
-                        ( updateActiveSession model (\sess ->
-                            { sess
-                                | filePicker = { fp | input = safeVal, filter = filterText, selected = clampedIdx }
-                            }
-                          )
-                        , cmd
-                        )
+                    ( updateActiveSession model (\sess -> { sess | filePicker = fp1 })
+                    , fpCmd op
+                    )
 
                 Nothing ->
                     ( model, Cmd.none )
 
         FilePickerNavigateDir name ->
-            -- User clicked a directory in the file list:
-            -- append the directory name + "/" to the current input path.
+            -- Append the clicked directory to the path (pure —
+            -- Session/FilePicker.navigateDir) and resolve it.
             case getActiveSession model of
                 Just s ->
                     let
-                        ( newFp, newDir ) =
-                            FP.appendDirToInput s.filePicker name
+                        ( fp1, op ) =
+                            FP.navigateDir name s.filePicker
                     in
-                    ( updateActiveSession model (\sess ->
-                        { sess | filePicker = newFp }
-                      )
-                    , Ports.fsResolvePath { path = newDir }
+                    ( updateActiveSession model (\sess -> { sess | filePicker = fp1 })
+                    , fpCmd op
                     )
 
                 Nothing ->
@@ -2853,153 +2815,45 @@ update msg model =
             )
 
         FilePickerConfirmItem ->
+            -- Confirm the keyboard-selected entry (pure —
+            -- Session/FilePicker.pickAt): a directory navigates into it,
+            -- a file starts the data-uri read that stages it as media.
             case getActiveSession model of
                 Just s ->
                     let
-                        fp =
-                            s.filePicker
-
-                        entries =
-                            FP.filterEntries fp
+                        ( fp1, op ) =
+                            FP.pickAt s.filePicker.selected s.filePicker
                     in
-                    case List.head (List.drop fp.selected entries) of
-                        Just entry ->
-                            if entry.isDir then
-                                -- Directory: autocomplete its name into the input path
-                                let
-                                    ( newFp, newDir ) =
-                                        FP.appendDirToInput fp entry.name
-                                in
-                                ( updateActiveSession model (\sess ->
-                                    { sess | filePicker = newFp }
-                                  )
-                                , Ports.fsResolvePath { path = newDir }
-                                )
-
-                            else
-                                -- File: select it
-                                let
-                                    fullPath =
-                                        if fp.dir == "" then
-                                            entry.name
-                                        else
-                                            fp.dir ++ "/" ++ entry.name
-                                in
-                                ( updateActiveSession model (\sess ->
-                                    { sess
-                                        | filePicker = { fp | loading = True, pendingFileName = entry.name }
-                                    }
-                                  )
-                                , Ports.fsReadFileDataUri { path = fullPath }
-                                )
-
-                        Nothing ->
-                            ( model, Cmd.none )
+                    ( updateActiveSession model (\sess -> { sess | filePicker = fp1 })
+                    , fpCmd op
+                    )
 
                 Nothing ->
                     ( model, Cmd.none )
 
         FilePickerPickItem idx ->
-            -- Pick an item by index (from click). Same logic as ConfirmItem but uses
-            -- the explicit clicked index instead of keyboard-selected index.
+            -- Pick the clicked entry by index — the same flow as
+            -- ConfirmItem, unified in Session/FilePicker.pickAt.
             case getActiveSession model of
                 Just s ->
                     let
-                        fp =
-                            s.filePicker
-
-                        entries =
-                            FP.filterEntries fp
+                        ( fp1, op ) =
+                            FP.pickAt idx s.filePicker
                     in
-                    case List.head (List.drop idx entries) of
-                        Just entry ->
-                            if entry.isDir then
-                                let
-                                    ( newFp, newDir ) =
-                                        FP.appendDirToInput fp entry.name
-                                in
-                                ( updateActiveSession model (\sess ->
-                                    { sess | filePicker = { newFp | selected = idx } }
-                                  )
-                                , Ports.fsResolvePath { path = newDir }
-                                )
-
-                            else
-                                let
-                                    fullPath =
-                                        if fp.dir == "" then
-                                            entry.name
-                                        else
-                                            fp.dir ++ "/" ++ entry.name
-                                in
-                                ( updateActiveSession model (\sess ->
-                                    { sess
-                                        | filePicker = { fp | loading = True, selected = idx, pendingFileName = entry.name }
-                                    }
-                                  )
-                                , Ports.fsReadFileDataUri { path = fullPath }
-                                )
-
-                        Nothing ->
-                            ( model, Cmd.none )
+                    ( updateActiveSession model (\sess -> { sess | filePicker = fp1 })
+                    , fpCmd op
+                    )
 
                 Nothing ->
                     ( model, Cmd.none )
 
         FilePickerToggleMode ->
+            -- Switch local ⇄ URL preserving each mode's path (pure —
+            -- Session/FilePicker.toggleMode); the arm refocuses the
+            -- picker input.
             case getActiveSession model of
                 Just s ->
-                    let
-                        fp =
-                            s.filePicker
-
-                        ( newMode, newInput ) =
-                            case fp.mode of
-                                T.Local ->
-                                    -- Switching FROM local TO URL: save local path, restore saved URL
-                                    ( T.Url
-                                    , fp.savedUrlPath
-                                    )
-
-                                T.Url ->
-                                    -- Switching FROM URL TO local: save URL, restore saved local path
-                                    let
-                                        restoredLocal =
-                                            if fp.savedLocalPath /= "" then
-                                                fp.savedLocalPath
-                                            else if fp.dir /= "" then
-                                                fp.dir ++ "/"
-                                            else
-                                                ""
-                                    in
-                                    ( T.Local
-                                    , restoredLocal
-                                    )
-
-                        ( savedLocal, savedUrl ) =
-                            case fp.mode of
-                                T.Local ->
-                                    ( fp.input
-                                    , ""
-                                    )
-
-                                T.Url ->
-                                    ( ""
-                                    , fp.input
-                                    )
-                    in
-                    ( updateActiveSession model (\oldS ->
-                        { oldS
-                            | filePicker =
-                                { fp
-                                    | mode = newMode
-                                    , input = newInput
-                                    , filter = ""
-                                    , savedLocalPath = savedLocal
-                                    , savedUrlPath = savedUrl
-                                }
-                        }
-                      )
+                    ( updateActiveSession model (\sess -> { sess | filePicker = FP.toggleMode s.filePicker })
                     , Cmd.batch
                         [ focusAfterDelay ("fp-page-input-" ++ s.id)
                         , Ports.setCursorPos { id = "fp-page-input-" ++ s.id, pos = Nothing }
@@ -3010,41 +2864,17 @@ update msg model =
                     ( model, Cmd.none )
 
         FilePickerNavigateUp ->
+            -- Go to the parent directory (pure —
+            -- Session/FilePicker.navigateUp).
             case getActiveSession model of
                 Just s ->
                     let
-                        fp =
-                            s.filePicker
+                        ( fp1, op ) =
+                            FP.navigateUp s.filePicker
                     in
-                    if fp.dir /= "" && fp.baseDir /= "" then
-                        let
-                            cleanPath =
-                                if String.endsWith "/" fp.dir then
-                                    String.dropRight 1 fp.dir
-                                else
-                                    fp.dir
-
-                            parts =
-                                String.split "/" cleanPath
-
-                            parentDir =
-                                case List.reverse parts of
-                                    _ :: rest ->
-                                        String.join "/" (List.reverse rest)
-
-                                    [] ->
-                                        "/"
-                        in
-                        ( updateActiveSession model (\sess ->
-                            { sess
-                                | filePicker = { fp | loading = True, input = parentDir ++ "/", filter = "" }
-                            }
-                          )
-                        , Ports.fsResolvePath { path = parentDir }
-                        )
-
-                    else
-                        ( model, Cmd.none )
+                    ( updateActiveSession model (\sess -> { sess | filePicker = fp1 })
+                    , fpCmd op
+                    )
 
                 Nothing ->
                     ( model, Cmd.none )
