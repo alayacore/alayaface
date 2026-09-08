@@ -29,12 +29,10 @@
 
   window.AlayaChain = {
     init: function (app) {
-      // Typed subscribe with safety check (mirrors transport.js's on()).
+      // Typed subscribe with safety check (shared impl in
+      // window.AlayaPorts.on — transport.js owns it).
       function on(port, cb) {
-        var p = app.ports[port];
-        if (!p) { console.warn("[chain] port not found:", port); return; }
-        if (!p.subscribe) { console.warn("[chain] port has no subscribe:", port); return; }
-        p.subscribe(function (v) { cb(v); });
+        window.AlayaPorts.on(app, port, cb, "chain");
       }
 
       // ── Connection CHAIN segments (P36/P39) ───────────────────────

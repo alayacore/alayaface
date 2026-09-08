@@ -12,12 +12,10 @@
 
   window.AlayaOverlay = {
     init: function (app, root, transport) {
-      // Typed subscribe with safety check (mirrors transport.js's on()).
+      // Typed subscribe with safety check (shared impl in
+      // window.AlayaPorts.on — transport.js owns it).
       function on(port, cb) {
-        var p = app.ports[port];
-        if (!p) { console.warn("[overlay] port not found:", port); return; }
-        if (!p.subscribe) { console.warn("[overlay] port has no subscribe:", port); return; }
-        p.subscribe(function (v) { cb(v); });
+        window.AlayaPorts.on(app, port, cb, "overlay");
       }
 
     on("scrollToBottom", function (data) {

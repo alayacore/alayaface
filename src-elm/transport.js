@@ -18,6 +18,20 @@
 (function () {
   "use strict";
 
+  // Shared typed port subscribe with safety check — ONE implementation
+  // for transport.js, chain.js and overlay.js (each used to carry its
+  // own copy and drift apart). The `tag` names the reporting file so a
+  // missing port is attributable. Created before any of the bridge
+  // files' init() runs (transport.js drives their init).
+  window.AlayaPorts = {
+    on: function (app, port, cb, tag) {
+      var p = app && app.ports ? app.ports[port] : null;
+      if (!p) { console.warn((tag || "bridge") + ": port not found:", port); return; }
+      if (!p.subscribe) { console.warn((tag || "bridge") + ": port has no subscribe:", port); return; }
+      p.subscribe(function (v) { cb(v); });
+    },
+  };
+
   // Per-page client identity. Persisted in sessionStorage so a page
   // REFRESH keeps the same id (its orphaned sessions are reclaimable),
   // while a new tab gets its own id. close_all_sessions / create /
@@ -185,12 +199,11 @@
     // 1. Create Elm app
     var app = Elm.Main.init({ flags: null, node: root });
 
-    // Helper: typed subscribe with safety check
+    // Helper: typed subscribe with safety check (shared impl in
+    // window.AlayaPorts — transport/chain/overlay used to each carry a
+    // copy).
     function on(port, cb) {
-      var p = app.ports[port];
-      if (!p) { console.warn("[bridge] port not found:", port); return; }
-      if (!p.subscribe) { console.warn("[bridge] port has no subscribe:", port); return; }
-      p.subscribe(function (v) { cb(v); });
+      window.AlayaPorts.on(app, port, cb, "bridge");
     }
 
     // Surface a backend RPC failure to the Elm UI (clears stuck
