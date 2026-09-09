@@ -104,12 +104,42 @@ execSync('go build -o "' + fakecore + '" ./internal/fakecore', { cwd: SRCGO, std
 execSync('go build -o "' + serverBin + '" ./cmd/alayaface-server', { cwd: SRCGO, stdio: 'inherit' });
 
 const port = await freePort();
-const server = spawn(serverBin, ['--addr', `127.0.0.1:${port}`, '--static', '../src-elm', '--alayacore-bin', fakecore], {
-  cwd: SRCGO,
-  env: { ...process.env, HOME: home },
-  stdio: ['ignore', 'pipe', 'pipe'],
+let server = null;
+
+// Spawned through a function because §12 restarts it: F3 is about the file
+// surviving a backend, so the SAME HOME has to come back on the SAME port with a
+// new process holding none of the old one's state.
+const startServer = () => {
+  const s = spawn(serverBin, ['--addr', `127.0.0.1:${port}`, '--static', '../src-elm', '--alayacore-bin', fakecore], {
+    cwd: SRCGO,
+    env: { ...process.env, HOME: home },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  s.stderr.on('data', d => { const t = String(d); if (!t.includes('[tlv]') && !t.includes('[rpc]')) process.stdout.write('[srv!] ' + t); });
+  server = s;
+  return s;
+};
+startServer();
+
+const waitExit = (s, ms) => new Promise((resolve, reject) => {
+  const t = setTimeout(() => reject(new Error('server did not exit within ' + ms + 'ms')), ms);
+  s.on('exit', () => { clearTimeout(t); resolve(); });
 });
-server.stderr.on('data', d => { const t = String(d); if (!t.includes('[tlv]') && !t.includes('[rpc]')) process.stdout.write('[srv!] ' + t); });
+
+// Read a config file back through the RPC rather than off the disk: the client
+// talks to the backend, so that is the path a user's layout actually takes — and
+// it proves the value went through the two backends' shape validation instead of
+// being a file the client happens to have written to somewhere else.
+const rpc = async (cmd, args) => {
+  const res = await fetch(`http://127.0.0.1:${port}/rpc/${cmd}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(args || {}),
+  });
+  const body = await res.text();
+  if (!res.ok) throw new Error(`${cmd} → HTTP ${res.status}: ${body}`);
+  return body ? JSON.parse(body) : null;
+};
 
 function cleanup() {
   try { server.kill('SIGTERM'); } catch {}
@@ -559,6 +589,152 @@ try {
   assert(!/main-content-solo/.test(s.cls), 'solo outlived its window (SD9)');
   console.log(`  the solo window died with no ✕ involved, and solo went with it — ${s.panels} panels left`);
   await shot('12-deleted-in-solo.png');
+
+  // ── 12. F3: the board survives a restart (ui.conf) ────────────────
+  // Everything above is about what solo LOOKS like; this is about what the
+  // layout store REMEMBERS. It is the half of F3 that elm-test cannot see: a
+  // real drag has to end up in a real file, that file has to survive the
+  // backend dying, and the window has to come back out of it — in the right
+  // place, with solo re-attached, and gone again once the session is deleted.
+  //
+  // Rects are read in CANVAS space (the file's space) by un-projecting through
+  // the transform the canvas actually carries: §4b left the board zoomed, and
+  // pretending the scale is 1 here would make the numbers agree by accident.
+  console.log('== 12. F3: ui.conf remembers the board across a restart');
+
+  const f3CanvasRect = key => page.evaluate(k => {
+    const el = document.querySelector(`.session-panel[data-session="${k}"]`);
+    const c = document.querySelector('.canvas');
+    if (!el || !c) return null;
+    const m = new DOMMatrixReadOnly(getComputedStyle(c).transform);
+    const r = el.getBoundingClientRect();
+    const s = m.a || 1;
+    return { x: Math.round((r.x - m.e) / s), y: Math.round((r.y - m.f) / s), w: Math.round(r.width / s), h: Math.round(r.height / s) };
+  }, key);
+
+  // Read the file back through the RPC, not off the disk: that is the path the
+  // client's own write took, through both backends' shape validation.
+  const f3UiConf = async () => {
+    for (let i = 0; i < 20; i++) {
+      const r = await rpc('get_ui_config', {});
+      if (r && r.config) return r.config;
+      await sleep(150);
+    }
+    return null;
+  };
+
+  // §11 leaves exactly one window (and the Session Manager it deleted from
+  // still open). One window is all this case needs — and it avoids re-entering
+  // the menu, whose preset flyout state the previous sections have toggled.
+  await page.keyboard.press('Escape');
+  await sleep(500);
+  const f3Ids = Object.keys(await panelRects());
+  assert(f3Ids.length >= 1, `setup: §11 should have left a window on the board, got ${f3Ids.length}`);
+  const f3Moved = f3Ids[f3Ids.length - 1];
+
+  // (a) a real pointer drag on the window bar, ended by a real pointerup
+  const f3Bar = await page.evaluate(k => {
+    const el = document.querySelector(`.session-panel[data-session="${k}"] .session-bar`);
+    const r = el.getBoundingClientRect();
+    return { x: Math.round(r.x + 60), y: Math.round(r.y + r.height / 2) };
+  }, f3Moved);
+  const f3Before = await f3CanvasRect(f3Moved);
+  await page.mouse.move(f3Bar.x, f3Bar.y);
+  await page.mouse.down();
+  await page.mouse.move(f3Bar.x + 140, f3Bar.y + 90, { steps: 6 });
+  await page.mouse.up();
+  await sleep(700);
+  const f3After = await f3CanvasRect(f3Moved);
+  console.log(`  dragged ${f3Moved.slice(0, 8)}: ${JSON.stringify(f3Before)} -> ${JSON.stringify(f3After)}`);
+  // 140×90 SCREEN px is less than that in canvas space at the zoom §4b left
+  // behind; the exact delta is not the assertion — that it moved is.
+  assert(f3After.x - f3Before.x >= 20 && f3After.y - f3Before.y >= 10,
+    `the pointer drag did not move the window: ${JSON.stringify(f3Before)} -> ${JSON.stringify(f3After)}`);
+
+  // (b) the drag END wrote the file — not the frames on the way
+  const f3Stored = await f3UiConf();
+  console.log('  ui.conf:', JSON.stringify(f3Stored));
+  assert(f3Stored && f3Stored.windows && f3Stored.windows[f3Moved], 'the ended drag did not reach ui.conf');
+  const f3Entry = f3Stored.windows[f3Moved];
+  assert(near(f3Entry.x, f3After.x) && near(f3Entry.y, f3After.y)
+    && near(f3Entry.w, f3After.w) && near(f3Entry.h, f3After.h),
+    `ui.conf does not describe where the window stopped: stored ${JSON.stringify(f3Entry)}, screen ${JSON.stringify(f3After)}`);
+  assert(f3Entry.t > 0, `the stored entry has no touch (${JSON.stringify(f3Entry)}) — eviction cannot order it`);
+  assert(f3Entry.w < 1200, 'ui.conf stored the VIEWPORT as the window width: the store read a presentation rect (SD4)');
+
+  // (c) solo is part of the layout — and so is leaving it
+  assert(await clickEl(`.session-panel[data-session="${f3Moved}"] .session-bar-solo`), 'cannot re-enter solo');
+  await sleep(600);
+  assert(((await f3UiConf()).soloWin || '') === f3Moved, 'entering solo was not written to ui.conf');
+  assert(await clickEl('.session-bar-solo'), 'cannot exit solo');
+  await sleep(600);
+  assert((await f3UiConf()).soloWin == null,
+    'leaving solo left the old flag in ui.conf — a stale intent would hijack the next restart');
+
+  // (d) end in solo, so the restart has something to restore
+  assert(await clickEl(`.session-panel[data-session="${f3Moved}"] .session-bar-solo`), 'cannot enter solo for the restart');
+  await sleep(600);
+
+  // (e) the backend dies; the file does not
+  server.kill('SIGTERM');
+  await waitExit(server, 15000);
+  startServer();
+  await waitPort(port, 30000);
+  await page.reload({ waitUntil: 'networkidle0' });
+  await page.waitForSelector('.main-content', { timeout: 30000 });
+  await sleep(1200);
+  assert((await shell()).panels === 0, 'a fresh page should start with an empty board');
+
+  // (f) reopen the session: it must come back solo, AND at its stored rect
+  await openGlobalMenu();
+  assert(await clickMenuItem('Session Manager'), 'the Session Manager did not open after the restart');
+  await waitFor('.sel-page-item');
+  const f3Resumed = await page.evaluate(prefix => {
+    const row = [...document.querySelectorAll('.sel-page-item')]
+      .find(r => (r.querySelector('.sel-page-item-name')?.textContent || '').includes(prefix));
+    const btn = row && [...row.querySelectorAll('button')].find(b => b.textContent.trim() === 'Resume');
+    if (!btn) return false;
+    btn.click();
+    return true;
+  }, f3Moved.slice(0, 8));
+  assert(f3Resumed, `the restarted backend cannot resume ${f3Moved.slice(0, 8)} from the manager`);
+  await waitFor('.session-panel', 30000);
+  await sleep(1500);
+  const f3Shell = await shell();
+  console.log(`  after restart+resume: panels=${f3Shell.panels}, cls=${f3Shell.cls}`);
+  assert(/main-content-solo/.test(f3Shell.cls),
+    'the solo flag from ui.conf did not re-attach to the reopened window (SD15)');
+  assert(await clickEl('.session-bar-solo'), 'cannot exit solo after the restart');
+  await sleep(700);
+  const f3Restored = await f3CanvasRect(f3Moved);
+  console.log(`  restored rect: ${JSON.stringify(f3Restored)} (stored ${JSON.stringify(f3Entry)})`);
+  const near3 = (a, b) => Math.abs(a - b) <= 3;
+  assert(near3(f3Restored.x, f3Entry.x) && near3(f3Restored.y, f3Entry.y)
+    && near3(f3Restored.w, f3Entry.w) && near3(f3Restored.h, f3Entry.h),
+    `the reopened window did not come back where the user left it: ${JSON.stringify(f3Restored)} vs ${JSON.stringify(f3Entry)}`);
+
+  // (g) a DELETED session stops being remembered — read back through the RPC
+  await openGlobalMenu();
+  assert(await clickMenuItem('Session Manager'), 'the Session Manager did not reopen');
+  await waitFor('.sel-page-item');
+  const f3Deleted = await page.evaluate(prefix => {
+    const row = [...document.querySelectorAll('.sel-page-item')]
+      .find(r => (r.querySelector('.sel-page-item-name')?.textContent || '').includes(prefix));
+    const btn = row && [...row.querySelectorAll('button')].find(b => (b.textContent || '').includes('Delete'));
+    if (!btn) return false;
+    btn.click();
+    return true;
+  }, f3Moved.slice(0, 8));
+  assert(f3Deleted, 'no Delete button for the restarted session in the manager');
+  await sleep(1500);
+  const f3AfterDelete = await f3UiConf();
+  const f3Left = Object.keys((f3AfterDelete && f3AfterDelete.windows) || {});
+  console.log(`  ui.conf after delete: ${f3Left.length} entries, the deleted key present=${f3Left.includes(f3Moved)}`);
+  assert(!f3Left.includes(f3Moved),
+    'a deleted session is still in ui.conf: its identity is gone for good, so its rect must be pruned (SD15)');
+  console.log('  the board survived the backend, and only the board that still exists did');
+  await shot('13-layout-after-restart.png');
+
   console.log('ALL PASS');
 } catch (err) {
   console.error('E2E FAILED:', err.message);

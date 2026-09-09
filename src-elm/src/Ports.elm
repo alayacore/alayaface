@@ -41,6 +41,12 @@ port module Ports exposing
     , syncAsrConfig
     , onAsrConfigGet
     , onAsrConfigSync
+      -- Layout store (ui.conf, F3): the board geometry, restored per window
+    , getUiConfig
+    , syncUiConfig
+    , onUiConfigGet
+    , onUiConfigSync
+    , onUiFlush
       -- Voice input (recording / transcription / cursor insertion)
     , voiceStart
     , voiceStop
@@ -180,6 +186,38 @@ port getAsrConfig : {} -> Cmd msg
 port syncAsrConfig : { config : String } -> Cmd msg
 port onAsrConfigGet : (E.Value -> msg) -> Sub msg
 port onAsrConfigSync : (E.Value -> msg) -> Sub msg
+
+
+{-| Layout store (F3, `~/.alayaface/ui.conf`). `getUiConfig` answers with the
+stored document verbatim under `config`, or `null` when there is none — the
+client treats that as "keep defaults". `syncUiConfig` REPLACES the file, so the
+payload must be a whole `UiConfig.encode` document: exactly like `model.conf`,
+a field the encoder does not carry is a field the user loses. Both backends
+pass the document through as opaque JSON and validate only its shape, which is
+why a new field is an Elm-side change (see `App/UiConfig.elm`).
+
+The result of `syncUiConfig` is reported through `onUiConfigSync` for ONE
+reason: a refused write (oversized, malformed) is otherwise silent, and the user
+finds out at the next restart. Nothing else reads it.
+-}
+port getUiConfig : {} -> Cmd msg
+
+
+port syncUiConfig : { config : String } -> Cmd msg
+
+
+port onUiConfigGet : (E.Value -> msg) -> Sub msg
+
+
+port onUiConfigSync : (E.Value -> msg) -> Sub msg
+
+
+{-| The page is going away (`beforeunload` in the bridge). Elm answers with the
+one write it considers worth making at teardown — see `App.UiLayout`. The bridge
+sends no document and decides nothing, because it has no idea what the board
+looks like; and no arm of this must be assumed to land (SD16: best effort).
+-}
+port onUiFlush : (E.Value -> msg) -> Sub msg
 
 -- Voice input: the webview records microphone audio (getUserMedia →
 -- 16kHz mono PCM → WAV) while voiceStart..voiceStop is active, then

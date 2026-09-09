@@ -86,7 +86,10 @@ why). `version` and `maxStoredWindows` are deliberately duplicated numbers:
 (`DEFAULT_UI_CONF_VERSION`, `MAX_STORED_WINDOWS`), Go
 (`DefaultUiConfVersion`, `MaxStoredWindows`) and Elm, and
 `testdata/serialization/ui_cases.json` is the accept/refuse table both backends
-run.
+run. **When** a write happens is a second policy module, `App/UiLayout.elm`
+(`syncUiLayout`/`withUiSave` are the only producers of a payload, and every write
+trigger is spelled `withUiSave` so the set is one grep): at the end of an
+interaction, never during one.
 
 ## Verification (run before every commit)
 

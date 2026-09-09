@@ -68,9 +68,10 @@
 
   // ─── Transport ────────────────────────────────────────────────────
   // interface:
-  //   invoke(cmd, args, timeoutMs?) → Promise<result>
+  //   invoke(cmd, args, timeoutMs?, opts?) → Promise<result>
   //       (Tauri invoke parity; timeoutMs bounds the HTTP fetch only —
-  //        the Tauri transport has no client-side abort)
+  //        the Tauri transport has no client-side abort. opts.keepalive
+  //        marks a request that must outlive the page; Tauri ignores both.)
   //   onEvent(name, cb) → unlisten | Promise<unlisten>
   //   isMaximized()     → Promise<boolean>
   //   onWindowEvent(cb) → void
@@ -137,7 +138,7 @@
     connect();
 
     return {
-      invoke: function (cmd, args, timeoutMs) {
+      invoke: function (cmd, args, timeoutMs, opts) {
         // Abort long-hanging requests so the UI never waits forever on a
         // stalled backend. The default (60s) covers normal RPCs; callers
         // with a longer backend budget (asr_transcribe allows 120s) pass
@@ -149,11 +150,16 @@
         if (backendToken) {
           headers["Authorization"] = "Bearer " + backendToken;
         }
+        // opts.keepalive: let this request outlive the page (the layout
+        // flush on unload). Browsers cap a keepalive body at 64 KiB, which
+        // the bounded ui.conf (maxStoredWindows=200 rects) fits by an order
+        // of magnitude — and it is the reason that cap is the client's job.
         return fetch("/rpc/" + cmd, {
           method: "POST",
           headers: headers,
           body: JSON.stringify(args || {}),
           signal: controller ? controller.signal : undefined,
+          keepalive: !!(opts && opts.keepalive),
         }).then(function (res) {
           return res.text().then(function (text) {
             var body = null;
@@ -488,6 +494,59 @@
             error: String((err && err.message) || err),
           });
         });
+    });
+
+    // ─── Layout store (ui.conf, F3) ───────────────────────────────────
+    //
+    // `get_ui_config` answers { ok, version, config } — `config` is the
+    // stored document verbatim, or null when there is no file yet.
+    // `sync_ui_config` takes { config } = a whole document assembled by Elm
+    // (App/UiConfig.elm owns the schema; App/UiLayout.elm owns when a write
+    // is worth making). Nothing is validated here: both backends check the
+    // SHAPE and refuse a truncated document, which is the only place a
+    // refusal is meaningful. `version` is not forwarded — the decoder reads
+    // the version out of the document itself, and a bridge-level copy of it
+    // could only ever disagree with the file.
+
+    on("getUiConfig", function () {
+      transport.invoke("get_ui_config")
+        .then(function (res) {
+          app.ports.onUiConfigGet.send({
+            ok: !!(res && res.ok !== false),
+            config: (res && res.config !== undefined) ? res.config : null,
+            error: (res && res.error) || "",
+          });
+        })
+        .catch(function (err) {
+          // A layout that cannot be read is not an error the user acts on:
+          // the board simply gets the placement rules. Report it, keep going.
+          app.ports.onUiConfigGet.send({ ok: false, config: null, error: String((err && err.message) || err) });
+        });
+    });
+
+    on("syncUiConfig", function (data) {
+      // keepalive on this ONE command: the unload flush below goes through
+      // the same port, and a plain fetch is cancelled as the page goes away.
+      // It is still best effort (SD16) — correctness rests on the
+      // interaction-end writes, not on this one surviving.
+      transport.invoke("sync_ui_config", { config: data.config }, undefined, { keepalive: true })
+        .then(function () {
+          app.ports.onUiConfigSync.send({ ok: true, error: "" });
+        })
+        .catch(function (err) {
+          app.ports.onUiConfigSync.send({ ok: false, error: String((err && err.message) || err) });
+        });
+    });
+
+    // Best-effort flush at teardown (SD16). This sends NO document and decides
+    // NOTHING: it nudges Elm, which owns the store and may or may not answer
+    // with a write. Over Tauri the webview is already going away; over HTTP the
+    // request survives only because sync_ui_config above is keepalive. Losing it
+    // costs at most the last unsettled wheel-zoom burst.
+    window.addEventListener("beforeunload", function () {
+      if (app && app.ports && app.ports.onUiFlush) {
+        app.ports.onUiFlush.send({});
+      }
     });
 
     on("listPresets", function () {

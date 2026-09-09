@@ -52,6 +52,12 @@ init _ =
       , sessionNums = Dict.empty
       , nextSessionNum = 1
       , windowPositions = Dict.empty
+      , uiLayout = Dict.empty
+      , uiTouch = 0
+      , uiSoloPending = Nothing
+      , uiExtras = Dict.empty
+      , uiZoomGen = 0
+      , uiLoaded = False
       , soloWin = Nothing
       , nextZIndex = 1
       , canvasOffset = { x = 0, y = 0 }
@@ -130,6 +136,11 @@ init _ =
         , Ports.listPresets {}
         , Ports.fsHomeDir {}
         , Ports.getGlobalConfig {}
+        -- Layout store (F3): read ui.conf BEFORE any window can be created,
+        -- so the first New Session of a restart lands on the board the user
+        -- left rather than on the placement rules. Async on purpose: a slow
+        -- backend costs a restored rect, never a startup stall.
+        , Ports.getUiConfig {}
         -- Startup health check: probe the alayacore binary so the home
         -- screen can show a "not found" banner before the user clicks
         -- New Session. Runs in parallel with the rest of init.
@@ -170,6 +181,9 @@ subscriptions model =
         , Ports.onGlobalConfigSync (\raw -> GlobalConfigSyncResult raw)
         , Ports.onAsrConfigGet (\raw -> AsrConfigGetResult raw)
         , Ports.onAsrConfigSync (\raw -> AsrConfigSyncResult raw)
+        , Ports.onUiConfigGet (\raw -> UiConfigGetResult raw)
+        , Ports.onUiConfigSync (\raw -> UiConfigSyncResult raw)
+        , Ports.onUiFlush (\_ -> UiFlush)
         , Ports.onVoiceError (\raw -> VoiceError raw)
         , Ports.onAsrResult (\raw -> AsrResult raw)
         , Ports.onCursorPos (\raw -> CursorPosResult raw)

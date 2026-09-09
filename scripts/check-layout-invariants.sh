@@ -159,10 +159,14 @@ fi
 # presentation STATE, so a `solo` check in JS means the two sides now disagree
 # about what is on screen — and only one of them is elm-tested.
 #
-# F3 legitimately touches transport.js again (the ui.conf flush); this guard is
-# F1/F2's freeze, so delete section 3 when F3 starts. `maximize` is NOT
-# matched on purpose: transport.js already carries the OS-window isMaximized
-# plumbing (dead state, see F4.1) and it is not a solo decision.
+# F3 DID touch transport.js (the ui.conf flush), and this guard survived it:
+# the flush sends no document and decides nothing — it nudges Elm — so the
+# freeze the bridge was put under in F1/F2 still holds and still costs nothing
+# to keep. (The original note here said to delete this section when F3 started,
+# on the assumption that a layout write would need a solo-aware pipe. It didn't.)
+# `maximize` is NOT matched on purpose: transport.js already carries the
+# OS-window isMaximized plumbing (dead state, see F4.1) and it is not a solo
+# decision.
 for f in src-elm/*.js; do
   [ -e "$f" ] || continue
   # elm.js is the generated Elm bundle (gitignored, `make elm`) — it starts

@@ -28,6 +28,7 @@ import App.Windows as Win exposing (..)
 import App.NodeConnection as NC
 import App.SelectorKit as Kit
 import App.Pointer as P
+import App.UiLayout as UiLayout
 import Plan.Update as PU exposing (..)
 import Session.Types as T
 import Session.Protocol as P
@@ -551,7 +552,12 @@ minimalCloseSession id model =
                         model.activeId
                 }
     in
-    ( m1
+    -- F3/SD16: a window closing is an interaction end — but the store KEEPS
+    -- the rect (`prune` is only for an identity that dies, see DeleteSession).
+    -- This is what makes "close this session, reopen it from the manager an
+    -- hour later" put the window back where the user had it.
+    UiLayout.withUiSave
+        ( m1
     , Cmd.batch
         [ -- C2b (I-E): close the work-copy process (core id); the frontend
           -- entry by Session.id was already removed in the sessions/… update above.
@@ -621,7 +627,8 @@ minimalPlanClose planId model =
     --    key leaves the layout store, so clearing solo here covers ✕,
     --    Ctrl+W, DeleteSession and the cascade teardown — one guard at the
     --    chokepoint instead of five at the call sites that reach it.
-    ( followSolo (SoloClosed planId)
+    UiLayout.withUiSave
+        ( followSolo (SoloClosed planId)
         { m2
             | planWindows = Dict.remove planId m2.planWindows
             , planOrder = List.filter (\k -> k /= planId) m2.planOrder
@@ -845,7 +852,14 @@ resumeSessionCreated liveId model =
                     | sessionOrder = base.sessionOrder ++ [ sessionId ]
                     , sessionNums = Dict.insert sessionId base.nextSessionNum base.sessionNums
                     , nextSessionNum = base.nextSessionNum + 1
-                    , windowPositions = Dict.insert sessionId (centeredSessionPos base) base.windowPositions
+                    , windowPositions =
+                        -- F3: a resumed session is exactly the case SD15 is
+                        -- about — the window was closed, its identity survives
+                        -- in ui.conf, and the rect there is where the user left
+                        -- it. The viewport-centered cascade is the fallback.
+                        Dict.insert sessionId
+                            (restoreOrPlace base sessionId (centeredSessionPos base))
+                            base.windowPositions
                 }
 
         raised =
@@ -888,7 +902,13 @@ resumeSessionCreated liveId model =
                 , Ports.setConnectionChain (chainPayload final final.connectionChain)
                 ]
     in
-    ( final, cmds )
+    -- An interaction end for the store (SD16): a window joined the board, and
+    -- if it is the one the file named as solo, solo re-attaches to it here
+    -- (through App/Windows.enterSolo, never by writing the field).
+    UiLayout.withUiSave
+        ( UiLayout.attachPendingSolo sessionId final
+        , cmds
+        )
 
 
 {-| Usual creation of a new session window (plain New Session / resume /
@@ -999,7 +1019,7 @@ createSessionWindow id model =
                                     Nothing ->
                                         centeredSessionPos model
                         in
-                        Dict.insert id pos model.windowPositions
+                        Dict.insert id (restoreOrPlace model id pos) model.windowPositions
                 -- The z bump is applied by raiseWindow below
                 -- (D6: bounded nextZIndex + order-list focus).
                 -- Only consume pendingSwitchOnCreate when this
@@ -1095,8 +1115,9 @@ createSessionWindow id model =
             else
                 followSolo (SoloCreated id) drainedModel
     in
-    ( finalModel
-    , Cmd.batch
+    UiLayout.withUiSave
+        ( UiLayout.attachPendingSolo id finalModel
+        , Cmd.batch
         [ cmds
         , drainCmd
         -- Draw whatever chain the new session state implies: the
@@ -1229,6 +1250,17 @@ metaScanEffectCmd eff =
         MetaScan.RememberRefs _ ->
             Cmd.none
 
+
+
+{-| How long a wheel-zoom burst must be quiet before its viewport is written to
+`ui.conf` (SD16's one allowed timer). Long enough that a 20-tick scroll gesture
+costs one RPC, short enough that "zoom, then immediately close the tab" is not a
+loss the user can produce by accident. Every other write in this feature is
+event-driven and needs no number like this.
+-}
+zoomIdleMs : Float
+zoomIdleMs =
+    1000
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -3577,14 +3609,18 @@ update msg model =
                     else
                         Cmd.none
             in
-            ( m2
-            , Cmd.batch
-                [ Ports.fsWriteFileText { path = path, content = content, createParents = True }
-                , Ports.fsWriteFileText { path = metaPath, content = E.encode 2 (PM.encodeMeta meta), createParents = True }
-                , Ports.setConnectionChain (chainPayload m2 m2.connectionChain)
-                , autoRunCmd
-                ]
-            )
+            -- F3/SD16: a plan window joining the board is a window create, so
+            -- it writes the store (and takes the pending solo with it, for the
+            -- restart where the file named THIS plan as the solo window).
+            UiLayout.withUiSave
+                ( UiLayout.attachPendingSolo planId m2
+                , Cmd.batch
+                    [ Ports.fsWriteFileText { path = path, content = content, createParents = True }
+                    , Ports.fsWriteFileText { path = metaPath, content = E.encode 2 (PM.encodeMeta meta), createParents = True }
+                    , Ports.setConnectionChain (chainPayload m2 m2.connectionChain)
+                    , autoRunCmd
+                    ]
+                )
 
         PlanStatusOpen planId ->
             -- The plan window is already open (auto-create) → focus it;
@@ -4338,7 +4374,19 @@ update msg model =
                     PU.collectCloseSetFromSession model id
 
                 m1 =
-                    { model | closeSet = Set.fromList (plans ++ sessions) }
+                    -- F3: prune BEFORE the cascade, not after it. Every close in
+                    -- that cascade writes the store, and two POSTs of
+                    -- sync_ui_config have no delivery-order guarantee — a prune
+                    -- at the end can lose the race and leave the deleted key in
+                    -- the file (this was the first version's bug, caught by
+                    -- solo-e2e §12). Pruning up front makes every write that
+                    -- follows already correct, in any order.
+                    --
+                    -- The whole ownership graph goes with it, not just `id`: the
+                    -- directory being deleted contains this session's plans and
+                    -- their node sessions, so those identities die too.
+                    UiLayout.prune (id :: plans ++ sessions)
+                        { model | closeSet = Set.fromList (plans ++ sessions) }
 
                 ( m2, planCmds ) =
                     List.foldl
@@ -4364,38 +4412,41 @@ update msg model =
                         ( m2, Cmd.none )
                         sessions
             in
-            ( { m3
-                | closeSet = Set.empty
-                , sessionManagerError = Nothing
-                -- C2b: drop the Session refs and work-copy mapping (the
-                -- process was already closed by CloseSession).
-                , sessionRefs = Dict.remove id m3.sessionRefs
-                , sessionWorkCopies = Dict.remove id m3.sessionWorkCopies
-              }
-            , Cmd.batch
-                [ planCmds
-                , sessionCmds
-                , Ports.deleteSessionDir { sessionId = id, planId = Nothing, nodeId = Nothing, originSessionId = Nothing }
-                -- C2b (§8.1): delete the work-copy directory (forked) along
-                -- with the Session — no orphan directories left.
-                , case Dict.get id m3.sessionRefs of
-                    Just refs ->
-                        case refs.workCopy of
-                            Just wc ->
-                                if wc == id then
+            -- F3: the final write, already free of the pruned identities (the
+            -- prune happened at `m1` above, before the cascade).
+            UiLayout.withUiSave
+                ( { m3
+                    | closeSet = Set.empty
+                    , sessionManagerError = Nothing
+                    -- C2b: drop the Session refs and work-copy mapping (the
+                    -- process was already closed by CloseSession).
+                    , sessionRefs = Dict.remove id m3.sessionRefs
+                    , sessionWorkCopies = Dict.remove id m3.sessionWorkCopies
+                  }
+                , Cmd.batch
+                    [ planCmds
+                    , sessionCmds
+                    , Ports.deleteSessionDir { sessionId = id, planId = Nothing, nodeId = Nothing, originSessionId = Nothing }
+                    -- C2b (§8.1): delete the work-copy directory (forked) along
+                    -- with the Session — no orphan directories left.
+                    , case Dict.get id m3.sessionRefs of
+                        Just refs ->
+                            case refs.workCopy of
+                                Just wc ->
+                                    if wc == id then
+                                        Cmd.none
+
+                                    else
+                                        Ports.deleteSessionDir { sessionId = wc, planId = Nothing, nodeId = Nothing, originSessionId = Nothing }
+
+                                Nothing ->
                                     Cmd.none
 
-                                else
-                                    Ports.deleteSessionDir { sessionId = wc, planId = Nothing, nodeId = Nothing, originSessionId = Nothing }
-
-                            Nothing ->
-                                Cmd.none
-
-                    Nothing ->
-                        Cmd.none
-                , Ports.setConnectionChain (chainPayload m3 m3.connectionChain)
-                ]
-            )
+                        Nothing ->
+                            Cmd.none
+                        , Ports.setConnectionChain (chainPayload m3 m3.connectionChain)
+                    ]
+                )
 
         DeleteWorkCopyDir dir planId nodeId originSessionId ->
             -- C2b/C3: delete the old work-copy directory lazily (only
@@ -5381,6 +5432,55 @@ update msg model =
                     { config = E.encode 0 (asrConfigJson { active = model.asrConfig.active } profiles) }
                 )
 
+        -- LAYOUT STORE (F3). The read is issued once, in Main's init; the
+        -- writes are issued by `UiLayout.withUiSave` at the END of an
+        -- interaction (SD16) — never from a move path.
+        UiConfigGetResult raw ->
+            case UiLayout.decodeGet raw of
+                Err why ->
+                    -- The board works, the memory does not. Log it: the only
+                    -- other clue the user gets is a shuffled layout at the next
+                    -- restart, which they will blame on the restart.
+                    ( model, Ports.logWarn why )
+
+                Ok Nothing ->
+                    -- No ui.conf yet (or a body that is not an object): not a
+                    -- failure, and the placement rules already describe this
+                    -- case. Marked as read, because there IS nothing to
+                    -- preserve — but nothing is applied, so a store the user
+                    -- already built up in this session survives the answer.
+                    ( UiLayout.markLoaded model, Cmd.none )
+
+                Ok (Just doc) ->
+                    ( UiLayout.applyLoaded doc model, Cmd.none )
+
+        UiConfigSyncResult raw ->
+            case UiLayout.decodeSyncResult raw of
+                Ok _ ->
+                    ( model, Cmd.none )
+
+                Err why ->
+                    -- A refused write is invisible by construction: windows keep
+                    -- dragging, and only the next restart shows that nothing was
+                    -- remembered. So this is reported, never swallowed.
+                    ( model, Ports.logWarn why )
+
+        UiFlush ->
+            -- The page is going away. Best effort (SD16): assembled by the same
+            -- single producer as every interaction-end write, so it cannot
+            -- disagree with them about what the board looks like.
+            UiLayout.syncUiLayout model
+
+        UiZoomIdle gen ->
+            -- A wheel burst has no pointerup, so this idle tick IS its end. A
+            -- stale generation belongs to a burst that another trigger already
+            -- flushed — dropping it is why one burst costs one write.
+            if gen == model.uiZoomGen then
+                UiLayout.syncUiLayout model
+
+            else
+                ( model, Cmd.none )
+
         AsrConfigGetResult raw ->
             case D.decodeValue asrConfigGetResultDecoder raw of
                 Ok res ->
@@ -6050,29 +6150,46 @@ update msg model =
                                         else
                                             activateArmedTap d base
                                 in
-                                ( m2, Cmd.none )
+                                -- SD16: THIS is the end of a move, a resize and a
+                                -- canvas pan — the three things the layout store
+                                -- cares about. An armed tap that never crossed the
+                                -- drag slop moved nothing, so it writes nothing.
+                                if d.active then
+                                    UiLayout.withUiSave ( m2, Cmd.none )
+
+                                else
+                                    ( m2, Cmd.none )
 
                             else
                                 ( m1, Cmd.none )
 
                         Nothing ->
                             let
-                                m2 =
+                                pinchEnded =
                                     case m1.pinch of
                                         Just pc ->
-                                            if pe.id == pc.pointerA || pe.id == pc.pointerB then
-                                                { m1 | pinch = Nothing }
-
-                                            else
-                                                m1
+                                            pe.id == pc.pointerA || pe.id == pc.pointerB
 
                                         Nothing ->
-                                            m1
+                                            False
+
+                                m2 =
+                                    if pinchEnded then
+                                        { m1 | pinch = Nothing }
+
+                                    else
+                                        m1
 
                                 m3 =
                                     { m2 | longPress = clearLongPressFor pe.id m2.longPress }
                             in
-                            ( m3, Cmd.none )
+                            -- The release of a two-finger pinch: the viewport
+                            -- changed and, like the drag above, this is its end.
+                            if pinchEnded then
+                                UiLayout.withUiSave ( m3, Cmd.none )
+
+                            else
+                                ( m3, Cmd.none )
 
                 Err _ ->
                     ( model, Cmd.none )
@@ -6083,44 +6200,71 @@ update msg model =
             -- drag/pinch/long-press stays armed.
             case D.decodeValue P.pointerEventDecoder raw of
                 Ok pe ->
-                    ( { model
-                        | activePointers = Dict.remove pe.id model.activePointers
-                        , drag =
-                            case model.drag of
+                    let
+                        -- A stolen gesture can still have moved the board: a drag
+                        -- applies its delta as it goes, so cancelling one that had
+                        -- passed the slop (or dropping a live pinch) IS an
+                        -- interaction end for the store (SD16). Dropping an armed
+                        -- tap or a stray long-press is not.
+                        disturbedGeometry =
+                            (case model.drag of
                                 Just d ->
-                                    if d.pointerId == pe.id then
-                                        Nothing
-
-                                    else
-                                        model.drag
+                                    d.active && d.pointerId == pe.id
 
                                 Nothing ->
-                                    Nothing
-                        , pinch =
-                            case model.pinch of
-                                Just pc ->
-                                    if pe.id == pc.pointerA || pe.id == pc.pointerB then
-                                        Nothing
+                                    False
+                            )
+                                || (case model.pinch of
+                                        Just pc ->
+                                            pe.id == pc.pointerA || pe.id == pc.pointerB
 
-                                    else
-                                        model.pinch
+                                        Nothing ->
+                                            False
+                                   )
 
-                                Nothing ->
-                                    Nothing
-                        , longPress =
-                            case model.longPress of
-                                Just lp ->
-                                    if lp.pointerId == pe.id then
-                                        Nothing
+                        m1 =
+                            { model
+                                | activePointers = Dict.remove pe.id model.activePointers
+                                , drag =
+                                    case model.drag of
+                                        Just d ->
+                                            if d.pointerId == pe.id then
+                                                Nothing
 
-                                    else
-                                        model.longPress
+                                            else
+                                                model.drag
 
-                                Nothing ->
-                                    Nothing
-                      }
-                    , Cmd.none
-                    )
+                                        Nothing ->
+                                            Nothing
+                                , pinch =
+                                    case model.pinch of
+                                        Just pc ->
+                                            if pe.id == pc.pointerA || pe.id == pc.pointerB then
+                                                Nothing
+
+                                            else
+                                                model.pinch
+
+                                        Nothing ->
+                                            Nothing
+                                , longPress =
+                                    case model.longPress of
+                                        Just lp ->
+                                            if lp.pointerId == pe.id then
+                                                Nothing
+
+                                            else
+                                                model.longPress
+
+                                        Nothing ->
+                                            Nothing
+                            }
+                    in
+                    if disturbedGeometry then
+                        UiLayout.withUiSave ( m1, Cmd.none )
+
+                    else
+                        ( m1, Cmd.none )
 
                 Err _ ->
                     ( model, Cmd.none )
@@ -6184,11 +6328,22 @@ update msg model =
 
             else
                 let
+                    -- A wheel burst has no end event, so SD16 allows exactly one
+                    -- timer for it: each tick schedules a single idle flush and
+                    -- bumps the generation, and `UiZoomIdle` drops a result that
+                    -- a newer tick (or any other trigger) has already superseded.
+                    -- One burst, one write — and no polling.
+                    gen =
+                        model.uiZoomGen + 1
+
                     m1 =
-                        applyZoom (e ^ (-deltaY * 0.0015)) mouseX mouseY model
+                        applyZoom (e ^ (-deltaY * 0.0015)) mouseX mouseY { model | uiZoomGen = gen }
                 in
                 ( m1
-                , Ports.setConnectionChain (chainPayload m1 m1.connectionChain)
+                , Cmd.batch
+                    [ Ports.setConnectionChain (chainPayload m1 m1.connectionChain)
+                    , Task.perform (\_ -> UiZoomIdle gen) (Process.sleep zoomIdleMs)
+                    ]
                 )
 
         CanvasZoomReset ->
@@ -6201,9 +6356,10 @@ update msg model =
                     m1 =
                         applyZoom (1 / model.canvasScale) (toFloat model.appWidth / 2) (toFloat model.appHeight / 2) model
                 in
-                ( m1
-                , Ports.setConnectionChain (chainPayload m1 m1.connectionChain)
-                )
+                UiLayout.withUiSave
+                    ( m1
+                    , Ports.setConnectionChain (chainPayload m1 m1.connectionChain)
+                    )
 
         SoloWindow key ->
             -- Entering solo writes nothing but soloWin (INV4): the layout
@@ -6220,7 +6376,10 @@ update msg model =
                 -- SD13: the chain is a canvas feature, so the overlays have to
                 -- be told to clear. chainPayload derives the emptiness from
                 -- the model it is handed, so no call site needs to know.
-                ( m1, Ports.setConnectionChain (chainPayload m1 m1.connectionChain) )
+                -- SD16: solo enter/exit is one of the write triggers — the
+                -- presentation state is part of the layout document (SD15).
+                UiLayout.withUiSave
+                    ( m1, Ports.setConnectionChain (chainPayload m1 m1.connectionChain) )
 
             else
                 ( model, Cmd.none )
@@ -6250,7 +6409,10 @@ update msg model =
                 m2 =
                     { m1 | connectionChain = chain }
             in
-            ( m2, Ports.setConnectionChain (chainPayload m2 chain) )
+            -- The exit half of the SD16 solo trigger (see SoloWindow above):
+            -- what is on screen when the page goes away is what the file says.
+            UiLayout.withUiSave
+                ( m2, Ports.setConnectionChain (chainPayload m2 chain) )
 
         ToggleSolo key ->
             if soloKey model == Just key then

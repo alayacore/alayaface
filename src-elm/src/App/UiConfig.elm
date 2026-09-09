@@ -7,6 +7,8 @@ module App.UiConfig exposing
     , decode
     , encode
     , evict
+    , fromStore
+    , soloIntent
     )
 
 {-| The schema of `~/.alayaface/ui.conf` — the layout store (F3): every
@@ -120,6 +122,42 @@ emptyDocument =
 knownKeys : List String
 knownKeys =
     [ "version", "soloWin", "canvasOffset", "canvasScale", "windows" ]
+
+
+{-| Assemble a document from what the client currently knows.
+
+The reason this exists is NAMING, not construction: `soloWin` is the name of a
+KEY in ui.conf, while `Model.soloWin` is the live presentation state — two
+things with different lifetimes that happen to share a spelling. A module that
+reads the Model must not have to reach across that ambiguity, so
+`App/UiLayout.elm` builds its document here, and
+`scripts/check-layout-invariants.sh` keeps the token out of the Model-reading
+code (the check allow-lists this file because `UiConfig` cannot import
+`App.Types`).
+-}
+fromStore :
+    { solo : Maybe String
+    , offset : { x : Int, y : Int }
+    , scale : Float
+    , windows : Dict String Entry
+    , extras : Dict String E.Value
+    }
+    -> Document
+fromStore s =
+    { version = version
+    , soloWin = s.solo
+    , canvasOffset = s.offset
+    , canvasScale = s.scale
+    , windows = s.windows
+    , extras = s.extras
+    }
+
+
+{-| The solo intent a stored document carries — the read half of `fromStore`.
+-}
+soloIntent : Document -> Maybe String
+soloIntent doc =
+    doc.soloWin
 
 
 {-| Read a stored document. Lenient by design — this file is not critical, so

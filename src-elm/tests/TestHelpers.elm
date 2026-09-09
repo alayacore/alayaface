@@ -31,6 +31,12 @@ initModelWithSession =
     , sessionNums = Dict.empty
     , nextSessionNum = 1
     , windowPositions = Dict.empty
+    , uiLayout = Dict.empty
+    , uiTouch = 0
+    , uiSoloPending = Nothing
+    , uiExtras = Dict.empty
+    , uiZoomGen = 0
+    , uiLoaded = False
     , soloWin = Nothing
     , nextZIndex = 1
     , canvasOffset = { x = 0, y = 0 }

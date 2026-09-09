@@ -30,7 +30,12 @@ module App.Windows exposing
     , addPlanWindow
     , winRect
     , winRectList
+    , layoutRects
     , hasWin
+    , storedRect
+    , restoreOrPlace
+    , storedScale
+    , storedOffset
     , isSolo
     , soloKey
     , soloRect
@@ -61,6 +66,7 @@ Extracted from App/Update.elm (D2). Types live in App.Types.
 import Dict exposing (Dict)
 import App.Types exposing (..)
 import App.NodeConnection as NC
+import App.UiConfig as UC
 import Plan.Meta as PM
 import Session.Types as T
 
@@ -112,10 +118,23 @@ winRectList : Model -> List ( String, WindowPos )
 winRectList model =
     case soloKey model of
         Nothing ->
-            Dict.toList model.windowPositions
+            layoutRects model
 
         Just solo ->
             winRect model solo |> Maybe.map (List.singleton << Tuple.pair solo) |> Maybe.withDefault []
+
+
+{-| The board as it LAYOUTS itself: every window's real rect, solo ignored.
+
+`winRectList` is the wrong question for the layout store (F3): while a window is
+solo it reports the VIEWPORT rect, and writing that into `ui.conf` would store
+"this window is as big as the screen" for a window the user had moved to 640×400
+— the same corruption SD4 forbids for `windowPositions`. The store, the chain
+and every placement anchor therefore read the board, not the presentation.
+-}
+layoutRects : Model -> List ( String, WindowPos )
+layoutRects model =
+    Dict.toList model.windowPositions
 
 
 {-| Is there a window under this key at all? Distinguishes "no window"
@@ -893,6 +912,68 @@ nodeSessionPositionBesidePlan model planId =
             centeredSessionPos model
 
 
+{-| Is a rect read from `ui.conf` usable? This is the validation a FILE needs
+and the pointer pipeline never does: `UiConfig.decode` already dropped
+non-integers and non-positive sizes, but only this module knows what a window
+may be — so the floor is `minWinW`/`minWinH` and the coordinates stay inside the
+same canvas bound a drag may produce.
+
+`Nothing` means "use the placement rule instead", which is what a hand-edited or
+future-format entry must do: one corrupt window must not move the whole board.
+-}
+storedRect : UC.Entry -> Maybe { x : Int, y : Int, w : Int, h : Int }
+storedRect e =
+    if
+        abs e.x <= canvasMaxPan
+            && abs e.y <= canvasMaxPan
+            && e.w >= minWinW
+            && e.h >= minWinH
+            && e.w <= canvasMaxPan
+            && e.h <= canvasMaxPan
+    then
+        Just { x = e.x, y = e.y, w = e.w, h = e.h }
+
+    else
+        Nothing
+
+
+{-| Where a window of this identity joins the board: its stored rect when
+`ui.conf` has a usable one (SD15 — the store outlives a closed window, so
+reopening a session returns the window to where the user left it), else the
+position the caller's placement rule computed.
+
+The `z` is always the fresh one already in `computed` (SD17): stacking follows
+creation order in this process; a z read from a file would smuggle in a stacking
+model this process has no way to reconcile with `rebasePositions`.
+-}
+restoreOrPlace : Model -> String -> WindowPos -> WindowPos
+restoreOrPlace model key computed =
+    case Dict.get key model.uiLayout |> Maybe.andThen storedRect of
+        Just r ->
+            { x = r.x, y = r.y, w = r.w, h = r.h, z = computed.z }
+
+        Nothing ->
+            computed
+
+
+{-| Stored zoom, clamped to the range the wheel/pinch code can ever produce.
+`applyZoom` divides by the scale, so an unclamped hand-edited 0 is a division by
+zero on the next wheel tick.
+-}
+storedScale : Float -> Float
+storedScale =
+    clamp canvasMinScale canvasMaxScale
+
+
+{-| Stored pan, clamped per axis to the same bound a canvas drag enforces.
+-}
+storedOffset : { x : Int, y : Int } -> { x : Int, y : Int }
+storedOffset o =
+    { x = clamp (negate canvasMaxPan) canvasMaxPan o.x
+    , y = clamp (negate canvasMaxPan) canvasMaxPan o.y
+    }
+
+
 {-| Apply a zoom factor centered on viewport point (mx, my): the canvas
 point under the cursor stays under the cursor. Derivation:
 canvas point c = (mx - ox) / s; after zoom mx = c * s' + ox' so
@@ -992,17 +1073,20 @@ addPlanWindow key win model =
                 model.windowPositions
 
             else
-                Dict.insert key
-                    (case originLiveId model key of
-                        -- Rule 1: below the owning session (cascading).
-                        Just liveOrigin ->
-                            planPositionBelowSession model liveOrigin
+                -- Rule 1: below the owning session (cascading); manager open /
+                -- no live source: center on the viewport. Then F3 gets the
+                -- last word — a plan identity with a usable stored rect comes
+                -- back to that rect, and these rules are the fallback.
+                let
+                    placed =
+                        case originLiveId model key of
+                            Just liveOrigin ->
+                                planPositionBelowSession model liveOrigin
 
-                        -- Manager open / no live source: center on viewport.
-                        Nothing ->
-                            centeredPlanPos model
-                    )
-                    model.windowPositions
+                            Nothing ->
+                                centeredPlanPos model
+                in
+                Dict.insert key (restoreOrPlace model key placed) model.windowPositions
 
         m0 =
             { model

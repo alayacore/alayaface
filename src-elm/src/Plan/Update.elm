@@ -76,6 +76,7 @@ cycle-free and the functions pure: a test passes a stub dispatcher.
 
 import App.Types exposing (..)
 import App.Windows exposing (addPlanWindow, chainPayload, setPlanWin)
+import App.UiLayout as UiLayout
 import App.NodeConnection as NC
 import Dict exposing (Dict)
 import Json.Decode as D
@@ -424,24 +425,29 @@ handlePlanReadTarget dispatch model target ok content error =
                             ( reqId2, m3 ) =
                                 nextFsReq m2
                         in
-                        ( { m3
-                            | planReadTarget =
-                                Just
-                                    { reqId = reqId2
-                                    , planId = target.planId
-                                    , path = runPath
-                                    , isResume = True
-                                    , continueRun = False
-                                    }
-                          }
-                        , Cmd.batch
-                            [ Ports.fsReadFileText { reqId = reqId2, path = runPath }
-                            , Ports.setConnectionChain (chainPayload m3 m3.connectionChain)
-                            ]
-                        )
+                        UiLayout.withUiSave
+                            ( UiLayout.attachPendingSolo target.planId
+                                { m3
+                                    | planReadTarget =
+                                        Just
+                                            { reqId = reqId2
+                                            , planId = target.planId
+                                            , path = runPath
+                                            , isResume = True
+                                            , continueRun = False
+                                            }
+                                }
+                            , Cmd.batch
+                                [ Ports.fsReadFileText { reqId = reqId2, path = runPath }
+                                , Ports.setConnectionChain (chainPayload m3 m3.connectionChain)
+                                ]
+                            )
 
                     else
-                        ( m2, Ports.setConnectionChain (chainPayload m2 m2.connectionChain) )
+                        UiLayout.withUiSave
+                            ( UiLayout.attachPendingSolo target.planId m2
+                            , Ports.setConnectionChain (chainPayload m2 m2.connectionChain)
+                            )
 
                 Err errs ->
                     -- Invalid plan file: surface the parse errors in the

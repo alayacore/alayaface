@@ -55,6 +55,7 @@ import Session.Selector as Sel
 import Session.Types as T
 import App.NodeConnection as NC
 import App.Pointer as P
+import App.UiConfig as UC
 import Arch.Values as AV
 import Arch.Freeze as Freeze
 import Plan.MetaScan as MetaScan
@@ -87,6 +88,40 @@ type alias Model =
     , sessionNums : Dict String Int
     , nextSessionNum : Int
     , windowPositions : Dict String WindowPos
+    -- LAYOUT STORE (F3, ui.conf). TWO dictionaries, TWO lifetimes:
+    -- `windowPositions` is the board that exists now — it loses an entry the
+    -- moment a window closes — and `uiLayout` is the identity-keyed memory of
+    -- where every window ever was, so reopening a session returns it to its
+    -- place (SD15). Never collapse one into the other: `windowPositions` is
+    -- read through App/Windows only (INV1), while this store is read/written
+    -- by exactly one module, App/UiLayout.
+    --
+    -- `uiTouch` is the counter behind `UiConfig.Entry.t` — a monotonic touch,
+    -- not a clock and not a stacking order (SD17). It exists because eviction
+    -- needs "least recently used" and a decoded Dict has lost all order.
+    , uiLayout : Dict String UC.Entry
+    , uiTouch : Int
+    -- Solo to RESTORE: read from ui.conf at startup, when the window it names
+    -- is not open yet (sessions do not auto-reopen). Consumed the moment that
+    -- key becomes a window; cleared by any real solo state, so a user who
+    -- enters and leaves solo is never dragged back in. Never the live solo
+    -- flag — that question is `Win.soloKey` (INV2b).
+    , uiSoloPending : Maybe String
+    -- Top-level keys a NEWER client wrote that this build does not model.
+    -- `sync_ui_config` replaces the file, so carrying them back out is what
+    -- stops an old AlayaFace from deleting a new one's field (the `model.conf`
+    -- hazard, AGENTS.md). Per-window keys are NOT carried — see UiConfig.
+    , uiExtras : Dict String E.Value
+    -- Generation number for the ONE timer F3 allows (SD16): a wheel-zoom burst
+    -- has no natural end, so each tick schedules a single idle flush and bumps
+    -- this counter; a result whose generation is stale belongs to a burst that
+    -- has already been flushed. Not a polling timer — it fires once per burst.
+    , uiZoomGen : Int
+    -- Has this process seen the file yet? A write replaces the WHOLE document,
+    -- so a client that never read it would be publishing a layout built from an
+    -- empty store — silently deleting what is actually on disk. This flag is the
+    -- gate on that (Session/ModelConfig's lesson, applied to the reader).
+    , uiLoaded : Bool
     -- SOLO VIEW (F1): the key of the one window that fills the viewport,
     -- in the SAME key space as windowPositions (a session id or a plan id
     -- — SD2, no new identity type). Presentation only: every other window
@@ -513,6 +548,17 @@ type Msg
     | AsrConfigSave
     | AsrConfigGetResult E.Value
     | AsrConfigSyncResult E.Value
+    -- LAYOUT STORE (F3). `UiConfigGetResult` is the read at startup;
+    -- `UiConfigSyncResult` exists to report a REFUSED write (the backends
+    -- reject a malformed or oversized document, and silence there means the
+    -- user's board quietly stops being remembered). `UiFlush` is the bridge
+    -- nudging Elm as the page goes away — it carries no document, because the
+    -- bridge knows nothing about the board (SD7). `UiZoomIdle` is the
+    -- generation-numbered end of a wheel-zoom burst (SD16).
+    | UiConfigGetResult E.Value
+    | UiConfigSyncResult E.Value
+    | UiFlush
+    | UiZoomIdle Int
       -- Voice input (recording / transcription, per-session)
     | VoiceError E.Value
     | AsrResult E.Value
