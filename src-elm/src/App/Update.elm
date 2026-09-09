@@ -1758,85 +1758,14 @@ update msg model =
                                                 else
                                                     model.planReplaySessions
                                         }
-    
-                                    -- Plan Mode (R2): when an assistant message
-                                    -- completes with a fenced ```json block
-                                    -- carrying the alayaface-plan marker, AUTO-
-                                    -- CREATE the plan (no button). The offer
-                                    -- entry is still recorded keyed by message
-                                    -- id so replay cannot create duplicates;
-                                    -- PlanCreateOffer consumes it.
-                                    -- NOTE: in delta mode the AT frame itself is
-                                    -- an empty terminator, so detect on the
-                                    -- final message content, not ev.content.
-                                    autoOfferCmd =
-                                        if ev.tag == "AT" then
-                                            case List.head (List.reverse newSession.messages) of
-                                                Just m ->
-                                                    let
-                                                        planIdx =
-                                                            planCountOf updatedModel.planMessageCounts sid
-                                                    in
-                                                    if m.role == T.Assistant
-                                                        && not (Set.member sid updatedModel.planReplaySessions)
-                                                        && not (Dict.member ( sid, planIdx ) updatedModel.pendingPlanOffers)
-                                                        && not (messageBoundToPlan updatedModel sid planIdx) then
-                                                        case Plan.Detect.extractPlanJson m.content of
-                                                            Just offerRaw ->
-                                                                if Plan.Detect.hasPlanTypeMarker offerRaw then
-                                                                    -- Live plan message: create + auto-open immediately. History
-                                                                    -- replays (resumed sessions) are suppressed via
-                                                                    -- planReplaySessions — their plan messages show the manual
-                                                                    -- "Open plan" button instead.
-                                                                    Task.perform (\_ -> PlanCreateOffer sid planIdx) Time.now
-    
-                                                                else
-                                                                    Cmd.none
-    
-                                                            Nothing ->
-                                                                Cmd.none
-    
-                                                    else
-                                                        Cmd.none
-    
-                                                Nothing ->
-                                                    Cmd.none
-    
-                                        else
-                                            Cmd.none
-    
-                                    updatedModel2 =
-                                        if ev.tag == "AT" then
-                                            case List.head (List.reverse newSession.messages) of
-                                                Just m ->
-                                                    let
-                                                        planIdx =
-                                                            planCountOf updatedModel.planMessageCounts sid
-                                                    in
-                                                    if m.role == T.Assistant
-                                                        && not (Set.member sid updatedModel.planReplaySessions)
-                                                        && not (Dict.member ( sid, planIdx ) updatedModel.pendingPlanOffers)
-                                                        && not (messageBoundToPlan updatedModel sid planIdx) then
-                                                        case Plan.Detect.extractPlanJson m.content of
-                                                            Just offerRaw ->
-                                                                if Plan.Detect.hasPlanTypeMarker offerRaw then
-                                                                    { updatedModel | pendingPlanOffers = Dict.insert ( sid, planIdx ) offerRaw updatedModel.pendingPlanOffers }
-    
-                                                                else
-                                                                    updatedModel
-    
-                                                            Nothing ->
-                                                                updatedModel
-    
-                                                    else
-                                                        updatedModel
-    
-                                                Nothing ->
-                                                    updatedModel
-    
-                                        else
-                                            updatedModel
-    
+
+                                    -- Plan Mode (R2): a completed assistant message
+                                    -- carrying the alayaface-plan marker is
+                                    -- auto-offered. Recording it and announcing it
+                                    -- are one decision — see planOfferFromFrame.
+                                    ( updatedModel2, autoOfferCmd ) =
+                                        planOfferFromFrame updatedModel sid newSession ev
+
                                     -- Runner injection: task done / SM error for
                                     -- a node-owned session feeds the state machine.
                                     -- planEventFromFrame also tracks task-start
@@ -6345,6 +6274,75 @@ encodeMcpServer s =
         , ( "auth_client_secret", E.string s.authClientSecret )
         , ( "proto_version", E.string s.protoVersion )
         ]
+
+
+-- Plan Mode (R2): when an assistant message completes with a fenced ```json
+-- block carrying the alayaface-plan marker, AUTO-CREATE the plan (no button).
+-- The offer entry is still recorded keyed by message index so replay cannot
+-- create duplicates; PlanCreateOffer consumes it.
+--
+-- One decision, two results: recording the offer in `pendingPlanOffers` and
+-- announcing it with `PlanCreateOffer` are returned together because they used
+-- to be two hand-copied guard chains in the FrameEvent arm. Copy-pair drift was
+-- silent either way — an offer recorded but never announced leaves no button,
+-- an announced offer that was never recorded makes PlanCreateOffer look up a
+-- `Nothing`.
+--
+-- Two orderings are load-bearing and must not be "simplified":
+--   * the caller passes the model as it stands AFTER `sessions`/`ready` were
+--     written but BEFORE the offer insert; both the guards and the insert read
+--     that same snapshot, so neither sees the other's copy;
+--   * `planIdx` comes from `planMessageCounts`, which this frame already bumped
+--     via `bumpPlanCount` — it is the index of the message that just arrived.
+--
+-- NOTE: in delta mode the AT frame itself is an empty terminator, so detection
+-- runs on the final message content, not `ev.content`.
+planOfferFromFrame : Model -> String -> T.SessionState -> P.FrameEvent -> ( Model, Cmd Msg )
+planOfferFromFrame updatedModel sid newSession ev =
+    if ev.tag == "AT" then
+        case List.head (List.reverse newSession.messages) of
+            Just m ->
+                let
+                    planIdx =
+                        planCountOf updatedModel.planMessageCounts sid
+
+                    offer =
+                        if m.role == T.Assistant
+                            && not (Set.member sid updatedModel.planReplaySessions)
+                            && not (Dict.member ( sid, planIdx ) updatedModel.pendingPlanOffers)
+                            && not (messageBoundToPlan updatedModel sid planIdx) then
+                            case Plan.Detect.extractPlanJson m.content of
+                                Just offerRaw ->
+                                    if Plan.Detect.hasPlanTypeMarker offerRaw then
+                                        Just offerRaw
+
+                                    else
+                                        Nothing
+
+                                Nothing ->
+                                    Nothing
+
+                        else
+                            Nothing
+                in
+                case offer of
+                    Just offerRaw ->
+                        -- Live plan message: create + auto-open immediately. History
+                        -- replays (resumed sessions) are suppressed via
+                        -- planReplaySessions — their plan messages show the manual
+                        -- "Open plan" button instead.
+                        ( { updatedModel | pendingPlanOffers = Dict.insert ( sid, planIdx ) offerRaw updatedModel.pendingPlanOffers }
+                        , Task.perform (\_ -> PlanCreateOffer sid planIdx) Time.now
+                        )
+
+                    Nothing ->
+                        ( updatedModel, Cmd.none )
+
+            Nothing ->
+                ( updatedModel, Cmd.none )
+
+    else
+        ( updatedModel, Cmd.none )
 
 
 -- Decode a model_sync CO result: Just ( isError, message ) when the frame
