@@ -7,11 +7,12 @@ Nothing here is urgent — it is mechanical work that is cheap only if the metho
 already written down.
 
 The first slice is done: **`App/AsrConfig.elm`** (the `asr.conf` overlay — profile
-list, edit form, delete confirm, both replies), landed 2026-09-09. The second is
-**`App.Presets`** (the Preset Manager — 17 arms: open/close, copy naming, rename,
-the two-step delete, the drag, both replies), landed the same day. Both are the
-worked examples below; the differences between them are in "What the second slice
-taught".
+list, edit form, delete confirm, both replies), landed 2026-09-09. Then
+**`App/Presets.elm`** (the Preset Manager — 17 arms: open/close, copy naming,
+rename, the two-step delete, the drag, both replies) and **`App/Arch.elm`** (the
+freeze queue and object-store replies — 6 arms + 2 helpers), the same day. All
+three are the worked examples below; where they differ is in "What the second
+slice taught" and "What the third slice taught".
 
 
 ## Measure before choosing
@@ -129,19 +130,63 @@ a dead import that only surfaces when something forces you to look. An unused
 exposed name produces no warning, because the module is used for the others.
 
 
+## What the third slice taught
+
+The third slice was **`App/Arch.elm`** — the freeze queue and the object-store
+replies (6 arms, and the two helpers they own). Two things it showed that the
+first two could not.
+
+**Define the family by STATE, not by message name.** Six arms mention the object
+store in their name; the freeze path also owns `startNextFreeze`, and — the part
+that matters — the queue it drains has a SECOND writer in `Plan/Update.elm`, which
+enqueues a freeze when a run finishes and starts that first item itself. So the
+"one freeze at a time" invariant is held across two modules and cannot be made
+local. Move the code and the rule disappears from sight; the fix is to say so in
+the module comment, with the grep that finds every writer.
+
+**A Model-aware slice can still return effects as data, and should.** The first
+draft followed `App/UiLayout` and returned `(Model, Cmd Msg)`. It compiled, the
+suite stayed green, and the interesting behaviour became untestable: which path
+the refs file goes to, which `reqId` the version object gets, whether a failed
+write drops the queue. `Cmd` is opaque — a test can only see the model. Returning
+`List Action` instead costs one mapper in `App.Update` and bought 18 tests that
+assert the commands themselves. Choose the `UiLayout` shape for what it is good at
+(needs the whole `Model`), not as a licence to return `Cmd`.
+
+**Assert that your mutation actually applied.** One mutation here appeared not to
+be caught by the test that should catch it — and the test was fine. The mutation
+had never been applied: the anchor string did not match the nested indentation, and
+a `replace` with a non-matching needle is a silent no-op. A mutation check that
+didn't mutate reports "your tests are weak", which is worse than no check because
+it is unfalsifiable. Print the changed line, or assert the replacement count.
+
+
 ## For the next slice
 
-1. Pick by coupling, not size. Remaining candidates, measured 2026-09-09:
-   the **`Object`/freeze pair** (102 + 46 lines, 2 arms, 3 local helpers and
-   `Freeze` is already a pure machine) is the next clean one. **`Fs`** (6 arms,
-   342 lines) looks big but is not a slice: its arms are the glue between the
-   file picker and `Plan/MetaScan`, and they route through `updateActiveSession`,
-   so moving them moves no decision. **`Session`** lifecycle (4 arms, 194 lines)
-   is entangled with window creation (`createSessionWindow`,
-   `resumeSessionCreated`, `forkSessionCreated`) — possible, but it is a
-   `App/Windows`-shaped change rather than a family slice. The `Plan` family
-   (26 arms, 819 lines) already has `Plan/Update.elm`; what is left there is
-   dispatch, not state.
+1. Pick by coupling, not size. Remaining candidates, measured 2026-09-09 over
+   `App/Update.elm` (6923 lines, `update` body 4642 lines, 235 arms):
+   **the two config editors are the next cheap slices, and they are the same shape
+   as `App/AsrConfig`** — `Settings` (6 arms, 186 lines: `tool_confirm`,
+   `builtin_tools`, `system_prompt`, `reasoning_level` per preset) and `Global`
+   (5 arms, 140 lines: the recursion limit). Note the difference in hazard before
+   writing their tests: `sync_global_settings` and `sync_global_config` MERGE
+   (both backends apply only the keys present in the payload, so an unmodelled key
+   survives and a partial save is the documented way to change one field), whereas
+   `sync_asr_config`, `sync_ui_config` and `model_sync` REPLACE. So these want a
+   "a partial save must not wipe the others" pin, not a byte-exact key-list pin.
+   **`Fs`** (6 arms, 342 lines) is the biggest-looking cluster and the least
+   sliceable — its arms ARE the glue between the file picker and `Plan/MetaScan`,
+   they route through `updateActiveSession`, and moving them would move no
+   decision. **`Session`** lifecycle (4 arms, 194 lines) is entangled with window
+   creation (`createSessionWindow`, `resumeSessionCreated`, `forkSessionCreated`) —
+   doable, but it is an `App/Windows`-shaped change rather than a family slice.
+   The **`Plan`** family (26 arms, 819 lines) already has `Plan/Update.elm`; what
+   is left in the dispatcher there is orchestration, not state. The **voice
+   runtime** arms (`VoiceInput`, `PushToTalk`, `VoiceError`, `AsrResult`) are
+   already thin wrappers over `Session/Voice.elm`.
+   Beyond those, what remains is the cluster described under "What resists, and
+   why" (frame/status/delta, `KeyDown`), and reducing it needs `Dispatch`
+   injection rather than another slice.
 2. Decide which of the two shapes applies BEFORE writing — if `Model` will reference
    your types, you have chosen the pure one and must pass every input explicitly.
 3. Move the private helpers first (decoder + encoder + the type definitions), so the

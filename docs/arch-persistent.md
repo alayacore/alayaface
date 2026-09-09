@@ -19,6 +19,34 @@ append-only immutable run log + a view pointer inside the session version).
 
 ---
 
+## 0b. Where this lives in the client today
+
+| Module | Owns |
+|---|---|
+| `src-elm/src/Arch/Values.elm` | the value types and their serialization — `Block`, `Version`, `RunSummary`, `SessionRefs`, and the content-addressed `*Content` encoders, whose output IS the object key |
+| `src-elm/src/Arch/Freeze.elm` | the pure freeze machine: `begin` → `initialPuts` → `onPutResult` (matched by `reqId` **within the active freeze**) → `buildVersion` → `isComplete` |
+| `src-elm/src/App/Arch.elm` | the `Model` half: handling `object_put` / `object_get` replies, moving the head pointer and writing `session.refs.json`, starting the next queued freeze, and version browsing |
+| `src-elm/src/Plan/Update.elm` | the OTHER writer of the freeze queue — a finished run enqueues a freeze and starts that first item itself |
+
+That last row is the part that cannot be localised: freezes are serial by
+construction (one `freezeActive`, a queue behind it), and the code holding that
+rule is split across two modules. `App/Arch.elm`'s module comment is the canonical
+statement of it, and `grep freezeQueue` lists every writer.
+
+Two asymmetries worth knowing before changing either side:
+
+- **`session.refs.json` is not an object.** It is the mutable head pointer, keyed
+  by session id rather than by content hash, so it goes through the file writer.
+  Sending it as `object_put` would yield an unreachable object and a session still
+  pointing at the previous version.
+- **An `object_get` reply cannot be routed to its asker.** `reqId` is the hash for
+  every reader (the freeze cache, the plan-meta scan, version browsing), so the
+  handler classifies by CONTENT instead: version, then block, then neither. A
+  payload that is neither is dropped rather than cached, because the cache key IS
+  the content hash and a poisoned entry would be permanent.
+
+---
+
 ## 1. Why the current state is unfixable (why redo it instead of patching)
 
 | # | Root cause | Symptom (user-visible) |

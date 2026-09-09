@@ -47,10 +47,10 @@ Three parts share ONE Elm client:
   `Session.ModelConfig`), then `App.Types` imports IT, so it can never import
   `App.Types` back — purity is forced by where the types live, not chosen.
   Slicing message families out of the dispatcher is written up in
-  [`docs/update-slices.md`](docs/update-slices.md); two are done —
-  `App/AsrConfig.elm` (the `asr.conf` overlay, 20 arms) and `App/Presets.elm`
-  (the Preset Manager, 17 arms) — and they are the worked examples for the
-  remaining families.
+  [`docs/update-slices.md`](docs/update-slices.md); three are done —
+  `App/AsrConfig.elm` (the `asr.conf` overlay, 20 arms), `App/Presets.elm` (the
+  Preset Manager, 17 arms) and `App/Arch.elm` (the freeze queue and object-store
+  replies, 6 arms) — and they are the worked examples for the remaining families.
   The JS bridge is split: `transport.js` (RPC ports ↔ tauri/http), `chain.js`
   (connection-chain SVG overlays), `overlay.js` (scrollbar/canvas zoom).
   Tests: `elm-test`.
@@ -150,10 +150,10 @@ Tracked design documents, one per area — read the one you are touching:
 | `docs/solo-view.md` | solo view, the one-geometry rule (`winRect` / `layoutRects`), what may write `soloWin`, gesture refusal, reachability, and the `ui.conf` layout store (scope, write policy, what a file may never decide) |
 | `docs/plan-mode.md` | Plan Mode: detection, meta, runner, cascade, node sessions |
 | `docs/touch-design.md` | the unified pointer/gesture FSM (D1–D5) and what the bridge may classify |
-| `docs/arch-persistent.md` | the Arch version/refs model (C-series) — what is persisted per session |
+| `docs/arch-persistent.md` | the Arch version/refs model (C-series) — what is persisted per session, which client module owns which half, and the two asymmetries (refs is not an object; a get reply cannot be routed to its asker) |
+| `docs/update-slices.md` | how to slice a message family out of `App/Update.elm`: how to measure which family is cheap, the two module shapes and the cycle rule that forces one of them, what resisted, and what made each of the three slices done so far (`App/AsrConfig`, `App/Presets`, `App/Arch`) verifiable — including replace-vs-merge semantics per config file and how to tell a mutation check that worked from one that silently did not |
 | `docs/go-backend.md` | the Go transport: RPC/WS mapping, per-command table, storage |
 | `docs/overlay-focus.md` | why overlay focus goes through `focusAfterDelay` |
-| `docs/update-slices.md` | how to slice a message family out of `App/Update.elm`: how to measure which family is cheap, the two module shapes and the cycle rule that forces one of them, what resisted, and what made the first slice (`App/AsrConfig.elm`) verifiable |
 | `docs/manual-acceptance.md` | the checklist a human runs before calling a UI change done |
 | `docs/archive/` | closed series as history: P/R (`TODO.md`, `REFACTOR.md`, `go-backend-todo.md`), P39, and the F-series working file (`TODO-f-series.md`). Tracked **history**, not live plans |
 

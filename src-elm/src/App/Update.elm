@@ -44,30 +44,10 @@ import Plan.Frames
 import Plan.MetaScan as MetaScan
 import App.AsrConfig as AS
 import App.Presets as PS
+import App.Arch as Arch
 import Ports
 import Arch.Values as AV
 import Arch.Freeze as Freeze
-
-
-{-| Start the next item in the freeze queue (serial: one at a time, reqId
-only matches the active item). Empty queue → clear freezeActive.
--}
-startNextFreeze : Model -> ( Model, Cmd Msg )
-startNextFreeze model =
-    case model.freezeQueue of
-        next :: rest ->
-            let
-                putCmds =
-                    Freeze.initialPuts next
-                        |> List.map
-                            (\( reqId, content ) ->
-                                Ports.objectPut { reqId = String.fromInt reqId, content = content }
-                            )
-            in
-            ( { model | freezeActive = Just next, freezeQueue = rest }, Cmd.batch putCmds )
-
-        [] ->
-            ( { model | freezeActive = Nothing }, Cmd.none )
 
 
 -- Constants (window/canvas/zoom constants moved to App/Windows)
@@ -115,30 +95,6 @@ cascadeForkResultDecoder =
         (\ok sessionId error -> { ok = ok, sessionId = sessionId, error = error })
         (D.field "ok" D.bool)
         (D.field "sessionId" D.string)
-        (D.field "error" D.string)
-
-
-{-| C architecture: object_put result ({ reqId, ok, hash, error }).
--}
-objectPutResultDecoder : D.Decoder { reqId : String, ok : Bool, hash : String, error : String }
-objectPutResultDecoder =
-    D.map4
-        (\reqId ok hash error -> { reqId = reqId, ok = ok, hash = hash, error = error })
-        (D.field "reqId" D.string)
-        (D.field "ok" D.bool)
-        (D.field "hash" D.string)
-        (D.field "error" D.string)
-
-
-{-| C architecture: object_get result ({ reqId, ok, content, error }).
--}
-objectGetResultDecoder : D.Decoder { reqId : String, ok : Bool, content : String, error : String }
-objectGetResultDecoder =
-    D.map4
-        (\reqId ok content error -> { reqId = reqId, ok = ok, content = content, error = error })
-        (D.field "reqId" D.string)
-        (D.field "ok" D.bool)
-        (D.field "content" D.string)
         (D.field "error" D.string)
 
 
@@ -1266,6 +1222,28 @@ applyPresetAction action =
 applyPresetActions : List PS.Action -> Cmd Msg
 applyPresetActions actions =
     actions |> List.map applyPresetAction |> Cmd.batch
+
+
+{-| The object store and the refs file. One mapper, so the whole command surface
+of the freeze path — including every write of a session's head pointer — is one
+grep away.
+-}
+applyArchAction : Arch.Action -> Cmd Msg
+applyArchAction action =
+    case action of
+        Arch.Put reqId content ->
+            Ports.objectPut { reqId = String.fromInt reqId, content = content }
+
+        Arch.Get hash ->
+            Ports.objectGet { reqId = hash, hash = hash }
+
+        Arch.WriteRefs path content ->
+            Ports.fsWriteFileText { path = path, content = content, createParents = True }
+
+
+applyArchActions : List Arch.Action -> Cmd Msg
+applyArchActions actions =
+    actions |> List.map applyArchAction |> Cmd.batch
 
 
 
@@ -3146,148 +3124,20 @@ update msg model =
 
         -- C architecture: object_put result (freeze progress).
         ObjectPutResult raw ->
-            case D.decodeValue objectPutResultDecoder raw of
-                Ok r ->
-                    if not r.ok then
-                        -- Object write failed: abort the current freeze,
-                        -- start the next queue item.
-                        startNextFreeze { model | freezeActive = Nothing, freezeQueue = [] }
-
-                    else
-                        case model.freezeActive of
-                            Nothing ->
-                                ( model, Cmd.none )
-
-                            Just st ->
-                                let
-                                    st2 =
-                                        Freeze.onPutResult (String.toInt r.reqId |> Maybe.withDefault -1) (Just r.hash) st
-                                in
-                                if Freeze.isComplete st2 then
-                                    -- Version object written: update the session
-                                    -- refs + write the refs file, then start the
-                                    -- next freeze in the queue.
-                                    let
-                                        versionHash =
-                                            Maybe.withDefault "" st2.versionHash
-
-                                        refs0 =
-                                            Dict.get st2.sessionId model.sessionRefs
-                                                |> Maybe.withDefault (AV.SessionRefs st2.sessionId "" [] Nothing)
-
-                                        refs =
-                                            { refs0
-                                                | head = versionHash
-                                                , versions = refs0.versions ++ [ versionHash ]
-                                                -- C2b: the work-copy directory at
-                                                -- freeze time (after fork = forkId;
-                                                -- resume keeps the old value)
-                                                , workCopy = st2.workCopy
-                                            }
-
-                                        m1 =
-                                            { model
-                                                | freezeActive = Nothing
-                                                , sessionRefs = Dict.insert st2.sessionId refs model.sessionRefs
-                                                , runSummaries =
-                                                    Dict.union
-                                                        (Freeze.runSummaries st2)
-                                                        model.runSummaries
-                                                , versionCache =
-                                                    case st2.built of
-                                                        Just v ->
-                                                            Dict.insert versionHash v model.versionCache
-
-                                                        Nothing ->
-                                                            model.versionCache
-                                            }
-
-                                        refsPath =
-                                            PU.sessionsDir model.homeDir ++ "/" ++ st2.sessionId ++ "/session.refs.json"
-
-                                        ( m2, nextCmd ) =
-                                            startNextFreeze m1
-                                    in
-                                    ( m2
-                                    , Cmd.batch
-                                        [ nextCmd
-                                        , Ports.fsWriteFileText
-                                            { path = refsPath
-                                            , content = AV.refsContent refs
-                                            , createParents = True
-                                            }
-                                        ]
-                                    )
-
-                                else
-                                    case Freeze.buildVersion st2 of
-                                        Just version ->
-                                            -- All blocks/runs ready → freeze the
-                                            -- version object itself.
-                                            let
-                                                content =
-                                                    AV.versionContent version
-
-                                                st3 =
-                                                    { st2 | built = Just version }
-                                            in
-                                            ( { model | freezeActive = Just st3 }
-                                            , Ports.objectPut
-                                                { reqId = String.fromInt (Freeze.versionReq st3)
-                                                , content = content
-                                                }
-                                            )
-
-                                        Nothing ->
-                                            -- Some blocks/runs not ready yet: keep waiting.
-                                            ( { model | freezeActive = Just st2 }, Cmd.none )
-
-                Err _ ->
-                    ( model, Cmd.none )
+            let
+                ( m, actions ) =
+                    Arch.objectPutResult raw model
+            in
+            ( m, applyArchActions actions )
 
         -- C architecture: object_get result (loads version content into
         -- the cache; the status bar resolves by version).
         ObjectGetResult raw ->
-            case D.decodeValue objectGetResultDecoder raw of
-                Ok r ->
-                    if r.ok then
-                        -- C4: reqId = hash; try Version first, then Block
-                        -- (message chunk) — version browsing loads both
-                        -- object kinds on demand.
-                        case D.decodeString AV.decodeVersion r.content of
-                            Ok v ->
-                                let
-                                    m1 =
-                                        { model | versionCache = Dict.insert r.reqId v model.versionCache }
-
-                                    -- C4: viewing this version → auto-fetch the
-                                    -- missing message blocks.
-                                    blockCmd =
-                                        if model.versionViewFor == Just r.reqId then
-                                            let
-                                                missing =
-                                                    List.filter (\b -> not (Dict.member b m1.blockCache)) v.blocks
-                                            in
-                                            Cmd.batch (List.map (\b -> Ports.objectGet { reqId = b, hash = b }) missing)
-
-                                        else
-                                            Cmd.none
-                                in
-                                ( m1, blockCmd )
-
-                            Err _ ->
-                                case D.decodeString AV.decodeBlock r.content of
-                                    Ok b ->
-                                        ( { model | blockCache = Dict.insert r.reqId b.messages model.blockCache }, Cmd.none )
-
-                                    Err _ ->
-                                        ( model, Cmd.none )
-
-                    else
-                        ( model, Cmd.none )
-
-                Err _ ->
-                    ( model, Cmd.none )
+            let
+                ( m, actions ) =
+                    Arch.objectGetResult raw model
+            in
+            ( m, applyArchActions actions )
 
         -- Text file read result: Plan Mode open/import (target.isResume =
         -- False), Load run (isResume=True + continueRun=True) or a silent
@@ -3420,48 +3270,32 @@ update msg model =
         -- C4: version browsing (read-only view of historical versions;
         -- D8 does not materialize).
         OpenVersionList sid ->
-            ( { model | versionListFor = Just sid, showSessionManager = False }, Cmd.none )
+            let
+                ( m, actions ) =
+                    Arch.openVersionList sid model
+            in
+            ( m, applyArchActions actions )
 
         CloseVersionList ->
-            ( { model | versionListFor = Nothing }, Cmd.none )
+            let
+                ( m, actions ) =
+                    Arch.closeVersionList model
+            in
+            ( m, applyArchActions actions )
 
         ViewVersion sid hash ->
             let
-                m1 =
-                    { model
-                        | versionListFor = Nothing
-                        , versionViewFor = Just hash
-                        , versionViewSession = Just sid
-                    }
-
-                ( m2, blockGets ) =
-                    case Dict.get hash m1.versionCache of
-                        Just v ->
-                            let
-                                missing =
-                                    List.filter (\b -> not (Dict.member b m1.blockCache)) v.blocks
-                            in
-                            ( m1, Cmd.batch (List.map (\b -> Ports.objectGet { reqId = b, hash = b }) missing) )
-
-                        Nothing ->
-                            -- Version object not loaded yet: fetch it first;
-                            -- the ObjectGetResult version branch auto-fetches
-                            -- the missing blocks.
-                            ( m1, Cmd.none )
+                ( m, actions ) =
+                    Arch.viewVersion sid hash model
             in
-            ( m2
-            , Cmd.batch
-                [ if Dict.member hash model.versionCache then
-                    Cmd.none
-
-                  else
-                    Ports.objectGet { reqId = hash, hash = hash }
-                , blockGets
-                ]
-            )
+            ( m, applyArchActions actions )
 
         CloseVersionView ->
-            ( { model | versionViewFor = Nothing, versionViewSession = Nothing }, Cmd.none )
+            let
+                ( m, actions ) =
+                    Arch.closeVersionView model
+            in
+            ( m, applyArchActions actions )
 
         PlanOpenFromMessage sid planIndex ->
             -- Manual open of a detected-but-suppressed plan message: find
@@ -5263,6 +5097,7 @@ update msg model =
                     AS.save model.asrConfig model.asrConfigEditor
             in
             ( { model | asrConfigEditor = ed }, applyAsrActions actions )
+
         -- LAYOUT STORE (F3). The read is issued once, in Main's init; the
         -- writes are issued by `UiLayout.withUiSave` at the END of an
         -- interaction (SD16) — never from a move path.
