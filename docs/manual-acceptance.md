@@ -7,8 +7,14 @@
 > quality with real alayacore + a real model, Tauri native windows, and MCP.
 >
 > Usage: when a desktop environment + a model API key (or a local .gguf) is
-> available, smoke-test each item below and tick it off; write the results back
-> to docs/archive/TODO.md.
+> available, smoke-test each item below and tick it off. Anything you learn on
+> the way that changes code belongs in the commit message of that change —
+> `docs/archive/` is history, not a scratchpad (see AGENTS.md → Docs map).
+>
+> What this checklist is FOR: behaviour that automation cannot see — Tauri's
+> real window lifecycle, graceful-shutdown ordering, disk timing, and whether
+> something *feels* instant. Where e2e already proves the logic, the row says
+> so and names the part left for a human.
 >
 > Prerequisites: `alayacore` executable (`which alayacore` or `ALAYACORE_BIN`),
 > model API key configured (Default preset's model.conf), MCP currently
@@ -97,7 +103,7 @@
       session was resumed/reopened (origin = on-disk session id, resolved
       to live)
 
-## 5. Graceful Close (P25 cancel-first)
+## 5d. Graceful Close (P25 cancel-first)
 
 - [ ] Closing an in-progress node session window → the task is **canceled** (not waited to finish) → process exits quickly (<3s, cancel → save → EOF sequence)
 - [ ] After closing, `~/.alayaface/sessions/<id>/session.alaya` exists and **contains the conversation up to the cancel point** (after cancel, alayacore auto-saves via handleTaskDone; the `save` frame is a fallback)
@@ -145,8 +151,30 @@
 - [ ] Readout updates live while a task runs and after it finishes; the limit comes from the active model's `context_limit`
 - [ ] Plan windows (no per-session token state) do NOT show the readout
 
+## 9. Window Layout Store (`~/.alayaface/ui.conf`, F3)
+
+> The board (window rects, pan, zoom, solo) survives a restart. The state machine
+> is unit-covered (`UiLayoutTest`, 37 cases) and the restart is covered end to end
+> on the Go backend by `solo-e2e` §12 — drag a window, wheel-zoom, solo it, kill
+> the server, restart it, reload the page, and assert the rects, the viewport
+> (both the pan and the scale), the solo intent and the delete-prune all come
+> back. The rows below are only what a headless test cannot see; design record:
+> `docs/solo-view.md` §The layout store.
+
+- [ ] **Lands in place, no jump**: restart with 2+ windows open → they appear at their saved rects on the first paint. A visible "cascade, then snap into place" flicker is a defect (the read is async, so the placement path must never run first)
+- [ ] **Tauri's quit flush** — the one genuinely unverified path: e2e proves the browser's `beforeunload` keepalive POST, and Tauri saves core state at teardown itself, but only a desktop session shows whether the *webview's* flush still lands when the native window closes. Drag a window somewhere unusual, quit with the window's ✕, relaunch → it is where you left it. If it is not, report it rather than "fixing" it by writing on every `pointermove` (SD16 forbids that; the invariants gate enforces it)
+- [ ] **Wheel-zoom loses at most the tail**: §12(b2) already proves a wheel burst reaches `ui.conf` once the ~1 s idle timer fires, so what is left for a human is the shape of the loss — zoom hard, then quit inside a second → the last notches may be unstored; zoom, pause, quit → all of it is. That trade is SD16's (one write per gesture, not one per tick): confirm it never feels like the board forgot where you were
+- [ ] **Your gesture wins on a slow read**: pan or zoom immediately after launch → the restored viewport must not yank the board back (a stored viewport applies only while the viewport is still untouched)
+- [ ] **Unusable stored rect degrades**: hand-edit `ui.conf` to give a window `w: 10` (under the 300×200 floor) or an absurd `x`, then restart → that window is placed by the cascade rules as if unsaved; no invisible/off-screen window, no crash, nothing clamped into a sliver
+- [ ] **Close keeps, delete erases**: close a session's window → reopen it from the Session Manager → same spot (closing is not forgetting). Delete the session instead → its rect leaves `ui.conf`, and a new session is free to take the cascade slot
+- [ ] **Solo follows the session**: solo a window, quit, restart, then Resume that session → it comes up soloed *on it*, not on whatever window that id happens to match
+- [ ] **Solo refused, not stuck**: delete the soloed session, restart → the board comes up unsoloed
+- [ ] **Two clients**: run the browser UI and the Tauri window against the same `~/.alayaface` at once, move windows in each, quit both → the file is valid JSON matching whichever wrote last. There is no merge by design; what must NOT happen is a torn or half-written file
+- [ ] **Hand-editable**: delete or comment out the whole file → the app behaves exactly as it did before F3 (fresh cascade placement), and starts saving again on the first interaction end
+
 ## Known Limitations (acceptance: confirm "as expected")
 
 - Killing the app mid-task loses the in-flight turn (alayacore only saves at task end; C1 forbids modifying alayacore)
 - Long tasks not finished within the 5s grace are still SIGKILLed (the save frame has already flushed first)
 - Two plans opened within ~50ms of each other may interfere with the auto-restore chain (planReadTarget is single-slot)
+- `ui.conf` is last-writer-wins: two clients open at once each save their own whole board, so one client's layout is overwritten (no merge, by design — see `docs/solo-view.md`). Stacking order is never restored (SD17), and a deleted session's rect is erased rather than kept in reserve

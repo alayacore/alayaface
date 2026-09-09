@@ -212,7 +212,7 @@ constraint any successor has to satisfy.
 | `tests/UiConfigTest.elm` | the document schema: leniency, per-entry repair, cap arithmetic |
 | `tests/UiLayoutTest.elm` | the client policy: envelope decode, what a file may do to the board, absorb/touch, the write gate, every trigger |
 | `scripts/check-layout-invariants.sh` | INV1/INV2/INV3 mechanically: read paths, the ratchet, `soloWin` confinement, no solo logic in the bridge |
-| `e2e/solo-e2e.mjs` | what only a browser can show: one panel filling the viewport, handles absent, the wheel behaving per view, and §12 — the drag, the file read back through the RPC, a real backend restart, solo re-attaching, the rect coming back, a deleted session pruned |
+| `e2e/solo-e2e.mjs` | what only a browser can show: one panel filling the viewport, handles absent, the wheel behaving per view, and §12 — the drag, the debounced wheel reaching the file, the file read back through the RPC, a real backend restart, solo re-attaching, the rect AND the viewport (pan + scale) coming back, a deleted session pruned |
 
 ## Known limits, recorded rather than discovered
 

@@ -62,7 +62,7 @@ not re-litigate them in code; if one proves wrong, update this file first.
 | F0 | Pure refactor: one accessor for effective window geometry + invariant check | [x] done | `92c923a` |
 | F1 | Solo view: state, derivation, interaction gating, chain, focus-follows-create | [x] done | `2c41a18` |
 | F2 | Reachability: ⋯ menu button, attention badge, Ctrl+W / Esc ordering | [x] done | `116e1d3` |
-| F3 | Layout persistence via `ui.conf` (Go + Rust symmetric) — scope decided (SD15–SD17) | [x] done — storage layer `58bd111`, client half (§F3-B) landed 2026-09-09 (ports + store, validated restore, interaction-end writes, prune/LRU, 34 elm-tests, `solo` §12 restart case) | `58bd111` |
+| F3 | Layout persistence via `ui.conf` (Go + Rust symmetric) — scope decided (SD15–SD17) | [x] done — storage layer `58bd111`, client half (§F3-B) landed 2026-09-09 (ports + store, validated restore, interaction-end writes, prune/LRU, 37 elm-tests, `solo-e2e` §12 restart case) | `58bd111` |
 | F4 | Dead-state cleanup + docs distillation | [ ] | |
 | SD19 | Solo renders no ✕ (closing a window is a canvas-view act) + window content always spans the window, blocks bounded top/bottom only (user request) | [x] done | |
 | H1 | Opportunistic: `pendingEvents` unbounded buffer (independent commit) | [x] done | `a20fad0` |
