@@ -1,5 +1,6 @@
 module Overlay.PresetManager exposing (view)
 
+import App.Presets as PS
 import Html exposing (Html)
 import Html.Attributes as Attr
 import Html.Events as Ev
@@ -7,14 +8,8 @@ import Icons
 import Json.Decode as D
 
 
-type alias PresetInfo =
-    { name : String
-    , isSeed : Bool
-    }
-
-
 view :
-    { presets : List PresetInfo
+    { presets : List PS.Info
     , loading : Bool
     , busy : Bool
     , renaming : Maybe String
@@ -71,7 +66,7 @@ view config =
 (Simple/Complex), which cannot be renamed or deleted. The tag lives in
 its own flex child so it is never clipped by the name's ellipsis.
 -}
-nameLabel : PresetInfo -> Html msg
+nameLabel : PS.Info -> Html msg
 nameLabel p =
     Html.span [ Attr.class "pm-name-wrap" ]
         [ Html.span [ Attr.class "pm-name" ] [ Html.text p.name ]
@@ -88,7 +83,7 @@ Copy/Edit/Rename/Delete is never swallowed by a drag gesture. Renders
 the Icons.grip SVG (six vertical dots) so the visual matches the rest
 of the icon family.
 -}
-dragHandle : Int -> PresetInfo -> (Int -> msg) -> msg -> Html msg
+dragHandle : Int -> PS.Info -> (Int -> msg) -> msg -> Html msg
 dragHandle idx p onDragStart onDragEnd =
     Html.span
         [ Attr.class "pm-drag-handle"
@@ -139,7 +134,7 @@ viewRow :
         , onDrop : Int -> msg
     }
     -> Int
-    -> PresetInfo
+    -> PS.Info
     -> List (Html msg)
 viewRow config idx p =
     let

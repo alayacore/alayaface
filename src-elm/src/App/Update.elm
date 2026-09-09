@@ -5,8 +5,6 @@ module App.Update exposing
     , SessionDir
     , decodeSessionDir
     , decodeWarning
-    , nextCopyName
-    , movePreset
     )
 
 {-| Application update logic. Message dispatch plus session/overlay
@@ -45,6 +43,7 @@ import Plan.Detect
 import Plan.Frames
 import Plan.MetaScan as MetaScan
 import App.AsrConfig as AS
+import App.Presets as PS
 import Ports
 import Arch.Values as AV
 import Arch.Freeze as Freeze
@@ -1240,6 +1239,34 @@ applyAsrAction action =
 applyAsrActions : List AS.Action -> Cmd Msg
 applyAsrActions actions =
     actions |> List.map applyAsrAction |> Cmd.batch
+
+
+{-| The preset manager's five commands. One mapper, so the whole write surface of
+the preset list (including the order) is one grep.
+-}
+applyPresetAction : PS.Action -> Cmd Msg
+applyPresetAction action =
+    case action of
+        PS.List ->
+            Ports.listPresets {}
+
+        PS.Copy source name ->
+            Ports.copyPreset { source = source, name = name }
+
+        PS.Rename oldName newName ->
+            Ports.renamePreset { oldName = oldName, newName = newName }
+
+        PS.Delete name ->
+            Ports.deletePreset { name = name }
+
+        PS.Reorder names ->
+            Ports.reorderPresets { names = names }
+
+
+applyPresetActions : List PS.Action -> Cmd Msg
+applyPresetActions actions =
+    actions |> List.map applyPresetAction |> Cmd.batch
+
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -5329,251 +5356,86 @@ update msg model =
 
         -- Presets
         OpenPresetManager ->
-            ( { model
-                | presetManager =
-                    { emptyPresetManager
-                        | show = True
-                        , loading = True
-                    }
-                , showGlobalMenu = False
-              }
-            , Ports.listPresets {}
-            )
+            let
+                ( pm, actions ) =
+                    PS.open
+            in
+            ( { model | presetManager = pm, showGlobalMenu = False }, applyPresetActions actions )
 
         ClosePresetManager ->
-            let
-                pm =
-                    model.presetManager
-            in
-            if pm.busy then
-                -- Do not allow closing while an action is in flight
-                ( model, Cmd.none )
-
-            else
-                ( { model | presetManager = emptyPresetManager }
-                , Cmd.none
-                )
+            -- Refuses while an action is in flight; the refusal is PS.close's.
+            ( { model | presetManager = PS.close model.presetManager }, Cmd.none )
 
         PresetCopy source ->
             let
-                pm =
-                    model.presetManager
+                ( pm, actions ) =
+                    PS.copy source model.presets model.presetManager
             in
-            ( { model
-                | presetManager = { pm | busy = True, error = Nothing }
-              }
-            , Ports.copyPreset
-                { source = source
-                , name = nextCopyName source model.presets
-                }
-            )
+            ( { model | presetManager = pm }, applyPresetActions actions )
 
         PresetRenameStart name ->
-            let
-                pm =
-                    model.presetManager
-            in
-            ( { model
-                | presetManager = { pm | renaming = Just name, renameInput = name }
-              }
-            , Cmd.none
-            )
+            ( { model | presetManager = PS.renameStart name model.presetManager }, Cmd.none )
 
         SetPresetRenameInput val ->
-            let
-                pm =
-                    model.presetManager
-            in
-            ( { model
-                | presetManager = { pm | renameInput = val, error = Nothing }
-              }
-            , Cmd.none
-            )
+            ( { model | presetManager = PS.setRenameInput val model.presetManager }, Cmd.none )
 
         PresetRenameSave oldName ->
             let
-                pm =
-                    model.presetManager
+                ( pm, actions ) =
+                    PS.renameSave oldName model.presetManager
             in
-            ( { model
-                | presetManager = { pm | busy = True, error = Nothing }
-              }
-            , Ports.renamePreset { oldName = oldName, newName = pm.renameInput }
-            )
+            ( { model | presetManager = pm }, applyPresetActions actions )
 
         PresetRenameCancel ->
-            let
-                pm =
-                    model.presetManager
-            in
-            ( { model
-                | presetManager = { pm | renaming = Nothing, renameInput = "" }
-              }
-            , Cmd.none
-            )
+            ( { model | presetManager = PS.renameCancel model.presetManager }, Cmd.none )
 
         PresetToggleEdit name ->
-            let
-                pm =
-                    model.presetManager
-            in
-            ( { model
-                | presetManager =
-                    { pm
-                        | editing =
-                            if pm.editing == Just name then
-                                Nothing
-                            else
-                                Just name
-                    }
-              }
-            , Cmd.none
-            )
+            ( { model | presetManager = PS.toggleEdit name model.presetManager }, Cmd.none )
 
         PresetDelete name ->
-            let
-                pm =
-                    model.presetManager
-            in
-            ( { model
-                | presetManager = { pm | confirmDelete = Just name }
-              }
-            , Cmd.none
-            )
+            ( { model | presetManager = PS.armDelete name model.presetManager }, Cmd.none )
 
         PresetConfirmDelete name ->
             let
-                pm =
-                    model.presetManager
+                ( pm, actions ) =
+                    PS.confirmDelete name model.presetManager
             in
-            ( { model
-                | presetManager = { pm | busy = True, error = Nothing, confirmDelete = Nothing }
-              }
-            , Ports.deletePreset { name = name }
-            )
+            ( { model | presetManager = pm }, applyPresetActions actions )
 
         PresetCancelDelete ->
-            let
-                pm =
-                    model.presetManager
-            in
-            ( { model
-                | presetManager = { pm | confirmDelete = Nothing }
-              }
-            , Cmd.none
-            )
+            ( { model | presetManager = PS.cancelDelete model.presetManager }, Cmd.none )
 
         PresetDragStart idx ->
-            let
-                pm =
-                    model.presetManager
-            in
-            ( { model
-                | presetManager = { pm | dragFrom = Just idx, dragOver = Just idx }
-              }
-            , Cmd.none
-            )
+            ( { model | presetManager = PS.dragStart idx model.presetManager }, Cmd.none )
 
         PresetDragOver idx ->
-            let
-                pm =
-                    model.presetManager
-            in
-            ( { model
-                | presetManager = { pm | dragOver = Just idx }
-              }
-            , Cmd.none
-            )
+            ( { model | presetManager = PS.dragOver idx model.presetManager }, Cmd.none )
 
         PresetDragEnd ->
-            let
-                pm =
-                    model.presetManager
-            in
-            ( { model
-                | presetManager = { pm | dragFrom = Nothing, dragOver = Nothing }
-              }
-            , Cmd.none
-            )
+            ( { model | presetManager = PS.dragEnd model.presetManager }, Cmd.none )
 
         PresetDrop idx ->
-            case model.presetManager.dragFrom of
-                Just from ->
-                    let
-                        reordered =
-                            movePreset from idx model.presets
+            let
+                ( presets, pm, actions ) =
+                    PS.drop idx model.presets model.presetManager
+            in
+            ( { model | presets = presets, presetManager = pm }, applyPresetActions actions )
 
-                        pm =
-                            model.presetManager
-                    in
-                    ( { model
-                        | presets = reordered
-                        , presetManager = { pm | dragFrom = Nothing, dragOver = Nothing }
-                      }
-                    , Ports.reorderPresets { names = List.map .name reordered }
-                    )
-
+        PresetsListResult raw ->
+            case PS.adoptList raw model.presets model.presetManager of
                 Nothing ->
                     ( model, Cmd.none )
 
-        PresetsListResult raw ->
-            case D.decodeValue presetsListResultDecoder raw of
-                Ok res ->
-                    if res.ok then
-                        let
-                            pm =
-                                model.presetManager
-                        in
-                        ( { model
-                            | presets = res.presets
-                            , presetManager = { pm | loading = False, error = Nothing }
-                          }
-                        , Cmd.none
-                        )
-
-                    else
-                        let
-                            pm =
-                                model.presetManager
-                        in
-                        ( { model
-                            | presetManager = { pm | loading = False, error = Just res.error }
-                          }
-                        , Cmd.none
-                        )
-
-                Err _ ->
-                    ( model, Cmd.none )
+                Just ( presets, pm ) ->
+                    ( { model | presets = presets, presetManager = pm }, Cmd.none )
 
         PresetActionResult raw ->
-            case D.decodeValue presetActionResultDecoder raw of
-                Ok res ->
-                    let
-                        pm =
-                            model.presetManager
-                    in
-                    if res.ok then
-                        ( { model
-                            | presetManager =
-                                { pm
-                                    | busy = False
-                                    , renaming = Nothing
-                                    , renameInput = ""
-                                    , confirmDelete = Nothing
-                                }
-                          }
-                        , Ports.listPresets {}
-                        )
-
-                    else
-                        ( { model
-                            | presetManager = { pm | busy = False, error = Just res.error }
-                          }
-                        , Cmd.none
-                        )
-
-                Err _ ->
+            case PS.adoptAction raw model.presetManager of
+                Nothing ->
                     ( model, Cmd.none )
+
+                Just ( pm, actions ) ->
+                    ( { model | presetManager = pm }, applyPresetActions actions )
 
         FillMcpAuthUrl server url ->
             case getActiveSession model of
@@ -7064,30 +6926,6 @@ cursorPosResultDecoder =
         (D.field "pos" D.int)
 
 
-presetInfoDecoder : D.Decoder PresetInfo
-presetInfoDecoder =
-    D.map2 PresetInfo
-        (D.field "name" D.string)
-        (D.field "is_seed" D.bool)
-
-
-presetsListResultDecoder : D.Decoder { ok : Bool, presets : List PresetInfo, error : String }
-presetsListResultDecoder =
-    D.map3
-        (\ok presets error -> { ok = ok, presets = presets, error = error })
-        (D.field "ok" D.bool)
-        (D.field "presets" (D.list presetInfoDecoder))
-        (D.field "error" D.string)
-
-
-presetActionResultDecoder : D.Decoder { ok : Bool, error : String }
-presetActionResultDecoder =
-    D.map2
-        (\ok error -> { ok = ok, error = error })
-        (D.field "ok" D.bool)
-        (D.field "error" D.string)
-
-
 sessionActionResultDecoder : D.Decoder { ok : Bool, error : String, kind : String }
 sessionActionResultDecoder =
     D.map3
@@ -7095,67 +6933,6 @@ sessionActionResultDecoder =
         (D.field "ok" D.bool)
         (D.field "error" D.string)
         (D.field "kind" D.string)
-
-
-nextCopyName : String -> List PresetInfo -> String
-nextCopyName source presets =
-    let
-        taken =
-            List.map .name presets |> Set.fromList
-
-        base =
-            source ++ "-copy"
-
-        find n =
-            let
-                cand =
-                    base ++ "-" ++ String.fromInt n
-            in
-            if Set.member cand taken then
-                find (n + 1)
-
-            else
-                cand
-    in
-    if Set.member base taken then
-        find 2
-
-    else
-        base
-
-
-{-| Move the item at index `from` to index `to` (0-based, clamped to the
-list bounds). Used by the Preset Manager's drag-to-reorder — indices
-are PRESET indices, not rendered row indices (a preset may show extra
-edit rows below its main row).
--}
-movePreset : Int -> Int -> List a -> List a
-movePreset from to list =
-    let
-        len =
-            List.length list
-
-        f =
-            clamp 0 (len - 1) from
-
-        t =
-            clamp 0 (len - 1) to
-    in
-    if len <= 1 || f == t then
-        list
-
-    else
-        case List.drop f list of
-            item :: rest ->
-                let
-                    withoutItem =
-                        List.take f list ++ rest
-                in
-                List.take t withoutItem
-                    ++ (item :: List.drop t withoutItem)
-
-            [] ->
-                list
 
 
 -- ─── Selector kits ──────────────────────────────────────────────────

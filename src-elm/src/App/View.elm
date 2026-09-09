@@ -16,7 +16,7 @@ import Set exposing (Set)
 import Time
 import Markdown
 import App.Types exposing (..)
-import App.Update exposing (SessionDir, decodeSessionDir, nextCopyName)
+import App.Update exposing (SessionDir, decodeSessionDir)
 import App.Windows as Win
 import Icons
 import Session.Types as T

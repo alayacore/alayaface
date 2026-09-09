@@ -15,6 +15,7 @@ import Json.Decode as D
 import Task
 import App.Types exposing (..)
 import App.AsrConfig as AS
+import App.Presets as PS
 import App.Update
 import App.View
 import Plan.MetaScan as MetaScan
@@ -79,7 +80,7 @@ init _ =
       , pendingVoiceInsert = Nothing
       , presets = []
       , presetSubmenuOpen = False
-      , presetManager = emptyPresetManager
+      , presetManager = PS.emptyManager
       , ctxVisible = False
       , ctxX = 0
       , ctxY = 0

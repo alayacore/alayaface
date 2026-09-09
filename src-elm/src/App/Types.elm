@@ -20,9 +20,6 @@ module App.Types exposing
     , emptyGlobalConfig
     , GlobalConfigEditor
     , emptyGlobalConfigEditor
-    , PresetInfo
-    , PresetManager
-    , emptyPresetManager
     , PlanViewState
     , emptyPlanView
     , PlanWindow
@@ -52,6 +49,7 @@ import App.NodeConnection as NC
 import App.Pointer as P
 import App.UiConfig as UC
 import App.AsrConfig as AS
+import App.Presets as PS
 import Arch.Values as AV
 import Arch.Freeze as Freeze
 import Plan.MetaScan as MetaScan
@@ -167,11 +165,11 @@ type alias Model =
     -- (read from the textarea right before inserting, so the text lands
     -- where the user's caret currently is).
     , pendingVoiceInsert : Maybe { sessionId : String, text : String }
-    , presets : List PresetInfo
+    , presets : List PS.Info
     -- Hover flyout state for the global menu's "New Session" item:
     -- True while the pointer is over the item or its preset submenu.
     , presetSubmenuOpen : Bool
-    , presetManager : PresetManager
+    , presetManager : PS.Manager
     , ctxVisible : Bool
     , ctxX : Int
     , ctxY : Int
@@ -924,46 +922,11 @@ emptyGlobalConfigEditor =
 -- `Model` fields below are typed by it.
 
 -- PRESETS
-
-type alias PresetInfo =
-    { name : String
-    -- Built-in seed preset (Simple/Complex): referenced by the seeded
-    -- plan contract, so it cannot be renamed (the backend rejects it and
-    -- the manager hides the Rename button).
-    , isSeed : Bool
-    }
-
-
-type alias PresetManager =
-    { show : Bool
-    , loading : Bool
-    , busy : Bool
-    , renaming : Maybe String
-    , renameInput : String
-    , editing : Maybe String
-    , confirmDelete : Maybe String
-    , error : Maybe String
-    -- Drag-to-reorder: preset indices of the row being dragged
-    -- (dragFrom) and the row currently under the pointer (dragOver).
-    , dragFrom : Maybe Int
-    , dragOver : Maybe Int
-    }
-
-
-emptyPresetManager : PresetManager
-emptyPresetManager =
-    { show = False
-    , loading = False
-    , busy = False
-    , renaming = Nothing
-    , renameInput = ""
-    , editing = Nothing
-    , confirmDelete = Nothing
-    , error = Nothing
-    , dragFrom = Nothing
-    , dragOver = Nothing
-    }
-
+--
+-- The list, the manager's view state and every transition over them live in
+-- `App.Presets` (see `docs/update-slices.md`): the manager's rows are also the
+-- only UI that writes the user's preset ORDER, so that belongs in one module
+-- rather than spread over 18 case arms. The `Model` fields above are typed by it.
 
 -- PLAN MODE
 

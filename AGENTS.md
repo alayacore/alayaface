@@ -47,9 +47,10 @@ Three parts share ONE Elm client:
   `Session.ModelConfig`), then `App.Types` imports IT, so it can never import
   `App.Types` back — purity is forced by where the types live, not chosen.
   Slicing message families out of the dispatcher is written up in
-  [`docs/update-slices.md`](docs/update-slices.md); the first one,
-  `App/AsrConfig.elm` (the whole `asr.conf` overlay, 20 arms → 7360-line
-  dispatcher), is the worked example.
+  [`docs/update-slices.md`](docs/update-slices.md); two are done —
+  `App/AsrConfig.elm` (the `asr.conf` overlay, 20 arms) and `App/Presets.elm`
+  (the Preset Manager, 17 arms) — and they are the worked examples for the
+  remaining families.
   The JS bridge is split: `transport.js` (RPC ports ↔ tauri/http), `chain.js`
   (connection-chain SVG overlays), `overlay.js` (scrollbar/canvas zoom).
   Tests: `elm-test`.

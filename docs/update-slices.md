@@ -7,8 +7,11 @@ Nothing here is urgent — it is mechanical work that is cheap only if the metho
 already written down.
 
 The first slice is done: **`App/AsrConfig.elm`** (the `asr.conf` overlay — profile
-list, edit form, delete confirm, both replies), landed 2026-09-09. It is the worked
-example below.
+list, edit form, delete confirm, both replies), landed 2026-09-09. The second is
+**`App.Presets`** (the Preset Manager — 17 arms: open/close, copy naming, rename,
+the two-step delete, the drag, both replies), landed the same day. Both are the
+worked examples below; the differences between them are in "What the second slice
+taught".
 
 
 ## Measure before choosing
@@ -97,10 +100,48 @@ catches a mis-transcribed arm. It would NOT catch a schema field going missing,
 because nothing reads the file back and compares. That is what (2) and (3) are for.
 
 
+## What the second slice taught
+
+Three things the first one could not show.
+
+**Build a reply fixture the way the transport builds one.** A test here — "a failed
+read keeps the rows the user is looking at" — failed at first, and the product was
+innocent: I had written the failure body as `{ ok: false, error: … }`, while
+`transport.js` sends `{ ok: false, presets: [], error: … }` so the strict decoder
+is satisfied. Fixing the fixture made the test worth having, because the real reply
+carries an empty list and the transition must *not* adopt it: adopting it would
+empty the manager on a transient backend error. So an unrealistic fixture is not
+merely a failing test — it hides the one behaviour most worth pinning. Check the
+`.catch` branch in `transport.js` for any command whose reply you imitate (`asr.conf`
+has the same shape: it synthesises `profiles: []` too).
+
+**A view module may be holding a duplicate copy of the shape you are moving.**
+`Overlay/PresetManager.elm` defined its own `PresetInfo` alias, structurally
+identical to `App.Types`'. Elm's record typing means a divergence is caught by the
+compiler rather than silently accepted, so this is duplication and not danger — but
+unify it while you are in there, or the next reader has two shapes to reconcile.
+
+**Read the dispatcher's `exposing` list before moving a helper.** Two of these
+helpers were public API of `App/Update.elm`: `movePreset` was used by nothing but
+its own test (which moved with it, and now names the module that owns the
+arithmetic), and `nextCopyName` was imported by `App/View.elm` and never called —
+a dead import that only surfaces when something forces you to look. An unused
+exposed name produces no warning, because the module is used for the others.
+
+
 ## For the next slice
 
-1. Pick by coupling, not size. The `Preset` family (14 arms) and the `Object`/freeze
-   pair are both candidates whose private decoders move with them.
+1. Pick by coupling, not size. Remaining candidates, measured 2026-09-09:
+   the **`Object`/freeze pair** (102 + 46 lines, 2 arms, 3 local helpers and
+   `Freeze` is already a pure machine) is the next clean one. **`Fs`** (6 arms,
+   342 lines) looks big but is not a slice: its arms are the glue between the
+   file picker and `Plan/MetaScan`, and they route through `updateActiveSession`,
+   so moving them moves no decision. **`Session`** lifecycle (4 arms, 194 lines)
+   is entangled with window creation (`createSessionWindow`,
+   `resumeSessionCreated`, `forkSessionCreated`) — possible, but it is a
+   `App/Windows`-shaped change rather than a family slice. The `Plan` family
+   (26 arms, 819 lines) already has `Plan/Update.elm`; what is left there is
+   dispatch, not state.
 2. Decide which of the two shapes applies BEFORE writing — if `Model` will reference
    your types, you have chosen the pure one and must pass every input explicitly.
 3. Move the private helpers first (decoder + encoder + the type definitions), so the

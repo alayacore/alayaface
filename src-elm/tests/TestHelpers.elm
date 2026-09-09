@@ -5,6 +5,7 @@ module TestHelpers exposing (initModelWithSession)
 
 import Dict
 import App.AsrConfig as AS
+import App.Presets as PS
 import Set
 import App.Types as AT
 import Plan.MetaScan as MetaScan
@@ -58,7 +59,7 @@ initModelWithSession =
     , pendingVoiceInsert = Nothing
     , presets = []
     , presetSubmenuOpen = False
-    , presetManager = AT.emptyPresetManager
+    , presetManager = PS.emptyManager
     , ctxVisible = False
     , ctxX = 0
     , ctxY = 0
