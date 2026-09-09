@@ -256,42 +256,8 @@ body {
      see App.View.viewInputBar. */
   margin-top: auto;
 }
-.session-input-bar .hs-search-form {
-  background: transparent;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4), 0 1px 4px rgba(0, 0, 0, 0.2);
-  border-radius: 4px;
-}
-
-@media (prefers-color-scheme: light) {
-  .session-input-bar .hs-search-form {
-    background: white;
-    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.1), 0 1px 4px rgba(0, 0, 0, 0.06);
-  }
-}
-
-.chat-area-centered .hs-search-form {
-  background: transparent;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4), 0 1px 4px rgba(0, 0, 0, 0.2);
-  border-radius: 4px;
-}
-
-@media (prefers-color-scheme: light) {
-  .chat-area-centered .hs-search-form {
-    background: white;
-    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.1), 0 1px 4px rgba(0, 0, 0, 0.06);
-  }
-}
-
-.session-input-bar .hs-search-wrapper {
-  max-width: var(--content-width);
-  width: 100%;
-}
 
 /* ─── Header ───────────────────────────────────────────────────────── */
-
-
-
-
 
 /* ─── Bottom Status Bar ────────────────────────────────────────────── */
 
@@ -1263,83 +1229,19 @@ body {
   position: relative;
 }
 
-/* The legacy .overlay-page / .overlay-close classes are kept as aliases
-   so any overlay that hasn't migrated yet still renders correctly.
-   Remove them once every overlay has been switched to .overlay-card. */
-.overlay-page {
-  width: 100%;
-  max-width: 100%;
-  height: 480px;
-  background: transparent;
-  border: none;
-  border-radius: 0;
-  padding: 10px;
-  color: #eee;
-  box-shadow: none;
-  outline: none;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  animation: overlay-page-in 0.2s ease-out;
-  pointer-events: auto;
-  position: relative;
-}
-
-.overlay-close {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  z-index: 10;
-  background: rgba(255,255,255,0.06);
-  border: none;
-  color: #888;
-  cursor: pointer;
-  font-size: 0.75rem;
-  width: 28px;
-  height: 28px;
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.12s, color 0.12s;
-  line-height: 1;
-}
-.overlay-close:hover {
-  background: rgba(233,69,96,0.15);
-  color: #e94560;
-}
-
-@media (prefers-color-scheme: light) {
-  .overlay-close {
-    background: rgba(0,0,0,0.04);
-    color: #999;
-  }
-  .overlay-close:hover {
-    background: rgba(233,69,96,0.1);
-    color: #e94560;
-  }
-}
-
 @keyframes overlay-page-in {
   from { opacity: 0; transform: translateY(8px) scale(0.98); }
   to { opacity: 1; transform: translateY(0) scale(1); }
-}
-
-@media (prefers-color-scheme: light) {
-  .overlay-page {
-    background: #f0f0f5;
-    border-color: #ccc;
-    color: #1a1a2e;
-  }
 }
 
 /* ─── Unified button family (Phase 7) ────────────────────────────────
    The previous CSS shipped 17 distinct button classes (confirm-page-btn,
    sel-page-action, pm-btn, asr-row-btn, me-save-btn, mcp-init-btn, …)
    with conflicting sizes, hover states, and disabled looks. They are
-   collapsed into a single .btn family with semantic modifiers; the
-   page-specific classes below are kept as legacy aliases until their
-   call sites are migrated. Once migrated, they should be deleted. */
+   collapsed into a single .btn family with semantic modifiers — and the
+   page-specific aliases that survived the collapse are gone: every call
+   site emits .btn/.btn-primary/.btn-danger by now, so the alias rules
+   named classes nothing renders. */
 
 .btn {
   display: inline-flex;
@@ -1398,70 +1300,16 @@ body {
   color: #86efac;
 }
 
-/* Ghost — text-only, no border */
-.btn-ghost { border-color: transparent; background: transparent; color: var(--fg-muted); }
-.btn-ghost:hover:not(:disabled) { background: var(--surface-row); color: var(--fg-strong); }
-
 /* Light theme overrides */
 @media (prefers-color-scheme: light) {
   .btn { border-color: rgba(0, 0, 0, 0.15); color: #333; }
   .btn:hover:not(:disabled) { background: rgba(0, 0, 0, 0.04); border-color: rgba(0, 0, 0, 0.25); }
-  .btn-ghost { color: #666; }
-  .btn-ghost:hover:not(:disabled) { background: rgba(0, 0, 0, 0.04); color: #1a1a2e; }
+
   .btn-danger-outline { color: var(--danger); border-color: rgba(220, 38, 38, 0.35); }
   .btn-danger-outline:hover:not(:disabled) { background: rgba(220, 38, 38, 0.08); color: #b91c1c; }
   .btn-success-outline { color: var(--success); border-color: rgba(22, 163, 74, 0.4); }
   .btn-success-outline:hover:not(:disabled) { background: rgba(22, 163, 74, 0.08); color: #166534; }
 }
-
-/* Legacy aliases — keep these so any remaining call site still
-   renders correctly. They render the same as a plain .btn. */
-.confirm-page-btn,
-.pm-btn,
-.asr-row-btn,
-.sel-page-action,
-.sel-page-item-btn,
-.me-save-btn,
-.me-cancel-btn,
-.me-back-btn,
-.mcp-init-btn,
-.plan-strip-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 5px 14px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-sm);
-  background: transparent;
-  color: var(--fg-default);
-  font-size: 0.82rem;
-  font-weight: 500;
-  line-height: 1.3;
-  text-align: center;
-  cursor: pointer;
-  transition: background 0.12s, border-color 0.12s, color 0.12s, transform 0.1s;
-}
-.confirm-page-btn:hover,
-.pm-btn:hover:not(:disabled),
-.asr-row-btn:hover,
-.sel-page-action:hover:not(:disabled),
-.sel-page-item-btn:hover,
-.me-save-btn:hover,
-.me-cancel-btn:hover,
-.me-back-btn:hover,
-.mcp-init-btn:hover,
-.plan-strip-btn:hover {
-  background: var(--surface-row-hover);
-  border-color: var(--border-strong);
-}
-.confirm-page-btn:active,
-.sel-page-item-btn:active { transform: scale(0.97); }
-.confirm-page-btn:disabled,
-.pm-btn:disabled,
-.asr-row-btn:disabled,
-.sel-page-action:disabled,
-.sel-page-item-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ─── Confirm Page (inside Overlay) ─────────────────────────────────── */
 
@@ -1507,39 +1355,10 @@ body {
   flex-wrap: wrap;
 }
 
-.confirm-page-btn {
-  padding: 10px 28px;
-  border-radius: 4px;
-  border: none;
-  font-size: 1rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s, transform 0.1s;
-  min-width: 120px;
-}
-
-.confirm-page-btn:active {
-  transform: scale(0.97);
-}
-
-.confirm-page-btn-allow {
-  background: #16a34a;
-  color: white;
-}
-.confirm-page-btn-allow:hover { background: rgba(22,163,74,0.1); }
-
-.confirm-page-btn-deny {
-  background: #dc2626;
-  color: white;
-}
-.confirm-page-btn-deny:hover { background: rgba(220,38,38,0.1); }
-
 @media (prefers-color-scheme: light) {
   .confirm-page-title { color: #b45309; }
   .confirm-page-input { background: #e8e8ee; border-color: #ccc; color: #555; }
 }
-
-.confirm-page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* Close-session confirmation overlay (Close / Close and Delete / Cancel) */
 .close-confirm-text {
@@ -1650,18 +1469,7 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
-.list-container {
-  flex: 1;
-  overflow-y: auto;
-  min-height: 0;
-  margin: 0 -4px;
-  padding: 2px;
-}
-.list-container:focus {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-  border-radius: var(--r-sm);
-}
+
 @media (prefers-color-scheme: light) {
   .list-row:hover { background: rgba(0,0,0,0.04); }
   .list-row.list-row-selected:hover { background: var(--accent-hover); }
@@ -1684,30 +1492,23 @@ body {
   cursor: pointer;
   font-size: 0.88rem;
 }
-.fp-page-item:hover,
 .sel-page-item:hover { background: var(--surface-row-hover); }
-.fp-page-item-selected,
 .sel-page-item-selected {
   background: var(--accent);
   color: white;
 }
-.fp-page-item-selected:hover,
 .sel-page-item-selected:hover { background: var(--accent-hover); }
 
-/* The `.fp-page-item*` selectors above are legacy aliases: the file
-   picker emits `.list-row` / `.list-row-name` now (Overlay/FilePicker.elm).
-   What used to sit under the last rule was the tail of a
-   `.fp-page-item-name` block whose selector line commit 4d2b890 deleted —
-   three dangling declarations, parsed as a rule with a garbage selector
-   and dropped. `.list-row-name` carries the same font hardening. */
+/* The file picker emits `.list-row` / `.list-row-name` (Overlay/FilePicker.elm)
+   and the selector emits `.sel-page-item` — two names for one row shape, which
+   is why they share the rules above. The `.fp-page-item*` aliases this block
+   once carried were deleted with the rest of the unreachable CSS.
+   `.list-row-name` carries the font hardening that used to sit under a
+   `.fp-page-item-name` rule whose selector line commit 4d2b890 deleted — the
+   dangling declarations check-css-parse.mjs exists to catch. */
 
 @media (prefers-color-scheme: light) {
-  .fp-page-input { background: white; color: #1a1a2e; border-color: #d0d0d8; }
-  .fp-page-input::placeholder { color: #aaa; }
-  .fp-page-input:focus { border-color: #6366f1; }
-  .fp-page-item:hover { background: rgba(0,0,0,0.03); }
-  .fp-page-item-selected { background: #6366f1; color: white; }
-  .fp-page-item-selected:hover { background: #5558e6; }
+
   .fp-page-status { color: #999; }
 }
 
@@ -1718,16 +1519,6 @@ body {
     color: #1a1a2e;
     background-color: #f0f0f5;
   }
-}
-
-/* ─── Responsive ───────────────────────────────────────────────────── */
-
-@media (max-width: 700px) {
-  .connection-controls { flex-direction: column; }
-  .input-area { flex-wrap: wrap; }
-  .message-input { min-width: 120px; }
-  .attach-buttons { order: -1; }
-  .media-image { max-width: 180px; max-height: 150px; }
 }
 
 /* ─── Markdown (within assistant messages) ─────────────────────────── */
@@ -2073,14 +1864,6 @@ body {
   .tool-output { color: #555; }
   .tool-output-error { color: #b91c1c; }
 }
-@media (prefers-color-scheme: light) {
-  .input-area { background: transparent; color: #1a1a2e; }
-}
-@media (prefers-color-scheme: light) {
-  .input-textarea { background: white; color: #1a1a2e; }
-  .input-textarea:focus { background: rgba(37, 99, 235, 0.02); }
-  .input-toolbar { background: rgba(37, 99, 235, 0.03); }
-}
 
 /* ─── Selector Page (Model Selector / shared) ────────────────────────── */
 
@@ -2109,21 +1892,6 @@ body {
   flex-shrink: 0;
 }
 
-.sel-page-input {
-  flex: 1;
-  padding: 8px 12px;
-  border-radius: 4px;
-  border: 1px solid #444;
-  background: transparent;
-  color: #eee;
-  font-size: 0.88rem;
-  outline: none;
-  width: 100%;
-  transition: border-color 0.15s;
-}
-.sel-page-input::placeholder { color: #555; }
-.sel-page-input:focus { border-color: #6366f1; }
-
 .sel-page-current {
   font-size: 0.78rem;
   color: #888;
@@ -2145,22 +1913,6 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.sel-page-add-btn {
-  padding: 2px 10px;
-  border-radius: 4px;
-  border: 1px solid #6366f1;
-  background: transparent;
-  color: #818cf8;
-  font-size: 0.75rem;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: background 0.15s, color 0.15s;
-}
-.sel-page-add-btn:hover {
-  background: #6366f1;
-  color: white;
 }
 
 .sel-page-status {
@@ -2311,66 +2063,6 @@ body {
   padding-left: 0;
 }
 
-.sel-page-action {
-  padding: 1px 8px;
-  border-radius: 4px;
-  border: 1px solid #555;
-  background: transparent;
-  color: #aaa;
-  font-size: 0.72rem;
-  cursor: pointer;
-  transition: border-color 0.15s, color 0.15s, background 0.15s;
-}
-.sel-page-action:hover:not(:disabled) {
-  border-color: #818cf8;
-  color: #a5b4fc;
-}
-.sel-page-action:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
-.sel-page-action-danger {
-  border-color: #7f1d1d;
-  color: #f87171;
-}
-.sel-page-action-danger:hover:not(:disabled) {
-  border-color: #ef4444;
-  background: rgba(239, 68, 68, 0.12);
-  color: #fca5a5;
-}
-.sel-page-action-default {
-  border-color: rgba(74, 222, 128, 0.4);
-  color: #4ade80;
-}
-.sel-page-action-default:hover:not(:disabled) {
-  border-color: #4ade80;
-  background: rgba(74, 222, 128, 0.1);
-  color: #86efac;
-}
-.sel-page-item-selected .sel-page-action { border-color: rgba(255,255,255,0.5); color: rgba(255,255,255,0.85); }
-.sel-page-item-selected .sel-page-action:hover:not(:disabled) { border-color: white; color: white; }
-
-/* Session Manager list buttons (Resume / Delete) — ONE consistent size
-   for both (they used to mix .confirm-page-btn defaults with per-button
-   inline overrides, hence the uneven look). */
-.sel-page-item-btn {
-  padding: 6px 14px;
-  border-radius: 4px;
-  border: none;
-  font-size: 0.8rem;
-  font-weight: 600;
-  cursor: pointer;
-  min-width: 76px;
-  flex-shrink: 0;
-  transition: background 0.15s, transform 0.1s;
-}
-.sel-page-item-btn:active { transform: scale(0.97); }
-.sel-page-item-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-.sel-page-item-btn-allow { background: #16a34a; color: white; }
-.sel-page-item-btn-allow:hover:not(:disabled) { background: rgba(22, 163, 74, 0.15); }
-.sel-page-item-btn-deny { background: #dc2626; color: white; }
-.sel-page-item-btn-deny:hover:not(:disabled) { background: rgba(220, 38, 38, 0.15); }
-
 /* C4 version browsing (read-only history snapshots) */
 .version-body {
   max-height: 60vh;
@@ -2421,8 +2113,7 @@ body {
 
 @media (prefers-color-scheme: light) {
   .sel-page-title { color: #6366f1; }
-  .sel-page-input { background: white; color: #1a1a2e; border-color: #d0d0d8; }
-  .sel-page-input:focus { border-color: #6366f1; }
+
   .sel-page-current-name { color: #16a34a; }
   .sel-page-status { color: #999; }
   .sel-page-item:hover { background: rgba(0,0,0,0.03); }
@@ -2435,16 +2126,9 @@ body {
     box-shadow: inset 3px 0 0 #16a34a;
   }
   .sel-page-current-name { color: #16a34a; }
-  .sel-page-add-btn { border-color: #6366f1; color: #6366f1; }
-  .sel-page-add-btn:hover { background: #6366f1; color: white; }
+
   .sel-page-status-error { color: #dc2626; }
-  .sel-page-action { border-color: #c0c0cc; color: #555; }
-  .sel-page-action:hover:not(:disabled) { border-color: #6366f1; color: #6366f1; }
-  .sel-page-action-danger { border-color: #fca5a5; color: #dc2626; }
-  .sel-page-action-danger:hover:not(:disabled) { background: rgba(220, 38, 38, 0.08); color: #b91c1c; }
-  .plan-tab { border-color: #d0d0d8; color: #555; }
-  .plan-tab:hover { background: rgba(0,0,0,0.03); }
-  .plan-tab-active { background: #6366f1; border-color: #6366f1; color: white; }
+
 }
 
 /* ─── Model Editor Page ────────────────────────────────────────────── */
@@ -2513,22 +2197,12 @@ body {
   line-height: 1.4;
 }
 
-.me-field-input {
-  padding: 6px 10px;
-  border-radius: var(--r-sm);
-  border: 1px solid var(--border-subtle);
-  background: var(--surface-input);
-  color: var(--fg-default);
-  font-size: 0.85rem;
-  outline: none;
-  transition: border-color 0.15s;
-}
-.me-field-input:focus { border-color: var(--accent); }
-
 /* Unified .input family — same look across all overlay editors, the
-   selector's search bar, and the file picker. The legacy .me-field-input /
-   .fp-page-input / .sel-page-input / .confirm-page-input classes below
-   are kept as transient aliases (they render identically to .input). */
+   selector's search bar, and the file picker. It used to also cover a set of
+   page-specific aliases (.me-field-input, .fp-page-input, .sel-page-input);
+   every one of them emits .input today, so the aliases are gone.
+   .confirm-page-input is a different case — the confirm overlay really does
+   carry it, and it styles its box, not just its chrome. */
 .input {
   padding: 6px 10px;
   border-radius: var(--r-sm);
@@ -2549,8 +2223,7 @@ body {
 
 /* Select — same frame as .input, plus an inline chevron SVG that
    matches the Icons.elm stroke style. */
-.input-select,
-.me-field-select {
+.input-select {
   appearance: none;
   -webkit-appearance: none;
   cursor: pointer;
@@ -2560,33 +2233,15 @@ body {
   padding-right: 28px;
   min-width: 180px;
 }
-.input-select option,
-.me-field-select option { background: #1e1e2e; color: #ddd; }
-.input-select:disabled,
-.me-field-select:disabled { opacity: 0.5; cursor: not-allowed; }
+.input-select option { background: #1e1e2e; color: #ddd; }
+.input-select:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Light theme overrides */
 @media (prefers-color-scheme: light) {
-  .input,
-  .me-field-input { background: white; color: #1a1a2e; border-color: rgba(0, 0, 0, 0.15); }
-  .input:focus,
-  .me-field-input:focus { border-color: var(--accent); }
-  .input-select option,
-  .me-field-select option { background: #fff; color: #1a1a2e; }
+  .input { background: white; color: #1a1a2e; border-color: rgba(0, 0, 0, 0.15); }
+  .input:focus { border-color: var(--accent); }
+  .input-select option { background: #fff; color: #1a1a2e; }
 }
-
-.me-field-select {
-  appearance: none;
-  -webkit-appearance: none;
-  cursor: pointer;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%23888' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>");
-  background-repeat: no-repeat;
-  background-position: right 10px center;
-  padding-right: 28px;
-  min-width: 180px;
-}
-.me-field-select option { background: #1e1e2e; color: #ddd; }
-.me-field-select:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .me-field-textarea {
   resize: vertical;
@@ -2673,68 +2328,16 @@ body {
   flex-shrink: 0;
 }
 
-.asr-row-btn {
-  padding: 3px 10px;
-  border-radius: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  background: transparent;
-  color: #ccc;
-  font-size: 0.75rem;
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s;
-}
-.asr-row-btn:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
-.asr-row-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-@media (prefers-color-scheme: light) {
-  .asr-row-btn { border-color: rgba(0, 0, 0, 0.15); color: #555; }
-  .asr-row-btn:hover { background: rgba(0, 0, 0, 0.06); color: #000; }
-}
-
-.asr-row-btn-danger { color: #f87171; border-color: rgba(248, 113, 113, 0.35); }
-.asr-row-btn-danger:hover { background: rgba(248, 113, 113, 0.12); color: #f87171; }
-@media (prefers-color-scheme: light) {
-  .asr-row-btn-danger { color: #dc2626; border-color: rgba(220, 38, 38, 0.35); }
-  .asr-row-btn-danger:hover { background: rgba(220, 38, 38, 0.1); color: #dc2626; }
-}
-
 .asr-row-confirm {
   display: inline-flex;
   align-items: center;
   gap: 6px;
 }
 
-.me-save-btn {
-  padding: 5px 18px;
-  border-radius: 4px;
-  border: 1px solid #6366f1;
-  background: #6366f1;
-  color: white;
-  font-size: 0.82rem;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.me-save-btn:hover { background: #5558e6; }
-
-.me-cancel-btn {
-  padding: 5px 14px;
-  border-radius: 4px;
-  border: 1px solid #555;
-  background: transparent;
-  color: #aaa;
-  font-size: 0.82rem;
-  cursor: pointer;
-  transition: border-color 0.15s, color 0.15s;
-}
-.me-cancel-btn:hover { border-color: #818cf8; color: #a5b4fc; }
-
 @media (prefers-color-scheme: light) {
   .me-field-label { color: #666; }
   .me-field-error { color: #dc2626; }
-  .me-field-input { background: white; color: #1a1a2e; border-color: #d0d0d8; }
-  .me-field-input:focus { border-color: #6366f1; }
-  .me-field-select option { background: #fff; color: #1a1a2e; }
-  .me-cancel-btn { border-color: #c0c0cc; color: #555; }
-  .me-cancel-btn:hover { border-color: #6366f1; color: #6366f1; }
+
 }
 
 /* ─── Presets ──────────────────────────────────────────────────────── */
@@ -2754,7 +2357,7 @@ body {
   border: 1px solid var(--border-subtle);
   background: var(--surface-row);
 }
-.pm-row-active { border-color: rgba(74, 222, 128, 0.4); background: rgba(74, 222, 128, 0.06); }
+
 .pm-row-renaming { border-color: var(--accent); }
 .pm-row-confirm { border-color: rgba(248, 113, 113, 0.5); }
 
@@ -2815,8 +2418,6 @@ body {
   border: 1px solid rgba(99, 102, 241, 0.35);
 }
 
-.pm-row-renaming .me-field-input { flex: 1; }
-
 .pm-edit-row {
   display: flex;
   align-items: center;
@@ -2848,26 +2449,9 @@ body {
   color: #f87171;
 }
 
-/* The old `.pm-btn` base rule lived here. Commit 523ca7a ("drop orphaned
-   CSS") deleted its selector line and left the declarations dangling — a
-   block with no selector, dropped by the parser, its closing brace
-   matching nothing. `.pm-btn` is a documented legacy alias of `.btn` now
-   (see the alias group above the button family), so the body is gone. */
-
-.pm-btn:hover:not(:disabled) { border-color: #818cf8; color: #a5b4fc; }
-.pm-btn-primary {
-  border-color: #6366f1;
-  background: rgba(99, 102, 241, 0.15);
-  color: #a5b4fc;
-}
-.pm-btn-primary:hover:not(:disabled) { background: #6366f1; color: white; }
-.pm-btn-danger { border-color: rgba(248, 113, 113, 0.5); color: #f87171; }
-.pm-btn-danger:hover:not(:disabled) { background: rgba(248, 113, 113, 0.15); border-color: #f87171; color: #fca5a5; }
-.pm-btn:disabled { opacity: 0.5; cursor: default; }
-
 @media (prefers-color-scheme: light) {
   .pm-row { border-color: #d8d8e0; background: rgba(0,0,0,0.02); }
-  .pm-row-active { border-color: rgba(22, 163, 74, 0.4); background: rgba(34, 197, 94, 0.07); }
+
   .pm-name { color: #1a1a2e; }
   .pm-drag-handle { color: #9a9aad; }
   .pm-drag-handle:hover { color: #4f46e5; }
@@ -2876,12 +2460,7 @@ body {
     background: rgba(99, 102, 241, 0.08);
     box-shadow: inset 0 2px 0 #6366f1;
   }
-  .pm-btn { border-color: #c0c0cc; color: #555; }
-  .pm-btn:hover:not(:disabled) { border-color: #6366f1; color: #4f46e5; }
-  .pm-btn-primary { border-color: #6366f1; background: rgba(99, 102, 241, 0.08); color: #4f46e5; }
-  .pm-btn-primary:hover:not(:disabled) { background: #6366f1; color: white; }
-  .pm-btn-danger { border-color: rgba(239, 68, 68, 0.5); color: #dc2626; }
-  .pm-btn-danger:hover:not(:disabled) { background: rgba(239, 68, 68, 0.08); border-color: #dc2626; color: #dc2626; }
+
 }
 
 /* ─── MCP Init Overlay ──────────────────────────────────────────────── */
@@ -2954,33 +2533,6 @@ body {
   padding-top: 8px;
 }
 
-.mcp-init-btn {
-  padding: 8px 20px;
-  border-radius: 4px;
-  border: 1px solid #555;
-  background: transparent;
-  color: #ddd;
-  cursor: pointer;
-  font-size: 0.85rem;
-  transition: background 0.15s;
-}
-.mcp-init-btn:hover { background: rgba(255,255,255,0.05); }
-
-.mcp-init-btn-url { border-color: #3b82f6; color: #3b82f6; }
-.mcp-init-btn-url:hover { background: rgba(59,130,246,0.1); }
-
-.mcp-init-btn-auth { border-color: #16a34a; color: #16a34a; }
-.mcp-init-btn-auth:hover { background: rgba(22,163,74,0.1); }
-
-.mcp-init-btn-deny { border-color: #f59e0b; color: #f59e0b; }
-.mcp-init-btn-deny:hover { background: rgba(245,158,11,0.1); }
-
-.mcp-init-btn-close {
-  border-color: #dc2626;
-  color: #dc2626;
-}
-.mcp-init-btn-close:hover { background: rgba(220,38,38,0.1); }
-
 @media (prefers-color-scheme: light) {
   .mcp-init-status { color: #888; }
   .mcp-init-server { background: rgba(0,0,0,0.02); }
@@ -3033,29 +2585,6 @@ body {
   max-width: 90vw;
 }
 
-.media-preview-close {
-  position: absolute;
-  top: -44px;
-  right: -12px;
-  background: rgba(255,255,255,0.1);
-  border: 1px solid rgba(255,255,255,0.2);
-  color: #ddd;
-  cursor: pointer;
-  font-size: 0.8rem;
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.12s, color 0.12s;
-  z-index: 10;
-}
-.media-preview-close:hover {
-  background: rgba(233,69,96,0.25);
-  color: #e94560;
-}
-
 .media-preview-unsupported {
   display: flex;
   flex-direction: column;
@@ -3079,15 +2608,7 @@ body {
 }
 
 @media (prefers-color-scheme: light) {
-  .media-preview-close {
-    background: rgba(0,0,0,0.08);
-    border-color: rgba(0,0,0,0.15);
-    color: #555;
-  }
-  .media-preview-close:hover {
-    background: rgba(220,38,38,0.12);
-    color: #b91c1c;
-  }
+
   .media-preview-unsupported {
     border-color: #d0d0d8;
     background: rgba(0,0,0,0.02);
@@ -3215,18 +2736,6 @@ body {
   border: 1px solid rgba(0,0,0,0.1);
   box-shadow: 0 1px 6px rgba(0,0,0,0.12);
 }
-.plan-strip-btn {
-  padding: 3px 10px;
-  font-size: 0.72rem;
-  border: 1px solid #ccc;
-  border-radius: 6px;
-  background: #fff;
-  color: #333;
-  cursor: pointer;
-  min-width: auto;
-  line-height: 1.3;
-}
-.plan-strip-btn:hover { border-color: #6366f1; color: #6366f1; }
 
 /* Floating info window (P37): all plan text lives here */
 .plan-info {
@@ -3362,15 +2871,7 @@ body {
   word-break: break-all;
 }
 .cascade-warning { font-size: 0.75rem; color: #666; margin: 4px 0 8px; }
-.cascade-user-warning {
-  font-size: 0.75rem;
-  color: #92400e;
-  background: #fef3c7;
-  border: 1px solid #fcd34d;
-  border-radius: 6px;
-  padding: 6px 8px;
-  margin-bottom: 8px;
-}
+
 .cascade-close-plans {
   font-size: 0.72rem;
   color: #991b1b;
@@ -3392,29 +2893,6 @@ body {
 }
 
 .plan-task-title { font-size: 0.85rem; font-weight: 600; flex: 1; }
-
-/* Plans manager tabs + saved-list filter (P17) */
-.plan-tabs {
-  display: flex;
-  gap: 6px;
-  margin: 8px 0 12px;
-}
-
-.plan-tab {
-  flex: 1;
-  padding: 6px 10px;
-  font-size: 0.8rem;
-  border: 1px solid var(--border-subtle);
-  background: transparent;
-  color: var(--fg-muted);
-  border-radius: var(--r-sm);
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s;
-}
-.plan-tab:hover { background: var(--surface-row-hover); }
-.plan-tab-active { background: var(--accent); border-color: var(--accent); color: white; }
-
-.plan-filter-row { margin-bottom: 10px; }
 
 /* Connection CHAIN curves (P19/P27/P36/P39): since Phase A each segment
    is an absolutely-positioned <svg class="connection-seg"> INSIDE
@@ -3763,7 +3241,6 @@ body {
 .plan-panel {
   cursor: default;
 }
-
 
 /* ─── Touch & pointer input (D3/D7/D8) ───────────────────────────────
    Declarative gesture suppression: the browser must never steal a
