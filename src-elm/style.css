@@ -250,15 +250,10 @@ body {
   width: 100%;
   max-width: var(--content-width);
   align-self: center;
-}
-
-/* Centered (no messages) */
-.session-input-bar.session-input-bar-centered {
-  margin: auto;
-}
-
-/* Bottom (has messages) — default state */
-.session-input-bar:not(.session-input-bar-centered) {
+  /* Docked at the bottom of the chat area in every state — including the
+     empty session. The old `.session-input-bar-centered` variant (margin:
+     auto → middle of the window until the first message arrived) is gone:
+     see App.View.viewInputBar. */
   margin-top: auto;
 }
 .session-input-bar .hs-search-form {

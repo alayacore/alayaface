@@ -2165,9 +2165,6 @@ reasoningLevelName lvl =
 viewInputBar : Model -> T.SessionState -> Html Msg
 viewInputBar model session =
     let
-        hasMessages =
-            not (List.isEmpty session.messages)
-
         hasStaged =
             not (List.isEmpty session.staged)
 
@@ -2194,11 +2191,13 @@ viewInputBar model session =
 
         rawLocked =
             not session.connected || planBlocking || session.voiceActive || session.asrBusy
-
-        inputClass =
-            "session-input-bar" ++ (if not hasMessages then " session-input-bar-centered" else "")
     in
-    Html.div [ Attr.class inputClass ]
+    -- The composer is always docked at the bottom of the chat area. It used
+    -- to switch to a centered (viewport-middle) position while the session
+    -- had no messages, but the empty session is not a landing page — the
+    -- input belongs in the same place it will be in one message later, so
+    -- the user never has to chase it.
+    Html.div [ Attr.class "session-input-bar" ]
         [ Html.div [ Attr.class "input-container" ]
             [ Html.div
                 [ Attr.class
