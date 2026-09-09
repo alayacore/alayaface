@@ -3129,7 +3129,8 @@ update msg model =
                                         in
                                         { w | view = { wv | saving = False } }
                                     )
-                        in                        ( model2, Cmd.none )
+                        in
+                        ( model2, Cmd.none )
 
                     else
                         ( setPlanErrors [ error ] model, Cmd.none )
@@ -3138,7 +3139,8 @@ update msg model =
                     ( model, Cmd.none )
 
         -- C architecture: object_put result (freeze progress).
-        ObjectPutResult raw ->            case D.decodeValue objectPutResultDecoder raw of
+        ObjectPutResult raw ->
+            case D.decodeValue objectPutResultDecoder raw of
                 Ok r ->
                     if not r.ok then
                         -- Object write failed: abort the current freeze,
