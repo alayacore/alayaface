@@ -41,8 +41,16 @@ Three parts share ONE Elm client:
   `Session/FilePicker.elm` (picker transitions) — and they return `(state, Int,
   List Effect)` / an `Op` value: **effects are data, ports stay in
   `App/Update.elm`**. A pure module must not import `App.Types` or
-  `Plan.Update` (cycle); the caller passes the context it resolved. The JS
-  bridge is split: `transport.js` (RPC ports ↔ tauri/http), `chain.js`
+  `Plan.Update` (cycle); the caller passes the context it resolved. That cycle
+  rule has a consequence worth knowing before you write a module: if a module
+  owns a type that a `Model` field uses (`App.UiConfig`, `App.AsrConfig`,
+  `Session.ModelConfig`), then `App.Types` imports IT, so it can never import
+  `App.Types` back — purity is forced by where the types live, not chosen.
+  Slicing message families out of the dispatcher is written up in
+  [`docs/update-slices.md`](docs/update-slices.md); the first one,
+  `App/AsrConfig.elm` (the whole `asr.conf` overlay, 20 arms → 7360-line
+  dispatcher), is the worked example.
+  The JS bridge is split: `transport.js` (RPC ports ↔ tauri/http), `chain.js`
   (connection-chain SVG overlays), `overlay.js` (scrollbar/canvas zoom).
   Tests: `elm-test`.
 
@@ -91,6 +99,21 @@ run. **When** a write happens is a second policy module, `App/UiLayout.elm`
 trigger is spelled `withUiSave` so the set is one grep): at the end of an
 interaction, never during one.
 
+**`asr.conf` is the same rule in a third file, without the escape hatch.**
+`src-elm/src/App/AsrConfig.elm` owns the voice-input profile document (seven
+per-profile fields, `active` + `profiles`), the editor state, every transition of
+the overlay, and the protocol vocabulary (the three wire protocols, their display
+names, and the per-protocol default model id). `sync_asr_config` replaces the
+file, and unlike `model.conf`/`ui.conf` there is no carry for keys this build does
+not model: all three implementations agree on exactly those field names, so a
+field dropped here is a line deleted from the user's config. That is what
+`tests/AsrConfigTest.elm` pins by asserting the serialized key list, and what a
+deliberately **strict** decode is for — the backends decode into typed structs and
+re-serialise every field, so a reply missing one means the shape changed, and
+guessing through it would write the guess back. `check-backend-parity.sh` compares
+the protocol list and the default-model table between Rust and Go but **not**
+against this module, so the third copy moves by hand: all three together, or none.
+
 ## Verification (run before every commit)
 
 ```bash
@@ -129,6 +152,7 @@ Tracked design documents, one per area — read the one you are touching:
 | `docs/arch-persistent.md` | the Arch version/refs model (C-series) — what is persisted per session |
 | `docs/go-backend.md` | the Go transport: RPC/WS mapping, per-command table, storage |
 | `docs/overlay-focus.md` | why overlay focus goes through `focusAfterDelay` |
+| `docs/update-slices.md` | how to slice a message family out of `App/Update.elm`: how to measure which family is cheap, the two module shapes and the cycle rule that forces one of them, what resisted, and what made the first slice (`App/AsrConfig.elm`) verifiable |
 | `docs/manual-acceptance.md` | the checklist a human runs before calling a UI change done |
 | `docs/archive/` | closed series as history: P/R (`TODO.md`, `REFACTOR.md`, `go-backend-todo.md`), P39, and the F-series working file (`TODO-f-series.md`). Tracked **history**, not live plans |
 

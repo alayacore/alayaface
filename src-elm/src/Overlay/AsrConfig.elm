@@ -1,18 +1,19 @@
-module Overlay.AsrConfig exposing (ProfileRow, defaultModel, protocolDisplayName, view)
+module Overlay.AsrConfig exposing (ProfileRow, view)
 
+import App.AsrConfig as AS
 import Html exposing (Html)
 import Html.Attributes as Attr
 import Html.Events as Ev
 
 
-{-| Voice-input ASR config overlay (~/.alayaface/asr.conf): a LIST of
-ASR endpoint profiles with one active profile, plus the add/edit FORM
-(the original single-endpoint page). Three wire protocols per profile:
-"transcriptions" (OpenAI-compatible multipart upload, default),
-"chat_completions" (OpenAI standard chat completions JSON body +
-api-key header) and "step_audio" (StepFun StepAudio realtime ASR). The
-user enters the FULL endpoint address (including the method path); the
-backend uses it verbatim.
+{-| Voice-input ASR config overlay: the profile LIST (entered from the system
+menu) and the add/edit FORM (the original single-endpoint page).
+
+This module owns MARKUP only. The document, its protocol vocabulary (the three
+wire protocols and their default model ids) and every state transition live in
+`App.AsrConfig`, because `sync_asr_config` replaces `asr.conf` and a field this
+file renders but the schema does not carry is a deleted line. The `view` argument
+is therefore an anonymous record: the overlay cannot see a type it does not own.
 -}
 
 
@@ -64,44 +65,6 @@ view cfg =
 
     else
         listView cfg
-
-
-{-| Human-readable protocol name, shared by the profile list rows and
-the edit-form dropdown (one source of truth). Unknown values (e.g. a
-hand-edited asr.conf) are shown verbatim instead of being silently
-mislabeled as "transcriptions".
--}
-protocolDisplayName : String -> String
-protocolDisplayName protocol =
-    case protocol of
-        "chat_completions" ->
-            "OpenAI /chat/completions (JSON + api-key)"
-
-        "step_audio" ->
-            "StepAudio (StepFun, raw PCM + SSE)"
-
-        "transcriptions" ->
-            "OpenAI /audio/transcriptions (multipart upload)"
-
-        other ->
-            other ++ " (unknown protocol)"
-
-
-{-| The model id the backend applies when the model field is left empty,
-per wire protocol (mirrors Go's `DefaultAsrModel` / Rust's
-`default_asr_model`). The edit form swaps this in when the protocol
-changes, so picking StepAudio does not keep sending a whisper model id to
-StepFun — the backend default alone cannot fix that, because the form
-prefills "whisper-1" (non-empty) and normalization keeps explicit values.
--}
-defaultModel : String -> String
-defaultModel protocol =
-    case protocol of
-        "step_audio" ->
-            "stepaudio-2.5-asr"
-
-        _ ->
-            "whisper-1"
 
 
 -- ─── List view (entry point from the system menu) ──────────────────
@@ -158,7 +121,7 @@ profileRow cfg p =
                     Html.text ""
                 ]
             , Html.div [ Attr.class "asr-row-meta" ]
-                [ Html.text (protocolDisplayName p.protocol ++ " · " ++ p.url) ]
+                [ Html.text (AS.protocolDisplayName p.protocol ++ " · " ++ p.url) ]
             ]
         , Html.div [ Attr.class "asr-row-actions" ]
             [ if p.isActive then
@@ -240,11 +203,11 @@ formView cfg =
                         , Ev.onInput cfg.onProtocol
                         ]
                         [ Html.option [ Attr.value "transcriptions", Attr.selected (cfg.protocol == "transcriptions") ]
-                            [ Html.text (protocolDisplayName "transcriptions") ]
+                            [ Html.text (AS.protocolDisplayName "transcriptions") ]
                         , Html.option [ Attr.value "chat_completions", Attr.selected (cfg.protocol == "chat_completions") ]
-                            [ Html.text (protocolDisplayName "chat_completions") ]
+                            [ Html.text (AS.protocolDisplayName "chat_completions") ]
                         , Html.option [ Attr.value "step_audio", Attr.selected (cfg.protocol == "step_audio") ]
-                            [ Html.text (protocolDisplayName "step_audio") ]
+                            [ Html.text (AS.protocolDisplayName "step_audio") ]
                         ]
                     , Html.div [ Attr.class "me-hint" ]
                         [ Html.text "\"transcriptions\": OpenAI-compatible multipart upload (most local whisper servers). \"chat_completions\": OpenAI standard chat completions — JSON body with input_audio base64 and api-key header. \"step_audio\": StepFun realtime ASR — JSON with raw PCM audio, Accept: text/event-stream, Authorization: Bearer." ]

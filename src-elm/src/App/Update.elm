@@ -44,7 +44,7 @@ import Plan.Cascade as PC
 import Plan.Detect
 import Plan.Frames
 import Plan.MetaScan as MetaScan
-import Overlay.AsrConfig as AsrUI
+import App.AsrConfig as AS
 import Ports
 import Arch.Values as AV
 import Arch.Freeze as Freeze
@@ -316,46 +316,6 @@ doSendPrompt model s =
             , media = mediaItems
             }
         )
-
-
-{-| Update one field of the ASR config editor (the Msg payload already
-carries the new value; only the field selector differs). Clears any
-previous error so the user can fix the field without dismissing the
-message first.
--}
-setAsrEditorField : Model -> (AsrConfigEditor -> AsrConfigEditor) -> ( Model, Cmd Msg )
-setAsrEditorField model updateEditor =
-    ( { model | asrConfigEditor = updateEditor model.asrConfigEditor }
-    , Cmd.none
-    )
-
-
-findAsrProfile : String -> List AsrProfile -> Maybe AsrProfile
-findAsrProfile profileId profiles =
-    List.filter (\p -> p.id == profileId) profiles |> List.head
-
-
-asrProfileEncoder : AsrProfile -> E.Value
-asrProfileEncoder p =
-    E.object
-        [ ( "id", E.string p.id )
-        , ( "name", E.string p.name )
-        , ( "protocol", E.string p.protocol )
-        , ( "url", E.string p.url )
-        , ( "api_key", E.string p.apiKey )
-        , ( "model", E.string p.model )
-        , ( "language", E.string p.language )
-        ]
-
-
-{-| Encode the full ASR config (active + profiles) for sync_asr_config.
--}
-asrConfigJson : { active : String } -> List AsrProfile -> E.Value
-asrConfigJson active profiles =
-    E.object
-        [ ( "active", E.string active.active )
-        , ( "profiles", E.list asrProfileEncoder profiles )
-        ]
 
 
 {-| Append a local error message to the session's message list (same
@@ -1261,6 +1221,25 @@ event-driven and needs no number like this.
 zoomIdleMs : Float
 zoomIdleMs =
     1000
+
+
+-- ─── ASR config effect glue (App/AsrConfig) ────────────────────────
+-- The transitions return `Action` data; this is the only place that turns one
+-- into a port call, so everything able to replace asr.conf is one grep away.
+
+applyAsrAction : AS.Action -> Cmd Msg
+applyAsrAction action =
+    case action of
+        AS.Get ->
+            Ports.getAsrConfig {}
+
+        AS.Sync config ->
+            Ports.syncAsrConfig { config = config }
+
+
+applyAsrActions : List AS.Action -> Cmd Msg
+applyAsrActions actions =
+    actions |> List.map applyAsrAction |> Cmd.batch
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -5191,246 +5170,72 @@ update msg model =
 
         -- Voice input ASR config overlay (cross-preset): profile list
         OpenAsrConfig ->
-            ( { model
-                | asrConfigEditor =
-                    { emptyAsrConfigEditor
-                        | show = True
-                        , loading = True
-                    }
-                , showGlobalMenu = False
-              }
-            , Ports.getAsrConfig {}
-            )
+            let
+                ( ed, actions ) =
+                    AS.open
+            in
+            ( { model | asrConfigEditor = ed, showGlobalMenu = False }, applyAsrActions actions )
 
         CloseAsrConfig ->
-            let
-                ed =
-                    model.asrConfigEditor
-            in
-            if ed.syncing then
-                -- Do not allow closing while a sync is in flight
-                ( model, Cmd.none )
-
-            else if ed.inForm then
-                -- The form's Back button returns to the list; closing
-                -- the overlay is only possible from the list view.
-                ( model, Cmd.none )
-
-            else
-                ( { model | asrConfigEditor = emptyAsrConfigEditor }
-                , Cmd.none
-                )
+            -- Both refusals (a sync in flight, and being inside the form) are
+            -- AS.close's decision, so this arm cannot disagree with it.
+            ( { model | asrConfigEditor = AS.close model.asrConfigEditor }, Cmd.none )
 
         AsrConfigAdd ->
-            -- Enter the form for a NEW profile.
-            ( { model
-                | asrConfigEditor =
-                    { emptyAsrConfigEditor
-                        | show = True
-                        , inForm = True
-                        , editingId = Nothing
-                    }
-              }
-            , Cmd.none
-            )
+            ( { model | asrConfigEditor = AS.add }, Cmd.none )
 
         AsrConfigEdit profileId ->
-            -- Enter the form pre-filled from the profile.
-            case findAsrProfile profileId model.asrConfig.profiles of
-                Just p ->
-                    ( { model
-                        | asrConfigEditor =
-                            { emptyAsrConfigEditor
-                                | show = True
-                                , inForm = True
-                                , editingId = Just p.id
-                                , name = p.name
-                                , protocol = p.protocol
-                                , url = p.url
-                                , apiKey = p.apiKey
-                                , model = p.model
-                                , language = p.language
-                            }
-                      }
-                    , Cmd.none
-                    )
-
-                Nothing ->
-                    ( model, Cmd.none )
+            ( { model | asrConfigEditor = AS.edit profileId model.asrConfig model.asrConfigEditor }, Cmd.none )
 
         AsrConfigBack ->
-            -- Form → list (unsaved edits are discarded).
-            ( { model
-                | asrConfigEditor =
-                    { emptyAsrConfigEditor
-                        | show = True
-                    }
-              }
-            , Cmd.none
-            )
+            ( { model | asrConfigEditor = AS.back }, Cmd.none )
 
         AsrConfigSetActive profileId ->
-            -- Switch the active profile (transcription uses it).
             let
-                ed =
-                    model.asrConfigEditor
+                ( ed, actions ) =
+                    AS.setActive profileId model.asrConfig model.asrConfigEditor
             in
-            ( { model
-                | asrConfigEditor =
-                    { ed
-                        | syncing = True
-                        , error = Nothing
-                    }
-              }
-            , Ports.syncAsrConfig
-                { config =
-                    E.encode 0
-                        (asrConfigJson { active = profileId } model.asrConfig.profiles)
-                }
-            )
+            ( { model | asrConfigEditor = ed }, applyAsrActions actions )
 
         AsrConfigDelete profileId ->
-            -- First click arms the confirm state on the list row.
-            let
-                ed =
-                    model.asrConfigEditor
-            in
-            ( { model
-                | asrConfigEditor =
-                    { ed
-                        | confirmDelete =
-                            if ed.confirmDelete == Just profileId then
-                                Nothing
-
-                            else
-                                Just profileId
-                    }
-              }
-            , Cmd.none
-            )
+            ( { model | asrConfigEditor = AS.delete profileId model.asrConfigEditor }, Cmd.none )
 
         AsrConfigDeleteConfirm ->
-            case model.asrConfigEditor.confirmDelete of
-                Just profileId ->
-                    let
-                        profiles =
-                            List.filter (\p -> p.id /= profileId) model.asrConfig.profiles
-
-                        ed =
-                            model.asrConfigEditor
-                    in
-                    ( { model
-                        | asrConfigEditor =
-                            { ed
-                                | syncing = True
-                                , confirmDelete = Nothing
-                                , error = Nothing
-                            }
-                      }
-                    , Ports.syncAsrConfig
-                        { config = E.encode 0 (asrConfigJson { active = model.asrConfig.active } profiles) }
-                    )
-
-                Nothing ->
-                    ( model, Cmd.none )
+            let
+                ( ed, actions ) =
+                    AS.deleteConfirm model.asrConfig model.asrConfigEditor
+            in
+            ( { model | asrConfigEditor = ed }, applyAsrActions actions )
 
         AsrConfigDeleteCancel ->
-            let
-                ed =
-                    model.asrConfigEditor
-            in
-            ( { model
-                | asrConfigEditor =
-                    { ed | confirmDelete = Nothing }
-              }
-            , Cmd.none
-            )
+            ( { model | asrConfigEditor = AS.deleteCancel model.asrConfigEditor }, Cmd.none )
 
         SetAsrName val ->
-            setAsrEditorField model (\ed -> { ed | name = val, error = Nothing })
+            ( { model | asrConfigEditor = AS.setName val model.asrConfigEditor }, Cmd.none )
 
         SetAsrProtocol val ->
-            -- The default model id is protocol-specific, and the backend only
-            -- applies it when the field is EMPTY — so switching a prefilled
-            -- form to StepAudio used to keep sending "whisper-1" to StepFun.
-            -- Swap the default when the current value is still a default
-            -- (or empty); a model the user typed themselves is left alone.
-            setAsrEditorField model <|
-                \ed ->
-                    let
-                        untouched =
-                            String.trim ed.model == ""
-                                || List.member (String.trim ed.model) [ AsrUI.defaultModel "transcriptions", AsrUI.defaultModel "step_audio" ]
-                    in
-                    { ed
-                        | protocol = val
-                        , model =
-                            if untouched then
-                                AsrUI.defaultModel val
-
-                            else
-                                ed.model
-                        , error = Nothing
-                    }
+            -- The per-protocol default-model swap lives with the protocol
+            -- table now (AS.setProtocol), not in the dispatcher.
+            ( { model | asrConfigEditor = AS.setProtocol val model.asrConfigEditor }, Cmd.none )
 
         SetAsrUrl val ->
-            setAsrEditorField model (\ed -> { ed | url = val, error = Nothing })
+            ( { model | asrConfigEditor = AS.setUrl val model.asrConfigEditor }, Cmd.none )
 
         SetAsrApiKey val ->
-            setAsrEditorField model (\ed -> { ed | apiKey = val, error = Nothing })
+            ( { model | asrConfigEditor = AS.setApiKey val model.asrConfigEditor }, Cmd.none )
 
         SetAsrModel val ->
-            setAsrEditorField model (\ed -> { ed | model = val, error = Nothing })
+            ( { model | asrConfigEditor = AS.setModel val model.asrConfigEditor }, Cmd.none )
 
         SetAsrLanguage val ->
-            setAsrEditorField model (\ed -> { ed | language = val, error = Nothing })
+            ( { model | asrConfigEditor = AS.setLanguage val model.asrConfigEditor }, Cmd.none )
 
         AsrConfigSave ->
             let
-                ed =
-                    model.asrConfigEditor
+                ( ed, actions ) =
+                    AS.save model.asrConfig model.asrConfigEditor
             in
-            if String.isEmpty (String.trim ed.url) then
-                ( { model
-                    | asrConfigEditor =
-                        { ed | error = Just "Endpoint URL is required (full address, e.g. http://127.0.0.1:8080/v1/audio/transcriptions)" }
-                  }
-                , Cmd.none
-                )
-
-            else
-                let
-                    draft =
-                        { id = Maybe.withDefault "" ed.editingId
-                        , name = String.trim ed.name
-                        , protocol = String.trim ed.protocol
-                        , url = String.trim ed.url
-                        , apiKey = String.trim ed.apiKey
-                        , model = String.trim ed.model
-                        , language = String.trim ed.language
-                        }
-
-                    profiles =
-                        case ed.editingId of
-                            Just profileId ->
-                                List.map
-                                    (\p -> if p.id == profileId then draft else p)
-                                    model.asrConfig.profiles
-
-                            Nothing ->
-                                model.asrConfig.profiles ++ [ draft ]
-                in
-                ( { model
-                    | asrConfigEditor =
-                        { ed
-                            | syncing = True
-                            , error = Nothing
-                        }
-                  }
-                , Ports.syncAsrConfig
-                    { config = E.encode 0 (asrConfigJson { active = model.asrConfig.active } profiles) }
-                )
-
+            ( { model | asrConfigEditor = ed }, applyAsrActions actions )
         -- LAYOUT STORE (F3). The read is issued once, in Main's init; the
         -- writes are issued by `UiLayout.withUiSave` at the END of an
         -- interaction (SD16) — never from a move path.
@@ -5482,75 +5287,30 @@ update msg model =
                 ( model, Cmd.none )
 
         AsrConfigGetResult raw ->
-            case D.decodeValue asrConfigGetResultDecoder raw of
-                Ok res ->
-                    let
-                        ed =
-                            model.asrConfigEditor
-                    in
-                    if res.ok then
-                        ( { model
-                            | asrConfig =
-                                { active = res.active
-                                , profiles = res.profiles
-                                }
-                            , asrConfigEditor =
-                                { ed
-                                    | loading = False
-                                    , error = Nothing
-                                }
-                          }
-                        , Cmd.none
-                        )
-
-                    else
-                        ( { model
-                            | asrConfigEditor =
-                                { ed
-                                    | loading = False
-                                    , error = Just res.error
-                                }
-                          }
-                        , Cmd.none
-                        )
-
-                Err _ ->
+            case AS.decodeReply raw of
+                Nothing ->
+                    -- Not a reply at all: leave the editor (and its `loading`)
+                    -- exactly as it is rather than guess at a shape.
                     ( model, Cmd.none )
+
+                Just reply ->
+                    let
+                        ( cfg, ed ) =
+                            AS.adoptGet reply model.asrConfig model.asrConfigEditor
+                    in
+                    ( { model | asrConfig = cfg, asrConfigEditor = ed }, Cmd.none )
 
         AsrConfigSyncResult raw ->
-            case D.decodeValue asrConfigGetResultDecoder raw of
-                Ok res ->
-                    if res.ok then
-                        ( { model
-                            | asrConfig =
-                                { active = res.active
-                                , profiles = res.profiles
-                                }
-                            , asrConfigEditor =
-                                { emptyAsrConfigEditor
-                                    | show = True
-                                }
-                          }
-                        , Cmd.none
-                        )
-
-                    else
-                        let
-                            ed =
-                                model.asrConfigEditor
-                        in
-                        ( { model
-                            | asrConfigEditor =
-                                { ed
-                                    | syncing = False
-                                    , error = Just res.error
-                                }
-                          }
-                        , Cmd.none
-                        )
-
-                Err _ ->
+            case AS.decodeReply raw of
+                Nothing ->
                     ( model, Cmd.none )
+
+                Just reply ->
+                    let
+                        ( cfg, ed ) =
+                            AS.adoptSync reply model.asrConfig model.asrConfigEditor
+                    in
+                    ( { model | asrConfig = cfg, asrConfigEditor = ed }, Cmd.none )
 
         AlayacoreCheckResult raw ->
             -- Startup probe reply: the backend reports whether the
@@ -7243,34 +7003,6 @@ globalConfigSyncResultDecoder =
         (\ok recursionLimit error -> { ok = ok, recursionLimit = recursionLimit, error = error })
         (D.field "ok" D.bool)
         (D.field "recursion_limit" D.int)
-        (D.field "error" D.string)
-
-
-asrProfileDecoder : D.Decoder AsrProfile
-asrProfileDecoder =
-    D.map7 AsrProfile
-        (D.field "id" D.string)
-        (D.field "name" D.string)
-        (D.field "protocol" D.string)
-        (D.field "url" D.string)
-        (D.field "api_key" D.string)
-        (D.field "model" D.string)
-        (D.field "language" D.string)
-
-
-asrConfigGetResultDecoder : D.Decoder { ok : Bool, active : String, profiles : List AsrProfile, error : String }
-asrConfigGetResultDecoder =
-    D.map4
-        (\ok active profiles error ->
-            { ok = ok
-            , active = active
-            , profiles = profiles
-            , error = error
-            }
-        )
-        (D.field "ok" D.bool)
-        (D.field "active" D.string)
-        (D.field "profiles" (D.list asrProfileDecoder))
         (D.field "error" D.string)
 
 

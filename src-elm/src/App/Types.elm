@@ -20,11 +20,6 @@ module App.Types exposing
     , emptyGlobalConfig
     , GlobalConfigEditor
     , emptyGlobalConfigEditor
-    , AsrConfig
-    , emptyAsrConfig
-    , AsrProfile
-    , AsrConfigEditor
-    , emptyAsrConfigEditor
     , PresetInfo
     , PresetManager
     , emptyPresetManager
@@ -56,6 +51,7 @@ import Session.Types as T
 import App.NodeConnection as NC
 import App.Pointer as P
 import App.UiConfig as UC
+import App.AsrConfig as AS
 import Arch.Values as AV
 import Arch.Freeze as Freeze
 import Plan.MetaScan as MetaScan
@@ -165,8 +161,8 @@ type alias Model =
     -- Voice-input ASR config overlay (~/.alayaface/asr.conf): an
     -- OpenAI-compatible /audio/transcriptions endpoint (local or remote
     -- — the two only differ by URL).
-    , asrConfig : AsrConfig
-    , asrConfigEditor : AsrConfigEditor
+    , asrConfig : AS.Document
+    , asrConfigEditor : AS.Editor
     -- Pending voice transcript waiting for the input cursor position
     -- (read from the textarea right before inserting, so the text lands
     -- where the user's caret currently is).
@@ -921,80 +917,11 @@ emptyGlobalConfigEditor =
 
 -- VOICE INPUT ASR CONFIG OVERLAY
 --
--- ~/.alayaface/asr.conf: a LIST of ASR endpoint profiles; one is
--- active and used by asr_transcribe. Three wire protocols per profile:
---   "transcriptions"    — OpenAI-compatible /audio/transcriptions
---                         (multipart file upload); local and remote
---                         differ only by URL (default)
---   "chat_completions"  — OpenAI standard chat completions: JSON body
---                         with input_audio base64, api-key header
---   "step_audio"        — StepFun StepAudio realtime ASR: JSON with raw
---                         PCM audio, Accept: text/event-stream,
---                         Authorization: Bearer
--- The endpoint URL is the FULL address and is used verbatim.
-
-type alias AsrProfile =
-    { id : String
-    , name : String
-    , protocol : String
-    , url : String
-    , apiKey : String
-    , model : String
-    , language : String
-    }
-
-
-type alias AsrConfig =
-    { active : String
-    , profiles : List AsrProfile
-    }
-
-
-emptyAsrConfig : AsrConfig
-emptyAsrConfig =
-    { active = ""
-    , profiles = []
-    }
-
-
-{-| Editor state: the overlay has two views — a profile LIST (the entry
-point from the system menu) and the FORM (add/edit, the same page as
-before). editingId = Nothing means a new profile.
--}
-type alias AsrConfigEditor =
-    { show : Bool
-    , loading : Bool
-    , syncing : Bool
-    , inForm : Bool
-    , editingId : Maybe String
-    , confirmDelete : Maybe String
-    , name : String
-    , protocol : String
-    , url : String
-    , apiKey : String
-    , model : String
-    , language : String
-    , error : Maybe String
-    }
-
-
-emptyAsrConfigEditor : AsrConfigEditor
-emptyAsrConfigEditor =
-    { show = False
-    , loading = False
-    , syncing = False
-    , inForm = False
-    , editingId = Nothing
-    , confirmDelete = Nothing
-    , name = ""
-    , protocol = "transcriptions"
-    , url = ""
-    , apiKey = ""
-    , model = "whisper-1"
-    , language = "auto"
-    , error = Nothing
-    }
-
+-- The document, the editor state and every transition over them live in
+-- `App.AsrConfig` — the same ownership rule `Session.ModelConfig` and
+-- `App.UiConfig` follow for `model.conf` / `ui.conf`: `sync_asr_config` replaces
+-- the file, so the field list is load-bearing and belongs in one module. The
+-- `Model` fields below are typed by it.
 
 -- PRESETS
 

@@ -14,6 +14,7 @@ import Html exposing (Html)
 import Json.Decode as D
 import Task
 import App.Types exposing (..)
+import App.AsrConfig as AS
 import App.Update
 import App.View
 import Plan.MetaScan as MetaScan
@@ -73,8 +74,8 @@ init _ =
       , settingsEditor = emptySettingsEditor
       , globalConfig = emptyGlobalConfig
       , globalConfigEditor = emptyGlobalConfigEditor
-      , asrConfig = emptyAsrConfig
-      , asrConfigEditor = emptyAsrConfigEditor
+      , asrConfig = AS.emptyDocument
+      , asrConfigEditor = AS.emptyEditor
       , pendingVoiceInsert = Nothing
       , presets = []
       , presetSubmenuOpen = False

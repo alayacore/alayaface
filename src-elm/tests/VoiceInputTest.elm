@@ -1,6 +1,7 @@
 module VoiceInputTest exposing (tests)
 
 import Dict
+import App.AsrConfig as AS
 import Expect
 import Json.Encode as E
 import Test exposing (Test, describe, test)
@@ -451,7 +452,7 @@ tests =
                         ed =
                             let
                                 base =
-                                    AT.emptyAsrConfigEditor
+                                    AS.emptyEditor
                             in
                             { base | show = True, loading = True }
 
@@ -516,7 +517,7 @@ tests =
                         ed =
                             let
                                 base =
-                                    AT.emptyAsrConfigEditor
+                                    AS.emptyEditor
                             in
                             { base | show = True, inForm = True, url = "http://x" }
 
@@ -537,7 +538,7 @@ tests =
                         ed =
                             let
                                 base =
-                                    AT.emptyAsrConfigEditor
+                                    AS.emptyEditor
                             in
                             { base | show = True, inForm = True }
 
@@ -554,7 +555,7 @@ tests =
                         ed =
                             let
                                 base =
-                                    AT.emptyAsrConfigEditor
+                                    AS.emptyEditor
                             in
                             { base | show = True, inForm = True, url = "" }
 
@@ -571,7 +572,7 @@ tests =
                         ed =
                             let
                                 base =
-                                    AT.emptyAsrConfigEditor
+                                    AS.emptyEditor
                             in
                             { base | show = True, inForm = True, name = "Local", url = "http://127.0.0.1:8080/v1/audio/transcriptions" }
 
@@ -613,7 +614,7 @@ tests =
                         ed =
                             let
                                 base =
-                                    AT.emptyAsrConfigEditor
+                                    AS.emptyEditor
                             in
                             { base | show = True, inForm = True, syncing = True }
 

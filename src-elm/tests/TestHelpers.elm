@@ -4,6 +4,7 @@ module TestHelpers exposing (initModelWithSession)
 -- "s1" (active) and all plan-mode fields at their initial values.
 
 import Dict
+import App.AsrConfig as AS
 import Set
 import App.Types as AT
 import Plan.MetaScan as MetaScan
@@ -52,8 +53,8 @@ initModelWithSession =
     , settingsEditor = AT.emptySettingsEditor
     , globalConfig = AT.emptyGlobalConfig
     , globalConfigEditor = AT.emptyGlobalConfigEditor
-    , asrConfig = AT.emptyAsrConfig
-    , asrConfigEditor = AT.emptyAsrConfigEditor
+    , asrConfig = AS.emptyDocument
+    , asrConfigEditor = AS.emptyEditor
     , pendingVoiceInsert = Nothing
     , presets = []
     , presetSubmenuOpen = False
