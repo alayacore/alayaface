@@ -6,6 +6,8 @@ module TestHelpers exposing (initModelWithSession)
 import Dict
 import App.AsrConfig as AS
 import App.Presets as PS
+import App.SettingsConfig as SC
+import App.GlobalConfig as GC
 import Set
 import App.Types as AT
 import Plan.MetaScan as MetaScan
@@ -51,9 +53,9 @@ initModelWithSession =
     , globalMenuY = 0
     , defaultModelsEditor = AT.emptyDefaultModelsEditor
     , mcpEditor = AT.emptyMcpEditor
-    , settingsEditor = AT.emptySettingsEditor
-    , globalConfig = AT.emptyGlobalConfig
-    , globalConfigEditor = AT.emptyGlobalConfigEditor
+    , settingsEditor = SC.emptyEditor
+    , globalConfig = GC.emptyDocument
+    , globalConfigEditor = GC.emptyEditor
     , asrConfig = AS.emptyDocument
     , asrConfigEditor = AS.emptyEditor
     , pendingVoiceInsert = Nothing

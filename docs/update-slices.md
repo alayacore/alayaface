@@ -7,12 +7,13 @@ Nothing here is urgent — it is mechanical work that is cheap only if the metho
 already written down.
 
 The first slice is done: **`App/AsrConfig.elm`** (the `asr.conf` overlay — profile
-list, edit form, delete confirm, both replies), landed 2026-09-09. Then
-**`App/Presets.elm`** (the Preset Manager — 17 arms: open/close, copy naming,
-rename, the two-step delete, the drag, both replies) and **`App/Arch.elm`** (the
-freeze queue and object-store replies — 6 arms + 2 helpers), the same day. All
-three are the worked examples below; where they differ is in "What the second
-slice taught" and "What the third slice taught".
+list, edit form, delete confirm, both replies), landed 2026-09-09. Then four more
+the same day: **`App/Presets.elm`** (the Preset Manager — 17 arms), **`App/Arch.elm`**
+(the freeze queue and object-store replies — 6 arms + 2 helpers),
+**`App/SettingsConfig.elm`** and **`App/GlobalConfig.elm`** (the two config editors,
+15 arms between them). All five are the worked examples below; where they differ is
+in "What the second slice taught", "What the third slice taught" and "What the
+fourth and fifth taught".
 
 
 ## Measure before choosing
@@ -161,32 +162,69 @@ didn't mutate reports "your tests are weak", which is worse than no check becaus
 it is unfalsifiable. Print the changed line, or assert the replacement count.
 
 
+## What the fourth and fifth taught
+
+The two config editors (`App/SettingsConfig.elm`, `App/GlobalConfig.elm`) were
+planned from a name-based measurement of "11 arms, 254 lines" and turned out to be
+**15 arms, 314 lines**.
+
+**Scope by state WRITTEN, not by message name — and then separate reads from
+writes.** The four field setters were named `SetToolConfirm`, `SetBuiltinTools`,
+`SetSystemPrompt` and `SetRecursionLimit`: none contains "Settings"/"Global", all
+four write the editors' state. Grepping for the fields instead caught them — and
+also caught `KeyDown`, 166 lines that merely READS `settingsEditor.show` to route
+Escape. A field grep is therefore the start of the scoping, not the end: writes
+define the family, reads are the family's customers.
+
+**Whether a save merges or replaces decides what the tests should be about.**
+`sync_global_settings` MERGES (both backends apply only the keys present in the
+payload, and the Go comment says so explicitly), so an unmodelled key in
+`settings.conf` survives and there is no byte-exact key-list pin to write; what
+matters instead is that a failed read does not blank the form the user is typing
+into, and that a save still sends the whole form so an editor cannot write a stale
+half of it. `global.conf` is the opposite — both backends decode into a typed
+struct and write that struct back, so it is REPLACE semantics, and its one default
+(`8`) was triplicated across Go, Rust and Elm with nothing comparing them. Slicing
+a family is when these semantics get written down; do not leave it for the next
+person to rediscover from the handlers.
+
+**A slice can expose a gate gap; fix it in the same commit.** Adding the
+recursion-limit comparison to `scripts/check-backend-parity.sh` also surfaced that
+`check_scalar` hardcoded "Rust:"/"Go:" in its messages while already being used for
+"Rust vs Elm" checks — so two existing checks were printing an Elm value under a
+"Go" label. Values are now printed neutrally, since every call site's label already
+names both sides. Verify a new parity check by MUTATING one side and asserting both
+the failure and the non-zero exit code: a check that never fails is decoration, and
+`| tail -1` in a pipeline will happily report exit 0 for it.
+
+**The mutation harness must assert its own anchor.** The helpers here `assert
+s.count(old) == 1` before replacing anything; that is what turned the earlier false
+negative ("my test didn't catch it") into the real finding ("my mutation never
+applied").
+
+
 ## For the next slice
 
-1. Pick by coupling, not size. Remaining candidates, measured 2026-09-09 over
-   `App/Update.elm` (6923 lines, `update` body 4642 lines, 235 arms):
-   **the two config editors are the next cheap slices, and they are the same shape
-   as `App/AsrConfig`** — `Settings` (6 arms, 186 lines: `tool_confirm`,
-   `builtin_tools`, `system_prompt`, `reasoning_level` per preset) and `Global`
-   (5 arms, 140 lines: the recursion limit). Note the difference in hazard before
-   writing their tests: `sync_global_settings` and `sync_global_config` MERGE
-   (both backends apply only the keys present in the payload, so an unmodelled key
-   survives and a partial save is the documented way to change one field), whereas
-   `sync_asr_config`, `sync_ui_config` and `model_sync` REPLACE. So these want a
-   "a partial save must not wipe the others" pin, not a byte-exact key-list pin.
+1. Pick by coupling, not size. Re-measured 2026-09-09 after five slices:
+   `App/Update.elm` is 6737 lines and its `update` body 4414 lines over 235 arms.
+   The cheap same-shape families are gone; what is left is either large-but-coupled
+   or small-and-already-thin:
+   **`Session`** lifecycle (4 arms, 194 lines: `SessionCreated`,
+   `SessionCreateError`, `CloseSession`, `DeleteSession`) is the strongest
+   remaining candidate, but it is entangled with window creation
+   (`createSessionWindow`, `resumeSessionCreated`, `forkSessionCreated`), so it is
+   an `App/Windows`-shaped change rather than a family slice.
    **`Fs`** (6 arms, 342 lines) is the biggest-looking cluster and the least
-   sliceable — its arms ARE the glue between the file picker and `Plan/MetaScan`,
+   sliceable: its arms ARE the glue between the file picker and `Plan/MetaScan`,
    they route through `updateActiveSession`, and moving them would move no
-   decision. **`Session`** lifecycle (4 arms, 194 lines) is entangled with window
-   creation (`createSessionWindow`, `resumeSessionCreated`, `forkSessionCreated`) —
-   doable, but it is an `App/Windows`-shaped change rather than a family slice.
-   The **`Plan`** family (26 arms, 819 lines) already has `Plan/Update.elm`; what
-   is left in the dispatcher there is orchestration, not state. The **voice
-   runtime** arms (`VoiceInput`, `PushToTalk`, `VoiceError`, `AsrResult`) are
-   already thin wrappers over `Session/Voice.elm`.
-   Beyond those, what remains is the cluster described under "What resists, and
-   why" (frame/status/delta, `KeyDown`), and reducing it needs `Dispatch`
-   injection rather than another slice.
+   decision. The **voice runtime** arms (`AsrResult`, `PushToTalk`, `VoiceError`,
+   `RawAudio*`, `CursorPosResult`, ~280 lines over ~10 arms) are already thin
+   wrappers over `Session/Voice.elm` — the machine exists, so the work there is
+   consolidating effect mapping, not extracting state.
+   Everything bigger needs the `Dispatch` injection written up in `TODO.md`
+   (root of the repo, gitignored): `FrameEvent` (250 lines), `KeyDown` (166),
+   `StatusEvent` + `DeltaEvent` (~150) and the 26 `Plan` orchestration arms (819).
+
 2. Decide which of the two shapes applies BEFORE writing — if `Model` will reference
    your types, you have chosen the pure one and must pass every input explicitly.
 3. Move the private helpers first (decoder + encoder + the type definitions), so the

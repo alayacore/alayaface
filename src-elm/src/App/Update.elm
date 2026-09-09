@@ -44,6 +44,8 @@ import Plan.Frames
 import Plan.MetaScan as MetaScan
 import App.AsrConfig as AS
 import App.Presets as PS
+import App.SettingsConfig as SC
+import App.GlobalConfig as GC
 import App.Arch as Arch
 import Ports
 import Arch.Values as AV
@@ -1244,6 +1246,46 @@ applyArchAction action =
 applyArchActions : List Arch.Action -> Cmd Msg
 applyArchActions actions =
     actions |> List.map applyArchAction |> Cmd.batch
+
+
+{-| The per-preset settings editor's commands. `Focus` and `PlaceCursor` are
+actions rather than direct calls so that a test can see a failed read does NOT move
+the caret into an empty form.
+-}
+applySettingsAction : SC.Action -> Cmd Msg
+applySettingsAction action =
+    case action of
+        SC.Read preset ->
+            Ports.listGlobalSettings { preset = preset }
+
+        SC.Sync payload ->
+            Ports.syncGlobalSettings payload
+
+        SC.Focus id ->
+            focusAfterDelay id
+
+        SC.PlaceCursor id ->
+            Ports.setCursorPos { id = id, pos = Nothing }
+
+
+applySettingsActions : List SC.Action -> Cmd Msg
+applySettingsActions actions =
+    actions |> List.map applySettingsAction |> Cmd.batch
+
+
+applyGlobalAction : GC.Action -> Cmd Msg
+applyGlobalAction action =
+    case action of
+        GC.Get ->
+            Ports.getGlobalConfig {}
+
+        GC.Sync n ->
+            Ports.syncGlobalConfig { recursionLimit = n }
+
+
+applyGlobalActions : List GC.Action -> Cmd Msg
+applyGlobalActions actions =
+    actions |> List.map applyGlobalAction |> Cmd.batch
 
 
 
@@ -4717,318 +4759,87 @@ update msg model =
 
         -- Global Settings (targets a specific preset)
         EditPresetSettings preset ->
-            ( { model
-                | settingsEditor =
-                    { emptySettingsEditor
-                        | show = True
-                        , loading = True
-                        , preset = preset
-                    }
-                , showGlobalMenu = False
-              }
-            , Ports.listGlobalSettings { preset = preset }
-            )
+            let
+                ( ed, actions ) =
+                    SC.open preset
+            in
+            ( { model | settingsEditor = ed, showGlobalMenu = False }, applySettingsActions actions )
 
         CloseSettingsEditor ->
-            let
-                ed =
-                    model.settingsEditor
-            in
-            if ed.syncing then
-                -- Do not allow closing while a sync is in flight
-                ( model, Cmd.none )
-
-            else
-                ( { model | settingsEditor = emptySettingsEditor }
-                , Cmd.none
-                )
+            ( { model | settingsEditor = SC.close model.settingsEditor }, Cmd.none )
 
         SetToolConfirm val ->
-            let
-                ed =
-                    model.settingsEditor
-            in
-            ( { model
-                | settingsEditor =
-                    { ed
-                        | toolConfirm = val
-                        , error = Nothing
-                    }
-              }
-            , Cmd.none
-            )
+            ( { model | settingsEditor = SC.setToolConfirm val model.settingsEditor }, Cmd.none )
 
         SetBuiltinTools val ->
-            let
-                ed =
-                    model.settingsEditor
-            in
-            ( { model
-                | settingsEditor =
-                    { ed
-                        | builtinTools = val
-                        , error = Nothing
-                    }
-              }
-            , Cmd.none
-            )
+            ( { model | settingsEditor = SC.setBuiltinTools val model.settingsEditor }, Cmd.none )
 
         SetSystemPrompt val ->
-            let
-                ed =
-                    model.settingsEditor
-            in
-            ( { model
-                | settingsEditor =
-                    { ed
-                        | systemPrompt = val
-                        , error = Nothing
-                    }
-              }
-            , Cmd.none
-            )
+            ( { model | settingsEditor = SC.setSystemPrompt val model.settingsEditor }, Cmd.none )
 
         SetSettingsReasoningLevel lvl ->
-            let
-                ed =
-                    model.settingsEditor
-            in
-            ( { model
-                | settingsEditor =
-                    { ed
-                        | reasoningLevel = lvl
-                        , error = Nothing
-                    }
-              }
-            , Cmd.none
-            )
+            ( { model | settingsEditor = SC.setReasoningLevel lvl model.settingsEditor }, Cmd.none )
 
         SettingsSave ->
+            -- No client-side validation: the backend normalizes each field, and a
+            -- second opinion here is how the two drift.
             let
-                ed =
-                    model.settingsEditor
+                ( ed, actions ) =
+                    SC.save model.settingsEditor
             in
-            ( { model
-                | settingsEditor = { ed | syncing = True, error = Nothing }
-              }
-            , Ports.syncGlobalSettings
-                { preset = ed.preset
-                , toolConfirm = ed.toolConfirm
-                , builtinTools = ed.builtinTools
-                , systemPrompt = ed.systemPrompt
-                , reasoningLevel = ed.reasoningLevel
-                }
-            )
+            ( { model | settingsEditor = ed }, applySettingsActions actions )
 
         SettingsListResult raw ->
-            case D.decodeValue settingsListResultDecoder raw of
-                Ok res ->
-                    let
-                        ed =
-                            model.settingsEditor
-                    in
-                    if res.ok then
-                        ( { model
-                            | settingsEditor =
-                                { ed
-                                    | loading = False
-                                    , toolConfirm = res.toolConfirm
-                                    , builtinTools = res.builtinTools
-                                    , systemPrompt = res.systemPrompt
-                                    , reasoningLevel = res.reasoningLevel
-                                    , error = Nothing
-                                }
-                          }
-                        , Cmd.batch
-                            [ focusAfterDelay "settings-tool-confirm"
-                            , Ports.setCursorPos { id = "settings-tool-confirm", pos = Nothing }
-                            ]
-                        )
-
-                    else
-                        ( { model
-                            | settingsEditor =
-                                { ed
-                                    | loading = False
-                                    , error = Just res.error
-                                }
-                          }
-                        , Cmd.none
-                        )
-
-                Err _ ->
+            case SC.adoptList raw model.settingsEditor of
+                Nothing ->
                     ( model, Cmd.none )
+
+                Just ( ed, actions ) ->
+                    ( { model | settingsEditor = ed }, applySettingsActions actions )
 
         SettingsSyncResult raw ->
-            case D.decodeValue settingsSyncResultDecoder raw of
-                Ok res ->
-                    if res.ok then
-                        ( { model | settingsEditor = emptySettingsEditor }
-                        , Cmd.none
-                        )
-
-                    else
-                        let
-                            ed =
-                                model.settingsEditor
-                        in
-                        ( { model
-                            | settingsEditor =
-                                { ed
-                                    | syncing = False
-                                    , error = Just res.error
-                                }
-                          }
-                        , Cmd.none
-                        )
-
-                Err _ ->
+            case SC.adoptSync raw model.settingsEditor of
+                Nothing ->
                     ( model, Cmd.none )
 
+                Just ed ->
+                    ( { model | settingsEditor = ed }, Cmd.none )
         -- Global config overlay (cross-preset)
         OpenGlobalConfig ->
-            ( { model
-                | globalConfigEditor =
-                    { emptyGlobalConfigEditor
-                        | show = True
-                        , loading = True
-                    }
-                , showGlobalMenu = False
-              }
-            , Ports.getGlobalConfig {}
-            )
+            let
+                ( ed, actions ) =
+                    GC.open
+            in
+            ( { model | globalConfigEditor = ed, showGlobalMenu = False }, applyGlobalActions actions )
 
         CloseGlobalConfig ->
-            let
-                ed =
-                    model.globalConfigEditor
-            in
-            if ed.syncing then
-                -- Do not allow closing while a sync is in flight
-                ( model, Cmd.none )
-
-            else
-                ( { model | globalConfigEditor = emptyGlobalConfigEditor }
-                , Cmd.none
-                )
+            ( { model | globalConfigEditor = GC.close model.globalConfigEditor }, Cmd.none )
 
         SetRecursionLimit val ->
-            let
-                ed =
-                    model.globalConfigEditor
-            in
-            ( { model
-                | globalConfigEditor =
-                    { ed
-                        | input = val
-                        , error = Nothing
-                    }
-              }
-            , Cmd.none
-            )
+            ( { model | globalConfigEditor = GC.setInput val model.globalConfigEditor }, Cmd.none )
 
         GlobalConfigSave ->
             let
-                ed =
-                    model.globalConfigEditor
+                ( ed, actions ) =
+                    GC.save model.globalConfigEditor
             in
-            case String.toInt (String.trim ed.input) of
-                Just n ->
-                    if n < 1 then
-                        ( { model
-                            | globalConfigEditor =
-                                { ed
-                                    | error = Just "Recursion limit must be >= 1"
-                                }
-                          }
-                        , Cmd.none
-                        )
-
-                    else
-                        ( { model
-                            | globalConfigEditor =
-                                { ed
-                                    | syncing = True
-                                    , error = Nothing
-                                }
-                          }
-                        , Ports.syncGlobalConfig { recursionLimit = n }
-                        )
-
-                Nothing ->
-                    ( { model
-                        | globalConfigEditor =
-                            { ed
-                                | error = Just "Recursion limit must be a positive integer"
-                            }
-                      }
-                    , Cmd.none
-                    )
+            ( { model | globalConfigEditor = ed }, applyGlobalActions actions )
 
         GlobalConfigGetResult raw ->
-            case D.decodeValue globalConfigGetResultDecoder raw of
-                Ok res ->
-                    let
-                        ed =
-                            model.globalConfigEditor
-                    in
-                    if res.ok then
-                        ( { model
-                            | globalConfig =
-                                { recursionLimit = res.recursionLimit }
-                            , globalConfigEditor =
-                                { ed
-                                    | loading = False
-                                    , input = String.fromInt res.recursionLimit
-                                    , error = Nothing
-                                }
-                          }
-                        , Cmd.none
-                        )
-
-                    else
-                        ( { model
-                            | globalConfigEditor =
-                                { ed
-                                    | loading = False
-                                    , error = Just res.error
-                                }
-                          }
-                        , Cmd.none
-                        )
-
-                Err _ ->
+            case GC.adoptGet raw ( model.globalConfig, model.globalConfigEditor ) of
+                Nothing ->
                     ( model, Cmd.none )
+
+                Just ( doc, ed ) ->
+                    ( { model | globalConfig = doc, globalConfigEditor = ed }, Cmd.none )
 
         GlobalConfigSyncResult raw ->
-            case D.decodeValue globalConfigSyncResultDecoder raw of
-                Ok res ->
-                    if res.ok then
-                        ( { model
-                            | globalConfig = { recursionLimit = res.recursionLimit }
-                            , globalConfigEditor = emptyGlobalConfigEditor
-                          }
-                        , Cmd.none
-                        )
-
-                    else
-                        let
-                            ed =
-                                model.globalConfigEditor
-                        in
-                        ( { model
-                            | globalConfigEditor =
-                                { ed
-                                    | syncing = False
-                                    , error = Just res.error
-                                }
-                          }
-                        , Cmd.none
-                        )
-
-                Err _ ->
+            case GC.adoptSync raw ( model.globalConfig, model.globalConfigEditor ) of
+                Nothing ->
                     ( model, Cmd.none )
 
+                Just ( doc, ed ) ->
+                    ( { model | globalConfig = doc, globalConfigEditor = ed }, Cmd.none )
         -- Voice input ASR config overlay (cross-preset): profile list
         OpenAsrConfig ->
             let
@@ -6655,52 +6466,6 @@ rpcErrorDecoder =
         (D.field "kind" D.string)
         (D.field "sessionId" D.string)
         (D.field "message" D.string)
-
-
-settingsListResultDecoder : D.Decoder { ok : Bool, toolConfirm : String, builtinTools : String, systemPrompt : String, reasoningLevel : Int, error : String }
-settingsListResultDecoder =
-    D.map6
-        (\ok toolConfirm builtinTools systemPrompt reasoningLevel error ->
-            { ok = ok
-            , toolConfirm = toolConfirm
-            , builtinTools = builtinTools
-            , systemPrompt = systemPrompt
-            , reasoningLevel = reasoningLevel
-            , error = error
-            }
-        )
-        (D.field "ok" D.bool)
-        (D.field "tool_confirm" D.string)
-        (D.field "builtin_tools" D.string)
-        (D.field "system_prompt" D.string)
-        (D.field "reasoning_level" D.int)
-        (D.field "error" D.string)
-
-
-settingsSyncResultDecoder : D.Decoder { ok : Bool, error : String }
-settingsSyncResultDecoder =
-    D.map2
-        (\ok error -> { ok = ok, error = error })
-        (D.field "ok" D.bool)
-        (D.field "error" D.string)
-
-
-globalConfigGetResultDecoder : D.Decoder { ok : Bool, recursionLimit : Int, error : String }
-globalConfigGetResultDecoder =
-    D.map3
-        (\ok recursionLimit error -> { ok = ok, recursionLimit = recursionLimit, error = error })
-        (D.field "ok" D.bool)
-        (D.field "recursion_limit" D.int)
-        (D.field "error" D.string)
-
-
-globalConfigSyncResultDecoder : D.Decoder { ok : Bool, recursionLimit : Int, error : String }
-globalConfigSyncResultDecoder =
-    D.map3
-        (\ok recursionLimit error -> { ok = ok, recursionLimit = recursionLimit, error = error })
-        (D.field "ok" D.bool)
-        (D.field "recursion_limit" D.int)
-        (D.field "error" D.string)
 
 
 -- AlayacoreCheckResult: the backend reports whether the alayacore

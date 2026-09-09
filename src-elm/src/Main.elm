@@ -16,6 +16,8 @@ import Task
 import App.Types exposing (..)
 import App.AsrConfig as AS
 import App.Presets as PS
+import App.SettingsConfig as SC
+import App.GlobalConfig as GC
 import App.Update
 import App.View
 import Plan.MetaScan as MetaScan
@@ -72,9 +74,9 @@ init _ =
       , globalMenuY = 0
       , defaultModelsEditor = emptyDefaultModelsEditor
       , mcpEditor = emptyMcpEditor
-      , settingsEditor = emptySettingsEditor
-      , globalConfig = emptyGlobalConfig
-      , globalConfigEditor = emptyGlobalConfigEditor
+      , settingsEditor = SC.emptyEditor
+      , globalConfig = GC.emptyDocument
+      , globalConfigEditor = GC.emptyEditor
       , asrConfig = AS.emptyDocument
       , asrConfigEditor = AS.emptyEditor
       , pendingVoiceInsert = Nothing

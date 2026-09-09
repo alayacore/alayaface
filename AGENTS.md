@@ -47,10 +47,13 @@ Three parts share ONE Elm client:
   `Session.ModelConfig`), then `App.Types` imports IT, so it can never import
   `App.Types` back — purity is forced by where the types live, not chosen.
   Slicing message families out of the dispatcher is written up in
-  [`docs/update-slices.md`](docs/update-slices.md); three are done —
-  `App/AsrConfig.elm` (the `asr.conf` overlay, 20 arms), `App/Presets.elm` (the
-  Preset Manager, 17 arms) and `App/Arch.elm` (the freeze queue and object-store
-  replies, 6 arms) — and they are the worked examples for the remaining families.
+  [`docs/update-slices.md`](docs/update-slices.md); five are done —
+  `App/AsrConfig.elm`, `App/Presets.elm`, `App/Arch.elm`, `App/SettingsConfig.elm`
+  and `App/GlobalConfig.elm` — and the cheap same-shape families are now exhausted
+  (the remaining big arms need `Dispatch` injection; see the repo's gitignored
+  `TODO.md`). Read that doc before starting another one: it says how to scope a
+  family by state WRITTEN rather than by message name, and what made each slice
+  verifiable.
   The JS bridge is split: `transport.js` (RPC ports ↔ tauri/http), `chain.js`
   (connection-chain SVG overlays), `overlay.js` (scrollbar/canvas zoom).
   Tests: `elm-test`.
@@ -114,6 +117,23 @@ re-serialise every field, so a reply missing one means the shape changed, and
 guessing through it would write the guess back. `check-backend-parity.sh` compares
 the protocol list and the default-model table between Rust and Go but **not**
 against this module, so the third copy moves by hand: all three together, or none.
+
+**Not every config file is written the same way — check before you add a field.**
+`model.conf`, `ui.conf`, `asr.conf` and `global.conf` are all **REPLACED** by their
+sync command (the backend decodes into a typed struct, or takes the client's whole
+document, and writes it back), so a key the client does not model is a key deleted
+from the user's file. `settings.conf` is the exception: `sync_global_settings`
+**MERGES** in both backends — only the keys present in the payload are applied, and
+the Go handler says so in so many words — so a hand-added key survives, and a
+partial save is the documented way to change one field. Consequences differ: the
+replace group needs a byte-exact key-list pin (`tests/AsrConfigTest.elm` has one;
+dropping a field fails five tests), while `settings.conf` needs its tests about the
+round trip instead (a failed read must not blank the form; a save still sends the
+whole form so a stale editor cannot write half of it). `global.conf` holds one key
+today, `recursion_limit`, whose default `8` is triplicated — `DefaultRecursionLimit`
+(Go), `DEFAULT_RECURSION_LIMIT` (Rust), `defaultRecursionLimit`
+(`App/GlobalConfig.elm`) — and `scripts/check-backend-parity.sh` now compares all
+three.
 
 ## Verification (run before every commit)
 

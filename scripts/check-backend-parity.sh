@@ -177,14 +177,16 @@ fi
 # scalars and prints both on mismatch (a diff over process substitutions tells
 # nobody anything).
 check_scalar() {
-  local label=$1 rv=$2 gv=$3
-  if [ -z "$rv" ] || [ -z "$gv" ]; then
-    echo "✗ parity check broken: $label extracted empty (Rust: '$rv', Go: '$gv') — fix the extractor"
+  local label=$1 left=$2 right=$3
+  if [ -z "$left" ] || [ -z "$right" ]; then
+    echo "✗ parity check broken: $label extracted empty (got: '$left' vs '$right') — fix the extractor"
     fail=1
     return
   fi
-  if [ "$rv" != "$gv" ]; then
-    echo "✗ parity mismatch: $label — Rust: '${rv}', Go: '${gv}'"
+  if [ "$left" != "$right" ]; then
+    # The label already names both sides ("... (Rust vs Elm)"), so the values are
+    # printed neutrally: hardcoding Rust/Go here mislabeled every Elm comparison.
+    echo "✗ parity mismatch: $label — got '${left}' vs '${right}'"
     fail=1
   fi
 }
@@ -260,6 +262,26 @@ if [ ! -f testdata/serialization/ui_cases.json ]; then
   echo "✗ parity check broken: testdata/serialization/ui_cases.json is gone (both backends' fixture tests read it)"
   fail=1
 fi
+
+# 2c-ter. global.conf — the recursion-limit default, triplicated.
+#     Unlike ui.conf the client does NOT own this schema: each backend decodes the
+#     file into its own typed struct and writes that struct back, so `global.conf`
+#     is REPLACE-semantics and holds exactly one key today. The default is the one
+#     number all three must agree on, and a mismatch is quiet: the symptom is a
+#     client showing a limit the backend replaces on the next save (and depth 8 vs
+#     some other number changes when a plan stops delegating).
+R_GC=src-tauri/src/commands/global_config.rs
+G_GC=src-go/internal/server/handlers/global_config.go
+E_GC=src-elm/src/App/GlobalConfig.elm
+
+check_scalar "global.conf recursion limit (Rust vs Go)" \
+  "$(plain_num 'DEFAULT_RECURSION_LIMIT' "$R_GC")" \
+  "$(plain_num 'DefaultRecursionLimit' "$G_GC")"
+
+check_scalar "global.conf recursion limit (Rust vs Elm)" \
+  "$(plain_num 'DEFAULT_RECURSION_LIMIT' "$R_GC")" \
+  "$(elm_num 'defaultRecursionLimit' "$E_GC")"
+
 
 # 2d. Seeded presets: the plan contract in the seeded system_prompt names them
 #     by string, so a divergence breaks rename guards and plan detection.

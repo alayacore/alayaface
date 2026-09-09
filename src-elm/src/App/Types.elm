@@ -14,12 +14,6 @@ module App.Types exposing
     , emptyDefaultModelsEditor
     , McpEditor
     , emptyMcpEditor
-    , SettingsEditor
-    , emptySettingsEditor
-    , GlobalConfig
-    , emptyGlobalConfig
-    , GlobalConfigEditor
-    , emptyGlobalConfigEditor
     , PlanViewState
     , emptyPlanView
     , PlanWindow
@@ -50,6 +44,8 @@ import App.Pointer as P
 import App.UiConfig as UC
 import App.AsrConfig as AS
 import App.Presets as PS
+import App.SettingsConfig as SC
+import App.GlobalConfig as GC
 import Arch.Values as AV
 import Arch.Freeze as Freeze
 import Plan.MetaScan as MetaScan
@@ -150,12 +146,12 @@ type alias Model =
     , globalMenuY : Int
     , defaultModelsEditor : DefaultModelsEditor
     , mcpEditor : McpEditor
-    , settingsEditor : SettingsEditor
+    , settingsEditor : SC.Editor
     -- Cross-preset global config overlay (~/.alayaface/global.conf).
     -- RecursionLimit bounds Plan Mode recursion: node sessions of a plan
     -- whose depth exceeds it get no plan system prompt.
-    , globalConfig : GlobalConfig
-    , globalConfigEditor : GlobalConfigEditor
+    , globalConfig : GC.Document
+    , globalConfigEditor : GC.Editor
     -- Voice-input ASR config overlay (~/.alayaface/asr.conf): an
     -- OpenAI-compatible /audio/transcriptions endpoint (local or remote
     -- — the two only differ by URL).
@@ -854,64 +850,12 @@ emptyMcpEditor =
     }
 
 
-type alias SettingsEditor =
-    { show : Bool
-    , loading : Bool
-    , syncing : Bool
-    , toolConfirm : String
-    , builtinTools : String
-    , systemPrompt : String
-    , reasoningLevel : Int
-    , error : Maybe String
-    , preset : String
-    }
-
-
-emptySettingsEditor : SettingsEditor
-emptySettingsEditor =
-    { show = False
-    , loading = False
-    , syncing = False
-    , toolConfirm = ""
-    , builtinTools = ""
-    , systemPrompt = ""
-    , reasoningLevel = 1
-    , error = Nothing
-    , preset = ""
-    }
-
-
--- GLOBAL CONFIG OVERLAY
-
-type alias GlobalConfig =
-    { recursionLimit : Int
-    }
-
-
-emptyGlobalConfig : GlobalConfig
-emptyGlobalConfig =
-    { recursionLimit = 8
-    }
-
-
-type alias GlobalConfigEditor =
-    { show : Bool
-    , loading : Bool
-    , syncing : Bool
-    , input : String
-    , error : Maybe String
-    }
-
-
-emptyGlobalConfigEditor : GlobalConfigEditor
-emptyGlobalConfigEditor =
-    { show = False
-    , loading = False
-    , syncing = False
-    , input = ""
-    , error = Nothing
-    }
-
+-- SETTINGS / GLOBAL CONFIG OVERLAYS
+--
+-- Both editors' state and every transition over them live in `App.SettingsConfig`
+-- (per-preset `settings.conf`, MERGE semantics) and `App.GlobalConfig`
+-- (cross-preset `global.conf`, REPLACE semantics) — see those modules and
+-- `docs/update-slices.md`. The `Model` fields above are typed by them.
 
 -- VOICE INPUT ASR CONFIG OVERLAY
 --
