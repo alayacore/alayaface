@@ -117,17 +117,30 @@ reading both sides (see the B-series and the reasoning-level / MIME / WAV
 slicing fixes). When you change behavior, change Go AND Rust in the same
 commit, and say in the message which twin you checked.
 
-## M-series refactor workflow (gitignored)
+## Where the design lives, and how to resume work
 
-The maintainability refactor is tracked in **root `TODO.md` / `REFACTOR.md`** —
-both are **gitignored local working files** (the project's history lives in
-`docs/archive/`). Interrupt recovery: read `REFACTOR.md` (design + confirmed
-decisions D1–D8) → `TODO.md` → continue from the first unchecked item.
+Tracked design documents, one per area — read the one you are touching:
 
-Every phase: implement → full verification above → `git commit` → push to
-**all three remotes** (`origin`, `gitee`, `org`, branch `main`) and verify
-with `git ls-remote`. M-series is behavior-preserving (except M3's
-performance-equivalent semantics); tests + E2E are the backstop.
+| Document | Covers |
+|---|---|
+| `docs/solo-view.md` | solo view, the one-geometry rule (`winRect` / `layoutRects`), what may write `soloWin`, gesture refusal, reachability, and the `ui.conf` layout store (scope, write policy, what a file may never decide) |
+| `docs/plan-mode.md` | Plan Mode: detection, meta, runner, cascade, node sessions |
+| `docs/touch-design.md` | the unified pointer/gesture FSM (D1–D5) and what the bridge may classify |
+| `docs/arch-persistent.md` | the Arch version/refs model (C-series) — what is persisted per session |
+| `docs/go-backend.md` | the Go transport: RPC/WS mapping, per-command table, storage |
+| `docs/overlay-focus.md` | why overlay focus goes through `focusAfterDelay` |
+| `docs/manual-acceptance.md` | the checklist a human runs before calling a UI change done |
+| `docs/archive/` | closed series as history: P/R (`TODO.md`, `REFACTOR.md`, `go-backend-todo.md`), P39, and the F-series working file (`TODO-f-series.md`). Tracked **history**, not live plans |
+
+**Interrupt recovery:** this file (rules + verification + what `scripts/`
+enforces) → the `docs/` row for the area → `git log --oneline`. Root `TODO.md` is
+**gitignored scratch**, and since the F-series closed it has carried no plan: if a
+task says "check the TODO", it means the archive. A phase list in a file nobody
+tracks is how a finished feature gets re-opened by the next reader.
+
+Every phase of any future series: implement → full verification below → `git
+commit` → push to **all three remotes** (`origin`, `gitee`, `org`, branch `main`)
+and verify with `git ls-remote`.
 
 ## Routing: tagged fs ports (B3/B4)
 

@@ -264,6 +264,20 @@ a session blocked on an invisible dialog would otherwise stall unnoticed;
 `running` counts hidden windows with a task in flight. Clicking the control
 returns to the canvas, where that prompt is waiting.
 
+**The board is remembered** (`~/.alayaface/ui.conf`). Move a window, resize it,
+pan or zoom, put one solo — and a restart (of the page, the backend, or the
+machine) puts it back exactly there: every window's position and size, the canvas
+pan and zoom, and which window was solo, so reopening a session from the Session
+Manager returns it full-screen in solo as you left it. Three things are
+deliberately not remembered: the **stacking order** (which window is on top
+follows creation order in the new session — importing an old z would resurrect a
+model of the board that no longer exists), a **deleted** session (its memory goes
+with its directory), and any stored rectangle that is too small to use — that one
+window falls back to the normal placement rule instead of coming back unusable.
+The store is capped at the 200 most recently moved windows; the ones currently
+open are never dropped. Two clients on one backend each write the whole file, so
+the last one to move a window wins (the other tab rewrites it on its next move).
+
 **No keyboard chord leaves solo** — deliberately. The keyboard is where typing
 and reflexes live, and the two keys that used to do it were both accidents:
 `Ctrl+W` (a reflex borrowed from the browser) used to close the topmost window,
