@@ -35,8 +35,14 @@ Three parts share ONE Elm client:
 - `src-elm/` — Elm frontend (no bundler). `App/Update.elm` is the message
   dispatcher; Plan Mode logic lives in `Plan/Update.elm` (pure, injects the
   dispatcher as `Dispatch`); window/canvas/zoom/z-index in `App/Windows.elm`
-  (pure); the plan state machine in `Plan/Runner.elm` (pure). The JS bridge
-  is split: `transport.js` (RPC ports ↔ tauri/http), `chain.js`
+  (pure); the plan state machine in `Plan/Runner.elm` (pure). Per-feature state
+  machines are extracted the same way — `Plan/MetaScan.elm` (the plan-meta
+  rebuild walk), `Session/Voice.elm` (mic/ASR/raw capture),
+  `Session/FilePicker.elm` (picker transitions) — and they return `(state, Int,
+  List Effect)` / an `Op` value: **effects are data, ports stay in
+  `App/Update.elm`**. A pure module must not import `App.Types` or
+  `Plan.Update` (cycle); the caller passes the context it resolved. The JS
+  bridge is split: `transport.js` (RPC ports ↔ tauri/http), `chain.js`
   (connection-chain SVG overlays), `overlay.js` (scrollbar/canvas zoom).
   Tests: `elm-test`.
 
@@ -66,6 +72,21 @@ repo and refreshes `testdata/alayacore-model-fields.txt`), add the field to
 (`tests/ModelConfigTest.elm` pins the round trip). Keys this build does not
 know survive via `ModelInfo.extras`, so an unupdated AlayaFace degrades to
 "cannot edit" instead of "deletes it".
+
+**`ui.conf` is the same rule in a second file.** `src-elm/src/App/UiConfig.elm`
+owns the whole layout-document schema (fields, `decode`, `encode`, `evict`,
+`version`, `maxStoredWindows`) and both backends pass the document through as
+**opaque JSON**, validating only its shape — that is what lets a newer AlayaFace
+save a richer file through an older backend without the older one eating fields
+it has never seen. `sync_ui_config` replaces the file, so an unmodelled
+per-window field is deleted exactly like a model field above; top-level unknown
+keys survive via `Document.extras`, per-window ones do not (the module documents
+why). `version` and `maxStoredWindows` are deliberately duplicated numbers:
+`scripts/check-backend-parity.sh` compares them across Rust
+(`DEFAULT_UI_CONF_VERSION`, `MAX_STORED_WINDOWS`), Go
+(`DefaultUiConfVersion`, `MaxStoredWindows`) and Elm, and
+`testdata/serialization/ui_cases.json` is the accept/refuse table both backends
+run.
 
 ## Verification (run before every commit)
 
@@ -110,9 +131,14 @@ performance-equivalent semantics); tests + E2E are the backstop.
 `fsListDir` and `fsReadFileText` are shared by TWO flows: the plan-meta scan
 (sessions/ → plans/ dirs → *.meta.json rebuild) and the normal UI flows
 (session manager, file picker, plan open/load). Responses are routed by
-**reqId** (`fs-N`, allocated by `nextFsReq` in `Plan/Update.elm`): a response
-whose reqId matches `planMetaScanReqId`/`planMetaReadReqId`/`planReadTarget`
-belongs to that flow; anything else belongs to the UI. Never route by global
+**reqId** (`fs-N`, allocated by `nextFsReq` in `Plan/Update.elm` and mirrored by
+`MetaScan.allocReqId` — the two formats must never diverge, because they share
+one counter): a response whose reqId matches `model.planMetaScan.scanReqId` or
+`model.planMetaScan.readReqId` belongs to the meta scan, one matching
+`planReadTarget` belongs to the single-file plan read, and anything else belongs
+to the UI. The scan's own state is the single `planMetaScan` record
+(`Plan/MetaScan.elm`) — the ten flat `planMeta*` fields it replaced are gone.
+Never route by global
 flags alone — a user listing racing the scan would be swallowed (stuck file
 picker) or parsed as plan dirs (corrupted scan). `fsHomeDirResult`,
 `fsReadFileUriResult`, `sessionDirsResult` are untagged but fire once per
