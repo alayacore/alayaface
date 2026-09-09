@@ -69,6 +69,24 @@ All three now use `focusAfterDelay` on open.
   right-click context menu. This prevents accidental dismissal of overlays
   that hold state (e.g. the model editor).
 
+## Where these pieces live now
+
+The table below is the change as it was made; two of its rows have since moved
+and a reader following them to the named file would come up empty:
+
+  * `focusAfterDelay` now lives in **`App/SelectorKit.elm`** (the shared kit the
+    selectors and editors borrow), not in `Main.elm` — `Main.elm` is the thin
+    shell: `main`/`init`/`update`/`view`/`subscriptions` plus the
+    `Dom.getElement "main-content"` re-query that keeps the viewport size fresh.
+    The
+    `setCursorPos` port is still declared in `Ports.elm` and called from the
+    overlay-open paths in `App/Update.elm` and `App/SelectorKit.elm`.
+  * the `pointer-events: auto` rule is on **`.overlay-card`** in `style.css`.
+    The `.overlay-page` / `.overlay-close` classes named in the row never
+    matched anything — no view emitted them — and the unreachable-CSS sweep
+    deleted those rules; `.overlay-page` as a name survives only as the
+    `@keyframes overlay-page-in` that `.overlay-card` animates with.
+
 ## Files Changed
 
 | File | Change |
