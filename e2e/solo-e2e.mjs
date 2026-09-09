@@ -251,7 +251,7 @@ try {
   const soloBtn = id => centerOf(`.session-panel[data-session="${id}"] .session-bar-solo`);
   const near = (a, b) => Math.abs(a - b) <= 2;
 
-  // ── 1–2. three windows on the board ───────────────────────────────
+  // ── 1. three windows on the board ───────────────────────────────
   console.log('== 1. create three sessions');
   await createSession('first');
   await createSession('second');
@@ -264,7 +264,7 @@ try {
   assert(shellBefore.handles === 24, `expected 8 handles per window, got ${shellBefore.handles}`);
   assert(!/main-content-solo/.test(shellBefore.cls), 'canvas view carries the solo class');
 
-  // ── 3. ⤢ — one window, the viewport, nothing else ────────────────
+  // ── 2. ⤢ — one window, the viewport, nothing else ────────────────
   console.log('== 2. enter solo via the ⤢ button');
   const topId = ids[ids.length - 1];
   const b1 = await soloBtn(topId);
@@ -326,7 +326,7 @@ try {
     `a block's text is indented away from its own rule: ${JSON.stringify(span)}`);
   await shot('02-solo.png');
 
-  // ── 4. gestures refused, and nothing written ─────────────────────
+  // ── 3. gestures refused, and nothing written ─────────────────────
   console.log('== 3. wheel zoom and bar drag are no-ops in solo');
   const storedSolo = await panelRects();
   // A real wheel over the panel is left to native scrolling by transport.js, so
@@ -353,7 +353,7 @@ try {
   assert(s.panels === 1, 'a gesture made a hidden window reappear');
   console.log('  no zoom, no move, no layout write');
 
-  // ── 5. ⤡ restores the board exactly ──────────────────────────────
+  // ── 4. ⤡ restores the board exactly ──────────────────────────────
   console.log('== 4. exit solo via the ⤡ button');
   const b2 = await soloBtn(topId);
   await clickAt(b2.x, b2.y);
@@ -363,7 +363,7 @@ try {
   assert(!/main-content-solo/.test(s.cls), 'the solo class survived exit');
   assert(JSON.stringify(await panelRects()) === JSON.stringify(before), 'the layout moved across a solo round trip');
   assert(s.transform === shellBefore.transform, 'the canvas transform moved across a solo round trip');
-  await shot('05-restored.png');
+  await shot('04-restored.png');
 
   // The CONTROL for §3: the same synthetic wheel on the same element DOES zoom
   // outside solo. Without this, "the wheel did nothing" would also be satisfied
@@ -389,7 +389,7 @@ try {
   });
   assert(Math.abs(scale - 1) < 0.001, `zoom reset left the scale at ${scale}`);
 
-  // ── 6. SD18: the chord enters, and cannot leave ──────────────────
+  // ── 5. SD18: the chord enters, and cannot leave ──────────────────
   console.log('== 5. Ctrl+Shift+F enters solo; no chord leaves it');
   await chord(['Control', 'Shift'], 'KeyF');
   assert((await shell()).panels === 1, 'Ctrl+Shift+F did not enter solo');
@@ -407,12 +407,12 @@ try {
   assert((await shell()).panels === 3, 'the ⤡ button did not leave solo');
   console.log('  the ⤡ button leaves; the chords do not');
 
-  // ── 7. Ctrl+F is still the browser's ─────────────────────────────
+  // ── 6. Ctrl+F is still the browser's ─────────────────────────────
   console.log('== 6. Ctrl+F alone stays free');
   await chord(['Control'], 'KeyF');
   assert((await shell()).panels === 3, 'Ctrl+F entered solo (browser find hijacked)');
 
-  // ── 8. the global menu path, both directions ─────────────────────
+  // ── 7. the global menu path, both directions ─────────────────────
   console.log('== 7. the global menu path (no window click needed)');
   await openGlobalMenu();
   assert(await clickMenuItem('Solo window'), 'the global menu has no "Solo window" item');
@@ -424,7 +424,7 @@ try {
   assert(JSON.stringify(await panelRects()) === JSON.stringify(before), 'the menu path moved the layout');
   console.log('  menu enters and leaves, layout untouched');
 
-  // ── 9. SD19: solo has no ✕, and closing is a canvas-view act ─────
+  // ── 8. SD19: solo has no ✕, and closing is a canvas-view act ─────
   console.log('== 8. no close button while solo');
   const b3 = await soloBtn(topId);
   await clickAt(b3.x, b3.y);
@@ -455,7 +455,7 @@ try {
   const survivors = Object.fromEntries(Object.entries(before).filter(k => k[0] in left));
   assert(JSON.stringify(left) === JSON.stringify(survivors), 'the surviving windows moved when one closed');
 
-  // ── 10. SD11: a hidden prompt is reported, then reachable ────────
+  // ── 9. SD11: a hidden prompt is reported, then reachable ────────
   console.log('== 9. a hidden modal is reported by the exit control');
   const ids2 = Object.keys(left);
   const hiddenId = ids2[0];
@@ -503,7 +503,7 @@ try {
   await sleep(350);
   assert(!(await overlayIn(hostId)), 'the picker stayed open — later counts would be wrong');
 
-  // ── 11. SD10/SD18: inert chords, working buttons ─────────────────
+  // ── 10. SD10/SD18: inert chords, working buttons ─────────────────
   console.log('== 10. Ctrl+W is inert; only pointers leave solo');
   // Canvas view: the chord closes nothing and confirms nothing.
   const rectsNow = await panelRects();
@@ -556,9 +556,9 @@ try {
   assert(JSON.stringify(await panelRects()) === JSON.stringify(rectsNow), 'a pointer exit changed the stored rects');
   console.log('  both pointer controls leave solo, and nothing else does');
 
-  await shot('11-final.png');
+  await shot('10-final.png');
 
-  // ── 12. SD9 from INSIDE solo: the window can still die, and solo goes ─
+  // ── 11. SD9 from INSIDE solo: the window can still die, and solo goes ─
   // The ✕ is gone in solo (SD19), but solo must still not outlive its window:
   // the delete that reaches it is the Session Manager's, which SD11 keeps
   // reachable through the ⋯ button. This is the only remaining path from a
@@ -588,7 +588,7 @@ try {
     `deleting the solo window left ${s.panels} panels, expected ${ids3.length - 1}`);
   assert(!/main-content-solo/.test(s.cls), 'solo outlived its window (SD9)');
   console.log(`  the solo window died with no ✕ involved, and solo went with it — ${s.panels} panels left`);
-  await shot('12-deleted-in-solo.png');
+  await shot('11-deleted-in-solo.png');
 
   // ── 12. F3: the board survives a restart (ui.conf) ────────────────
   // Everything above is about what solo LOOKS like; this is about what the
@@ -662,6 +662,21 @@ try {
   assert(f3Entry.t > 0, `the stored entry has no touch (${JSON.stringify(f3Entry)}) — eviction cannot order it`);
   assert(f3Entry.w < 1200, 'ui.conf stored the VIEWPORT as the window width: the store read a presentation rect (SD4)');
 
+  // (b2) the WHEEL is stored too — this is the one write path with no end
+  // event, so it is the debounce's job (SD16). Solo is not a zoom (it keeps the
+  // transform; §4 proved that), so a non-1 scale here is the wheel's doing and
+  // nothing else's. Waiting past the idle timer is what makes this a debounce
+  // test rather than a race.
+  await page.evaluate(() => {
+    document.querySelector('#main-content').dispatchEvent(
+      new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: -500, clientX: 700, clientY: 500 }));
+  });
+  await sleep(1600);
+  const f3Zoomed = await f3UiConf();
+  console.log(`  after the wheel: stored canvasScale=${f3Zoomed && f3Zoomed.canvasScale}`);
+  assert(f3Zoomed && Math.abs(f3Zoomed.canvasScale - 1) > 0.01,
+    `the wheel zoom never reached ui.conf (scale=${f3Zoomed && f3Zoomed.canvasScale}) — either the debounce did not fire or the viewport is not stored`);
+
   // (c) solo is part of the layout — and so is leaving it
   assert(await clickEl(`.session-panel[data-session="${f3Moved}"] .session-bar-solo`), 'cannot re-enter solo');
   await sleep(600);
@@ -684,6 +699,22 @@ try {
   await page.waitForSelector('.main-content', { timeout: 30000 });
   await sleep(1200);
   assert((await shell()).panels === 0, 'a fresh page should start with an empty board');
+
+  // (e2) snapshot the stored viewport BEFORE anything in the new process can
+  // rewrite it. elm-test proves the model applies the stored pan+zoom to
+  // itself; only a reload proves those numbers survive encode → file → port →
+  // decode — the same seam that nearly ate the window width (see the `w < 1200`
+  // guard above), so a green rect check would NOT have caught a viewport that
+  // never lands. The live half of this comparison is at the end of (f): the
+  // `.canvas` layer only exists once a window does (View renders the welcome
+  // panel in its place), so there is nothing to measure on an empty board.
+  const f3VpStored = await f3UiConf();
+  const f3Scale = f3VpStored && f3VpStored.canvasScale;
+  const f3Off = (f3VpStored && f3VpStored.canvasOffset) || {};
+  console.log(`  stored viewport before restart: scale=${f3Scale} offset=${JSON.stringify(f3Off)}`);
+  assert(f3Scale != null, 'ui.conf carries no canvasScale — the writer never stored the viewport');
+  assert(Math.abs(f3Scale - 1) > 0.01 || (f3Off.x || 0) !== 0 || (f3Off.y || 0) !== 0,
+    `setup: the stored viewport is the default (scale=${f3Scale}, offset=${JSON.stringify(f3Off)}) — the checks in (f) would pass by accident`);
 
   // (f) reopen the session: it must come back solo, AND at its stored rect
   await openGlobalMenu();
@@ -713,6 +744,23 @@ try {
     && near3(f3Restored.w, f3Entry.w) && near3(f3Restored.h, f3Entry.h),
     `the reopened window did not come back where the user left it: ${JSON.stringify(f3Restored)} vs ${JSON.stringify(f3Entry)}`);
 
+  // (f2) and the BOARD came back with it: the zoom and pan the file holds are
+  // the ones the restarted page paints. Measured after the solo exit above,
+  // because solo keeps the transform it was given (§4), so this is still the
+  // viewport the old process wrote — not a fit the new one invented.
+  const f3VpLive = await page.evaluate(() => {
+    const c = document.querySelector('.canvas');
+    if (!c) return null;
+    const m = new DOMMatrixReadOnly(getComputedStyle(c).transform);
+    return { k: m.a, x: m.e, y: m.f };
+  });
+  console.log(`  live viewport after restart:  ${JSON.stringify(f3VpLive)}`);
+  assert(f3VpLive, 'the .canvas layer is gone — the viewport cannot be read');
+  assert(Math.abs(f3VpLive.k - f3Scale) < 0.02,
+    `the restarted page did not restore the zoom: live scale ${f3VpLive.k} vs stored ${f3Scale}`);
+  assert(Math.abs(f3VpLive.x - (f3Off.x || 0)) <= 3 && Math.abs(f3VpLive.y - (f3Off.y || 0)) <= 3,
+    `the restarted page did not restore the pan: live ${JSON.stringify(f3VpLive)} vs stored ${JSON.stringify(f3Off)}`);
+
   // (g) a DELETED session stops being remembered — read back through the RPC
   await openGlobalMenu();
   assert(await clickMenuItem('Session Manager'), 'the Session Manager did not reopen');
@@ -733,7 +781,7 @@ try {
   assert(!f3Left.includes(f3Moved),
     'a deleted session is still in ui.conf: its identity is gone for good, so its rect must be pruned (SD15)');
   console.log('  the board survived the backend, and only the board that still exists did');
-  await shot('13-layout-after-restart.png');
+  await shot('12-layout-after-restart.png');
 
   console.log('ALL PASS');
 } catch (err) {
