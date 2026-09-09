@@ -21,7 +21,6 @@ initModelWithSession =
     , showSessionManager = False
     , sessionDirs = []
     , sessionManagerError = Nothing
-    , isMaximized = False
     , sessionOrder = [ "s1" ]
     , pendingSwitchOnCreate = False
     , inputRows = 1

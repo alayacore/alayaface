@@ -39,7 +39,6 @@ init _ =
       , showSessionManager = False
       , sessionDirs = []
       , sessionManagerError = Nothing
-      , isMaximized = False
       , sessionOrder = []
       , pendingSwitchOnCreate = False
       , ptHeld = False
@@ -207,7 +206,6 @@ subscriptions model =
         , Ports.onObjectPut (\raw -> ObjectPutResult raw)
         , Ports.onObjectGet (\raw -> ObjectGetResult raw)
         , Ports.onFsResolvePath (\result -> FsResolvePathResult result)
-        , Ports.onWindowMaximized (\v -> WindowMaximized v)
         , Evts.onResize (\_ _ -> RequerySize)
         , Evts.onKeyDown <|
             D.map5 KeyDown

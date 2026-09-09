@@ -29,7 +29,7 @@ Rust/Tauri has two channels, each of which needs a Go counterpart:
 
 | Tauri channel | Semantics | Go counterpart |
 |---------------|-----------|----------------|
-| `invoke(cmd, args) → Promise<result>` | Request/response (30 commands) | `POST /rpc/{command}` |
+| `invoke(cmd, args, timeoutMs?, opts?) → Promise<result>` | Request/response (the command list is whatever `scripts/check-backend-parity.sh` counts — it prints Rust / Go / bridge side by side) | `POST /rpc/{command}` |
 | `event.listen(name, cb)` | Server push (tlv-delta / tlv-frame / core-status) | WebSocket `GET /ws` |
 
 ### 2.1 Command channel: RPC-style `POST /rpc/{command}`
@@ -105,6 +105,8 @@ One-way push (server → client), message format:
 | `sync_global_settings` | `POST /rpc/sync_global_settings` | `config`, `preset` | — (merge semantics: absent fields keep current values) |
 | `get_global_config` | `POST /rpc/get_global_config` | — | `{recursion_limit}` |
 | `sync_global_config` | `POST /rpc/sync_global_config` | `config` | `{recursion_limit}` (normalized) |
+| `get_ui_config` | `POST /rpc/get_ui_config` | — | `{version, config}` — `config` is the stored layout document verbatim, or `null` when `~/.alayaface/ui.conf` does not exist |
+| `sync_ui_config` | `POST /rpc/sync_ui_config` | `config` (a WHOLE document) | `{written}` — replaces the file; refuses a non-object or a `windows` map over `MaxStoredWindows` instead of trimming it (only the client knows which windows are open, so eviction is the client's job). Schema owner: `src-elm/src/App/UiConfig.elm`; write policy: `App/UiLayout.elm` |
 | `list_presets` | `POST /rpc/list_presets` | — | `[{name}]` |
 | `copy_preset` | `POST /rpc/copy_preset` | `source`, `name` | — |
 | `rename_preset` | `POST /rpc/rename_preset` | `oldName`, `newName` | — |
@@ -313,14 +315,23 @@ var transport = (window.__TAURI__ && window.__TAURI__.core)
                        // onEvent → WebSocket /ws (dispatch by type + reconnect)
 ```
 
-- `httpTransport.invoke(cmd, args)`: `fetch("/rpc/"+cmd, {method:"POST",
-  headers:{"Content-Type":"application/json"}, body: JSON.stringify(args||{})})`;
+- `httpTransport.invoke(cmd, args, timeoutMs, opts)`: `fetch("/rpc/"+cmd, {method:"POST",
+  headers:{"Content-Type":"application/json"}, body: JSON.stringify(args||{}),
+  signal: <AbortController>, keepalive: !!opts.keepalive})`;
   reject `{message: body.error}` on non-2xx so `.catch(err => String(err.message||err))`
-  behaves like Tauri.
+  behaves like Tauri. `timeoutMs` bounds the HTTP fetch only (the Tauri transport has
+  no client-side abort); `opts.keepalive` is used by exactly one command —
+  `sync_ui_config`, because the layout flush it performs may be running while the page
+  is going away, and a plain fetch is cancelled there.
 - `httpTransport.onEvent(name, cb)`: a single internal WS; on `{type, payload}` call
   `cb(payload)` when `type===name`; reconnect with exponential backoff.
-- Window-maximize event: in browser mode degrade to
-  `window.innerHeight >= screen.availHeight` + `resize` listener (Tauri branch unchanged).
+- No OS-window state at all. The bridge used to report "maximized" (Tauri
+  `isMaximized()` + `onResized`, degraded in browser mode to
+  `innerHeight >= availHeight` + a `resize` listener) into `Model.isMaximized`, which
+  nothing ever read; F4.1 deleted the field, the port, the message and both transports'
+  members. What the app DOES need from the viewport — its size — arrives independently
+  through `Browser.Events.onResize → RequerySize` (`Main.elm`) and `overlay.js`'s
+  container re-measure, so neither transport exposes a window-state API now.
 
 Thus **index.html doesn't change** (still loads the same transport.js); the Tauri and Go
 runtimes auto-switch on the presence of `window.__TAURI__`, avoiding two bridge files.

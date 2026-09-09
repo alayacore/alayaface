@@ -113,8 +113,6 @@ port module Ports exposing
     , setCursorPos
     , scrollIntoView
     , onScroll
-      -- Window state
-    , onWindowMaximized
       -- Canvas zoom (wheel from transport.js, non-passive so the browser
       -- page zoom / scroll can be prevented)
     , onCanvasWheel
@@ -196,6 +194,12 @@ a field the encoder does not carry is a field the user loses. Both backends
 pass the document through as opaque JSON and validate only its shape, which is
 why a new field is an Elm-side change (see `App/UiConfig.elm`).
 
+`teardown` says this is the LAST write the client will attempt (the unload
+flush), which is the only case that needs the request to outlive the page — the
+bridge turns it into `fetch(keepalive)`. Every other save is an ordinary
+request: keepalive is capped per page by the browser, and a save per interaction
+end is a lot of saves.
+
 The result of `syncUiConfig` is reported through `onUiConfigSync` for ONE
 reason: a refused write (oversized, malformed) is otherwise silent, and the user
 finds out at the next restart. Nothing else reads it.
@@ -203,7 +207,7 @@ finds out at the next restart. Nothing else reads it.
 port getUiConfig : {} -> Cmd msg
 
 
-port syncUiConfig : { config : String } -> Cmd msg
+port syncUiConfig : { config : String, teardown : Bool } -> Cmd msg
 
 
 port onUiConfigGet : (E.Value -> msg) -> Sub msg
@@ -378,10 +382,6 @@ port setCursorPos : { id : String, pos : Maybe Int } -> Cmd msg
 port scrollIntoView : String -> Cmd msg
 port onScroll : ({ sessionId : String, scrollTop : Float, scrollHeight : Float, clientHeight : Float } -> msg) -> Sub msg
 
-
--- Window state
-
-port onWindowMaximized : (Bool -> msg) -> Sub msg
 
 
 -- Canvas zoom: transport.js forwards wheel events (with native scroll /

@@ -4464,9 +4464,6 @@ update msg model =
             )
 
         -- Window
-        WindowMaximized v ->
-            ( { model | isMaximized = v }, Cmd.none )
-
         GotContainerSize result ->
             case result of
                 Ok el ->
@@ -5468,15 +5465,16 @@ update msg model =
         UiFlush ->
             -- The page is going away. Best effort (SD16): assembled by the same
             -- single producer as every interaction-end write, so it cannot
-            -- disagree with them about what the board looks like.
-            UiLayout.syncUiLayout model
+            -- disagree with them about what the board looks like. `True` is the
+            -- one thing this arm adds: the write asks to outlive the page.
+            UiLayout.syncUiLayout True model
 
         UiZoomIdle gen ->
             -- A wheel burst has no pointerup, so this idle tick IS its end. A
             -- stale generation belongs to a burst that another trigger already
             -- flushed — dropping it is why one burst costs one write.
             if gen == model.uiZoomGen then
-                UiLayout.syncUiLayout model
+                UiLayout.syncUiLayout False model
 
             else
                 ( model, Cmd.none )

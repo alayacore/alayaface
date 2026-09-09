@@ -73,7 +73,6 @@ type alias Model =
     , showSessionManager : Bool
     , sessionDirs : List E.Value
     , sessionManagerError : Maybe String
-    , isMaximized : Bool
     , sessionOrder : List String
     , pendingSwitchOnCreate : Bool
     , inputRows : Int
@@ -442,8 +441,6 @@ type Msg
     -- racing the directory recreation). planId/nodeId/originSessionId
     -- locate the nested node work copy (top-level uses "").
     | DeleteWorkCopyDir String String String String
-      -- Window
-    | WindowMaximized Bool
       -- Solo view (F1). SoloWindow/ExitSolo are the two directions;
       -- ToggleSolo flips the topmost one (the ⤢ button and the shortcut
       -- both go through it, so the button never needs to know the state).

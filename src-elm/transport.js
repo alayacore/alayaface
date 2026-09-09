@@ -73,8 +73,6 @@
   //        the Tauri transport has no client-side abort. opts.keepalive
   //        marks a request that must outlive the page; Tauri ignores both.)
   //   onEvent(name, cb) → unlisten | Promise<unlisten>
-  //   isMaximized()     → Promise<boolean>
-  //   onWindowEvent(cb) → void
 
   function tauriTransport() {
     var invoke = window.__TAURI__.core.invoke;
@@ -85,14 +83,6 @@
       },
       onEvent: function (name, cb) {
         return listen(name, function (ev) { cb(ev.payload); });
-      },
-      isMaximized: function () {
-        return window.__TAURI__.window.getCurrentWindow().isMaximized();
-      },
-      onWindowEvent: function (cb) {
-        window.__TAURI__.window.getCurrentWindow().onResized(function () {
-          window.__TAURI__.window.getCurrentWindow().isMaximized().then(cb);
-        });
       },
     };
   }
@@ -182,14 +172,6 @@
         return function () {
           listeners[name] = (listeners[name] || []).filter(function (f) { return f !== cb; });
         };
-      },
-      isMaximized: function () {
-        return Promise.resolve(window.innerHeight >= screen.availHeight);
-      },
-      onWindowEvent: function (cb) {
-        window.addEventListener("resize", function () {
-          cb(window.innerHeight >= screen.availHeight);
-        });
       },
     };
   }
@@ -525,11 +507,14 @@
     });
 
     on("syncUiConfig", function (data) {
-      // keepalive on this ONE command: the unload flush below goes through
-      // the same port, and a plain fetch is cancelled as the page goes away.
-      // It is still best effort (SD16) — correctness rests on the
-      // interaction-end writes, not on this one surviving.
-      transport.invoke("sync_ui_config", { config: data.config }, undefined, { keepalive: true })
+      // keepalive ONLY when Elm marks the write as its teardown flush
+      // (`data.teardown`): a plain fetch is cancelled as the page goes away, and
+      // this is the one request whose whole purpose is to survive that. It is
+      // still best effort (SD16) — correctness rests on the interaction-end
+      // writes. Not on every save: browsers cap the bytes a page may send with
+      // keepalive, so marking all of them would fail the ordinary writes that
+      // come later in the same session.
+      transport.invoke("sync_ui_config", { config: data.config }, undefined, { keepalive: !!data.teardown })
         .then(function () {
           app.ports.onUiConfigSync.send({ ok: true, error: "" });
         })
@@ -930,13 +915,14 @@
     installPointerPipe(app);
     installAttachmentDrop(app);
 
-    // 5. Window maximize state
-    transport.isMaximized().then(function (v) {
-      app.ports.onWindowMaximized.send(v);
-    });
-    transport.onWindowEvent(function (v) {
-      app.ports.onWindowMaximized.send(v);
-    });
+    // (There used to be a step 5 here: the OS window's maximize state,
+    // forwarded on startup and on every resize into Model.isMaximized. Nothing
+    // ever read that field — not the view, not a gesture gate, not a test — and
+    // F4.1 deleted the whole chain. OS maximize is not a state AlayaFace has an
+    // opinion about: the app fills whatever viewport it is given, and the
+    // viewport size it does care about arrives through Browser.Events.onResize
+    // → RequerySize. Keeping the pipe cost a listener and an RPC per session for
+    // a value that could not be observed.)
   }
 
   // ─── Pointer input pipe (touch & pointer design D1/D2) ─────────────

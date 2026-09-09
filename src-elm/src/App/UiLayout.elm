@@ -246,6 +246,11 @@ SD16's list of interaction-end triggers cannot become six slightly different
 savers — and so that the unload flush, the zoom idle tick and a resize all agree
 about what the file says right now.
 
+`teardown` is not "how important is this write" (they are all the same document);
+it is "may this request outlive the page". Browsers cap how much a page may send
+with `keepalive`, so the flag is set by exactly one caller — the `UiFlush` arm —
+and every interaction-end save is an ordinary request.
+
 Eviction protects the OPEN windows, taken from the board (`layoutRects`, not the
 store): the backends refuse an oversized document rather than trim it, because
 only this client knows which windows the user is looking at. When it does drop
@@ -256,8 +261,8 @@ The model it returns carries the absorbed store (touch counter included), so a
 caller that keeps the model keeps the memory consistent with the file it just
 wrote.
 -}
-syncUiLayout : Model -> ( Model, Cmd Msg )
-syncUiLayout model =
+syncUiLayout : Bool -> Model -> ( Model, Cmd Msg )
+syncUiLayout teardown model =
     if not model.uiLoaded then
         -- No read has answered yet (or it FAILED — see the Err branch in
         -- App/Update). Writing now would replace a file this process has never
@@ -308,7 +313,7 @@ syncUiLayout model =
         in
         ( { absorbed | uiLayout = bounded.windows }
         , Cmd.batch
-            [ Ports.syncUiConfig { config = E.encode 0 (UC.encode bounded) }
+            [ Ports.syncUiConfig { config = E.encode 0 (UC.encode bounded), teardown = teardown }
             , note
             ]
         )
@@ -340,7 +345,7 @@ withUiSave : ( Model, Cmd Msg ) -> ( Model, Cmd Msg )
 withUiSave ( m, cmd ) =
     let
         ( m1, save ) =
-            syncUiLayout m
+            syncUiLayout False m
     in
     ( m1, Cmd.batch [ cmd, save ] )
 
