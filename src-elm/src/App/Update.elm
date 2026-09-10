@@ -1559,9 +1559,6 @@ update msg model =
                                     userEchoNow =
                                         P.isUserEchoTag ev.tag
     
-                                    mcpJustCompleted =
-                                        session.mcpStatus /= Nothing && newSession.mcpStatus == Nothing
-    
                                     -- A node prompt held by the readiness gate
                                     -- (pendingNodePrompts) is flushed the
                                     -- moment the session becomes ready.
