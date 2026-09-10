@@ -47,9 +47,11 @@ Three parts share ONE Elm client:
   `Session.ModelConfig`), then `App.Types` imports IT, so it can never import
   `App.Types` back — purity is forced by where the types live, not chosen.
   Slicing message families out of the dispatcher is written up in
-  [`docs/update-slices.md`](docs/update-slices.md); five are done —
-  `App/AsrConfig.elm`, `App/Presets.elm`, `App/Arch.elm`, `App/SettingsConfig.elm`
-  and `App/GlobalConfig.elm` — and the cheap same-shape families are now exhausted
+  [`docs/update-slices.md`](docs/update-slices.md); six are done —
+  `App/AsrConfig.elm`, `App/Presets.elm`, `App/Arch.elm`, `App/SettingsConfig.elm`,
+  `App/GlobalConfig.elm` and `Session/Events.elm` (the inbound event arms' routing,
+  which cannot reuse the pure shape because it must read the whole `Model`) — and
+  the cheap same-shape families are now exhausted
   (the remaining big arms need `Dispatch` injection; see the repo's gitignored
   `TODO.md`). Read that doc before starting another one: it says how to scope a
   family by state WRITTEN rather than by message name, and what made each slice
@@ -171,7 +173,7 @@ Tracked design documents, one per area — read the one you are touching:
 | `docs/plan-mode.md` | Plan Mode: detection, meta, runner, cascade, node sessions |
 | `docs/touch-design.md` | the unified pointer/gesture FSM (D1–D5) and what the bridge may classify |
 | `docs/arch-persistent.md` | the Arch version/refs model (C-series) — what is persisted per session, which client module owns which half, and the two asymmetries (refs is not an object; a get reply cannot be routed to its asker) |
-| `docs/update-slices.md` | how to slice a message family out of `App/Update.elm`: how to measure which family is cheap, the two module shapes and the cycle rule that forces one of them, what resisted, and what made each of the three slices done so far (`App/AsrConfig`, `App/Presets`, `App/Arch`) verifiable — including replace-vs-merge semantics per config file and how to tell a mutation check that worked from one that silently did not |
+| `docs/update-slices.md` | how to slice a message family out of `App/Update.elm`: how to measure which family is cheap, the two module shapes and the cycle rule that forces one of them, what resisted, and what made each completed slice verifiable (the list is in Architecture above, so this row cannot go stale) — including replace-vs-merge semantics per config file, why an extracted arm is only testable if its effects leave as data, and how to tell a mutation check that worked from one that silently did not |
 | `docs/go-backend.md` | the Go transport: RPC/WS mapping, per-command table, storage |
 | `docs/overlay-focus.md` | why overlay focus goes through `focusAfterDelay` |
 | `docs/manual-acceptance.md` | the checklist a human runs before calling a UI change done |

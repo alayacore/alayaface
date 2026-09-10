@@ -7,6 +7,7 @@ import Json.Decode as D
 import Json.Encode as E
 import App.Types as AT
 import App.Update
+import Session.Events
 import Session.Protocol as P
 import Plan.Update as PU
 import Test exposing (Test, describe, test)
@@ -49,7 +50,7 @@ malformedEventTests =
                             [ String.startsWith "FrameEvent decode failed: " >> Expect.equal True
                             , \w -> Expect.equal True (String.contains "tag" w)
                             ]
-                            (App.Update.decodeWarning "FrameEvent" err)
+                            (Session.Events.decodeWarning "FrameEvent" err)
 
                     Ok _ ->
                         Expect.fail "the fixture must be undecodable, or the test proves nothing"

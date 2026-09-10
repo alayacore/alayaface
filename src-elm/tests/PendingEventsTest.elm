@@ -9,6 +9,11 @@ client opening sessions makes this page accumulate frames for keys it will
 never drain, for the lifetime of the tab. These tests pin the bound, the
 drop-OLDEST direction (the replay needs the NEWEST state), and the one-warning
 rule.
+
+The buffer lives in `Session/Events.elm`, with the routing that fills it. Only
+the model half is asserted here: `Session.Events` returns the warning as
+`Action` data, and `elm-explorations/test` has no way to open a `Cmd` — which
+is the reason the data shape exists.
 -}
 
 import Dict
@@ -17,7 +22,7 @@ import Json.Decode as D
 import Json.Encode as E
 import Set
 import App.Types as AT
-import App.Update as AU
+import Session.Events as SE
 import Test exposing (Test, describe, test)
 import TestHelpers exposing (initModelWithSession)
 
@@ -31,7 +36,7 @@ feed : Int -> Int -> AT.Model -> AT.Model
 feed from to model =
     List.foldl
         (\n m ->
-            AU.bufferPendingEvent m "ghost" (frame n) |> Tuple.first
+            SE.bufferPendingEvent m "ghost" (frame n) |> Tuple.first
         )
         model
         (List.range from to)
@@ -51,10 +56,10 @@ suite =
             \_ ->
                 let
                     m =
-                        feed 1 (AU.pendingEventsCap - 1) initModelWithSession
+                        feed 1 (SE.pendingEventsCap - 1) initModelWithSession
                 in
                 Expect.all
-                    [ \_ -> Expect.equal (List.length (keptNumbers m)) (AU.pendingEventsCap - 1)
+                    [ \_ -> Expect.equal (List.length (keptNumbers m)) (SE.pendingEventsCap - 1)
                     , \_ -> Expect.equal (Set.member "ghost" m.pendingOverflow) False
                     ]
                     ()
@@ -62,9 +67,9 @@ suite =
             \_ ->
                 let
                     m =
-                        feed 1 (AU.pendingEventsCap * 3) initModelWithSession
+                        feed 1 (SE.pendingEventsCap * 3) initModelWithSession
                 in
-                Expect.equal (List.length (keptNumbers m)) AU.pendingEventsCap
+                Expect.equal (List.length (keptNumbers m)) SE.pendingEventsCap
         , test "the NEWEST frames survive (drop oldest)" <|
                 \_ ->
                     -- Replaying a session start out of the buffer only helps if
@@ -72,7 +77,7 @@ suite =
                     -- the head.
                     let
                         total =
-                            AU.pendingEventsCap + 100
+                            SE.pendingEventsCap + 100
 
                         m =
                             feed 1 total initModelWithSession
@@ -81,7 +86,7 @@ suite =
                             keptNumbers m
                     in
                     Expect.all
-                        [ \_ -> Expect.equal (List.length kept) AU.pendingEventsCap
+                        [ \_ -> Expect.equal (List.length kept) SE.pendingEventsCap
                         , \_ -> Expect.equal (List.head kept) (Just 101)
                         , \_ -> Expect.equal (List.head (List.reverse kept)) (Just total)
                         ]
@@ -93,10 +98,10 @@ suite =
                     -- 300 times past the cap still logs once.
                     let
                         first =
-                            feed 1 (AU.pendingEventsCap + 1) initModelWithSession
+                            feed 1 (SE.pendingEventsCap + 1) initModelWithSession
 
                         later =
-                            feed (AU.pendingEventsCap + 2) (AU.pendingEventsCap + 300) first
+                            feed (SE.pendingEventsCap + 2) (SE.pendingEventsCap + 300) first
                     in
                     Expect.all
                         [ \_ -> Expect.equal (Set.member "ghost" first.pendingOverflow) True
@@ -110,7 +115,7 @@ suite =
                         m =
                             List.foldl
                                 (\( key, n ) acc ->
-                                    Tuple.first (AU.bufferPendingEvent acc key (E.object [ ( "n", E.int n ) ]))
+                                    Tuple.first (SE.bufferPendingEvent acc key (E.object [ ( "n", E.int n ) ]))
                                 )
                                 initModelWithSession
                                 [ ( "a", 1 ), ( "a", 2 ), ( "b", 3 ) ]

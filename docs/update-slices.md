@@ -8,12 +8,15 @@ already written down.
 
 The first slice is done: **`App/AsrConfig.elm`** (the `asr.conf` overlay — profile
 list, edit form, delete confirm, both replies), landed 2026-09-09. Then four more
-the same day: **`App/Presets.elm`** (the Preset Manager — 17 arms), **`App/Arch.elm`**
+the same day: **`App/Presets.elm`** (the Preset Manager — 17 arms), **`App.Arch.elm`**
 (the freeze queue and object-store replies — 6 arms + 2 helpers),
 **`App/SettingsConfig.elm`** and **`App/GlobalConfig.elm`** (the two config editors,
-15 arms between them). All five are the worked examples below; where they differ is
-in "What the second slice taught", "What the third slice taught" and "What the
-fourth and fifth taught".
+15 arms between them). And the sixth is **`Session/Events.elm`** (the inbound
+`DeltaEvent`/`StatusEvent` arms — routing, the work-copy gate, the event buffer),
+landed 2026-09-10, which is the one that is not an overlay and the one whose tests
+were written after the code. All six are the worked examples below; where they
+differ is in "What the second slice taught", "What the third slice taught", "What
+the fourth and fifth taught" and "What the sixth slice taught".
 
 
 ## Measure before choosing
@@ -203,10 +206,79 @@ negative ("my test didn't catch it") into the real finding ("my mutation never
 applied").
 
 
+## What the sixth slice taught (`Session/Events.elm`)
+
+The sixth is the first that is not a feature overlay: `DeltaEvent` and
+`StatusEvent`, the two inbound arms that had never lived anywhere but the
+dispatcher. Same shape as `App/Arch` (take `Model`, return `(Model, List Action)`),
+because routing needs the whole board, not one feature's record. Its tests were
+written **after** the move and then proven by mutation, which is where the
+interesting failures were.
+
+**A `Cmd` return is not testable, and that decides the shape.**
+`elm-explorations/test` 2.2.0 ships no `Test.Cmd` (its `src/Test/` holds
+`Distribution`, `Expectation`, `Fuzz`, `Internal`, `Runner`, `Html` — checked
+against the package cache). So the module's `Action` list is assertable and
+`applyEventActions` is not. Concretely: the `planOfferFromFrame` helper that came
+out of de-duplicating the frame arm returns `Cmd Msg` and has **no unit test at
+all** — its only pin is the e2e `plan` suite. "Effects are data" is not style here;
+it is the difference between a slice you can verify and one you can only trust.
+
+**A duplicated guard pair is a bug that has not fired yet.** `autoOfferCmd` and
+`updatedModel2` computed the same four-condition chain verbatim, one to announce
+a plan offer and one to record it. Both failure modes are silent: guard edited
+into one copy only leaves an offer recorded but never announced (no button, no
+plan), or announced but never recorded (`PlanCreateOffer` looks up a `Nothing`).
+Merging them into one function that returns `( model, cmd )` makes the pair
+undrift-able, which is the whole reason to do it. Diff the two copies before
+merging — do not eyeball them; the pair here differed only in the leaf
+expression, which is exactly the detail eyeballing loses.
+
+**Everything the arm needs moves with it, or stays in the arm.** The routing calls
+`isCurrentWorkCopy` and `bufferPendingEvent`, both defined in `App/Update.elm`;
+importing the dispatcher is a cycle, so both moved and the arms became four-line
+delegations. Cost, paid visibly: `App.Update`'s `exposing` list lost three names
+and `PendingEventsTest` switched to `Session.Events` (11 references, all
+compiler-listed) — plus `Model` is not `comparable` (`E.Value` fields), so
+"leaves the model untouched" had to become an explicit projection of the arm's
+write set (`touched` in `SessionEventsTest`), which is both the definition of the
+claim and its weakness: an arm that learns to write a field not in the projection
+passes every untouched test. Keep that list and the `| sessions =` updates in the
+module the same length. Elm caps tuples at three, so such a projection must be a
+record anyway.
+
+**A fixture must distinguish the identifiers its test names.** Two of 17 mutations
+survived, and both survived for the same reason:
+
+  - "buffers under the core id" passed a build that buffered under `Session.id`,
+    because the fixture had **no work-copy mapping** — so the core id and the
+    Session.id were the same string. Now a model maps `s9 → core-2` with `s9`
+    unregistered: the two candidate keys differ, and the test says which one won.
+  - "warns once on overflow" passed a build that warned per frame, because the
+    fixture filled the buffer to exactly `cap + 1`, so one frame was ever in
+    violation. It now fills to `cap + 5`.
+
+Any test that asserts *which* identifier, *how many* times, or *which one*
+survived needs a fixture where the wrong answer is a different value. Otherwise it
+is a comment with a green check beside it.
+
+**A mutation sweep on a dirty baseline reports 100% killed.** The first sweep was
+interrupted mid-flight, which left the module mutated on disk; the next sweep
+snapshotted *that* as its baseline and reported all 17 mutations killed, several
+"by 2 tests" — one of them the pre-existing failure. Three rules came out of it:
+assert the baseline is green before mutating and abort if not; compare the **set**
+of failing test names against the baseline set rather than counting failures; and
+run the whole suite, since `elm-test tests/OneFile.elm` is what let the mutated
+module look fine (the drop-oldest rule is pinned in `PendingEventsTest`, not here).
+
+
 ## For the next slice
 
-1. Pick by coupling, not size. Re-measured 2026-09-09 after five slices:
-   `App/Update.elm` is 6737 lines and its `update` body 4414 lines over 235 arms.
+1. Pick by coupling, not size. Re-measured 2026-09-10 after six slices:
+   `App/Update.elm` is 6525 lines and its `update` body 4215 — spread over the
+   same **235 arms** as when the counting started. Extracting a family leaves its
+   arms behind as four-line delegations, so the arm count never moves and is the
+   wrong metric; measure the body.
    The cheap same-shape families are gone; what is left is either large-but-coupled
    or small-and-already-thin:
    **`Session`** lifecycle (4 arms, 194 lines: `SessionCreated`,
@@ -221,9 +293,15 @@ applied").
    `RawAudio*`, `CursorPosResult`, ~280 lines over ~10 arms) are already thin
    wrappers over `Session/Voice.elm` — the machine exists, so the work there is
    consolidating effect mapping, not extracting state.
-   Everything bigger needs the `Dispatch` injection written up in `TODO.md`
-   (root of the repo, gitignored): `FrameEvent` (250 lines), `KeyDown` (166),
-   `StatusEvent` + `DeltaEvent` (~150) and the 26 `Plan` orchestration arms (819).
+   What still needs a mechanism, and which one: **`FrameEvent`** (250 lines) has
+   exactly **one** re-entry into `update` — a `model_sync` CO riding inside a
+   stream frame — so the smallest thing that works is a `Defer Msg` action folded
+   by the effect mapper, not a `Dispatch` parameter threaded through a module.
+   **`KeyDown`** (166) and the 26 **Plan** orchestration arms (819) do re-enter
+   repeatedly and want the injected `Dispatch` `Plan/Update.elm` already uses.
+   `StatusEvent` and `DeltaEvent` were on this list as needing `Dispatch` too;
+   counting the `Model` fields each arm writes showed neither needs any — they are
+   the `App/Arch` shape unchanged. Measure before believing a size.
 
 2. Decide which of the two shapes applies BEFORE writing — if `Model` will reference
    your types, you have chosen the pure one and must pass every input explicitly.

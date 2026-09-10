@@ -1,10 +1,7 @@
 module App.Update exposing
     ( update
-    , pendingEventsCap
-    , bufferPendingEvent
     , SessionDir
     , decodeSessionDir
-    , decodeWarning
     )
 
 {-| Application update logic. Message dispatch plus session/overlay
@@ -31,6 +28,7 @@ import Plan.Update as PU exposing (..)
 import Session.Types as T
 import Session.Protocol as P
 import Session.Handlers as H
+import Session.Events as EV
 import Session.Voice as Voice
 import Session.ModelConfig as MC
 import Session.Selector as Sel exposing (Page(..))
@@ -298,79 +296,6 @@ appendErrorMsg s text =
     }
 
 
--- Buffer an inbound event for a session that has not been registered
--- yet (e.g. transport events racing session creation). The buffered
--- events are flushed when the session appears (see SessionCreated).
-{-| Frames that arrive for a session this client has not created yet are
-buffered and replayed when it appears (`SessionCreated` → `applyPendingEvent`).
-Without a bound the buffer is a leak: the Go backend broadcasts every frame to
-every client, so a second tab, an SSH session, or any core this UI never opened
-keeps appending to a key that will never be drained — for the lifetime of the
-page. 512 frames is far more than a session start can be waiting for (a
-replay-long enough to matter would already be on screen), and dropping the
-OLDEST keeps the newest state, which is the part the replay needs: `taskRunning
-= True` or the final `model` frame is worthless without the messages that came
-before it.
-
-One `logWarn` per session, not per frame: `pendingOverflow` records that this
-key already said so. Without it a runaway core writes the log at frame rate —
-and the point of the warning is a human reading it, not the disc it lands on.
--}
-pendingEventsCap : Int
-pendingEventsCap =
-    512
-
-
-bufferPendingEvent : Model -> String -> E.Value -> ( Model, Cmd Msg )
-bufferPendingEvent model sessionId raw =
-    let
-        existing =
-            Dict.get sessionId model.pendingEvents |> Maybe.withDefault []
-
-        queued =
-            existing ++ [ raw ]
-
-        over =
-            List.length queued - pendingEventsCap
-
-        alreadyLogged =
-            Set.member sessionId model.pendingOverflow
-
-        kept =
-            if over > 0 then
-                List.drop over queued
-
-            else
-                queued
-
-        warnCmd =
-            -- over > 0 on the FIRST frame that pushes a key past the cap; every
-            -- later frame sees the flag already set, so this fires once.
-            if over > 0 && not alreadyLogged then
-                Ports.logWarn
-                    ("dropping oldest buffered events for unknown session "
-                        ++ sessionId
-                        ++ " (buffer capped at "
-                        ++ String.fromInt pendingEventsCap
-                        ++ ")"
-                    )
-
-            else
-                Cmd.none
-    in
-    ( { model
-        | pendingEvents = Dict.insert sessionId kept model.pendingEvents
-        , pendingOverflow =
-            if over > 0 then
-                Set.insert sessionId model.pendingOverflow
-
-            else
-                model.pendingOverflow
-      }
-    , warnCmd
-    )
-
-
 -- Session dir root: ~/.alayaface/sessions. Plans live INSIDE their
 -- owning session's dir (sessions/<originSessionId>/plans/<planId>/), so
 -- there is no top-level plans/ root anymore. (sessionsDir itself moved
@@ -576,21 +501,6 @@ minimalPlanClose planId model =
         , Ports.setConnectionChain (chainPayload m2 m2.connectionChain)
         ]
     )
-
-
-{-| C2b (I-G): is this core id the **current** work copy of its Session?
-Late frames/disconnects from an OLD work copy (replaced by a fork) would
-pollute the new entry if routed by Session.id — the "current work copy"
-guard drops them. Plain sessions (no mapping) are always True. Node
-sessions (no mapping) are likewise always True (behavior unchanged pre-C3).
--}
-isCurrentWorkCopy : Model -> String -> Bool
-isCurrentWorkCopy model coreId =
-    let
-        sid =
-            PU.sessionIdOfWorkCopy model coreId
-    in
-    PU.workCopyId model sid == coreId
 
 
 {-| C2b/C3: an in-flight cascade fork (top-level or node) always goes
@@ -1288,6 +1198,28 @@ applyGlobalActions actions =
     actions |> List.map applyGlobalAction |> Cmd.batch
 
 
+-- ─── Inbound event effect glue (Session/Events) ────────────────────
+-- The routing returns `Action` data; this is the only place a buffered frame,
+-- a decode failure or a dropped session can reach a port, so "what may write
+-- to the console" and "what may scroll a window" stay one grep.
+
+applyEventAction : EV.Action -> Cmd Msg
+applyEventAction action =
+    case action of
+        EV.LogWarn message ->
+            Ports.logWarn message
+
+        EV.ScrollToBottom sid ->
+            Ports.scrollToBottom { sessionId = sid }
+
+        EV.RunnerEvent runnerEvent ->
+            Task.perform (\t -> PlanRunFrame (Time.posixToMillis t) runnerEvent) Time.now
+
+
+applyEventActions : List EV.Action -> Cmd Msg
+applyEventActions actions =
+    actions |> List.map applyEventAction |> Cmd.batch
+
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
@@ -1564,72 +1496,17 @@ update msg model =
 
         -- Transport Events
         DeltaEvent raw ->
-            case D.decodeValue P.deltaEventDecoder raw of
-                Ok ev ->
-                    -- C2b (I-G): only handle frames from the CURRENT work
-                    -- copy — late frames/disconnects from an old work copy
-                    -- (replaced by a fork) would pollute the new entry.
-                    if not (isCurrentWorkCopy model ev.sessionId) then
-                        ( model, Cmd.none )
-
-                    else
-                        -- C2b (I-D): frame core id → Session.id (work-copy
-                        -- frame; plain session = identity).
-                        let
-                            sid =
-                                PU.sessionIdOfWorkCopy model ev.sessionId
-                        in
-                            case Dict.get sid model.sessions of
-                            Just session ->
-                                let
-                                    -- M3/D4: incremental plan count — the delta
-                                    -- accumulator for this tag:historyId before
-                                    -- and after; crossing the ```json fence
-                                    -- bumps the counter exactly once per plan
-                                    -- message (replaces the per-frame O(n)
-                                    -- planIndexForMessage scan).
-                                    prevContent =
-                                        Dict.get (ev.tag ++ ":" ++ ev.historyId) session.historyContents
-                                            |> Maybe.withDefault ""
-    
-                                    becamePlan =
-                                        becamePlanMessage prevContent (prevContent ++ ev.content)
-    
-                                    newSession =
-                                        H.handleDeltaEvent session ev
-    
-                                    -- scrollToBottom is frontend DOM scrolling:
-                                    -- elements are named by window key
-                                    -- (Session.id), so pass sid, not coreId.
-                                    cmds =
-                                        if session.atBottom then
-                                            Ports.scrollToBottom { sessionId = sid }
-                                        else
-                                            Cmd.none
-                                in
-                                ( { model
-                                    | sessions = Dict.insert sid newSession model.sessions
-                                    , planMessageCounts = bumpPlanCount model.planMessageCounts sid becamePlan
-                                  }
-                                , cmds
-                                )
-    
-                            -- Buffering is still keyed by core id (replayed
-                            -- with routing once SessionCreated sets up
-                            -- workCopies).
-                            Nothing ->
-                                bufferPendingEvent model ev.sessionId raw
-    
-                -- A malformed event here stops the transcript updating
-                -- while the window still looks alive — report it.
-                Err err ->
-                    ( model, Ports.logWarn (decodeWarning "DeltaEvent" err) )
+            let
+                ( m, actions ) =
+                    EV.deltaEvent model raw
+            in
+            ( m, applyEventActions actions )
 
         FrameEvent raw ->
             case D.decodeValue P.frameEventDecoder raw of
                 Ok ev ->
                     -- C2b (I-G): only handle frames from the current work copy.
-                    if not (isCurrentWorkCopy model ev.sessionId) then
+                    if not (EV.isCurrentWorkCopy model ev.sessionId) then
                         ( model, Cmd.none )
 
                     else
@@ -1797,97 +1674,23 @@ update msg model =
                                         ( updatedModel3, Cmd.batch [ cmds, runnerFrameCmd, autoOfferCmd ] )
     
                             Nothing ->
-                                bufferPendingEvent model ev.sessionId raw
+                                let
+                                    ( buffered, actions ) =
+                                        EV.bufferPendingEvent model ev.sessionId raw
+                                in
+                                ( buffered, applyEventActions actions )
     
                 -- A malformed event here stops the transcript updating
                 -- while the window still looks alive — report it.
                 Err err ->
-                    ( model, Ports.logWarn (decodeWarning "FrameEvent" err) )
+                    ( model, Ports.logWarn (EV.decodeWarning "FrameEvent" err) )
 
         StatusEvent raw ->
-            case D.decodeValue P.statusEventDecoder raw of
-                Ok ev ->
-                    -- C2b (I-G): only handle status events from the CURRENT
-                    -- work copy (a connected:false from an old work copy
-                    -- being closed must not pollute the new entry).
-                    if not (isCurrentWorkCopy model ev.sessionId) then
-                        ( model, Cmd.none )
-
-                    else
-                        let
-                            -- C2b (I-D): core id → Session.id (sessions update
-                            -- by Session.id; runner injection/buffering still
-                            -- by core id).
-                            sid =
-                                PU.sessionIdOfWorkCopy model ev.sessionId
-
-                            -- Runner injection: a node-owned session that
-                            -- disconnects before task completion is a failure.
-                            -- C3: route by Session.id (node binding =
-                            -- Session.id; after fork/resume frames come from
-                            -- the work-copy core id).
-                            statusRunnerCmd =
-                                if not ev.connected then
-                                    case findPlanIdBySession model sid of
-                                        Just _ ->
-                                            Task.perform
-                                                (\t ->
-                                                    PlanRunFrame (Time.posixToMillis t)
-                                                        (R.SessionDisconnected sid ev.message)
-                                                )
-                                                Time.now
-
-                                        Nothing ->
-                                            Cmd.none
-
-                                else
-                                    Cmd.none
-                        in
-                            case Dict.get sid model.sessions of
-                            Just session ->
-                                let
-                                    updated =
-                                        { session
-                                            | connected = ev.connected
-                                            , statusMsg = ev.message
-                                            -- A disconnect means any in-flight
-                                            -- prompt can never be echoed back —
-                                            -- clear the stuck "Sending…" state.
-                                            , sendPending = if ev.connected then session.sendPending else False
-                                        }
-                                in
-                                if not ev.connected && session.modelSelector.page == ModelSelSyncing then
-                                    -- A disconnect means the model_sync CO will
-                                    -- never arrive — fail the sync instead of
-                                    -- leaving the overlay stuck.
-                                    ( { model
-                                        | sessions = Dict.insert sid
-                                            { updated
-                                                | modelSelector = Sel.syncFailed "Session disconnected during sync" updated.modelSelector
-                                            }
-                                            model.sessions
-                                      }
-                                    , statusRunnerCmd
-                                    )
-    
-                                else
-                                    ( { model
-                                        | sessions = Dict.insert sid updated model.sessions
-                                      }
-                                    , statusRunnerCmd
-                                    )
-    
-                            Nothing ->
-                                let
-                                    ( model1, cmds1 ) =
-                                        bufferPendingEvent model ev.sessionId raw
-                                in
-                                ( model1, Cmd.batch [ cmds1, statusRunnerCmd ] )
-    
-                -- A malformed event here stops the transcript updating
-                -- while the window still looks alive — report it.
-                Err err ->
-                    ( model, Ports.logWarn (decodeWarning "StatusEvent" err) )
+            let
+                ( m, actions ) =
+                    EV.statusEvent model raw
+            in
+            ( m, applyEventActions actions )
 
         -- Backend RPC failure (transport.js catches invoke rejections and
         -- forwards {kind, sessionId, message} via onRpcError). The
@@ -1900,7 +1703,7 @@ update msg model =
                 Ok err ->
                     -- C2b (I-G): RPC errors sent to an OLD work copy are
                     -- stale — ignore.
-                    if not (isCurrentWorkCopy model err.sessionId) then
+                    if not (EV.isCurrentWorkCopy model err.sessionId) then
                         ( model, Cmd.none )
 
                     else
@@ -5979,19 +5782,6 @@ pinchMove model =
 
 
 -- ─── Helpers ──────────────────────────────────────────────────────────
-
-{-| Console line for an inbound backend event whose JSON the decoder rejected.
-
-Kept as a pure function so the format is pinned by a test: these are the
-failures with no UI surface (AGENTS.md rule #1 — the app looks operational
-while the transcript has stopped updating), so the message is what a bug
-report has to go on. `label` names the port so the line points at the path
-that broke.
--}
-decodeWarning : String -> D.Error -> String
-decodeWarning label err =
-    label ++ " decode failed: " ++ D.errorToString err
-
 
 updateAfterConfirm : Model -> String -> Model
 updateAfterConfirm model sid =
