@@ -272,13 +272,74 @@ run the whole suite, since `elm-test tests/OneFile.elm` is what let the mutated
 module look fine (the drop-oldest rule is pinned in `PendingEventsTest`, not here).
 
 
+## What the frame arm added (the same slice, second step)
+
+`FrameEvent` — 250 lines, the last of the three transport arms — moved into the
+same module one step later, and it is the only part of the six that needed a
+decision rather than a transcription.
+
+**Count the re-entries before choosing a mechanism.** The plan said this arm
+needed the dispatcher injected as `Dispatch`, because it "mutates Model
+mid-flight and re-enters update". Measured: of ~400 lines across the three arms
+there is **exactly one** re-entry, and it exists only because a `model_sync` CO
+result arrives embedded in a stream frame. So the module got `Defer Msg` — one
+action the mapper folds through `update` — instead of a `Dispatch` parameter
+threaded through a module whose other 600 lines are data. `Plan/Update.elm` still
+injects `Dispatch`, and correctly: it recurses repeatedly. The rule is
+"re-enters more than once ⇒ inject", not "touches the dispatcher ⇒ inject".
+
+Consequence worth knowing before you add an action: `applyEventActions` is now the
+**only** effect mapper in `App/Update.elm` that takes and returns a `Model`. Every
+other `apply*Actions` is `List Action -> Cmd Msg`. That asymmetry is the `Defer`
+case, and it is the reason the frame arm's tests include one that goes through
+`App.Update.update` — the fold lives in the mapper, and no test of the module can
+see whether it works.
+
+**A branch that drops its sibling commands is behaviour, not sloppiness.** The
+sync-CO branch used to `update (ForSession …) updatedModel3` and never batch the
+frame's `cmds`/`runnerFrameCmd`/`autoOfferCmd`. So a `model_sync` CO frame does
+not re-pin the viewport. The faithful move emits `[ Defer … ]` ALONE. It looks
+like an oversight and invites a "fix" — do it in its own commit if it is wrong,
+because the test that pins it (`while the overlay is syncing it defers, alone`)
+is otherwise indistinguishable from one that asserts the bug is intended.
+
+**Some mutations cannot be observed, and saying so is better than a green sweep.**
+`ready = newSession.ready || readyNow` is redundant: `Session.Handlers.handleSystemSession`
+sets `ready = True` for the same SM predicate that `isSessionReady` reads, from the
+other module. Deleting the `||` breaks no test and no behaviour. That is recorded
+in a comment at the write (the two predicates drifting is the risk — the field
+would keep looking right while the *node-prompt flush*, which depends on the arm's
+own copy of the signal, quietly stopped) and in the sweep as a declared
+non-gap. A mutation list that reports 21/21 killed is more suspicious than one
+that reports 20/20 plus one untestable.
+
+**A compile error is not a killed test.** One replay mutation swapped
+`frameEventDecoder` for `deltaEventDecoder`; the module stopped type-checking, and
+the harness counted the failure to run as a kill. Every mutation must survive
+compilation and change only runtime behaviour, or it proves nothing. (The replay
+path is now pinned by two better mutations instead: dropping the status writes,
+and keying the insert by the frame's core id rather than the routed `Session.id` —
+the second one initially SURVIVED, because a fixture whose lookup key is unchanged
+hides a changed insert key. Same lesson as D1's buffer-key hole, third time:
+**make the wrong answer a different value.**)
+
+**`elm make` cannot see an orphaned binding.** `mcpJustCompleted` had been dead for
+six weeks in the arm being moved, with zero build warnings (Elm 0.19 does not warn
+about unused `let` bindings). After moving an arm, count each bound name's
+occurrences in the region — anything appearing exactly once is its own definition.
+`483169c` is that cleanup, separate from the move.
+
+
 ## For the next slice
 
-1. Pick by coupling, not size. Re-measured 2026-09-10 after six slices:
-   `App/Update.elm` is 6525 lines and its `update` body 4215 — spread over the
-   same **235 arms** as when the counting started. Extracting a family leaves its
-   arms behind as four-line delegations, so the arm count never moves and is the
-   wrong metric; measure the body.
+1. Pick by coupling, not size. Re-measured 2026-09-10 after six slices
+   (all three transport arms now in `Session/Events.elm`): `App/Update.elm` is
+   6204 lines and its `update` body 4039 — over the same **235 arms** as when the
+   counting started. Extracting a family leaves its arms behind as four-line
+   delegations, so the arm count never moves and is the wrong metric; measure the
+   body. The biggest remaining arms are `KeyDown` (166), `PlanSaveReady` (99),
+   `PlanCascadeForkResult` (92), `DeleteSession` (83), `PlanOpenNodeSession` (78)
+   — no transport arm is in the top eight any more.
    The cheap same-shape families are gone; what is left is either large-but-coupled
    or small-and-already-thin:
    **`Session`** lifecycle (4 arms, 194 lines: `SessionCreated`,

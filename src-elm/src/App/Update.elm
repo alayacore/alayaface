@@ -553,7 +553,7 @@ forkSessionCreated forkId model =
 
         sessionsAfterBuffer =
             List.foldl
-                (applyPendingEvent (PU.sessionIdOfWorkCopyDict newWorkCopies))
+                (EV.applyPendingEvent (PU.sessionIdOfWorkCopyDict newWorkCopies))
                 newSessions
                 buffered
 
@@ -639,7 +639,7 @@ resumeSessionCreated liveId model =
 
         sessionsAfterBuffer =
             List.foldl
-                (applyPendingEvent (PU.sessionIdOfWorkCopyDict newWorkCopies))
+                (EV.applyPendingEvent (PU.sessionIdOfWorkCopyDict newWorkCopies))
                 newSessions
                 buffered
 
@@ -756,7 +756,7 @@ createSessionWindow id model =
             Dict.get id model.pendingEvents |> Maybe.withDefault []
 
         sessionsAfterBuffer =
-            List.foldl (applyPendingEvent (\core -> core)) newSessions buffered
+            List.foldl (\v -> EV.applyPendingEvent (\core -> core) v) newSessions buffered
 
         -- Only auto-switch on initial creation (activeId was Nothing)
         -- If user is already viewing a session, don't steal focus.
@@ -1203,22 +1203,46 @@ applyGlobalActions actions =
 -- a decode failure or a dropped session can reach a port, so "what may write
 -- to the console" and "what may scroll a window" stay one grep.
 
-applyEventAction : EV.Action -> Cmd Msg
-applyEventAction action =
+{-| One action, applied to a model. Takes and returns `Model` because
+`Defer` re-enters the dispatcher; every other `apply*Actions` mapper in this
+file is `List Action -> Cmd Msg`, and the difference is exactly this one action.
+
+`Defer` is the whole reason an inbound event still needs the dispatcher: a
+`model_sync` CO that lands while the overlay is syncing is handled by the
+`ModelSelectorSyncResult` arm, and duplicating that arm here would put the model
+selector's rules in two places.
+-}
+applyEventAction : Model -> EV.Action -> ( Model, Cmd Msg )
+applyEventAction model action =
     case action of
         EV.LogWarn message ->
-            Ports.logWarn message
+            ( model, Ports.logWarn message )
 
         EV.ScrollToBottom sid ->
-            Ports.scrollToBottom { sessionId = sid }
+            ( model, Ports.scrollToBottom { sessionId = sid } )
 
         EV.RunnerEvent runnerEvent ->
-            Task.perform (\t -> PlanRunFrame (Time.posixToMillis t) runnerEvent) Time.now
+            ( model, Task.perform (\t -> PlanRunFrame (Time.posixToMillis t) runnerEvent) Time.now )
+
+        EV.SendPrompt sid text ->
+            ( model, Ports.sendPrompt { sessionId = sid, text = text, media = [] } )
+
+        EV.PlanOffer sid planIndex ->
+            ( model, Task.perform (\_ -> PlanCreateOffer sid planIndex) Time.now )
+
+        EV.Defer msg ->
+            update msg model
 
 
-applyEventActions : List EV.Action -> Cmd Msg
-applyEventActions actions =
-    actions |> List.map applyEventAction |> Cmd.batch
+applyEventActions : Model -> List EV.Action -> ( Model, Cmd Msg )
+applyEventActions model actions =
+    List.foldl
+        (\action ( m, cmds ) ->
+            applyEventAction m action |> Tuple.mapSecond (\cmd -> cmds ++ [ cmd ])
+        )
+        ( model, [] )
+        actions
+        |> Tuple.mapSecond Cmd.batch
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -1500,194 +1524,21 @@ update msg model =
                 ( m, actions ) =
                     EV.deltaEvent model raw
             in
-            ( m, applyEventActions actions )
+            applyEventActions m actions
 
         FrameEvent raw ->
-            case D.decodeValue P.frameEventDecoder raw of
-                Ok ev ->
-                    -- C2b (I-G): only handle frames from the current work copy.
-                    if not (EV.isCurrentWorkCopy model ev.sessionId) then
-                        ( model, Cmd.none )
-
-                    else
-                        -- C2b (I-D): core id → Session.id.
-                        let
-                            sid =
-                                PU.sessionIdOfWorkCopy model ev.sessionId
-                        in
-                            case Dict.get sid model.sessions of
-                            Just session ->
-                                let
-                                    -- M3/D4: incremental plan count — the
-                                    -- accumulated content for this
-                                    -- tag:historyId BEFORE the frame; if the
-                                    -- frame's content crosses the fence for
-                                    -- the first time, bump the counter.
-                                    -- AT with empty content (delta-mode
-                                    -- terminator) or already-plan accumulated
-                                    -- content never double-counts.
-                                    prevAccum =
-                                        case ev.historyId of
-                                            Just hid ->
-                                                Dict.get (ev.tag ++ ":" ++ hid) session.historyContents
-                                                    |> Maybe.withDefault ""
-    
-                                            Nothing ->
-                                                ""
-    
-                                    becamePlan =
-                                        becamePlanMessage prevAccum (Maybe.withDefault "" ev.content)
-    
-                                    -- The core's explicit readiness signal
-                                    -- (SM {"type":"session","data":
-                                    -- {"state":"ready"}}): MCP init done,
-                                    -- replay ended, session interactive.
-                                    readyNow =
-                                        isSessionReady ev
-    
-                                    newSession =
-                                        H.handleFrameEvent session ev
-    
-                                    -- A user echo (UT/UI/UV/UA/UD) is the
-                                    -- user's OWN action — sent from the
-                                    -- always-visible input bar, possibly
-                                    -- while scrolled up reading history.
-                                    -- Always bring it into view: chat UX
-                                    -- requires the new user message to be
-                                    -- visible regardless of auto-follow
-                                    -- state (atBottom).
-                                    userEchoNow =
-                                        P.isUserEchoTag ev.tag
-    
-                                    -- A node prompt held by the readiness gate
-                                    -- (pendingNodePrompts) is flushed the
-                                    -- moment the session becomes ready.
-                                    flushPendingCmd =
-                                        if readyNow then
-                                            case Dict.get sid model.pendingNodePrompts of
-                                                Just text ->
-                                                    Ports.sendPrompt { sessionId = sid, text = text, media = [] }
-    
-                                                Nothing ->
-                                                    Cmd.none
-    
-                                        else
-                                            Cmd.none
-    
-                                    -- scrollToBottom is frontend DOM scrolling:
-                                    -- elements are named by window key
-                                    -- (Session.id), so pass sid.
-                                    --
-                                    -- Auto-follow re-pins on EVERY frame, not
-                                    -- just message-count changes: frames that
-                                    -- only grow an EXISTING message's content
-                                    -- (Af tool-arg deltas, UF tool results, Uf
-                                    -- previews, complete AT/AR replacements,
-                                    -- media appended to a user echo) also push
-                                    -- content below the fold. Gating on
-                                    -- msgCountChanged left the viewport stuck
-                                    -- until the next assistant-text delta
-                                    -- created a new message. State-only frames
-                                    -- (SM status, model sync…) are a harmless
-                                    -- no-op: at the bottom, scrollTop =
-                                    -- scrollHeight changes nothing.
-                                    --
-                                    -- User echoes are the exception to the
-                                    -- atBottom gate: they are the user's own
-                                    -- send, so the page always follows them
-                                    -- (see userEchoNow above).
-                                    cmds =
-                                        Cmd.batch
-                                            [ flushPendingCmd
-                                            , if session.atBottom || userEchoNow then
-                                                Ports.scrollToBottom { sessionId = sid }
-                                              else
-                                                Cmd.none
-                                            ]
-    
-                                    updatedModel =
-                                        { model
-                                            | sessions = Dict.insert sid { newSession | ready = newSession.ready || readyNow } model.sessions
-                                            , pendingNodePrompts =
-                                                if readyNow then
-                                                    Dict.remove sid model.pendingNodePrompts
-    
-                                                else
-                                                    model.pendingNodePrompts
-                                            , planMessageCounts = bumpPlanCount model.planMessageCounts sid becamePlan
-                                            -- Replay suppression: the marker is
-                                            -- removed by the core's explicit
-                                            -- readiness signal — SM
-                                            -- {"type":"session","data":
-                                            -- {"state":"ready"}} arrives AFTER
-                                            -- all replayed history content
-                                            -- (alayacore v0.62.4+, verified
-                                            -- against the binary). No fallback:
-                                            -- older cores without the ready SM
-                                            -- are not supported.
-                                            , planReplaySessions =
-                                                if readyNow then
-                                                    Set.remove sid model.planReplaySessions
-    
-                                                else
-                                                    model.planReplaySessions
-                                        }
-
-                                    -- Plan Mode (R2): a completed assistant message
-                                    -- carrying the alayaface-plan marker is
-                                    -- auto-offered. Recording it and announcing it
-                                    -- are one decision — see planOfferFromFrame.
-                                    ( updatedModel2, autoOfferCmd ) =
-                                        planOfferFromFrame updatedModel sid newSession ev
-
-                                    -- Runner injection: task done / SM error for
-                                    -- a node-owned session feeds the state machine.
-                                    -- planEventFromFrame also tracks task-start
-                                    -- (in_progress:true) so the alayacore boot
-                                    -- task frame is not mistaken for a real
-                                    -- task completion (R5 fix).
-                                    ( updatedModel3, runnerEv ) =
-                                        planEventFromFrame updatedModel2 ev
-    
-                                    runnerFrameCmd =
-                                        case runnerEv of
-                                            Just runnerEvent ->
-                                                Task.perform (\t -> PlanRunFrame (Time.posixToMillis t) runnerEvent) Time.now
-    
-                                            Nothing ->
-                                                Cmd.none
-                                in
-                                -- model_sync completes asynchronously via CO:
-                                -- success closes the overlay, failure keeps it open
-                                case decodeSyncOutcome raw of
-                                    Just ( isError, message ) ->
-                                        if newSession.modelSelector.page == ModelSelSyncing then
-                                            update (ForSession sid (ModelSelectorSyncResult isError message)) updatedModel3
-    
-                                        else
-                                            ( updatedModel3, Cmd.batch [ cmds, runnerFrameCmd, autoOfferCmd ] )
-    
-                                    Nothing ->
-                                        ( updatedModel3, Cmd.batch [ cmds, runnerFrameCmd, autoOfferCmd ] )
-    
-                            Nothing ->
-                                let
-                                    ( buffered, actions ) =
-                                        EV.bufferPendingEvent model ev.sessionId raw
-                                in
-                                ( buffered, applyEventActions actions )
-    
-                -- A malformed event here stops the transcript updating
-                -- while the window still looks alive — report it.
-                Err err ->
-                    ( model, Ports.logWarn (EV.decodeWarning "FrameEvent" err) )
+            let
+                ( m, actions ) =
+                    EV.frameEvent model raw
+            in
+            applyEventActions m actions
 
         StatusEvent raw ->
             let
                 ( m, actions ) =
                     EV.statusEvent model raw
             in
-            ( m, applyEventActions actions )
+            applyEventActions m actions
 
         -- Backend RPC failure (transport.js catches invoke rejections and
         -- forwards {kind, sessionId, message} via onRpcError). The
@@ -5796,65 +5647,6 @@ updateAfterConfirm model sid =
             model
 
 
--- | Apply a buffered frame/delta/status event to the sessions dict.
--- C2b (§8.1, I-D): `sidFor` routes a frame's core id to Session.id
--- (work-copy frames from fork/resume; plain session = identity). After
--- SessionCreated sets up workCopies it is used to replay buffered frames.
-applyPendingEvent : (String -> String) -> E.Value -> Dict String T.SessionState -> Dict String T.SessionState
-applyPendingEvent sidFor raw sessions =
-    -- Try FrameEvent first (most common for initial messages)
-    case D.decodeValue P.frameEventDecoder raw of
-        Ok ev ->
-            let
-                sid =
-                    sidFor ev.sessionId
-            in
-            case Dict.get sid sessions of
-                Just session ->
-                    Dict.insert sid (H.handleFrameEvent session ev) sessions
-
-                Nothing ->
-                    sessions
-
-        Err _ ->
-            -- Try DeltaEvent
-            case D.decodeValue P.deltaEventDecoder raw of
-                Ok ev ->
-                    let
-                        sid =
-                            sidFor ev.sessionId
-                    in
-                    case Dict.get sid sessions of
-                        Just session ->
-                            Dict.insert sid (H.handleDeltaEvent session ev) sessions
-
-                        Nothing ->
-                            sessions
-
-                Err _ ->
-                    -- Try StatusEvent
-                    case D.decodeValue P.statusEventDecoder raw of
-                        Ok ev ->
-                            let
-                                sid =
-                                    sidFor ev.sessionId
-                            in
-                            case Dict.get sid sessions of
-                                Just session ->
-                                    Dict.insert sid
-                                        { session
-                                            | connected = ev.connected
-                                            , statusMsg = ev.message
-                                        }
-                                        sessions
-
-                                Nothing ->
-                                    sessions
-
-                        Err _ ->
-                            sessions
-
-
 type alias SessionDir =
     { id : String
     , createdAt : String
@@ -6061,116 +5853,6 @@ encodeMcpServer s =
         , ( "auth_client_secret", E.string s.authClientSecret )
         , ( "proto_version", E.string s.protoVersion )
         ]
-
-
--- Plan Mode (R2): when an assistant message completes with a fenced ```json
--- block carrying the alayaface-plan marker, AUTO-CREATE the plan (no button).
--- The offer entry is still recorded keyed by message index so replay cannot
--- create duplicates; PlanCreateOffer consumes it.
---
--- One decision, two results: recording the offer in `pendingPlanOffers` and
--- announcing it with `PlanCreateOffer` are returned together because they used
--- to be two hand-copied guard chains in the FrameEvent arm. Copy-pair drift was
--- silent either way — an offer recorded but never announced leaves no button,
--- an announced offer that was never recorded makes PlanCreateOffer look up a
--- `Nothing`.
---
--- Two orderings are load-bearing and must not be "simplified":
---   * the caller passes the model as it stands AFTER `sessions`/`ready` were
---     written but BEFORE the offer insert; both the guards and the insert read
---     that same snapshot, so neither sees the other's copy;
---   * `planIdx` comes from `planMessageCounts`, which this frame already bumped
---     via `bumpPlanCount` — it is the index of the message that just arrived.
---
--- NOTE: in delta mode the AT frame itself is an empty terminator, so detection
--- runs on the final message content, not `ev.content`.
-planOfferFromFrame : Model -> String -> T.SessionState -> P.FrameEvent -> ( Model, Cmd Msg )
-planOfferFromFrame updatedModel sid newSession ev =
-    if ev.tag == "AT" then
-        case List.head (List.reverse newSession.messages) of
-            Just m ->
-                let
-                    planIdx =
-                        planCountOf updatedModel.planMessageCounts sid
-
-                    offer =
-                        if m.role == T.Assistant
-                            && not (Set.member sid updatedModel.planReplaySessions)
-                            && not (Dict.member ( sid, planIdx ) updatedModel.pendingPlanOffers)
-                            && not (messageBoundToPlan updatedModel sid planIdx) then
-                            case Plan.Detect.extractPlanJson m.content of
-                                Just offerRaw ->
-                                    if Plan.Detect.hasPlanTypeMarker offerRaw then
-                                        Just offerRaw
-
-                                    else
-                                        Nothing
-
-                                Nothing ->
-                                    Nothing
-
-                        else
-                            Nothing
-                in
-                case offer of
-                    Just offerRaw ->
-                        -- Live plan message: create + auto-open immediately. History
-                        -- replays (resumed sessions) are suppressed via
-                        -- planReplaySessions — their plan messages show the manual
-                        -- "Open plan" button instead.
-                        ( { updatedModel | pendingPlanOffers = Dict.insert ( sid, planIdx ) offerRaw updatedModel.pendingPlanOffers }
-                        , Task.perform (\_ -> PlanCreateOffer sid planIdx) Time.now
-                        )
-
-                    Nothing ->
-                        ( updatedModel, Cmd.none )
-
-            Nothing ->
-                ( updatedModel, Cmd.none )
-
-    else
-        ( updatedModel, Cmd.none )
-
-
--- Decode a model_sync CO result: Just ( isError, message ) when the frame
--- is a CO for the model_sync command, Nothing otherwise.
-decodeSyncOutcome : E.Value -> Maybe ( Bool, String )
-decodeSyncOutcome raw =
-    case D.decodeValue P.frameEventDecoder raw of
-        Ok ev ->
-            if ev.tag == "CO" then
-                case ev.json of
-                    Just json ->
-                        let
-                            name =
-                                D.decodeValue (D.field "name" D.string) json
-                                    |> Result.toMaybe
-                                    |> Maybe.withDefault ""
-
-                            isError =
-                                D.decodeValue (D.field "is_error" D.bool) json
-                                    |> Result.toMaybe
-                                    |> Maybe.withDefault False
-
-                            message =
-                                D.decodeValue (D.field "output" (D.field "message" D.string)) json
-                                    |> Result.toMaybe
-                                    |> Maybe.withDefault ""
-                        in
-                        if name == "model_sync" then
-                            Just ( isError, message )
-
-                        else
-                            Nothing
-
-                    Nothing ->
-                        Nothing
-
-            else
-                Nothing
-
-        Err _ ->
-            Nothing
 
 
 defaultModelsListResultDecoder : D.Decoder { ok : Bool, models : List T.ModelInfo, activeId : Maybe Int, error : String }
