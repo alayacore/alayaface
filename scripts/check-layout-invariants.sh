@@ -59,14 +59,20 @@ geometry_lines() {
 
 # ─── 1. No raw reads outside App/Windows.elm (INV1) ──────────────────
 
-for f in src-elm/src/App/View.elm src-elm/src/App/Update.elm; do
+# The scanned list is DERIVED, not enumerated. It named two files by hand, so
+# every module added since — `src/Session/Events.elm`, and the ones before it —
+# escaped INV1 silently while the gate still printed ✓. App/Windows.elm is the
+# only exclusion, because that file IS the read path.
+scanned=0
+while read -r f; do
+  scanned=$((scanned + 1))
   n=$(geometry_reads "$f")
   if [ "$n" -ne 0 ]; then
     echo "✗ INV1: $f reads windowPositions directly ($n site(s)) — use App/Windows winRect / winRectList / hasWin"
     geometry_lines "$f" | sed 's/^/      /'
     fail=1
   fi
-done
+done < <(find src-elm/src -name '*.elm' ! -path '*/App/Windows.elm' | sort)
 
 # ─── 2. Ratchet inside App/Windows.elm (reads may only shrink) ───────
 #
@@ -186,4 +192,4 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 
-echo "✓ layout invariants OK — windowPositions reads: Windows.elm $WIN_READS/$WIN_READS_MAX, View.elm + Update.elm 0; soloWin confined to App/Windows; JS bridge free of solo logic"
+echo "✓ layout invariants OK — windowPositions reads: Windows.elm $WIN_READS/$WIN_READS_MAX, 0 in each of the other $scanned modules; soloWin confined to App/Windows; JS bridge free of solo logic"
