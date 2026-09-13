@@ -296,9 +296,14 @@ where you left it. A window can still die under solo (a delete from the Session
 Manager, an ownership-graph cascade), and the view then exits itself, so it can
 never point at a window that is gone.
 
-Solo stores nothing: the layout it returns to is exactly the layout it came
-from, and it is not persisted (a restart shows the canvas). Persisting the board
-itself is planned as a separate step (see `docs/`).
+Solo stores nothing of its own: the layout it returns to is exactly the layout it
+came from, because entering solo changes no rect. What solo *is* remembered through
+is the board store — `ui.conf` carries which window was solo, and since sessions do
+not auto-reopen, that key lands as a **pending intent** which attaches the moment
+the window is created again (see `docs/solo-view.md`). A restart therefore shows the
+canvas until you reopen the session, and then it comes back solo as you left it.
+Leaving solo clears the intent, so a solo entered three restarts ago cannot hijack a
+session the user never asked to be alone.
 
 ## Automated E2E (headless browser, no real model)
 
