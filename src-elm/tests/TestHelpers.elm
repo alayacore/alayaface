@@ -33,6 +33,7 @@ initModelWithSession =
     , pendingOverflow = Set.empty
     , sessionNums = Dict.empty
     , nextSessionNum = 1
+    , sessionLabels = Dict.empty
     , windowPositions = Dict.empty
     , uiLayout = Dict.empty
     , uiTouch = 0

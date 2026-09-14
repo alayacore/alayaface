@@ -748,6 +748,27 @@ pub fn read_session_label(session_dir: &std::path::Path) -> String {
     doc.label
 }
 
+/// Store the client's label document verbatim, atomically (tmp + rename).
+/// Atomicity is not a detail: a torn write leaves a file that parses as
+/// nothing, and `read_session_label` turns that into "no name" with no trace.
+/// The document is NOT re-modelled — the client owns the schema (ui.conf's
+/// rule), and the caller has already checked the shape.
+pub fn write_session_label(session_dir: &std::path::Path, text: &str) -> Result<(), String> {
+    write_file_atomic(&label_file(session_dir), text)
+        .map_err(|e| format!("Cannot persist session label: {e}"))
+}
+
+/// Clear a name. An empty label means "no name", not a tombstone, so the file
+/// goes away and every reader falls back by itself. A missing file is success:
+/// the writer is idempotent, because the client may commit the same blank twice.
+pub fn remove_session_label(session_dir: &std::path::Path) -> Result<(), String> {
+    match std::fs::remove_file(label_file(session_dir)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("Cannot remove session label: {e}")),
+    }
+}
+
 #[cfg(test)]
 pub(crate) static TEST_HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

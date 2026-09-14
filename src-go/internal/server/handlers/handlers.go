@@ -66,6 +66,9 @@ func Registry() map[string]Command {
 		// Both backends keep the document opaque — see ui_config.go.
 		"get_ui_config":  GetUiConfig,
 		"sync_ui_config": SyncUiConfig,
+		// session label (the G-series name). Write-only: reads ride
+		// list_session_dirs. Document kept opaque — see label.go.
+		"sync_session_label": SyncSessionLabel,
 		// voice input ASR (cross-preset)
 		"get_asr_config":  GetAsrConfig,
 		"sync_asr_config": SyncAsrConfig,

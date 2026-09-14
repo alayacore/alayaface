@@ -523,6 +523,25 @@
         });
     });
 
+    // Session label (G-series): write-only here. Reads ride list_session_dirs,
+    // because the manager must name sessions that are NOT open. `document` is
+    // the client's own JSON (Session/Labels.elm owns the schema) and nothing is
+    // validated in this pipe — both backends check the SHAPE and refuse, which
+    // is the only place a refusal is meaningful (SD-G16: this reply is its own
+    // message so a failed name cannot be blamed on another writer).
+    on("syncSessionLabel", function (data) {
+      transport.invoke("sync_session_label", {
+        sessionId: data.sessionId,
+        document: data.document,
+      }).then(function () {
+        app.ports.onSessionLabelSync.send({ ok: true, error: "" });
+      }).catch(function (err) {
+        app.ports.onSessionLabelSync.send({
+          ok: false, error: String((err && err.message) || err),
+        });
+      });
+    });
+
     // Best-effort flush at teardown (SD16). This sends NO document and decides
     // NOTHING: it nudges Elm, which owns the store and may or may not answer
     // with a write. Over Tauri the webview is already going away; over HTTP the

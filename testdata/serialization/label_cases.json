@@ -127,5 +127,136 @@
       "expected": "",
       "why": "the common case: every session created before G0"
     }
-  ]
+  ],
+  "write_cases": [
+    {
+      "name": "valid",
+      "document": {
+        "v": 1,
+        "label": "refactor the parser",
+        "auto": false
+      },
+      "expected": "ok",
+      "why": "the shape the client writes"
+    },
+    {
+      "name": "blank-is-accepted-here",
+      "document": {
+        "v": 1,
+        "label": "   ",
+        "auto": false
+      },
+      "expected": "ok",
+      "why": "the VALIDATOR accepts blank; the COMMAND then removes the file (no tombstone). Refusing it would make 'clear the name' impossible."
+    },
+    {
+      "name": "hanzi-at-cap",
+      "document": {
+        "v": 1,
+        "label": "中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中",
+        "auto": false
+      },
+      "expected": "ok",
+      "why": "120 chars = 360 bytes: the cap counts characters (SD-G10)"
+    },
+    {
+      "name": "hanzi-over-cap",
+      "document": {
+        "v": 1,
+        "label": "中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中",
+        "auto": false
+      },
+      "expected": "Session label is over the character limit",
+      "why": "one character past it is refused, not truncated"
+    },
+    {
+      "name": "latin-over-cap",
+      "document": {
+        "v": 1,
+        "label": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "auto": false
+      },
+      "expected": "Session label is over the character limit",
+      "why": "same boundary in ASCII"
+    },
+    {
+      "name": "no-label-key",
+      "document": {
+        "v": 1,
+        "auto": false
+      },
+      "expected": "Session label document has no 'label'",
+      "why": "nothing to store"
+    },
+    {
+      "name": "label-null",
+      "document": {
+        "v": 1,
+        "label": null,
+        "auto": false
+      },
+      "expected": "Session label 'label' must be a string",
+      "why": "JSON null is not a name. Go unmarshals null into a string field WITHOUT an error and into a *string as nil; serde yields Value::Null. Untyped, that made Go accept the document and treat it as a blank label — i.e. DELETE the user's name — while Rust refused it. This case is the reason the pointer check exists."
+    },
+    {
+      "name": "label-number",
+      "document": {
+        "v": 1,
+        "label": 42
+      },
+      "expected": "Session label 'label' must be a string",
+      "why": "a number is not a name"
+    },
+    {
+      "name": "label-array",
+      "document": {
+        "v": 1,
+        "label": [
+          "a"
+        ]
+      },
+      "expected": "Session label 'label' must be a string",
+      "why": "a list is not a name"
+    },
+    {
+      "name": "non-object-document",
+      "document": [
+        1,
+        2
+      ],
+      "expected": "Session label document must be a JSON object",
+      "why": "the whole store is replace-on-write, so garbage must never land"
+    },
+    {
+      "name": "null-document",
+      "document": null,
+      "expected": "Session label document must be a JSON object",
+      "why": "JSON null is not a document"
+    },
+    {
+      "name": "unmodelled-keys",
+      "document": {
+        "v": 99,
+        "label": "ok",
+        "auto": "yes",
+        "future": [
+          1,
+          2
+        ]
+      },
+      "expected": "ok",
+      "why": "fields this build has never heard of must not block a save (SD-G5), whatever their type"
+    },
+    {
+      "name": "non-ascii-short",
+      "document": {
+        "v": 1,
+        "label": "中文 ok",
+        "auto": false
+      },
+      "expected": "ok",
+      "why": "a short non-ASCII name stores fine — the cap is characters, so this is the case a byte-counting writer would wrongly refuse if the limit were lowered"
+    }
+  ],
+  "_comment_write": "write_cases is the ACCEPT/REFUSE table for storing a label: `document` is the whole payload the client sends, `expected` is \"ok\" or the exact refusal message both backends must return. The message is compared verbatim because the client shows it to the user; check-backend-parity.sh compares command NAMES and can never see a divergent message. Run by Go handlers.TestLabelWriteTableMatchesSharedFixture and Rust commands::label::tests::write_table_matches_shared_fixture."
 }

@@ -47,6 +47,9 @@ port module Ports exposing
     , onUiConfigGet
     , onUiConfigSync
     , onUiFlush
+      -- Session name (G-series): write only, read rides listSessionDirs
+    , syncSessionLabel
+    , onSessionLabelSync
       -- Voice input (recording / transcription / cursor insertion)
     , voiceStart
     , voiceStop
@@ -214,6 +217,24 @@ port onUiConfigGet : (E.Value -> msg) -> Sub msg
 
 
 port onUiConfigSync : (E.Value -> msg) -> Sub msg
+
+
+{-| Session name (G-series, `session.label.json`). Write-only: the READ side
+rides `list_session_dirs`, because the manager must name sessions that are not
+open and one read per session directory would be the expensive way to ask a
+question the listing can answer (SD-G6).
+
+`document` is the client's own JSON — `Session/Labels.elm` owns the schema and
+both backends store the bytes verbatim, refusing only a document whose shape
+would lose the name (SD-G16). The result comes back through `onSessionLabelSync`
+because this reply has to be attributable: `fs_write_file_text`'s reply carries
+`{ok, error}` and nothing else, so a second writer on that port would have its
+failure blamed on the first.
+-}
+port syncSessionLabel : { sessionId : String, document : String } -> Cmd msg
+
+
+port onSessionLabelSync : (E.Value -> msg) -> Sub msg
 
 
 {-| The page is going away (`beforeunload` in the bridge). Elm answers with the

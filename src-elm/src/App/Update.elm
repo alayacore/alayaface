@@ -33,6 +33,7 @@ import Session.Voice as Voice
 import Session.ModelConfig as MC
 import Session.Selector as Sel exposing (Page(..))
 import Session.FilePicker as FP
+import App.Labels as Labels
 import Plan.Types as PT
 import Plan.Runner as R
 import Plan.Meta as PM
@@ -271,6 +272,16 @@ doSendPrompt model s =
             , media = mediaItems
             }
         )
+            -- SD-G8/G12: the first thing the user typed becomes the session's
+            -- name, once. Every guard lives inside that function (no entry yet,
+            -- non-blank text, and not a node session per SD-G15), so this line
+            -- cannot accidentally rename a session the user named themselves.
+            |> Labels.autoNameOnFirstPrompt
+                { sessionsDir = PU.sessionsDir model.homeDir
+                , sessionId = s.id
+                , prompt = text
+                , isNodeSession = Dict.member s.id model.planNodeSessions
+                }
 
 
 {-| Append a local error message to the session's message list (same
@@ -2744,6 +2755,13 @@ update msg model =
                 Err _ ->
                     ( model, Cmd.none )
 
+        -- The reply of a session-name save (SD-G16). Attributable on purpose:
+        -- fsWriteFileText's reply carries {ok, error} and nothing else, so a
+        -- failed name write routed through it would have cleared the ACTIVE
+        -- PLAN WINDOW's `saving` flag and filed the error under the plan.
+        SessionLabelSyncResult raw ->
+            Labels.onSyncResult raw model
+
         -- C architecture: object_put result (freeze progress).
         ObjectPutResult raw ->
             let
@@ -3751,7 +3769,16 @@ update msg model =
             case D.decodeValue sessionDirsDecoder raw of
                 Ok { ok, dirs, error } ->
                     if ok then
-                        ( { model | sessionDirs = dirs, sessionManagerError = Nothing }, Cmd.none )
+                        -- The same reply feeds the manager's list AND the name
+                        -- map (SD-G6/G7): the manager needs `dirs` to draw rows,
+                        -- and a window title needs the name of a session that is
+                        -- not in the manager at all. Folding here keeps one read
+                        -- path for a listing — a second `list_session_dirs`
+                        -- caller would be a second model of what disk says.
+                        ( Labels.foldListing dirs model
+                            |> (\m -> { m | sessionDirs = dirs, sessionManagerError = Nothing })
+                        , Cmd.none
+                        )
 
                     else
                         -- list_session_dirs failed: surface the error
@@ -3851,6 +3878,11 @@ update msg model =
                     -- their node sessions, so those identities die too.
                     UiLayout.prune (id :: plans ++ sessions)
                         { model | closeSet = Set.fromList (plans ++ sessions) }
+                        -- The local name map goes with the identities (no disk
+                        -- work: the label file lived in the directory being
+                        -- deleted, which is why this feature needs no prune-on-
+                        -- delete path the way ui.conf does).
+                        |> Labels.forgetAll (id :: plans ++ sessions)
 
                 ( m2, planCmds ) =
                     List.foldl

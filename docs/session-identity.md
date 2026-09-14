@@ -1,10 +1,12 @@
 # Session identity — a name for a session, and how to find it again
 
-**Status: G0 landed (2026-09-14, backends only — the client does not read it yet);
-G1–G3 unchecked below.** The ⚑ questions were put
-to the human on 2026-09-14 and every one was answered **"as recommended"**, so SD-G12
-… SD-G15 below are confirmed decisions. Do not re-litigate an SD row in code: change
-the row here first and say so in the commit message, per the repo's convention.
+**Status: G0 and G1 landed (2026-09-14). A name is derived, stored, read back and
+folded into the model — and NO SURFACE SHOWS IT YET** (that is G2, plus G2's
+`titleFor` accessor and its enforcement). G2–G3 are unchecked below. The ⚑
+questions were put to the human on 2026-09-14 and
+every one was answered **"as recommended"**, so SD-G12 … SD-G15 below are confirmed
+decisions. Do not re-litigate an SD row in code: change the row here first and say so
+in the commit message, per the repo's convention.
 
 This is the tracked design for the **G-series**. When a phase ships, its checklist
 items get ticked here (this file is tracked — a phase list in a file nobody tracks is
@@ -65,7 +67,7 @@ written by the **client**, read by the **backends**.
 | **SD-G3** | The home is **not** `session.refs.json`. | `Arch.Values.decodeSessionRefs` is a strict `D.map4` — a missing field means the shape changed, by design. refs is Arch's head pointer + version list, written by `App/Arch.elm` at the end of a **serial** freeze queue. A rename must never contend with a freeze, and a user-visible string does not belong in an append-only history pointer. |
 | **SD-G4** | The home is **not** `session.spawn.json`. | Tempting — it is already per-session, already read by `list_session_dirs` (`dirs::read_spawn_args(&path).preset`), already has a shared fixture. But the **backend owns that file**: it writes it at create and at fork, and `resume_session` re-applies it as the capability envelope. A file the user edits must not be a file the spawn path overwrites. |
 | **SD-G5** | The file is named for its **document**, not for one field of it, and the schema is owned by one client module (`src-elm/src/Session/Labels.elm`) in the *schema owner* shape (like `App/UiConfig.elm`, `App/AsrConfig.elm`, `Session/ModelConfig.elm`). | The name is `session.label.json` because the document *is* the label: `{ v, label, auto }`. A future note/tags/pinned field is a **different document** (different write trigger, different lifetime), not a new key here — which is the test that keeps a per-session file from becoming a second `settings.conf`. `v` lets a newer reader tell an older shape from a corrupt one; a newer file through an older backend still reads (extra keys ignored on read, and the client's whole-document write is its own). |
-| **SD-G5b** | The feature needs **two** client modules, not one: `Session/Labels.elm` owns the document (types, decode/encode, `normalise`, `autoFromPrompt`, the editor's transitions — pure, no `App.Types`), and `App/Labels.elm` is the model-aware policy (`titleFor : Model -> String -> String`, `withLabelSave`). | This is F3's split repeated, and for the same reason (`AGENTS.md` records the rule): once `Model.sessionLabels` has a field whose type is `Labels.Label`, `App.Types` imports `Session/Labels.elm`, so that module can never import `App.Types` back. `titleFor` needs `sessionNums` (for the `Session <n>` fallback) and the save needs the board, so both belong above the line — exactly why F3 ended up with `App/UiConfig.elm` *and* `App/UiLayout.elm`. One module cannot be both shapes; try it and the compiler says so. |
+| **SD-G5b** | The feature has **two** client modules: `Session/Labels.elm` owns the document (types, decode/encode, `normalise`, `autoFromPrompt`, `usableText` — pure, no `App.Types`), and `App/Labels.elm` is the model-aware policy (fold the listing, decide when to write, `withLabelSave`). The Model's map value is the **name string**, not the document. | The shape is F3's (`App/UiConfig` + `App/UiLayout`) and the reason is ordinary: the policy needs `Model` (`sessionLabels`, `planNodeSessions`) and the document codec must be testable without one. **A correction, stated because this document's first draft got it wrong:** it claimed the split was FORCED by the cycle rule "once `Model` has a `Label` field". G1 found no reader for the flag in the model — the listing answers with a name, and SD-G8's guard is "an entry exists", not "the entry is user-chosen" — so `sessionLabels : Dict String String` and the cycle rule does not bite. Keeping `auto` in the map would have been a field nothing reads (the zombie state F4.1 deleted). The split survives because it is the right one, not because a compiler demanded it. |
 | **SD-G6** | Labels reach the client through the **typed `list_session_dirs` RPC**, which grows a `label` field — not through `fs_read_file_text`, and not through `Plan/MetaScan`'s startup walk. | The fs ports are shared traffic routed by reqId (AGENTS.md "Routing: tagged fs ports"), and the scan reads **one file at a time**, so N labels = N more serialised round trips and a second queue in a machine that already has four. The RPC already iterates every top-level session dir and already parses a JSON file per dir. One call, one payload, no new routing hazard. |
 | **SD-G7** | `OpenSessionManager` is currently the only caller of `listSessionDirs`. A **startup fetch** is added. | Without it the title bar knows no label for a session restored from disk, and the feature would name sessions only in the screen the user is least likely to be looking at. The fetch is untagged and fire-once per request, which the AGENTS.md routing note already classifies as safe (`sessionDirsResult` is in that list). |
 | **SD-G8** ⚑1 | The label is **auto-derived from the first prompt** and persisted then, unless a label already exists. `auto: true` marks it as machine-derived; any user edit sets `auto: false` and nothing in the client ever writes over `auto: false`. | Without this the feature ships empty: nobody renames 30 existing sessions by hand. The first user message is already in the client's hands at send time, so the derivation costs one small write per session, once. Old sessions keep the hex/id fallback until they are named — stated plainly so nobody is surprised, and see "Later" for the backfill idea. |
@@ -79,6 +81,8 @@ written by the **client**, read by the **backends**.
 | **SD-G15** ⚑3 ⚑4 | **Node sessions are not named** — no label document under `plans/<planId>/<nodeId>/`; their identity is meaningful only inside its plan, and they already carry `[Plan · planId/nodeId]`. **An unnamed session keeps the 8-char id** in the manager, not `Untitled`. | `Untitled` × 30 is a list where every row says nothing; a differing hex prefix at least discriminates, and matches what the window's own fallback (`Session <n>`) points at. Node sessions: naming them would put a second, narrower identity space next to the one `list_session_dirs` already refuses to list (it skips dirs with no top-level `session.alaya`). |
 
 
+
+| **SD-G16** | The write goes through **`sync_session_label`**, its own command, and its reply is its own message (`SessionLabelSyncResult`). Not `fs_write_file_text`. | `onFsWriteResult` carries `{ ok, error }` only — no path, no reqId — so a second writer on that port cannot be told apart from the first. The arm today would take a failed rename, clear the ACTIVE PLAN WINDOW's `saving` flag and file the error under `setPlanErrors`: a wrong attribution found while writing G1, before G2 needed it. A dedicated reply also lets the backend enforce the cap and write atomically (tmp + rename, `dirs.WriteFileAtomic`) — `fs_write_file_text` neither validates shape nor writes atomically, and a torn label file is an invisible lost name (SD-G9 would then *drop* it). Precedent: every other client-owned document has its own pair (`get/sync_ui_config`, `_asr_config`, `_global_config`); only `session.refs.json` rides the fs port, and it is content-addressed, so its reply never needed attributing. |
 
 ### The document
 
@@ -113,11 +117,24 @@ encoding), and every trigger that sends one is spelled `withLabelSave` in
 2. the auto-label at the **end of the first prompt send** of a session that has no
    label and is not `auto: false`.
 
-Both go out through the existing `Ports.fsWriteFileText { path, content,
-createParents = True }` — the same port `App/Arch.elm` uses for `session.refs.json`.
-**No new command, no new port, nothing new for `transport.js`,** which is why
-`check-backend-parity.sh`'s command counts do not move in this series (say so in the
-commit message, per the "which twin did you check" rule).
+Both go out through **`sync_session_label`, a command of its own** (SD-G16).
+**No new port for reading, one for writing**, and `transport.js` gains one
+dumb-pipe handler like the `get/sync` pairs `ui.conf`, `asr.conf` and
+`global.conf` already have.
+
+> **SD-G16 corrects what this document claimed when G0 was designed.** The first
+> plan said the write would ride the existing `fs_write_file_text`, so "no new
+> command, no new port, nothing in `transport.js`" and the parity script's
+> command counts would not move. Writing that into code showed it was wrong: the
+> reply of that port is `{ ok, error }` and **nothing else** — no path, no reqId
+> (`transport.js`'s `fsWriteFileText` handler, and `Ports.elm`'s port record is
+> `{path, content, createParents}`). So a failed name write would be attributed to
+> whatever else had last used the port — today its `FsWriteResult` arm clears the
+> ACTIVE PLAN WINDOW's `saving` flag and pushes the error into `setPlanErrors`.
+> That is the class of defect AGENTS.md's "Routing: tagged fs ports" section and
+> `docs/arch-persistent.md`'s "an `object_get` reply cannot be routed to its
+> asker" note exist to prevent, and G2 (which must show a rename failure in the
+> manager) would have shipped straight into it.
 
 A failed rename write surfaces in `sessionManagerError` (the manager's existing error
 row). A failed auto-label write is logged and **not** shown: a name is not worth
@@ -215,28 +232,104 @@ own.** G0 touches no Elm; if you find yourself editing `src-elm/src` during G0, 
       `check-backend-parity.sh`, `check-layout-invariants.sh`, `check-schema`,
       `check-css`, `make e2e` (all 14 suites in `e2e/scripts.txt`).
 
-### G1 — the client's half of the document
+### G1 — the client's half of the document ✅ landed 2026-09-14
 
-- [ ] `src-elm/src/Session/Labels.elm` — **schema owner, pure**: `Label`, `decode`,
-      `encode`, `maxLabelChars`, `normalise` (trim, collapse newlines — **the writer's
-      job, and only the writer's**), `autoFromPrompt`, and the rename editor's
-      transitions. No `App.Types` import (SD-G5b: once `Model` has a `Label` field this
-      is forced by the cycle rule, not chosen).
-- [ ] `src-elm/src/App/Labels.elm` — **model-aware policy**: `titleFor` (label →
-      `Session <n>` → id fallback chain, the only reader of `sessionLabels`) and
-      `withLabelSave` (the only producer of a save `Cmd`). Two modules because one
-      cannot be both shapes — see SD-G5b.
-- [ ] `App.Types.Model.sessionLabels`, `Main.elm` init, `tests/TestHelpers.elm` init
-      (both initialise the whole record; `App/Types.elm` gains the `Label` import).
-- [ ] `SessionDirsResult` carries labels into the model (SD-G6/G7); the startup fetch
-      added where the startup sequence is built.
-- [ ] The two write triggers wired (rename commit, auto-label after the first prompt
-      send), gated on "no label and not `auto: false`".
-- [ ] `tests/LabelsTest.elm`: round trip; the serialised **key list pinned** (the
-      `AsrConfigTest.elm` discipline — a dropped field must fail a test, not silently
-      shrink the user's file); normalisation idempotence; over-cap refused; `auto` never
-      overwritten; `titleFor`'s full fallback chain; one case per Chinese/emoji label.
-- [ ] Gate: full verification. Commit + push ×3.
+- [x] **The write command, both backends** (SD-G16): `sync_session_label
+      {sessionId, document}` — id validated by `SafePathComponent` /
+      `safe_path_component` (a traversal here would write outside the store), the
+      document validated for shape + `maxLabelChars`, then
+      `dirs.WriteSessionLabel` (atomic tmp+rename) or `dirs.RemoveSessionLabel`
+      when the label is empty-after-trim (no tombstone). Stored **verbatim**: a
+      re-marshal would have the two backends write different bytes for one name
+      (Go sorts map keys, serde_json keeps insertion order). Registry
+      `handlers.go` + `lib.rs`, one `transport.js` pipe handler,
+      `Ports.syncSessionLabel` / `onSessionLabelSync`, `Msg.SessionLabelSyncResult`.
+      Parity counts moved **47 → 48** and the bridge **44 → 45** — the check
+      noticed, which was the point.
+- [x] `label_cases.json` grew `write_cases` (13): the accept/refuse table for that
+      validation, run by both backends
+      (`TestLabelWriteTableMatchesSharedFixture` /
+      `write_table_matches_shared_fixture`) with the refusal compared as a
+      **literal message** — those strings are shown to the user, and a
+      command-name check can never see one drift.
+- [x] `src-elm/src/Session/Labels.elm` — **the document, pure**: `Label`,
+      `decode`, `encode`, `keys`, `usableText` (the ONE usability rule, shared by
+      the document reader and the listing projection), `normalise`
+      (`String.words` + join: idempotent, and the writer's job alone),
+      `autoFromPrompt` (cut at a word boundary past the midpoint, else hard cut,
+      then `…`), `storedPath`. No `App.Types` import.
+- [x] `src-elm/src/App/Labels.elm` — **the policy**: `foldListing` (a listing
+      fills gaps, never overwrites), `forget` / `forgetAll` (the delete cascade
+      hands it its whole ownership set, one call like `UiLayout.prune`),
+      `autoNameOnFirstPrompt` (SD-G8/G12/G15's guards, all in this one function),
+      `withLabelSave` (the only producer of `syncSessionLabel`), `onSyncResult`
+      (ok → nothing; failure → `Ports.logWarn`: never interrupt a send for a
+      name). **No `titleFor`** — G2 adds it together with its enforcement, so
+      there is no accessor without a caller (F4.1's zombie state, avoided rather
+      than deleted later).
+- [x] `App.Types.Model.sessionLabels : Dict String String`, `Main.elm` init,
+      `tests/TestHelpers.elm` init. The value is the NAME, not the document —
+      see the corrected SD-G5b for why, and for what this document first claimed.
+- [x] `SessionDirsResult` folds names into the model (SD-G6/G7), and the startup
+      `Ports.listSessionDirs {}` joined `Main.elm`'s init batch: without it a
+      restored session has no source for its name until the manager opens.
+- [x] The auto-label hooked at `doSendPrompt` (the single typed-send path). The
+      rename-commit trigger arrives with G2's editor.
+- [x] `tests/LabelsTest.elm` — 5 groups: the serialised document pinned as BYTES
+      with the key list spelled twice; the round trip; the client's twin of the
+      18 deciding `label_cases.json` names (Elm cannot read a file in a test, so
+      the shared case NAMES are the sync); `normalise` idempotence; the cap in
+      characters plus the emoji case that asserts the CLIENT is the strictest of
+      the three (a deliberate direction, stated in `maxLabelChars`'s comment);
+      the listing precedence both ways; the auto-derivation guards from both
+      origins (named-from-disk, named-by-save); and two message-level tests
+      through `App.Update.update SendPrompt`, so the hook is attached to the send
+      rather than merely adjacent to it.
+- [x] Gate: `make test-go` (10 pkgs, -race), `cargo test --lib` (145),
+      `cargo clippy --lib` (0 errors), `elm make` (0 warnings) + `elm-test`
+      (977), `check-backend-parity.sh` (48/48/45), `check-layout-invariants.sh`
+      (53 modules), `check-schema`, `check-css`, `make e2e` (all 14 suites).
+
+#### What G1 taught
+
+1. **The shared fixture caught a live divergence on its first run.** `label:
+   null`: Go unmarshals JSON `null` into a `string` field *without an error*, so
+   it accepted the document, read the blank as "clear the name" and would have
+   **deleted a user's name**; Rust's `as_str()` yields None and refuses. Fixed by
+   decoding into `*string` and refusing nil. Two per-language suites would each
+   have asserted their own language's default and both would have been green.
+2. **`Dict.keys` sorts, so it cannot assert an order.** The first key-list test
+   decoded into a `Dict` and compared `Dict.keys` against `Labels.keys` — it
+   passed while proving nothing, because both sides were alphabetised. The pin is
+   now on the encoded string, which is also what the file actually contains.
+3. **`{ f x | field = y }` is a parse error** — the rule
+   `docs/update-slices.md` records, walked into anyway while writing tests. The
+   doc was right; reading is not the same as believing.
+4. **A reply that cannot be attributed is a bug already filed** (SD-G16).
+   `onFsWriteResult` carries `{ok, error}` and nothing else, so a name write
+   riding that port would have had its failure blamed on the plan that saved
+   last. AGENTS.md's "an `object_get` reply cannot be routed to its asker" is the
+   same defect from the other end; the design was re-read at implementation time
+   and the sentence in it was wrong.
+5. **Proved on disk, not in a model.** `ALAYAFACE_KEEP_ARTIFACTS=1 node
+   chain-diag.mjs`, then a filesystem look: the top-level session directory holds
+   `session.label.json` = `{"v":1,"label":"Create a demo plan for
+   diag","auto":true}`, and the three node-session dirs under `plans/…/t1|t2|t3/`
+   hold `session.alaya` with **no label file** — SD-G15 observed rather than
+   assumed (guard in the client, plus the backend's top-level requirement).
+6. **What no elm-test here can see: that the port fired.** `withLabelSave`
+   returns a `Cmd` (the `App/UiLayout` shape) and a test cannot name the port
+   inside one — the same limit `UiLayoutTest` lives with. The model half is
+   asserted; reading the file back through the RPC is `e2e/label-e2e.mjs`'s job
+   in G3. Naming the gap is cheaper than discovering it later.
+7. **Four mutations run against the new suite**, each red for exactly the reason
+   the rule exists: disk-wins in `foldListing` → 1 red; the SD-G8 guard removed →
+   3 red; `usableText`'s cap check removed → 3 red. A first attempt at the second
+   mutation did not compile (a multi-line substitution that silently did not
+   match), so it was redone as a one-line lookup swap — a mutation that never
+   ran is not a check, which is the same lesson `docs/update-slices.md` records
+   about a kill counted as a pass.
+
 
 ### G2 — the surfaces
 

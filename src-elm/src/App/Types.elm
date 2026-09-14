@@ -76,6 +76,22 @@ type alias Model =
     , pendingOverflow : Set String
     , sessionNums : Dict String Int
     , nextSessionNum : Int
+    -- SESSION NAME (G-series, session.label.json): identity → the name the user
+    -- (or the first prompt) gave it. Keyed by SESSION ID, like sessionRefs and
+    -- uiLayout — never by the work copy, so a fork keeps its name with no
+    -- inheritance code (SD-G1). Filled by the startup `list_session_dirs`
+    -- (SD-G7: the manager must name sessions that are NOT open) and by this
+    -- process's own saves; read only through App/Labels (INV-G1).
+    --
+    -- The VALUE IS THE NAME, not the whole document: `list_session_dirs` answers
+    -- with a name, and the document's `auto` flag has no reader in the UI — the
+    -- rule it guards ("never derive over a name that exists") is enforced by the
+    -- presence of an entry, not by the flag. Carrying a field nothing reads would
+    -- be F4.1's zombie state again. `Session.Labels.Label` stays the DOCUMENT.
+    --
+    -- This is display metadata with its own file: no spawn decision, resume
+    -- path, or plan behaviour reads it (INV-G6).
+    , sessionLabels : Dict String String
     , windowPositions : Dict String WindowPos
     -- LAYOUT STORE (F3, ui.conf). TWO dictionaries, TWO lifetimes:
     -- `windowPositions` is the board that exists now — it loses an entry the
@@ -546,6 +562,11 @@ type Msg
     | UiConfigSyncResult E.Value
     | UiFlush
     | UiZoomIdle Int
+      -- SESSION NAME (G-series). One message, for one command: it exists so a
+      -- refused or failed save is attributable to the name that was being saved
+      -- (SD-G16 — `fs_write_file_text`'s reply cannot tell the two writers
+      -- apart, and a name that silently never saved is the bug this avoids).
+    | SessionLabelSyncResult E.Value
       -- Voice input (recording / transcription, per-session)
     | VoiceError E.Value
     | AsrResult E.Value

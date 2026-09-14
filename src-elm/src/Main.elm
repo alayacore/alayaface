@@ -54,6 +54,7 @@ init _ =
       , pendingOverflow = Set.empty
       , sessionNums = Dict.empty
       , nextSessionNum = 1
+      , sessionLabels = Dict.empty
       , windowPositions = Dict.empty
       , uiLayout = Dict.empty
       , uiTouch = 0
@@ -144,6 +145,13 @@ init _ =
         -- left rather than on the placement rules. Async on purpose: a slow
         -- backend costs a restored rect, never a startup stall.
         , Ports.getUiConfig {}
+        -- Session names (G-series, SD-G7): the manager fetches its listing when
+        -- it opens, but a WINDOW title needs the name too, and a session
+        -- restored from disk has no other source. One call at startup, reusing
+        -- the command the manager already uses — no second read path, and no
+        -- per-session fs read (the reason is SD-G6: the scan reads one file at
+        -- a time, so N names would be N round trips).
+        , Ports.listSessionDirs {}
         -- Startup health check: probe the alayacore binary so the home
         -- screen can show a "not found" banner before the user clicks
         -- New Session. Runs in parallel with the rest of init.
@@ -186,6 +194,7 @@ subscriptions model =
         , Ports.onAsrConfigSync (\raw -> AsrConfigSyncResult raw)
         , Ports.onUiConfigGet (\raw -> UiConfigGetResult raw)
         , Ports.onUiConfigSync (\raw -> UiConfigSyncResult raw)
+        , Ports.onSessionLabelSync (\raw -> SessionLabelSyncResult raw)
         , Ports.onUiFlush (\_ -> UiFlush)
         , Ports.onVoiceError (\raw -> VoiceError raw)
         , Ports.onAsrResult (\raw -> AsrResult raw)

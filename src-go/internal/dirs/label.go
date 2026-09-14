@@ -74,3 +74,24 @@ func ReadSessionLabel(sessionDir string) string {
 	}
 	return doc.Label
 }
+
+// WriteSessionLabel stores the client's label document verbatim, atomically
+// (tmp + rename). Atomicity is not a detail here: a torn write leaves a file
+// that parses as nothing, and SD-G9 turns that into "no name" with no trace.
+// The document is NOT re-modelled — the client owns the schema, exactly like
+// ui.conf; the caller has already checked its shape.
+func WriteSessionLabel(sessionDir string, text []byte) error {
+	return WriteFileAtomic(LabelFile(sessionDir), text)
+}
+
+// RemoveSessionLabel clears a name. An empty label means "no name", not a
+// tombstone, so the file goes away and every reader falls back by itself. A
+// missing file is success: the writer is idempotent, because the client may
+// commit the same blank twice.
+func RemoveSessionLabel(sessionDir string) error {
+	err := os.Remove(LabelFile(sessionDir))
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
