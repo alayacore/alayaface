@@ -1,0 +1,131 @@
+{
+  "_comment": "Shared truth table for session.label.json READING (docs/session-identity.md, G-series). `input` is the EXACT bytes of the file, or null meaning 'no file at all'. `expected` is the label both backends must return (\"\" = show the fallback instead). Run by BOTH src-go/internal/dirs/label_read_test.go and src-tauri/src/dirs.rs's session_label_read_matches_shared_fixture — the same file must produce the same name on the desktop app and on the HTTP backend, and the divergences that matter (bytes vs chars, null vs missing, BOM, trailing data, verbatim whitespace) are exactly the ones a per-language test suite would each excuse on its own terms.",
+  "cases": [
+    {
+      "name": "plain",
+      "input": "{\"v\": 1, \"label\": \"refactor the parser\", \"auto\": false}",
+      "expected": "refactor the parser",
+      "why": "the shape the client writes"
+    },
+    {
+      "name": "chinese-label",
+      "input": "{\"v\": 1, \"label\": \"帮我看看 reader.go 为什么 cancel 之后 history 会重复\", \"auto\": true}",
+      "expected": "帮我看看 reader.go 为什么 cancel 之后 history 会重复",
+      "why": "an auto-derived label; non-ASCII must survive both readers"
+    },
+    {
+      "name": "hanzi-at-cap",
+      "input": "{\"v\": 1, \"label\": \"中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中\", \"auto\": false}",
+      "expected": "中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中",
+      "why": "120 CHARS = 360 BYTES: kept. A reader that measured bytes would drop what the other keeps (SD-G10)"
+    },
+    {
+      "name": "hanzi-over-cap",
+      "input": "{\"v\": 1, \"label\": \"中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中\", \"auto\": false}",
+      "expected": "",
+      "why": "121 chars / 363 bytes → dropped, not clamped (SD-G9)"
+    },
+    {
+      "name": "latin-at-cap",
+      "input": "{\"v\": 1, \"label\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"auto\": false}",
+      "expected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "why": "boundary, inclusive"
+    },
+    {
+      "name": "latin-over-cap",
+      "input": "{\"v\": 1, \"label\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"auto\": false}",
+      "expected": "",
+      "why": "one char past the cap is no label"
+    },
+    {
+      "name": "future-version-reads",
+      "input": "{\"v\": 2, \"label\": \"written by a newer client\", \"auto\": false}",
+      "expected": "written by a newer client",
+      "why": "v is not checked: an old AlayaFace must not lose a newer one's names"
+    },
+    {
+      "name": "unmodelled-field-wrong-type",
+      "input": "{\"v\": 1, \"label\": \"ok\", \"auto\": \"yes\"}",
+      "expected": "ok",
+      "why": "the backend does not model `auto`; its type must not affect the read"
+    },
+    {
+      "name": "label-null",
+      "input": "{\"v\": 1, \"label\": null}",
+      "expected": "",
+      "why": "JSON null is not a name"
+    },
+    {
+      "name": "label-missing",
+      "input": "{\"v\": 1, \"auto\": false}",
+      "expected": "",
+      "why": "no label key"
+    },
+    {
+      "name": "label-empty",
+      "input": "{\"v\": 1, \"label\": \"\", \"auto\": false}",
+      "expected": "",
+      "why": "empty is absent"
+    },
+    {
+      "name": "label-whitespace-only",
+      "input": "{\"v\": 1, \"label\": \"   \\n \", \"auto\": false}",
+      "expected": "",
+      "why": "trim decides PRESENCE only"
+    },
+    {
+      "name": "padded-label-verbatim",
+      "input": "{\"v\": 1, \"label\": \" x \", \"auto\": false}",
+      "expected": " x ",
+      "why": "trim must NOT rewrite the value shown — normalisation is the writer's job alone"
+    },
+    {
+      "name": "label-wrong-type",
+      "input": "{\"v\": 1, \"label\": 42}",
+      "expected": "",
+      "why": "a number is not a name"
+    },
+    {
+      "name": "escaped-unicode",
+      "input": "{\"v\":1,\"label\":\"\\u4e2d\\u6587\",\"auto\":false}",
+      "expected": "中文",
+      "why": "\\u escapes decode the same on both sides"
+    },
+    {
+      "name": "bom",
+      "input": "﻿{\"v\": 1, \"label\": \"hand-saved by an editor\", \"auto\": false}",
+      "expected": "",
+      "why": "a BOM breaks JSON parsing on both sides → dropped, not read with the BOM stripped"
+    },
+    {
+      "name": "not-json-body",
+      "input": "this is not json",
+      "expected": "",
+      "why": "corrupt file"
+    },
+    {
+      "name": "non-object-body",
+      "input": "[1,2]",
+      "expected": "",
+      "why": "a valid document must be an object"
+    },
+    {
+      "name": "trailing-garbage",
+      "input": "{\"v\":1,\"label\":\"a\",\"auto\":false} trailing",
+      "expected": "",
+      "why": "both readers reject trailing data"
+    },
+    {
+      "name": "empty-body",
+      "input": "",
+      "expected": "",
+      "why": "zero-length file"
+    },
+    {
+      "name": "no-file",
+      "input": null,
+      "expected": "",
+      "why": "the common case: every session created before G0"
+    }
+  ]
+}

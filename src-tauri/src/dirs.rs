@@ -677,6 +677,77 @@ pub fn read_spawn_args(session_dir: &std::path::Path) -> SpawnArgs {
     }
 }
 
+// ─── Session label (G-series) ───────────────────────────────────────
+//
+// <session_dir>/session.label.json holds the session's user-visible name —
+// the thing a window title and a Session Manager row show instead of a UUID
+// prefix. The CLIENT owns the document (src-elm/src/Session/Labels.elm, G1):
+// it is the only writer, going through fs_write_file_text the same way
+// session.refs.json does. The backend's whole job here is to READ it for
+// list_session_dirs, so the manager can name sessions that are not open
+// without the client issuing one read per session directory.
+//
+// Two consequences worth knowing before changing anything below:
+//
+//   - Do NOT write this file from the backend. It lives in the identity's
+//     ROOT directory, and a fork replaces the work copy rather than the
+//     identity — which is what makes a name survive a fork with no
+//     inheritance code. A second writer would need compare-and-swap to be
+//     safe, and would break that property.
+//   - Reading is lenient and DROPS (SD-G9): a name that cannot be trusted is
+//     no name, and the fallback chain (label → "Session <n>" → id prefix)
+//     decides what the user sees. Never clamp, never repair, and never trim
+//     the value that is returned — trimming here only decides *presence*.
+//     Normalisation belongs to the writer alone.
+//
+// Mirrors Go internal/dirs/label.go.
+
+/// The label document inside a session directory.
+pub fn label_file(session_dir: &std::path::Path) -> PathBuf {
+    session_dir.join("session.label.json")
+}
+
+/// Upper bound on a label in CHARACTERS (`chars()`), not bytes. Twins:
+/// `MaxLabelChars` (Go) and `maxLabelChars` (Session/Labels.elm, G1),
+/// compared by scripts/check-backend-parity.sh. The unit matters: a
+/// 120-hanzi label is 360 bytes, so a byte-counting reader would drop names
+/// the other backend keeps and the same session would look named differently
+/// depending on which backend serves it.
+pub const MAX_LABEL_CHARS: usize = 120;
+
+/// Read the session's label. Every failure mode is `""` and not an error:
+/// `list_session_dirs` must keep listing the session (a session that cannot
+/// be named is still a session), and a corrupt file must not surface as a red
+/// banner.
+///
+/// Only `label` is decoded. `v` is deliberately NOT checked (a document from a
+/// future client still reads, exactly like `ui.conf`), and `auto` is not
+/// modelled at all — a field this build has never heard of must not make the
+/// name disappear, and must not make the file fail to parse.
+pub fn read_session_label(session_dir: &std::path::Path) -> String {
+    #[derive(serde::Deserialize)]
+    struct LabelDoc {
+        #[serde(default)]
+        label: String,
+    }
+
+    let text = match std::fs::read_to_string(label_file(session_dir)) {
+        Ok(t) => t,
+        Err(_) => return String::new(),
+    };
+    let doc: LabelDoc = match serde_json::from_str(&text) {
+        Ok(d) => d,
+        Err(_) => return String::new(),
+    };
+    if doc.label.trim().is_empty() {
+        return String::new();
+    }
+    if doc.label.chars().count() > MAX_LABEL_CHARS {
+        return String::new();
+    }
+    doc.label
+}
+
 #[cfg(test)]
 pub(crate) static TEST_HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -944,6 +1015,69 @@ mod tests {
             let got = serde_json::to_string_pretty(&args).unwrap();
             assert_eq!(got, c.expected, "SpawnArgs case {}", c.name);
         }
+    }
+
+    /// G0 truth table (docs/session-identity.md): reading
+    /// session.label.json must give the SAME answer as the Go side, so both
+    /// run the shared fixture testdata/serialization/label_cases.json (the
+    /// same arrangement as spawn_cases.json). Every divergence this feature
+    /// can have lives where each language would excuse on its own terms —
+    /// bytes vs characters for the cap, null vs missing key, a UTF-8 BOM,
+    /// trailing data, whether trimming rewrites the value — so the table, not
+    /// two local suites, is what asserts the contract.
+    #[test]
+    fn session_label_read_matches_shared_fixture() {
+        #[derive(serde::Deserialize)]
+        struct Fixture {
+            cases: Vec<Case>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Case {
+            name: String,
+            /// The exact bytes of the file; None means "no file at all" (the
+            /// case for every session created before this feature).
+            input: Option<String>,
+            expected: String,
+        }
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../testdata/serialization/label_cases.json");
+        let text = std::fs::read_to_string(&path).expect("read label_cases.json fixture");
+        let fx: Fixture = serde_json::from_str(&text).expect("parse label_cases.json fixture");
+        assert!(!fx.cases.is_empty(), "label fixture has no cases");
+
+        for c in fx.cases {
+            let dir = std::env::temp_dir().join(format!(
+                "alayaface-label-{}-{}",
+                std::process::id(),
+                TEST_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            if let Some(body) = &c.input {
+                std::fs::write(label_file(&dir), body).unwrap();
+            }
+            assert_eq!(read_session_label(&dir), c.expected, "label case {}", c.name);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// The cap is the number the parity script compares across Rust / Go /
+    /// Elm, and the unit is characters — a 120-hanzi label is 360 bytes and
+    /// must still read (the fixture's hanzi-at-cap case covers the user-visible
+    /// side; this pins the constant itself, SD-G10).
+    #[test]
+    fn max_label_chars_is_the_parity_scalar() {
+        assert_eq!(MAX_LABEL_CHARS, 120, "docs/session-identity.md SD-G10");
+    }
+
+    /// The file name is part of the contract with the client, which is the
+    /// only writer: renaming it here would orphan every label already on disk.
+    #[test]
+    fn label_file_location() {
+        assert_eq!(
+            label_file(std::path::Path::new("/tmp/sess-1")),
+            std::path::PathBuf::from("/tmp/sess-1/session.label.json")
+        );
     }
 
     // ─── --config-path override ────────────────────────────────────

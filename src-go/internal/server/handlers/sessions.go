@@ -21,6 +21,12 @@ type SessionDirInfo struct {
 	ID        string `json:"id"`
 	CreatedAt string `json:"created_at"`
 	Preset    string `json:"preset"`
+	// Label is the session's user-visible name read from its
+	// session.label.json (G-series, docs/session-identity.md), or "" when the
+	// session has none / the file cannot be trusted. The CLIENT owns that
+	// document; the backend only reads it, so the manager can name sessions
+	// that are not open without one fs read per session directory.
+	Label string `json:"label"`
 }
 
 // CreateSession spawns a new alayacore session.
@@ -414,6 +420,7 @@ func ListSessionDirs(h *Handler, w http.ResponseWriter, r *http.Request) error {
 				ID:        e.Name(),
 				CreatedAt: fmt.Sprintf("%d", created.Unix()),
 				Preset:    dirs.ReadSpawnArgs(path).Preset,
+				Label:     dirs.ReadSessionLabel(path),
 			},
 			mod: mod,
 		})

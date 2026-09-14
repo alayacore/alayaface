@@ -283,6 +283,29 @@ check_scalar "global.conf recursion limit (Rust vs Elm)" \
   "$(elm_num 'defaultRecursionLimit' "$E_GC")"
 
 
+# 2c-quater. session.label.json (the G-series session name) — the cap that
+#     decides when a stored name is no name. The CLIENT owns the document and
+#     both backends only READ it, so the duplicated number is the whole
+#     surface of the contract today. The unit is CHARACTERS, not bytes, which
+#     is why the shared fixture has a 120-hanzi/360-byte case: a byte-counting
+#     reader drops names the other keeps, and the same session would look
+#     differently named depending on which backend serves it.
+#     The Elm side (maxLabelChars in Session/Labels.elm) joins this comparison
+#     in G1 — until then it covers two files, and `label_cases.json` existing
+#     matters more: both backends' fixture tests read it, so a missing file is
+#     a silent loss of the only cross-language assertion.
+R_LABEL=src-tauri/src/dirs.rs
+G_LABEL=src-go/internal/dirs/label.go
+
+check_scalar "session label char cap (Rust vs Go)" \
+  "$(plain_num 'MAX_LABEL_CHARS' "$R_LABEL")" \
+  "$(plain_num 'MaxLabelChars' "$G_LABEL")"
+
+if [ ! -f testdata/serialization/label_cases.json ]; then
+  echo "✗ parity check broken: testdata/serialization/label_cases.json is gone (both backends' fixture tests read it)"
+  fail=1
+fi
+
 # 2d. Seeded presets: the plan contract in the seeded system_prompt names them
 #     by string, so a divergence breaks rename guards and plan detection.
 #     (Rust calls the list SEED_PRESETS, Go SeedPresets — the NAMES may

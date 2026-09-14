@@ -1,6 +1,7 @@
 # Session identity — a name for a session, and how to find it again
 
-**Status: design confirmed, G-series not started in code.** The ⚑ questions were put
+**Status: G0 landed (2026-09-14, backends only — the client does not read it yet);
+G1–G3 unchecked below.** The ⚑ questions were put
 to the human on 2026-09-14 and every one was answered **"as recommended"**, so SD-G12
 … SD-G15 below are confirmed decisions. Do not re-litigate an SD row in code: change
 the row here first and say so in the commit message, per the repo's convention.
@@ -166,27 +167,53 @@ broken.
 Mirror F3's split, which worked: **storage first, client second, each green on its
 own.** G0 touches no Elm; if you find yourself editing `src-elm/src` during G0, stop.
 
-### G0 — the storage half (backends only)
+### G0 — the storage half (backends only) ✅ landed 2026-09-14
 
-- [ ] `dirs.rs` / `internal/dirs`: `label_file(session_dir)`, `read_session_label(dir)
-      -> Option<String>` (lenient per SD-G9), `MAX_LABEL_CHARS` / `MaxLabelChars`.
-- [ ] `list_session_dirs`: one more field on the item struct in both backends, `""` on
-      any read failure, same dir-skipping rules as today.
-- [ ] Shared fixture `testdata/serialization/label_cases.json` — a **read/accept table**
-      (bytes → expected label), run by both `src-go/internal/dirs/*_test.go` and the
-      Rust `dirs.rs` tests, like `spawn_cases.json`. Cases: valid, unknown `v`, missing
-      `label`, non-object body, empty/whitespace-only, over `maxLabelChars`, **a Chinese
-      label** (the sanctioned fixture exception to the no-Chinese rule: it proves the
-      byte range survives both readers), and a file with a UTF-8 BOM.
-- [ ] `check-backend-parity.sh`: `check_scalar "label char cap"` comparing **Rust and
-      Go** here, with the Elm side (`maxLabelChars` in `Session/Labels.elm`) appended to
-      the same line in G1. Decided rather than left open, because a scalar check that
-      silently covers two of three files is the half-wired gate this repo has already
-      been bitten by (`b34891b`: INV1's file list named two files by hand and every
-      module added since escaped the check). G0 therefore touches no Elm at all.
-- [ ] Go + Rust tests: a dir with a label is listed with it; a corrupt one is listed
-      without it; the two backends agree on every fixture case.
-- [ ] Gate: full verification. Commit + push ×3.
+> A phase's commit hash lives in `git log --oneline`, not in this file: the
+> F-series wrote hashes here and they were only true after the fact. The date is
+> the part this file can state honestly at the moment it is written.
+
+- [x] `dirs.rs` / `internal/dirs/label.go`: `label_file` / `LabelFile`,
+      `read_session_label` / `ReadSessionLabel` (lenient per SD-G9, verbatim per
+      its second half), `MAX_LABEL_CHARS` / `MaxLabelChars`. Both carry the "do
+      NOT write this from the backend" warning, because the file's value comes
+      from having exactly one writer.
+- [x] `list_session_dirs`: `label` on `SessionDirInfo` in both backends
+      (`commands/mod.rs`, `handlers/sessions.go`), `""` on any read failure,
+      dir-skipping rules untouched (a dir with no `session.alaya` stays out —
+      a name must not resurrect a plan node dir into the manager).
+- [x] Shared fixture `testdata/serialization/label_cases.json` — **21 cases**, a
+      read/accept table (`input` = the exact file bytes, `null` = no file), run
+      by `src-go/internal/dirs/label_read_test.go` and
+      `dirs.rs::session_label_read_matches_shared_fixture`. The cases that exist
+      because a per-language suite would have excused them: `hanzi-at-cap` (120
+      chars = 360 bytes), `hanzi-over-cap`, `label-null` vs `label-missing` (Go
+      leaves the zero value, serde errors — both must yield `""`),
+      `unmodelled-field-wrong-type` (`auto` mistyped must not lose the name),
+      `bom`, `trailing-garbage`, `padded-label-verbatim` (the reader must not
+      repair), `no-file`.
+- [x] `check-backend-parity.sh`: `check_scalar "session label char cap (Rust vs
+      Go)"`, plus the fixture-existence assertion. The Elm side joins in G1,
+      which is why the label says "(Rust vs Go)" rather than claiming three.
+- [x] Behaviour tests both sides: `handlers.TestListSessionDirsCarriesLabel` /
+      `dirs.rs::list_session_dirs_carries_label` (named, corrupt, absent — and
+      `len(list) == 3`, because an unreadable name must never hide a session),
+      plus `TestSessionDirInfoLabelKey` pinning the reply's key spelling (the
+      parity script compares command NAMES, never payload KEYS, and a drifted
+      key reads as "no name" forever on one deployment only).
+- [x] **Mutation-verified**, because a test that cannot fail is not a check:
+      dropping the Go wiring → red; dropping the Rust wiring → red; making Go
+      measure the cap in BYTES → `hanzi-at-cap` red; setting Go's cap to 121 →
+      the parity script red. One attempt produced a *false* green first: the
+      byte-mutation didn't compile (unused `utf8` import), and a build failure
+      is not a passing test — it was red for the wrong reason, so it was redone
+      in a form that compiles.
+- [x] Gate: full verification, all green — `go vet` + `go test -race` (10 pkgs),
+      `cargo test --lib` (139), `cargo clippy --lib` (2 pre-existing
+      too-many-arguments warnings in `alayacore.rs:56` / `sessions.rs:189`, no
+      errors), `elm make` (untouched) + `elm-test` (931),
+      `check-backend-parity.sh`, `check-layout-invariants.sh`, `check-schema`,
+      `check-css`, `make e2e` (all 14 suites in `e2e/scripts.txt`).
 
 ### G1 — the client's half of the document
 

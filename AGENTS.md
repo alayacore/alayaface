@@ -170,7 +170,7 @@ Tracked design documents, one per area — read the one you are touching:
 | Document | Covers |
 |---|---|
 | `docs/solo-view.md` | solo view, the one-geometry rule (`winRect` / `layoutRects`), what may write `soloWin`, gesture refusal, reachability, and the `ui.conf` layout store (scope, write policy, what a file may never decide) |
-| `docs/session-identity.md` | **proposed, no code yet** — the per-session label (`session.label.json`): which file may hold it and which may not, the two-module client split it forces, `maxLabelChars` as the next parity scalar, and what "find it again" may not claim about content search |
+| `docs/session-identity.md` | the per-session label (`session.label.json`): which file may hold it and which may not, the two-module client split it forces, `maxLabelChars` as the next parity scalar, and what "find it again" may not claim about content search |
 | `docs/plan-mode.md` | Plan Mode: detection, meta, runner, cascade, node sessions |
 | `docs/touch-design.md` | the unified pointer/gesture FSM (D1–D5) and what the bridge may classify |
 | `docs/arch-persistent.md` | the Arch version/refs model (C-series) — what is persisted per session, which client module owns which half, and the two asymmetries (refs is not an object; a get reply cannot be routed to its asker) |

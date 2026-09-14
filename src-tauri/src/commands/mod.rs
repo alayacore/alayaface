@@ -40,6 +40,12 @@ pub struct SessionDirInfo {
     pub id: String,
     pub created_at: String,
     pub preset: String,
+    /// The session's user-visible name, read from its session.label.json
+    /// (G-series, docs/session-identity.md), or "" when the session has none
+    /// or the file cannot be trusted. The CLIENT owns that document; the
+    /// backend only reads it, so the manager can name sessions that are not
+    /// open without one fs read per session directory.
+    pub label: String,
 }
 
 #[derive(serde::Deserialize)]

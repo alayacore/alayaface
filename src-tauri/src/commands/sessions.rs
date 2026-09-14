@@ -373,6 +373,7 @@ pub async fn list_session_dirs() -> Result<Vec<SessionDirInfo>, String> {
             id,
             created_at,
             preset: dirs::read_spawn_args(&path).preset,
+            label: dirs::read_session_label(&path),
         });
     }
     Ok(result)
@@ -652,5 +653,50 @@ mod tests {
         assert_eq!(got.preset, "Complex");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// G0 (docs/session-identity.md): `list_session_dirs` carries each
+    /// session's label, so the Session Manager can name sessions that are NOT
+    /// open without one fs read per session directory. Two halves, both
+    /// user-visible: a named session is listed with its name, and a name that
+    /// cannot be trusted (SD-G9) is listed as `""` — the session still
+    /// appears, because an unreadable name must never hide a session.
+    /// Mirrors Go's TestListSessionDirsCarriesLabel.
+    #[test]
+    fn list_session_dirs_carries_label() {
+        crate::dirs::isolated_home(|| {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                let sessions = dirs::alayaface_dir().join("sessions");
+                // Chinese here is the sanctioned exception: this IS the
+                // fixture that proves a non-ASCII name round-trips (AGENTS.md).
+                let cases: [(&str, Option<&str>); 3] = [
+                    ("named-sess", Some("{\"v\":1,\"label\":\"重构 parser\",\"auto\":false}")),
+                    ("broken-sess", Some("not json")),
+                    ("plain-sess", None),
+                ];
+                for (id, label) in cases {
+                    let dir = sessions.join(id);
+                    std::fs::create_dir_all(&dir).unwrap();
+                    // Without session.alaya the dir is not a top-level
+                    // session at all, so it must stay out of the list.
+                    std::fs::write(dir.join("session.alaya"), "[]").unwrap();
+                    if let Some(body) = label {
+                        std::fs::write(dirs::label_file(&dir), body).unwrap();
+                    }
+                }
+
+                let list = list_session_dirs().await.unwrap();
+                let label_of = |want: &str| {
+                    list.iter()
+                        .find(|d| d.id == want)
+                        .map(|d| d.label.as_str())
+                };
+                assert_eq!(label_of("named-sess"), Some("重构 parser"));
+                assert_eq!(label_of("broken-sess"), Some(""), "unreadable → no name, not no session");
+                assert_eq!(label_of("plain-sess"), Some(""));
+                assert_eq!(list.len(), 3);
+            });
+        });
     }
 }
