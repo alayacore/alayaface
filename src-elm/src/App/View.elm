@@ -17,6 +17,7 @@ import Time
 import Markdown
 import App.Types exposing (..)
 import App.Update exposing (SessionDir, decodeSessionDir)
+import App.Labels as Labels
 import App.Windows as Win
 import Icons
 import Session.Types as T
@@ -153,11 +154,6 @@ viewSessionPanel model id =
                 isActive =
                     model.activeId == Just id
 
-                idx =
-                    case Dict.get id model.sessionNums of
-                        Just n -> n
-                        Nothing -> 0
-
                 winPos =
                     Win.winRect model id
 
@@ -215,7 +211,16 @@ viewSessionPanel model id =
                     [ Attr.class "session-bar"
                     , Attr.title "Drag to move"
                     ]
-                    ([ Html.span [ Attr.class "session-bar-title" ]
+                    ([ Html.span
+                        [ Attr.class "session-bar-title"
+                        -- The name is truncated by WIDTH (SD-G13: the window is
+                        -- resizable and its content spans it, so there is no
+                        -- character count to agree on), which means a long name
+                        -- cannot be read from the bar alone. The tooltip carries
+                        -- the whole name and the session id — the id because a
+                        -- seat number is not a handle (titleFor).
+                        , Attr.title (Labels.titleTooltip model id)
+                        ]
                         [ Html.text
                             ((case Dict.get id model.planNodeSessions of
                                 Just lbl ->
@@ -224,11 +229,12 @@ viewSessionPanel model id =
                                 Nothing ->
                                     ""
                              )
+                                ++ Labels.titleFor model id
                                 ++ (if session.activeModelName /= "" then
-                                        "Session " ++ String.fromInt idx ++ " — " ++ session.activeModelName
+                                        " — " ++ session.activeModelName
 
                                     else
-                                        "Session " ++ String.fromInt idx
+                                        ""
                                    )
                             )
                         ]

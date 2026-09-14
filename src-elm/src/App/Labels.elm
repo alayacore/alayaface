@@ -1,5 +1,7 @@
 module App.Labels exposing
     ( foldListing
+    , titleFor
+    , titleTooltip
     , autoNameOnFirstPrompt
     , withLabelSave
     , forget
@@ -35,13 +37,18 @@ repo already made, which is the point of making it.
     write policy (SD16) applied to a name: the auto write hangs off the send,
     and G2's editor commits on Enter/Save, not per keystroke.
 
-## What is deliberately NOT here
+## The one read path (INV-G1)
 
-No `titleFor` yet: the title bar keeps building `"Session <n>"` until G2, and an
-accessor with no caller is how dead state gets born (F4.1 deleted exactly that —
-a field written by nobody and read by nobody, plus its port and both transports).
-G2 adds it together with `scripts/check-layout-invariants.sh`'s read-path
-section, so the accessor and its enforcement arrive in the same commit.
+`titleFor` is the only place that may read `sessionLabels` for display, and the
+only place the `Session <n>` fallback may be built. A second construction site
+would be a second model of what a window is called — the same defect
+`scripts/check-layout-invariants.sh` forbids for geometry, and that same file now
+enforces it (section 5), including the anti-vacuity assertion that the accessor
+still exists.
+
+What is still not here: the `✎` rename control and the manager's filter box
+(G2's second half). This half answers "which window is which", which is the
+question the feature exists for.
 -}
 
 import Dict exposing (Dict)
@@ -69,6 +76,38 @@ foldListing listed model =
                 |> Dict.fromList
     in
     { model | sessionLabels = Dict.union model.sessionLabels parsed }
+
+
+{-| The NAME a window is called (SD-G14): the session's own name if it has one,
+otherwise the seat number the app has always shown. The ` — <model>` half is the
+caller's (the view), because which model a window is talking to is load-bearing
+while debugging and must survive a name being set or cleared.
+
+The fallback is `Session <n>`, and `n` comes from `sessionNums`, which
+`Main.elm` restarts at 1 per page load — so an unnamed session's title is NOT a
+stable handle. That is the whole reason this feature exists (SD-G12 derives a
+name instead of asking the user to build one), and it is why `titleTooltip`
+always carries the identity.
+-}
+titleFor : Model -> String -> String
+titleFor model id =
+    Maybe.withDefault (seatOf model id) (Dict.get id model.sessionLabels)
+
+
+{-| The full name for a tooltip: the name verbatim (a truncated one in the bar is
+never a lost one) plus the session id, which is the only stable handle for an
+unnamed session.
+-}
+titleTooltip : Model -> String -> String
+titleTooltip model id =
+    titleFor model id ++ "\n" ++ id
+
+
+seatOf : Model -> String -> String
+seatOf model id =
+    "Session "
+        ++ String.fromInt
+            (Maybe.withDefault 0 (Dict.get id model.sessionNums))
 
 
 {-| One listing item → (identity, name), or Nothing when it carries no usable

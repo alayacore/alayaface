@@ -186,6 +186,93 @@ for f in src-elm/*.js; do
   fi
 done
 
+# ─── 5. Session names: one read path, one writer (INV-G1, INV-G2) ───
+#
+# G-series (docs/session-identity.md). `sessionLabels` is the model's memory of
+# what each identity is called, and `"Session <n>"` is the fallback for one that
+# is not. Both are exactly the shape INV1 already forbids for geometry: a second
+# place that computes what the screen says is a second model of the screen, and
+# the two drift (a window titled by its seat number while the manager shows a
+# name, or the reverse).
+#
+#   INV-G1  reads of `sessionLabels` and the `Session <n>` construction live only
+#           in App/Labels.elm (titleFor / titleTooltip).
+#   INV-G2  `Ports.syncSessionLabel` — the write — is called from exactly one
+#           module, App/Labels.elm, so "when is a name saved" stays one grep
+#           (the `withUiSave` rule, applied to a name).
+#
+# Writes to the field stay legal where a record must be built whole
+# (App/Types' declaration, Main.elm's init, tests/TestHelpers.elm's init), and
+# App/Labels.elm itself; anywhere else a `sessionLabels =` is an ad-hoc write
+# around the module that owns the map.
+# Both orders, because Elm writes it both ways: `Dict.get id model.sessionLabels`
+# names the field AFTER the call (the shape this codebase uses), and
+# `Dict.member k model.sessionLabels` likewise — while a pipeline like
+# `Dict.get id sessionLabels` would name it after the argument. Match either.
+label_read_re='Dict\.(get|member|toList|filter|foldl|foldr|map|union)[^|]*(model\.)?sessionLabels|(model\.)?sessionLabels[^\n]*\|\>[[:space:]]*Dict\.(get|member|toList|filter|foldl|foldr|map)'
+
+label_reads() {
+  elm_code "$1" | grep -cE "$label_read_re" || true
+}
+
+label_read_lines() {
+  elm_code "$1" | grep -nE "$label_read_re" || true
+}
+
+while read -r f; do
+  n=$(label_reads "$f")
+  if [ "$n" -ne 0 ]; then
+    echo "✗ INV-G1: $f reads sessionLabels directly ($n site(s)) — use App/Labels titleFor / titleTooltip"
+    label_read_lines "$f" | sed 's/^/      /'
+    fail=1
+  fi
+done < <(find src-elm/src -name '*.elm' ! -path '*/App/Labels.elm' | sort)
+
+# The construction of the fallback, in a string. Blank-line-comment stripping
+# matters here: several modules NAME "Session <n>" in prose to explain the rule.
+while read -r f; do
+  case $f in */App/Labels.elm) continue ;; esac
+  n=$(elm_code "$f" | grep -cE '"Session " \+\+' || true)
+  if [ "$n" -ne 0 ]; then
+    echo "✗ INV-G1: $f builds a \"Session <n>\" title itself ($n site(s)) — that is App/Labels.titleFor's job"
+    elm_code "$f" | grep -nE '"Session " \+\+' | sed 's/^/      /'
+    fail=1
+  fi
+done < <(find src-elm/src -name '*.elm' | sort)
+
+while read -r f; do
+  case $f in
+    src-elm/src/App/Labels.elm|src-elm/src/App/Types.elm|src-elm/src/Main.elm) continue ;;
+  esac
+  n=$(elm_code "$f" | grep -cE '(^|[,{ ])sessionLabels = ' || true)
+  if [ "$n" -ne 0 ]; then
+    echo "✗ INV-G1: $f writes sessionLabels directly ($n site(s)) — App/Labels owns the map"
+    elm_code "$f" | grep -nE '(^|[,{ ])sessionLabels = ' | sed 's/^/      /'
+    fail=1
+  fi
+done < <(find src-elm/src -name '*.elm' | sort)
+
+# INV-G2: the port has exactly one caller. A second writer would be a second
+# answer to "when is a name saved", which is the question SD-G16 exists to keep
+# single, and (with the reply being attributable now) the one that G2's rename
+# error handling depends on.
+label_writers=$(find src-elm/src -name '*.elm' ! -path '*/App/Labels.elm' ! -path '*/Ports.elm' -exec sh -c 'elm_code() { sed -e "s/[[:space:]]*--.*$/ /" "$1"; }; elm_code "$1" | grep -c "Ports.syncSessionLabel" || true' _ {} \; | awk '{ s += $1 } END { print s + 0 }')
+if [ "$label_writers" -ne 0 ]; then
+  echo "✗ INV-G2: $label_writers call site(s) of Ports.syncSessionLabel outside App/Labels.elm — withLabelSave is the only writer"
+  find src-elm/src -name '*.elm' ! -path '*/App/Labels.elm' ! -path '*/Ports.elm' -exec grep -l "Ports.syncSessionLabel" {} \; | sed 's/^/      /'
+  fail=1
+fi
+
+# Anti-vacuity (the lesson of the `WIN_READS -eq 0` branch above): a grep that
+# matches nothing because the accessor was renamed passes as "no stray reads".
+# Assert the accessors are still the real ones.
+for fn in titleFor foldListing withLabelSave autoNameOnFirstPrompt; do
+  if ! grep -qE "^${fn} :|^${fn} :" src-elm/src/App/Labels.elm; then
+    echo "✗ INV-G1/G2 check broken: $fn is gone from src-elm/src/App/Labels.elm — fix this script, do not delete the check"
+    fail=1
+  fi
+done
+
 # ─── Result ──────────────────────────────────────────────────────────
 
 if [ "$fail" -ne 0 ]; then

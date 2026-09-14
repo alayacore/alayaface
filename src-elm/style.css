@@ -482,7 +482,13 @@ body {
   font-weight: 700;
   color: #888;
   letter-spacing: 0.02em;
-  text-transform: uppercase;
+  /* No `text-transform: uppercase` here, which used to sit on this line.
+     The bar carried a system string ("SESSION 3 — MODEL") where uppercase was
+     a style choice; it now carries THE USER'S WORDS (a session name,
+     docs/session-identity.md SD-G14), and capitalising them changes the
+     sentence — "fix the Parser, NOT the lexer" is not the name anyone typed,
+     and a Latin name shown shouted next to a Chinese one (which no transform
+     can touch) would not even be consistent. Weight, size and spacing stay. */
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

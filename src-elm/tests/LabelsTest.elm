@@ -406,6 +406,38 @@ policyGroup =
                     |> Dict.isEmpty
                     |> Expect.equal True
 
+        , test "titleFor: the name when there is one" <|
+            \_ ->
+                AL.titleFor (named False "重构 parser" board) "s1"
+                    |> Expect.equal "重构 parser"
+
+        , test "titleFor: the seat number when there is none (unchanged UI)" <|
+            \_ ->
+                -- The fallback must be exactly what the bar said before this
+                -- feature, or "a session with no name" becomes a visible
+                -- regression rather than a no-op.
+                let
+                    seated =
+                        { board | sessionNums = Dict.insert "s1" 7 board.sessionNums }
+                in
+                Expect.all
+                    [ \() -> Expect.equal "Session 7" (AL.titleFor seated "s1")
+                    , \() -> Expect.equal "Session 0" (AL.titleFor board "s1")
+                    ]
+                    ()
+
+        , test "titleFor: an unknown id is a seat 0, not a crash or a blank" <|
+            \_ ->
+                Expect.equal "Session 0" (AL.titleFor board "no-such-session")
+
+        , test "titleTooltip: the name verbatim plus the id" <|
+            \_ ->
+                -- The bar truncates by width (SD-G13), so the tooltip is the
+                -- only place a long name is fully readable, and the id is the
+                -- only stable handle when there is no name at all.
+                AL.titleTooltip (named False "  padded name  " board) "s1"
+                    |> Expect.equal "  padded name  \ns1"
+
         , test "forgetAll drops a deleted identity, and only those" <|
             \_ ->
                 { board
