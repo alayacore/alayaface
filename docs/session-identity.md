@@ -1,9 +1,9 @@
 # Session identity — a name for a session, and how to find it again
 
-**Status: proposed, no code yet.** The ⚑ section at the end is what this document asks
-the human to confirm before G0 starts. **SD** rows are decisions the cited code
-evidence settles — once the ⚑ answers are in, do not re-litigate an SD row in code:
-change the row here first and say so in the commit message, per the repo's convention.
+**Status: design confirmed, G-series not started in code.** The ⚑ questions were put
+to the human on 2026-09-14 and every one was answered **"as recommended"**, so SD-G12
+… SD-G15 below are confirmed decisions. Do not re-litigate an SD row in code: change
+the row here first and say so in the commit message, per the repo's convention.
 
 This is the tracked design for the **G-series**. When a phase ships, its checklist
 items get ticked here (this file is tracked — a phase list in a file nobody tracks is
@@ -68,9 +68,16 @@ written by the **client**, read by the **backends**.
 | **SD-G6** | Labels reach the client through the **typed `list_session_dirs` RPC**, which grows a `label` field — not through `fs_read_file_text`, and not through `Plan/MetaScan`'s startup walk. | The fs ports are shared traffic routed by reqId (AGENTS.md "Routing: tagged fs ports"), and the scan reads **one file at a time**, so N labels = N more serialised round trips and a second queue in a machine that already has four. The RPC already iterates every top-level session dir and already parses a JSON file per dir. One call, one payload, no new routing hazard. |
 | **SD-G7** | `OpenSessionManager` is currently the only caller of `listSessionDirs`. A **startup fetch** is added. | Without it the title bar knows no label for a session restored from disk, and the feature would name sessions only in the screen the user is least likely to be looking at. The fetch is untagged and fire-once per request, which the AGENTS.md routing note already classifies as safe (`sessionDirsResult` is in that list). |
 | **SD-G8** ⚑1 | The label is **auto-derived from the first prompt** and persisted then, unless a label already exists. `auto: true` marks it as machine-derived; any user edit sets `auto: false` and nothing in the client ever writes over `auto: false`. | Without this the feature ships empty: nobody renames 30 existing sessions by hand. The first user message is already in the client's hands at send time, so the derivation costs one small write per session, once. Old sessions keep the hex/id fallback until they are named — stated plainly so nobody is surprised, and see "Later" for the backfill idea. |
-| **SD-G9** | Reader is **lenient and drops**, never clamps: a `session.label.json` that is absent, unparseable, missing `label`, or longer than `maxLabelChars` yields *no label*, and the fallback chain decides what to show. | The same rule `App/UiConfig.elm` states for a bad rect ("not clamped into range: inventing a value would put something on screen that nobody ever had") and the same one `dirs.ReadSpawnArgs` already applies ("a missing or corrupt file is best-effort → defaults"). For a name there is no salvage worth guessing at, and a guessed name is a lie about the user's conversation. |
-| **SD-G10** | `maxLabelChars = 120` is the **one duplicated number**, and it joins `scripts/check-backend-parity.sh`'s `check_scalar` list across Elm / Rust (`MAX_LABEL_CHARS`) / Go (`MaxLabelChars`). | The backends need it to enforce SD-G9 while reading. That makes it the fourth triplicated constant in the repo (with `DEFAULT_UI_CONF_VERSION`, `MAX_STORED_WINDOWS`, `DEFAULT_RECURSION_LIMIT`) and the parity script already has the exact mechanism. The *display* truncation (60 chars in a title bar, full text in the tooltip) is a client presentation rule and is deliberately **not** shared — it must not become a storage rule. |
+| **SD-G9** | Reader is **lenient and drops**, never clamps: a `session.label.json` that is absent, unparseable, missing `label`, empty-after-trim, or longer than `maxLabelChars` yields *no label*, and the fallback chain decides what to show. It returns `label` **verbatim** — trimming decides *presence* only, never the bytes shown. | The same rule `App/UiConfig.elm` states for a bad rect ("not clamped into range: inventing a value would put something on screen that nobody ever had") and the same one `dirs.ReadSpawnArgs` already applies ("a missing or corrupt file is best-effort → defaults"). For a name there is no salvage worth guessing at, and a guessed name is a lie about the user's conversation. The verbatim half follows from INV-G2: normalisation is the writer's job, and a reader that repairs values is a second writer with a different idea of the name. |
+| **SD-G10** ⚑2 | `maxLabelChars = 120` **characters**, and it is the **one duplicated number** — it joins `scripts/check-backend-parity.sh`'s `check_scalar` list across Rust (`MAX_LABEL_CHARS`) / Go (`MaxLabelChars`) and, in G1, Elm. | The backends need it to enforce SD-G9 while reading. That makes it the fourth triplicated constant in the repo (with `DEFAULT_UI_CONF_VERSION`, `MAX_STORED_WINDOWS`, `DEFAULT_RECURSION_LIMIT`) and the parity script already has the exact mechanism. Nothing about *display* shares this number (SD-G13): it is a storage rule only, so no presentation constant can drift into it. **The unit is characters, not bytes** — `chars().count()` / `utf8.RuneCountInString` — because a 120-hanzi label is 360 bytes, and a backend that measured bytes would drop names the other keeps. `label_cases.json` has that case precisely so the divergence cannot hide. |
 | **SD-G11** | Last-writer-wins, no merge, no compare-and-swap. | `ui.conf` already accepted this trade (README: two clients each write the whole file) and the hazard here is strictly smaller: the document is one session's name, so a stale write can only clobber that one name, and the auto-derived text is a deterministic function of the first prompt. A conditional write would need a new backend capability to protect a cosmetic field. |
+
+| **SD-G12** ⚑1 | **Auto-naming is on**, with no setting. The first prompt of a session that has no label writes the derived one. | The alternative (UI-only, never persisted) leaves the closed-session list exactly as broken as today, which is the half this feature exists for; the third option (a toggle) is a fifth config file for a field that is one keystroke to overwrite. What the user typed is the least controversial possible source for the name, and `auto: false` means their own words always win. |
+| **SD-G13** ⚑2 | **No fixed display cap.** Storage caps at `maxLabelChars` (SD-G10); a title bar truncates by *width* (CSS ellipsis) because the window is resizable and "a window's content spans the window" is already this app's rule. Full text in the tooltip. | A 60-character cap would be a reading column inside a frame the user just dragged wide — the exact thing `cb52073` ("a window's content spans the window") removed from the message body. Width-aware ellipsis needs no constant, so nothing is duplicated across the three files, so the parity scalar stays a *storage* rule. |
+| **SD-G14** ⚑2 | The title bar keeps the **model name**: `<label> — <model>`, falling back to `Session <n> — <model>` when there is no label. Only the `Session <n>` part is replaced by a label; the em-dash separator is what the title uses today, so it stays. | Which model a window is talking to is the one piece of the old title that is load-bearing while debugging (a wrong `preset`/`model.conf` choice shows up here first). Dropping it would trade a name for a name. Truncation (SD-G13) eats the label, never the model. |
+| **SD-G15** ⚑3 ⚑4 | **Node sessions are not named** — no label document under `plans/<planId>/<nodeId>/`; their identity is meaningful only inside its plan, and they already carry `[Plan · planId/nodeId]`. **An unnamed session keeps the 8-char id** in the manager, not `Untitled`. | `Untitled` × 30 is a list where every row says nothing; a differing hex prefix at least discriminates, and matches what the window's own fallback (`Session <n>`) points at. Node sessions: naming them would put a second, narrower identity space next to the one `list_session_dirs` already refuses to list (it skips dirs with no top-level `session.alaya`). |
+
+
 
 ### The document
 
@@ -124,7 +131,7 @@ deleted session's memory goes with its directory").
 
 | Surface | Change |
 |---|---|
-| Window title bar (`session-bar-title`) | `label` if present, else today's `Session <n> — <model>`. The plan badge prefix stays in front of either. The full label + the session id go in the `title` tooltip so a truncated name is never a lost name. |
+| Window title bar (`session-bar-title`) | `<label> — <model>`, or today's `Session <n> — <model>` with no label (SD-G14). Ellipsis by *width* — a CSS rule on the title span, no character count in Elm (SD-G13) — with the full label and the session id in the `title` tooltip, so a truncated name is never a lost name. The `[Plan · …]` badge prefix stays in front of either. |
 | Session Manager row (`.sel-page-item-name`) | The label, or the 8-char id prefix when there is none — an unnamed session still needs *some* handle the user can compare against a window. The id goes onto the row as `data-session-id` either way (INV-G3). |
 | Session Manager controls | A `✎ Rename` button per row in the existing actions cell, next to Resume / Versions / Delete. A filter box at the top (`Fuzzy.fuzzyMatch` + the trimming/selection-clamping discipline `Session/Selector.elm` already implements — reuse it, do not re-derive it). Rows sort by label when filtering, by modification time otherwise (the backends' current order). |
 | Rename editor | A **global** overlay, the same shape as the Preset/config editors: an `App/Types.elm` record `{ show, targetId, input, error }` and one module owning its transitions. |
@@ -270,17 +277,18 @@ after the last one you remember. `cd3d042` exists because of exactly that mistak
 - Sorting/grouping the manager by preset (the field G0 could stop dropping).
 - Content search — needs a defined index (see Scope).
 
-## Open questions ⚑
+## Open questions ⚑ — all four answered 2026-09-14 ("as recommended")
 
-1. **Auto-label on by default?** SD-G8 writes a derived name into every new session's
-   directory. Some users will read that as the app putting words in their file.
-   Alternative: auto-label only in the UI (never persisted), and the manager shows hex
-   for closed unnamed sessions — which is the hole this feature exists to close.
-2. **Cap at 120, display at 60** — agree with SD-G10's numbers, or is a title bar that
-   can be resized wide enough for 120 worth displaying more of?
-3. **Node sessions** stay unlisted and unnamed (they already show `[Plan · planId/
-   nodeId]`). Confirm the label document is *not* needed under `plans/<planId>/<nodeId>/`
-   — i.e. a node session's identity is meaningful only inside its plan.
-4. **Old unnamed sessions in the manager**: fall back to the 8-char id (today's
-   behaviour) or show `Untitled`? Fallback is proposed; `Untitled` is friendlier and
-   would make the id reachable only through the tooltip.
+Kept here, answered, because the reasoning is the part a later reader re-asks.
+
+1. **Auto-label on by default?** → **Yes, no setting** (SD-G12). Some users will read a
+   derived name as the app putting words in their file; `auto: false` and one keystroke
+   are the answer, and a UI-only auto name would leave the closed-session list exactly
+   as broken as today.
+2. **Cap at 120, display at 60?** → **120 in storage, no display cap** (SD-G13, SD-G14):
+   a window is resizable and its content spans it, so truncation is by width, and the
+   model name stays in the title because it is the load-bearing half while debugging.
+3. **Node sessions?** → **Not named** (SD-G15). No label document under
+   `plans/<planId>/<nodeId>/`; their identity is only meaningful inside its plan.
+4. **Old unnamed sessions** → **keep the 8-char id** (SD-G15). `Untitled` × 30 is a
+   list where every row says the same nothing.
