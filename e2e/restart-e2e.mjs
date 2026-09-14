@@ -173,15 +173,14 @@ try {
   await sleep(600);
   // Type into the newest session.
   await page.evaluate(() => {
-    const panels = [...document.querySelectorAll('.session-panel')];
-    let bestN = -1;
-    for (const p of panels) {
-      const m = (p.querySelector('.session-bar-title')?.textContent || '').match(/Session (\d+)/);
-      if (m) bestN = Math.max(bestN, parseInt(m[1], 10));
-    }
-    for (const p of panels) {
-      const m = (p.querySelector('.session-bar-title')?.textContent || '').match(/Session (\d+)/);
-      if (!m || parseInt(m[1], 10) !== bestN) continue;
+    // The NEWEST plain session window: panels render in `sessionOrder`
+    // (creation order) and plan windows carry `.plan-panel`, so the LAST
+    // non-plan panel is the one that just appeared. Deliberately NOT the
+    // title's "Session N": a seat number is not an identity (it restarts at
+    // 1 with the page), and a session may now carry a name instead of one
+    // (docs/session-identity.md).
+    const p = [...document.querySelectorAll('.session-panel')].filter(x => !x.classList.contains('plan-panel')).pop();
+    if (p) {
       const ta = p.querySelector('textarea.input-text');
       if (ta) {
         ta.value = 'Create a demo plan for restart test';
@@ -234,9 +233,11 @@ try {
   const refreshed = await page.evaluate((prefix) => {
     const items = [...document.querySelectorAll('.sel-page-item')];
     for (const it of items) {
-      const name = it.querySelector('.sel-page-item-name')?.textContent || '';
+      // INV-G3: the row carries its identity in a data attribute; its text is a
+      // NAME now (G-series) and a prefix-of-uuid match on text is exactly what
+      // breaks when a row starts meaning something.
       const btn = [...it.querySelectorAll('button')].find(b => b.textContent.trim() === 'Resume');
-      if (name === prefix.slice(0, 8) && btn && !btn.disabled) { btn.click(); return true; }
+      if (it.dataset.sessionId === prefix && btn && !btn.disabled) { btn.click(); return true; }
     }
     return false;
   }, originDir);
@@ -275,13 +276,12 @@ try {
   await openGlobalMenu(page);
   assert(await clickByText('.global-menu-item', 'Session Manager'), 'Session Manager menu item');
   await page.waitForSelector('.sel-page-item', { timeout: 10000 });
-  // Resume the origin session (identified by its id prefix).
+  // Resume the origin session (identified by its id, from the row's data attribute).
   const resumed = await page.evaluate((prefix) => {
     const items = [...document.querySelectorAll('.sel-page-item')];
     for (const it of items) {
-      const name = it.querySelector('.sel-page-item-name')?.textContent || '';
       const btn = [...it.querySelectorAll('button')].find(b => b.textContent.trim() === 'Resume');
-      if (name === prefix.slice(0, 8) && btn) { btn.click(); return true; }
+      if (it.dataset.sessionId === prefix && btn) { btn.click(); return true; }
     }
     return false;
   }, originDir);

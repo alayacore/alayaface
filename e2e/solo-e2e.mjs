@@ -575,7 +575,8 @@ try {
   await waitFor('.overlay .sel-page-item');
   const deleted = await page.evaluate((id) => {
     const rows = [...document.querySelectorAll('.sel-page-item')];
-    const row = rows.find(r => (r.querySelector('.sel-page-item-name')?.textContent || '').trim() === id.slice(0, 8));
+    // INV-G3: by identity, not by displayed text (a row now shows a NAME).
+    const row = rows.find(r => r.dataset.sessionId === id);
     const btn = row && [...row.querySelectorAll('button')].find(b => (b.textContent || '').includes('Delete'));
     if (!btn) return false;
     btn.click();
@@ -722,13 +723,13 @@ try {
   await waitFor('.sel-page-item');
   const f3Resumed = await page.evaluate(prefix => {
     const row = [...document.querySelectorAll('.sel-page-item')]
-      .find(r => (r.querySelector('.sel-page-item-name')?.textContent || '').includes(prefix));
+      .find(r => r.dataset.sessionId === prefix);
     const btn = row && [...row.querySelectorAll('button')].find(b => b.textContent.trim() === 'Resume');
     if (!btn) return false;
     btn.click();
     return true;
-  }, f3Moved.slice(0, 8));
-  assert(f3Resumed, `the restarted backend cannot resume ${f3Moved.slice(0, 8)} from the manager`);
+  }, f3Moved);
+  assert(f3Resumed, `the restarted backend cannot resume ${f3Moved} from the manager`);
   await waitFor('.session-panel', 30000);
   await sleep(1500);
   const f3Shell = await shell();
@@ -767,12 +768,12 @@ try {
   await waitFor('.sel-page-item');
   const f3Deleted = await page.evaluate(prefix => {
     const row = [...document.querySelectorAll('.sel-page-item')]
-      .find(r => (r.querySelector('.sel-page-item-name')?.textContent || '').includes(prefix));
+      .find(r => r.dataset.sessionId === prefix);
     const btn = row && [...row.querySelectorAll('button')].find(b => (b.textContent || '').includes('Delete'));
     if (!btn) return false;
     btn.click();
     return true;
-  }, f3Moved.slice(0, 8));
+  }, f3Moved);
   assert(f3Deleted, 'no Delete button for the restarted session in the manager');
   await sleep(1500);
   const f3AfterDelete = await f3UiConf();

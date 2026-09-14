@@ -203,37 +203,29 @@ try {
 
   // Send the user prompt into the NEWEST session (the one we just
   // created — no session is auto-created at startup anymore).
-  const planPanel = await page.$$eval('.session-panel', panels => {
-    let best = null;
-    let bestN = -1;
-    for (const p of panels) {
-      const t = p.querySelector('.session-bar-title')?.textContent || '';
-      const m = t.match(/Session (\d+)/);
-      const n = m ? parseInt(m[1], 10) : -1;
-      if (n > bestN) {
-        bestN = n;
-        best = { has: true, title: t, ta: !!p.querySelector('textarea.input-text'), btn: !!p.querySelector('.send-btn') };
-      }
-    }
-    return best || { has: false };
+  const planPanel = await page.evaluate(() => {
+    // The NEWEST plain session window: panels render in `sessionOrder`
+    // (creation order) and plan windows carry `.plan-panel`, so the LAST
+    // non-plan panel is the one that just appeared. Deliberately NOT the
+    // title's "Session N": a seat number is not an identity (it restarts at 1
+    // with the page), and a session may now carry a name instead of one
+    // (docs/session-identity.md).
+    const p = [...document.querySelectorAll('.session-panel')].filter(x => !x.classList.contains('plan-panel')).pop();
+    if (!p) return { has: false };
+    return { has: true, title: p.querySelector('.session-bar-title')?.textContent || '', ta: !!p.querySelector('textarea.input-text'), btn: !!p.querySelector('.send-btn') };
   });
   console.log('plan panel:', JSON.stringify(planPanel));
   assert(planPanel.has, 'new session window not found');
 
   await page.evaluate(() => {
-    const panels = [...document.querySelectorAll('.session-panel')];
-    let bestN = -1;
-    for (const p of panels) {
-      const t = p.querySelector('.session-bar-title')?.textContent || '';
-      const m = t.match(/Session (\d+)/);
-      const n = m ? parseInt(m[1], 10) : -1;
-      if (n > bestN) bestN = n;
-    }
-    for (const p of panels) {
-      const t = p.querySelector('.session-bar-title')?.textContent || '';
-      const m = t.match(/Session (\d+)/);
-      const n = m ? parseInt(m[1], 10) : -1;
-      if (n !== bestN) continue;
+    // The NEWEST plain session window: panels render in `sessionOrder`
+    // (creation order) and plan windows carry `.plan-panel`, so the LAST
+    // non-plan panel is the one that just appeared. Deliberately NOT the
+    // title's "Session N": a seat number is not an identity (it restarts at 1
+    // with the page), and a session may now carry a name instead of one
+    // (docs/session-identity.md).
+    const p = [...document.querySelectorAll('.session-panel')].filter(x => !x.classList.contains('plan-panel')).pop();
+    if (p) {
       const ta = p.querySelector('textarea.input-text');
       if (ta) {
         ta.value = 'Create a demo plan for e2e';
@@ -906,7 +898,10 @@ try {
   // Close the ORIGIN session: the plain "Session N" window that created
   // the plan (node sessions carry a "[Plan · ..." badge — exclude them).
   // Per-session close-confirm overlay → ✕ then #close-confirm-close.
-  await closeSessionPanels((t) => !t.includes('[Plan ·') && /Session \d+/.test(t));
+  // A plain session window is one WITHOUT the node badge — the old test also
+  // required the title to say "Session N", which a named session no longer
+  // does; the badge check alone is the actual rule (SD-G14 keeps it).
+  await closeSessionPanels((t) => !t.includes('[Plan ·'));
   await page.waitForFunction(() => {
     return document.querySelectorAll('.plan-page').length === 0;
   }, { timeout: 10000 });
@@ -942,15 +937,15 @@ try {
   await sleep(600);
   const beforeSettleCount = await page.$$eval('.plan-page', els => els.length);
   await page.evaluate(() => {
-    const panels = [...document.querySelectorAll('.session-panel')];
-    let best = -1;
-    for (const p of panels) { const m = (p.querySelector('.session-bar-title')?.textContent || '').match(/Session (\d+)/); if (m) best = Math.max(best, parseInt(m[1], 10)); }
-    for (const p of panels) {
-      const m = (p.querySelector('.session-bar-title')?.textContent || '').match(/Session (\d+)/);
-      if (!m || parseInt(m[1], 10) !== best) continue;
-      const ta = p.querySelector('textarea.input-text');
-      if (ta) ta.focus();
-    }
+    // The NEWEST plain session window: panels render in `sessionOrder`
+    // (creation order) and plan windows carry `.plan-panel`, so the LAST
+    // non-plan panel is the one that just appeared. Deliberately NOT the
+    // title's "Session N": a seat number is not an identity (it restarts at 1
+    // with the page), and a session may now carry a name instead of one
+    // (docs/session-identity.md).
+    const p = [...document.querySelectorAll('.session-panel')].filter(x => !x.classList.contains('plan-panel')).pop();
+    const ta = p && p.querySelector('textarea.input-text');
+    if (ta) ta.focus();
   });
   await page.keyboard.type('create a plan', { delay: 2 });
   await page.keyboard.press('Enter');

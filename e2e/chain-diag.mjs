@@ -99,19 +99,14 @@ await page.waitForFunction(() => document.querySelectorAll('.session-panel').len
 await sleep(600);
 // Send the demo prompt (fakecore responds with a plan)
 await page.evaluate(() => {
-  const panels = [...document.querySelectorAll('.session-panel')];
-  let bestN = -1;
-  for (const p of panels) {
-    const t = p.querySelector('.session-bar-title')?.textContent || '';
-    const m = t.match(/Session (\d+)/);
-    const n = m ? parseInt(m[1], 10) : -1;
-    if (n > bestN) bestN = n;
-  }
-  for (const p of panels) {
-    const t = p.querySelector('.session-bar-title')?.textContent || '';
-    const m = t.match(/Session (\d+)/);
-    const n = m ? parseInt(m[1], 10) : -1;
-    if (n !== bestN) continue;
+  // The NEWEST plain session window: panels render in `sessionOrder`
+  // (creation order) and plan windows carry `.plan-panel`, so the LAST
+  // non-plan panel is the one that just appeared. Deliberately NOT the
+  // title's "Session N": a seat number is not an identity (it restarts at
+  // 1 with the page), and a session may now carry a name instead of one
+  // (docs/session-identity.md).
+  const p = [...document.querySelectorAll('.session-panel')].filter(x => !x.classList.contains('plan-panel')).pop();
+  if (p) {
     const ta = p.querySelector('textarea.input-text');
     if (ta) {
       ta.value = 'Create a demo plan for diag';

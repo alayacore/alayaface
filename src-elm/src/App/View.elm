@@ -736,7 +736,18 @@ viewSessionManagerOverlay model =
                                     not active
                             in
                             Html.div
-                                [ Attr.class "sel-page-item" ]
+                                [ Attr.class "sel-page-item"
+                                -- INV-G3: the row's identity is a DATA attribute,
+                                -- not its displayed text. The name a session shows
+                                -- is user data that changes (G-series), and a test
+                                -- that finds a row by comparing text against a
+                                -- UUID prefix breaks the moment a row means
+                                -- something. Same direction as f5129fe (chain
+                                -- lookups by data attributes, not text scanning).
+                                -- Only the SESSION rows carry it: the version list
+                                -- and the model selector reuse `.sel-page-item`.
+                                , Attr.attribute "data-session-id" dir.id
+                                ]
                                 [ Html.div [ Attr.class "sel-page-item-main" ]
                                     [ Html.span
                                         [ Attr.class "sel-page-item-name"

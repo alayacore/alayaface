@@ -198,25 +198,22 @@ try {
   await sleep(600);
 
   await page.evaluate(() => {
-    const panels = [...document.querySelectorAll('.session-panel')];
-    let bestN = -1;
-    for (const p of panels) {
-      const m = (p.querySelector('.session-bar-title')?.textContent || '').match(/Session (\d+)/);
-      const n = m ? parseInt(m[1], 10) : -1;
-      if (n > bestN) bestN = n;
-    }
-    for (const p of panels) {
-      const m = (p.querySelector('.session-bar-title')?.textContent || '').match(/Session (\d+)/);
-      const n = m ? parseInt(m[1], 10) : -1;
-      if (n !== bestN) continue;
-      const ta = p.querySelector('textarea.input-text');
-      if (ta) {
-        ta.value = 'Create a demo plan for e2e';
-        ta.dispatchEvent(new Event('input', { bubbles: true }));
+      // The NEWEST plain session window: panels render in `sessionOrder`
+      // (creation order) and plan windows carry `.plan-panel`, so the LAST
+      // non-plan panel is the one that just appeared. Deliberately NOT the
+      // title's "Session N": a seat number is not an identity (it restarts at
+      // 1 with the page), and a session may now carry a name instead of one
+      // (docs/session-identity.md).
+      const p = [...document.querySelectorAll('.session-panel')].filter(x => !x.classList.contains('plan-panel')).pop();
+      if (p) {
+        const ta = p.querySelector('textarea.input-text');
+        if (ta) {
+          ta.value = 'Create a demo plan for e2e';
+          ta.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        const btn = p.querySelector('.send-btn');
+        if (btn) btn.click();
       }
-      const btn = p.querySelector('.send-btn');
-      if (btn) btn.click();
-    }
   });
   // Plan auto-creates (R2).
   await page.waitForFunction(() => document.querySelectorAll('.plan-page').length === 1, { timeout: 30000 });
@@ -363,16 +360,18 @@ try {
   // container); wait for presence, not visibility.
   await page.waitForSelector('.sel-page-item', { timeout: 10000 });
   // The manager must show ONLY the Session root (never the work copy).
-  const managerNames = await page.$$eval('.sel-page-item-name', els => els.map(e => e.textContent || ''));
+  // The claim is about which IDENTITIES are listed, so read identities: a row's
+  // text is a name now and may be anything (INV-G3).
+  const managerNames = await page.$$eval('.sel-page-item', els => els.map(e => e.dataset.sessionId || ''));
   assert(managerNames.length === 1, 'manager lists exactly one Session (the root), got: ' + JSON.stringify(managerNames));
-  assert(managerNames[0].includes(rootSid.slice(0, 8)),
+  assert(managerNames[0] === rootSid,
     'manager shows the root, got: ' + JSON.stringify(managerNames));
   const resumedRoot = await page.evaluate((fid) => {
     const items = [...document.querySelectorAll('.sel-page-item')];
     for (const it of items) {
-      const name = it.querySelector('.sel-page-item-name')?.textContent || '';
+      // INV-G3: the row's identity is its data attribute; the text is a name.
       const btn = [...it.querySelectorAll('button')].find(b => b.textContent.trim() === 'Resume');
-      if (name === fid.slice(0, 8) && btn && !btn.disabled) { btn.click(); return true; }
+      if (it.dataset.sessionId === fid && btn && !btn.disabled) { btn.click(); return true; }
     }
     return false;
   }, rootSid);
@@ -447,14 +446,14 @@ try {
   await openGlobalMenu();
   assert(await clickByText('.global-menu-item', 'Session Manager'), 'Session Manager menu item (chained refresh)');
   await page.waitForSelector('.sel-page-item', { timeout: 10000 });
-  const managerNames2 = await page.$$eval('.sel-page-item-name', els => els.map(e => e.textContent || ''));
+  const managerNames2 = await page.$$eval('.sel-page-item', els => els.map(e => e.dataset.sessionId || ''));
   assert(managerNames2.length === 1, 'manager lists exactly one Session (root), got: ' + JSON.stringify(managerNames2));
   const resumedHead = await page.evaluate((fid) => {
     const items = [...document.querySelectorAll('.sel-page-item')];
     for (const it of items) {
-      const name = it.querySelector('.sel-page-item-name')?.textContent || '';
+      // INV-G3: the row's identity is its data attribute; the text is a name.
       const btn = [...it.querySelectorAll('button')].find(b => b.textContent.trim() === 'Resume');
-      if (name === fid.slice(0, 8) && btn && !btn.disabled) { btn.click(); return true; }
+      if (it.dataset.sessionId === fid && btn && !btn.disabled) { btn.click(); return true; }
     }
     return false;
   }, root2.sid);
