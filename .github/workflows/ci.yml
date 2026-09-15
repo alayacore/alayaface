@@ -114,18 +114,42 @@ jobs:
       # in the body (an `echo`), so a failing suite printed its error and
       # the job still went green — that is how three scripts sat broken on a
       # clean checkout. Run them all, then fail on any failure.
+      #
+      # Output goes to a file, not straight to the console, so a FAILURE can
+      # be quoted into the annotation. `pt-e2e` has failed on this job three
+      # times ("e2e pt failed") while passing locally every time, and the
+      # annotation said nothing more than that — the job log holds the answer
+      # but `/actions/jobs/<id>/logs` needs repo admin, so anyone triaging
+      # from the API or a phone sees a shrug. Now the failing assertion's own
+      # line lands in the check annotations, where it is public.
       - name: E2E (all scripts from e2e/scripts.txt)
         run: |
           failed=()
-          while read -r t; do
-            [ -n "$t" ] || continue
+          for t in $(grep -v '^\s*\#' scripts.txt | grep -v '^\s*$'); do
             echo "::group::$t-e2e.mjs"
-            if ! node "$t-e2e.mjs"; then
+            log="/tmp/e2e-$t.log"
+            if node "$t-e2e.mjs" > "$log" 2>&1; then
+              cat "$log"
+            else
               failed+=("$t")
-              echo "::error::e2e $t failed"
+              # The lines that explain it, if the script printed any; else the
+              # tail, which is at least where it stopped.
+              reason=$(grep -aE 'ASSERT FAILED|FAIL:|\[fatal\]|Error:|ECONN|timeout' "$log" | tail -n 3)
+              [ -n "$reason" ] || reason=$(tail -n 3 "$log")
+              {
+                echo "### e2e \`$t-e2e.mjs\` failed"
+                echo ""
+                echo '```'
+                tail -n 40 "$log"
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+              # One annotation value = one line: CRs out, `%`/newlines escaped
+              # in the order Actions expects.
+              flat=$(printf '%s' "$reason" | tr -d '\r' | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+              echo "::error::e2e $t failed: ${flat:0:900}"
             fi
             echo "::endgroup::"
-          done < <(grep -v '^\s*\#' scripts.txt | grep -v '^\s*$')
+          done
           if [ ${#failed[@]} -gt 0 ]; then
             echo "FAILED e2e suites: ${failed[*]}"
             exit 1
