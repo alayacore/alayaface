@@ -22,13 +22,20 @@ import puppeteer from "puppeteer-core";
 import { spawn } from "child_process";
 import { mkdtempSync, rmSync, readFileSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { join, resolve } from "path";
 import { buildGoBinaries } from "./build-binaries.mjs";
 
 const CHROME = process.env.CHROME || "/usr/bin/google-chrome";
-const GO_DIR = join(process.cwd(), "..", "src-go");
+// The repo root from THIS file, not from the working directory. These four
+// scripts were written to be launched from e2e/ (which is what `make e2e`
+// and CI do); resolving the root off the cwd instead means that running one
+// from anywhere else points OUTSIDE the repo, and `buildGoBinaries` then
+// creates that directory and builds into it — so the failure reads as
+// "go.mod not found" in a stray tree instead of an obvious wrong path.
+const ROOT = resolve(import.meta.dirname, "..");
+const GO_DIR = join(ROOT, "src-go");
 let FAKECORE, SERVER;
-const STATIC = join(process.cwd(), "..", "src-elm");
+const STATIC = join(ROOT, "src-elm");
 
 const home = mkdtempSync(join(tmpdir(), "alayaface-mc-"));
 const port = 9231 + Math.floor(Math.random() * 200);
@@ -38,7 +45,7 @@ console.log("HOME:", home, "port:", port);
 // Built here rather than inherited from whichever script ran first: this
 // suite asserts on fakecore's model_sync record, so it has to be THIS
 // checkout's fakecore, not a stale binary left in bin/.
-({ fakecore: FAKECORE, server: SERVER } = buildGoBinaries(join(process.cwd(), "..")));
+({ fakecore: FAKECORE, server: SERVER } = buildGoBinaries(ROOT));
 
 const server = spawn(SERVER, ["--addr", `127.0.0.1:${port}`, "--static", STATIC, "--alayacore-bin", FAKECORE], { env, stdio: "inherit" });
 
@@ -220,6 +227,38 @@ async function main() {
   if (!errs.some((e) => e.includes("reasoning_1") || e.includes("Reasoning"))) throw new Error("no reasoning_1 problem reported");
   await setField("reasoning_1", '{"thinking":{"type":"disabled"}}');
   if (await saveDisabled()) throw new Error("Save still disabled after fixing reasoning_1");
+
+  // ── 2b. a required field blocks Save, because saving it deletes the model ──
+  // AlayaCore's syncFromContent skips entries failing validateModel and then
+  // writeConfigFile persists the SURVIVORS: an entry with no base_url is gone
+  // from model.conf before the MODEL_VALIDATION reply arrives to say so. So the
+  // refusal has to happen here, at Save, and the message has to say why —
+  // "required" alone does not explain a blocked button.
+  await setField("base_url", "");
+  if (!(await saveDisabled())) throw new Error("Save enabled with an empty base_url (the entry would be deleted on sync)");
+  const reqErrs = await errorLines();
+  console.log("required-field errors:", JSON.stringify(reqErrs));
+  if (!reqErrs.some((e) => e.includes("Base URL") && e.includes("model.conf"))) {
+    throw new Error("the base_url refusal does not name the field and its consequence: " + JSON.stringify(reqErrs));
+  }
+
+  // Whitespace counts as empty because the ENCODER trims it: " " reaches
+  // AlayaCore as "", so a client that only refused the literal "" would leave
+  // this exact hole open.
+  await setField("base_url", "   ");
+  if (!(await saveDisabled())) throw new Error("Save enabled with a whitespace-only base_url");
+
+  await setField("base_url", "http://localhost:11434/v1");
+  if (await saveDisabled()) throw new Error("Save still disabled after restoring base_url");
+
+  // `name` is NOT required — validateModel does not test it. Refusing it would
+  // block a save the core accepts and strand an entry whose base URL the user
+  // only wants to fix. (A blank name's real cost is invisibility in the list,
+  // and that is answered by ModelConfig.displayOf, asserted in ModelConfigTest.)
+  await setField("name", "");
+  if (await saveDisabled()) throw new Error("Save disabled for an empty name, which AlayaCore does not require");
+  await setField("name", "fake-model-2");
+  if (await saveDisabled()) throw new Error("Save still disabled after restoring name");
 
   // Edit the visible fields; everything else must survive untouched.
   await setField("name", "renamed-vllm");

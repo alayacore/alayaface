@@ -8,15 +8,22 @@ import puppeteer from "puppeteer-core";
 import { spawn } from "child_process";
 import { mkdtempSync, rmSync, existsSync, readFileSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { join, resolve } from "path";
 import { buildGoBinaries } from "./build-binaries.mjs";
 
 const CHROME = process.env.CHROME || "/usr/bin/google-chrome";
-const STATIC = join(process.cwd(), "..", "src-elm");
+// The repo root from THIS file, not from the working directory. These four
+// scripts were written to be launched from e2e/ (which is what `make e2e`
+// and CI do); resolving the root off the cwd instead means that running one
+// from anywhere else points OUTSIDE the repo, and `buildGoBinaries` then
+// creates that directory and builds into it — so the failure reads as
+// "go.mod not found" in a stray tree instead of an obvious wrong path.
+const ROOT = resolve(import.meta.dirname, "..");
+const STATIC = join(ROOT, "src-elm");
 
 // Built here, not assumed: on a clean checkout src-go/bin does not exist,
 // and this script used to fail with `spawn ... ENOENT`.
-const { fakecore: FAKECORE, server: SERVER } = buildGoBinaries(join(process.cwd(), ".."));
+const { fakecore: FAKECORE, server: SERVER } = buildGoBinaries(ROOT);
 
 const home = mkdtempSync(join(tmpdir(), "alayaface-dr-"));
 const port = 9101 + Math.floor(Math.random() * 200);
