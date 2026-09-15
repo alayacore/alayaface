@@ -12,6 +12,7 @@ module Session.ModelConfig exposing
     , encodeModel
     , modeledKeys
     , summaryOf
+    , displayOf
     )
 
 {-| AlayaCore's `model.conf` schema: the one place in AlayaFace that knows
@@ -29,6 +30,11 @@ So these must agree, and ModelConfigTest asserts that they do:
 
   * `fields`               — every key gets a control in Overlay.ModelEditor,
     so nothing is saved while being invisible to the user;
+  * `Field.required`       — which of those keys AlayaCore refuses an entry
+    without. Saving one empty DELETES the entry (see `draftProblems`), so this
+    is the second way this module can lose a model by knowing too little, and
+    `scripts/check-model-schema.sh` compares the set against `validateModel` in
+    both directions;
   * `modelInfoDecoder` /
     `encodeModel`          — every key survives `model_list` -> `model_sync`;
   * `modeledKeys`          — the keys above; anything outside them is
@@ -74,6 +80,20 @@ type alias Field =
     , kind : FieldKind
     , placeholder : String
     , hint : String
+      -- Does AlayaCore's `validateModel` refuse an entry whose value is empty?
+      -- It is data rather than a special case in `draftProblems` because the
+      -- consequence is per-field and severe: `:model_sync` REPLACES the list,
+      -- `syncFromContent` drops the entries that fail validation and then
+      -- `writeConfigFile` persists what is left — so saving a model missing one
+      -- of these DELETES it from the user's `model.conf`, and the
+      -- MODEL_VALIDATION error arrives only after the write.
+      --
+      -- Mirrored from `model_manager.go:validateModel` (the three are
+      -- `protocol_type`, `base_url`, `model_name`). `name` is NOT required
+      -- there, and this table does not invent a stricter rule than the core:
+      -- a nameless entry is still a working entry, so `displayOf` exists to
+      -- keep it visible in a list instead.
+    , required : Bool
     , get : ModelDraft -> String
     , set : String -> ModelDraft -> ModelDraft
     }
@@ -90,13 +110,13 @@ fields =
         "Display name; must be unique in the list."
         .name
         (\v d -> { d | name = v })
-    , choice "protocol_type" "Protocol Type" "Wire protocol of the endpoint."
+    , requiredChoice "protocol_type" "Protocol Type" "Wire protocol of the endpoint."
         [ ( "openai", "openai" )
         , ( "anthropic", "anthropic" )
         ]
         .protocolType
         (\v d -> { d | protocolType = v })
-    , field "base_url" Text "Base URL" "https://api.openai.com/v1"
+    , requiredField "base_url" Text "Base URL" "https://api.openai.com/v1"
         "API server URL the entry talks to."
         .baseUrl
         (\v d -> { d | baseUrl = v })
@@ -104,7 +124,7 @@ fields =
         ""
         .apiKey
         (\v d -> { d | apiKey = v })
-    , field "model_name" Text "Model Name" "gpt-4o"
+    , requiredField "model_name" Text "Model Name" "gpt-4o"
         "Model identifier sent to the API."
         .modelName
         (\v d -> { d | modelName = v })
@@ -152,14 +172,51 @@ field key kind label placeholderText hint get set =
     , kind = kind
     , placeholder = placeholderText
     , hint = hint
+    , required = False
     , get = get
     , set = set
     }
 
 
+{-| A `field` whose emptiness makes AlayaCore drop the whole entry. See
+`Field.required`.
+
+The `let` is not ceremony: `{ field a b c | required = True }` is a parse error
+in Elm (`docs/update-slices.md` records it), because the record-update syntax
+needs a variable, not an application.
+-}
+requiredField : String -> FieldKind -> String -> String -> String -> (ModelDraft -> String) -> (String -> ModelDraft -> ModelDraft) -> Field
+requiredField key kind label placeholderText hint get set =
+    let
+        f =
+            field key kind label placeholderText hint get set
+    in
+    { f | required = True }
+
+
 choice : String -> String -> String -> List ( String, String ) -> (ModelDraft -> String) -> (String -> ModelDraft -> ModelDraft) -> Field
 choice key label hint options get set =
     field key (Choice options) label "" hint get set
+
+
+{-| A `choice` whose key AlayaCore requires. Separate from `choice` because the
+two facts are independent: `serial_tool_calls` is a control that can never hold
+an empty value AND is optional in `model.conf` (absent = false), so "the control
+cannot be blank" must not be read as "the core requires it" — that
+conflation would refuse saves the core accepts.
+
+The naming is load-bearing, not stylistic: `scripts/check-model-schema.sh`
+treats any helper in `fields` whose name begins with `required` as the client
+saying "AlayaCore requires this key", and compares that set against
+`validateModel`.
+-}
+requiredChoice : String -> String -> String -> List ( String, String ) -> (ModelDraft -> String) -> (String -> ModelDraft -> ModelDraft) -> Field
+requiredChoice key label hint options get set =
+    let
+        f =
+            choice key label hint options get set
+    in
+    { f | required = True }
 
 
 {-| Keys AlayaFace models — the complement of what `extras` carries. -}
@@ -299,36 +356,56 @@ canonicalJson text =
 
 {-| Per-field reasons a draft must not be saved, as (field key, message).
 
-Only `Json` and `Number` can fail: `encodeModel` cannot represent
-unparsable provider JSON or a non-numeric token limit without inventing a
-value, and inventing one is precisely the silent data loss this module
-exists to prevent. `Overlay.ModelEditor` shows these against the offending
-field and disables Save; `App.SelectorKit.editSave` refuses on them too, so
-neither end can be bypassed.
+Two rules, and the second is the one that saves data:
 
-Empty text is never a problem — every optional field is empty by default,
+  * **a required field must not be empty** (`Field.required`). Saving one is
+    how a model gets deleted: `syncFromContent` skips entries that fail
+    `validateModel` and `writeConfigFile` then persists the survivors, so the
+    entry is gone from `model.conf` before the MODEL_VALIDATION reply arrives to
+    explain why. The refusal says that in the user's terms, because "required"
+    alone does not explain why a field they might want to leave blank is
+    blocking a button.
+  * **`Json` and `Number` values must parse**: `encodeModel` cannot represent
+    unparsable provider JSON or a non-numeric token limit without inventing a
+    value, and inventing one is precisely the silent data loss this module
+    exists to prevent. `Choice` refuses anything outside its options, which is
+    also how an empty `protocol_type` is caught.
+
+`Overlay.ModelEditor` shows these against the offending field and disables
+Save; `App.SelectorKit.editSave` refuses on them too, so neither end can be
+bypassed.
+
+Other empty text is never a problem — every optional field is empty by default,
 meaning "not configured", which is what a brand-new entry starts with.
 -}
 draftProblems : ModelDraft -> List ( String, String )
 draftProblems draft =
     let
         problem f =
-            case f.kind of
-                Json ->
-                    jsonProblem f (f.get draft)
+            let
+                value =
+                    f.get draft
+            in
+            if f.required && String.trim value == "" then
+                Just ( f.key, f.label ++ " is required — without it AlayaCore drops this model from model.conf when the list is saved." )
 
-                Number ->
-                    numberProblem f (f.get draft)
+            else
+                case f.kind of
+                    Json ->
+                        jsonProblem f value
 
-                Choice options ->
-                    if List.member (String.trim (f.get draft)) (List.map Tuple.first options) then
+                    Number ->
+                        numberProblem f value
+
+                    Choice options ->
+                        if List.member (String.trim value) (List.map Tuple.first options) then
+                            Nothing
+
+                        else
+                            Just ( f.key, f.label ++ " must be one of the listed values." )
+
+                    Text ->
                         Nothing
-
-                    else
-                        Just ( f.key, f.label ++ " must be one of the listed values." )
-
-                Text ->
-                    Nothing
     in
     List.filterMap problem fields
 
@@ -379,6 +456,32 @@ numberProblem f text =
 
     else
         Just ( f.key, f.label ++ " must be a whole number of tokens (0 = default), not \"" ++ trimmed ++ "\"." )
+
+
+{-| What a model entry is CALLED in a list.
+
+`name` is what the user gave it, and AlayaCore does not require one — an entry
+hand-written into `model.conf` (or created by an older client) can have a blank
+`name` and still work perfectly. The lists title their rows with `name`, so a
+blank one renders an empty row: present, selectable, and impossible to tell
+apart from the other empty row. `model_name` is the next-best handle because it
+is the string that actually identifies the endpoint, and the numeric `id` is the
+last resort so a row is never blank.
+
+This is a DISPLAY rule, deliberately not a validation rule: refusing to save a
+nameless model would block editing its base URL over a field the core does not
+even require. Naming it is the user's call; hiding it is not.
+-}
+displayOf : ModelInfo -> String
+displayOf m =
+    if String.trim m.name /= "" then
+        m.name
+
+    else if String.trim m.modelName /= "" then
+        m.modelName
+
+    else
+        "model " ++ String.fromInt m.id
 
 
 {-| One-line digest of what an entry is configured to do, for the model

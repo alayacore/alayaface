@@ -10,12 +10,16 @@ silent and destructive: edit one field, Save, and unrelated fields —
 the symptom is "the REASONING window never appears" or "tool calls overlapped
 again", with no error anywhere.
 
-Four invariants, none of which held before Session.ModelConfig existed:
+Five invariants, none of which held before Session.ModelConfig existed:
 
   1. every key `model_list` sends is decoded and re-encoded;
   2. editing one field leaves every other field untouched;
   3. a key AlayaFace has never heard of still comes back out;
-  4. every modelled key has a control in the editor.
+  4. every modelled key has a control in the editor;
+  5. the keys AlayaCore's `validateModel` requires cannot be saved empty —
+     `scripts/check-model-schema.sh` compares that set against the core, in both
+     directions, so neither a missing refusal nor an over-strict one stays
+     invisible.
 -}
 
 import Dict exposing (Dict)
@@ -86,6 +90,17 @@ parser only accepts a plain lowercase name as a record-update base.
 blank : T.ModelDraft
 blank =
     MC.emptyDraft
+
+
+{-| The smallest draft that IS savable: `blank` plus the two text fields
+AlayaCore's `validateModel` requires. Per-field tests start here so that the
+problem list they assert contains only the field under test — starting from
+`blank` would mix in "base_url is required" and every assertion would be about
+two things at once.
+-}
+clean : T.ModelDraft
+clean =
+    { blank | baseUrl = "https://api.example.com/v1", modelName = "gpt-4o" }
 
 
 minimal : T.ModelInfo
@@ -258,6 +273,35 @@ suite =
                             }
                         )
             ]
+        , describe "what a row is called (displayOf)"
+            [ test "a named entry uses its name" <|
+                \_ -> Expect.equal "vLLM DeepSeek" (MC.displayOf { entry | name = "vLLM DeepSeek", modelName = "model-9" })
+            , test "…but a blank name does not buy a blank row" <|
+                \_ ->
+                    -- AlayaCore does not require `name`, so an entry can legally
+                    -- have none — and a list titled by it shows an empty row that
+                    -- is still selectable. `model_name` is the next handle that
+                    -- actually identifies an endpoint.
+                    Expect.equal "model-9" (MC.displayOf { entry | name = "", modelName = "model-9" })
+            , test "whitespace is a blank name, because the encoder says so" <|
+                \_ ->
+                    -- `modelFromDraft` trims, so a name of "   " is stored as ""
+                    -- and would otherwise render the empty row this exists to
+                    -- prevent.
+                    Expect.equal "model-9" (MC.displayOf { entry | name = " \u{00a0} ", modelName = "model-9" })
+            , test "an entry with neither still says which one it is" <|
+                \_ ->
+                    -- Never blank, because a blank row cannot be told apart from
+                    -- the other blank row; the id is the only thing left and it
+                    -- is what AlayaCore assigns.
+                    Expect.equal "model 7" (MC.displayOf { entry | name = "", modelName = "" })
+            , test "the digest is unaffected, so the two never duplicate each other" <|
+                \_ ->
+                    -- `displayOf` falls back to `model_name`, and `summaryOf`
+                    -- does NOT mention it — if it did, a nameless entry would
+                    -- show the same string twice on one row.
+                    Expect.equal False (String.contains "model-9" (MC.summaryOf { entry | name = "", modelName = "model-9" }))
+            ]
         , describe "UI coverage"
             [ test "the editor's fields plus id are exactly the modelled keys" <|
                 \_ -> Expect.equal MC.modeledKeys ("id" :: List.map .key MC.fields)
@@ -278,19 +322,66 @@ suite =
                 \_ ->
                     Expect.equal MC.emptyDraft
                         (MC.updateDraftField "reasoning_9" "x" MC.emptyDraft)
-            , test "a brand-new model is savable" <|
-                \_ -> Expect.equal [] (MC.draftProblems MC.emptyDraft)
+            , test "a brand-new model is NOT savable until the required fields are filled" <|
+                \_ ->
+                    -- This assertion used to read "a brand-new model is savable",
+                    -- and that was the bug: an entry with no base_url or
+                    -- model_name is what the form shipped, and saving one is how
+                    -- a model disappears. `syncFromContent` skips entries that
+                    -- fail `validateModel`, then `writeConfigFile` persists the
+                    -- survivors — so the entry is gone from the user's model.conf
+                    -- BEFORE the MODEL_VALIDATION reply explains why. The refusal
+                    -- has to come from the client, at Save time.
+                    Expect.equal [ "base_url", "model_name" ]
+                        (MC.draftProblems MC.emptyDraft |> List.map Tuple.first)
+            , test "…and filling exactly those two makes it savable" <|
+                \_ -> Expect.equal [] (MC.draftProblems clean)
+            , test "the required-field message says what is at stake" <|
+                \_ ->
+                    -- "Required" alone does not explain why a field the user may
+                    -- want to leave blank is blocking a button; the consequence
+                    -- (losing the whole entry) is the part that earns the refusal.
+                    case MC.draftProblems { clean | baseUrl = "   " } of
+                        [ ( key, message ) ] ->
+                            Expect.all
+                                [ \() -> Expect.equal "base_url" key
+                                , \() -> Expect.equal True (String.contains "model.conf" message)
+                                , \() -> Expect.equal True (String.contains "Base URL" message)
+                                ]
+                                ()
+
+                        other ->
+                            Expect.fail ("expected one problem, got " ++ String.fromInt (List.length other))
+            , test "whitespace-only counts as empty, because the encoder makes it so" <|
+                \_ ->
+                    -- The chain, not the first link: AlayaCore's check is
+                    -- `m.BaseURL == ""`, so " " would pass IT — but
+                    -- `modelFromDraft` trims every text field before encoding,
+                    -- so what actually reaches the core is "". Refusing only the
+                    -- literally-empty string would therefore leave this exact
+                    -- hole: the user saves " ", the entry is trimmed to nothing,
+                    -- skipped, and deleted from model.conf.
+                    Expect.equal [ "model_name" ]
+                        (MC.draftProblems { clean | modelName = " \u{00a0} " } |> List.map Tuple.first)
+            , test "name is NOT required, because the core does not require it" <|
+                \_ ->
+                    -- The table mirrors `validateModel`, it does not outdo it:
+                    -- a nameless entry works, so blocking its save would be
+                    -- inventing a rule and would strand the user (they could not
+                    -- fix a base URL without also naming the model). `displayOf`
+                    -- is the answer to a blank name, not a refusal.
+                    Expect.equal [] (MC.draftProblems { clean | name = "" })
             ]
         , describe "a draft the codec cannot encode must not save"
             [ test "unparsable provider JSON is reported against its own field" <|
                 \_ ->
                     Expect.equal [ "reasoning_1" ]
-                        (MC.draftProblems { blank | reasoning1 = "{\"thinking\":" }
+                        (MC.draftProblems { clean | reasoning1 = "{\"thinking\":" }
                             |> List.map Tuple.first
                         )
             , test "…and the message stays a single readable line naming the reason" <|
                 \_ ->
-                    case MC.draftProblems { blank | reasoning1 = "{\"thinking\":" } of
+                    case MC.draftProblems { clean | reasoning1 = "{\"thinking\":" } of
                         [ ( _, message ) ] ->
                             Expect.all
                                 [ \m -> Expect.equal 1 (List.length (String.split "\n" m))
@@ -311,13 +402,13 @@ suite =
             , test "a non-numeric token limit is refused, not clamped to 0 (0 means unlimited)" <|
                 \_ ->
                     Expect.equal [ "context_limit" ]
-                        (MC.draftProblems { blank | contextLimit = "128k" }
+                        (MC.draftProblems { clean | contextLimit = "128k" }
                             |> List.map Tuple.first
                         )
             , test "clearing a provider-JSON block on purpose is allowed" <|
-                \_ -> Expect.equal [] (MC.draftProblems { blank | reasoning0 = "  " })
+                \_ -> Expect.equal [] (MC.draftProblems { clean | reasoning0 = "  " })
             , test "an empty reasoning_field is the provider default, not an error" <|
-                \_ -> Expect.equal [] (MC.draftProblems { blank | reasoningField = "" })
+                \_ -> Expect.equal [] (MC.draftProblems { clean | reasoningField = "" })
             , test "a bare null block collapses to unset (model.conf cannot hold it)" <|
                 \_ ->
                     Expect.equal ""
@@ -327,11 +418,11 @@ suite =
                             |> .reasoning0
                         )
             , test "provider JSON is not restricted to objects" <|
-                \_ -> Expect.equal [] (MC.draftProblems { blank | reasoning2 = "[1,2]" })
+                \_ -> Expect.equal [] (MC.draftProblems { clean | reasoning2 = "[1,2]" })
             , test "the tool-call mode accepts only what its control offers" <|
                 \_ ->
                     Expect.equal [ "serial_tool_calls" ]
-                        (MC.draftProblems { blank | serialToolCalls = "maybe" }
+                        (MC.draftProblems { clean | serialToolCalls = "maybe" }
                             |> List.map Tuple.first
                         )
             ]

@@ -182,6 +182,11 @@ for you:
   be deleted from your `model.conf` on the next save. Keys newer than this
   build are carried through untouched rather than dropped
   (`src-elm/src/Session/ModelConfig.elm`, checked by `make check-schema`).
+  The three fields AlayaCore *requires* (`protocol_type`, `base_url`,
+  `model_name`) cannot be saved empty for the same reason: a model missing one
+  is skipped by the sync and then deleted from your file, and the error only
+  arrives after the write. `name` is not required, so a nameless model stays
+  editable and simply shows its `model_name` in the list instead of a blank row.
 - `~/.alayaface/preset_order.conf` records the **display order** of the
   preset list (a JSON array of names) — reorder presets by dragging the
   ⠿ handle in **Preset Manager**; presets missing from the file are

@@ -1,0 +1,8 @@
+# Which model.conf keys AlayaCore requires, from validateModel()
+# (internal/agent/model_manager.go), mapped to json keys through the
+# modelConfig struct tags. An entry missing one of these is SKIPPED
+# by syncFromContent and then deleted from model.conf by
+# writeConfigFile, so a client that lets it through destroys it.
+base_url
+model_name
+protocol_type

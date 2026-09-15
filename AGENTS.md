@@ -87,6 +87,21 @@ repo and refreshes `testdata/alayacore-model-fields.txt`), add the field to
 know survive via `ModelInfo.extras`, so an unupdated AlayaFace degrades to
 "cannot edit" instead of "deletes it".
 
+**A second axis of the same check, because there is a second way to lose a
+model.** `make check-schema` also compares `validateModel`'s required keys
+against the fields marked `requiredField`/`requiredChoice`, both directions, and
+refreshes `testdata/alayacore-model-required.txt`. The consequence of an empty
+required field is not a failed save: `syncFromContent` skips entries that fail
+validation and `writeConfigFile` persists the SURVIVORS, so the entry is deleted
+from `model.conf` and the MODEL_VALIDATION reply only arrives afterwards to
+explain what already happened. Refusing at Save is the only place that can
+prevent it. The check is symmetric on purpose — marking a key required that the
+core does not require blocks saves the core would accept and can strand an entry
+(`name` is the live example: not required, so `displayOf` keeps a nameless model
+visible instead of the form refusing to save it). A helper whose name begins
+with `required` is what the grep reads, so renaming one is caught by the check
+rather than silently dropping a key from it.
+
 **`ui.conf` is the same rule in a second file.** `src-elm/src/App/UiConfig.elm`
 owns the whole layout-document schema (fields, `decode`, `encode`, `evict`,
 `version`, `maxStoredWindows`) and both backends pass the document through as

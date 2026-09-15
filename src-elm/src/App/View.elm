@@ -2838,7 +2838,7 @@ viewModelSelectorList sid session =
                 session.activeModelName
         , addTitle = "Add model"
         , itemId = \m -> m.id
-        , itemTitle = \m -> m.name
+        , itemTitle = MC.displayOf
         , itemSubtitle = MC.summaryOf
         , isActive = \m -> session.activeModelId == Just m.id
         , confirmOnClick = True
@@ -2988,7 +2988,7 @@ viewDefaultModelsList ed =
             ed.preset ++ " · " ++ name
         , addTitle = "Add model"
         , itemId = \m -> m.id
-        , itemTitle = \m -> m.name
+        , itemTitle = MC.displayOf
         , itemSubtitle = MC.summaryOf
         , isActive = \m -> ed.activeModelId == Just m.id
         , confirmOnClick = False

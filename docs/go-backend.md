@@ -128,7 +128,10 @@ One-way push (server → client), message format:
 > `src-elm/src/Session/ModelConfig.elm` (see `AGENTS.md`; guarded by
 > `make check-schema`). Adding a model field to AlayaCore therefore needs
 > no backend change and DOES need a ModelConfig one, or the field is
-> deleted from `model.conf` on the next save.
+> deleted from `model.conf` on the next save. That check has two axes now:
+> the key set, and which keys `validateModel` requires — an empty required
+> value deletes the whole entry, and neither axis can be verified from a
+> backend, because a backend never parses this payload.
 
 > Note: snake_case fields in Rust command returns (`tool_confirm`,
 > `builtin_tools`, `system_prompt`, `media_type`, ...) are serde defaults (no rename). Go JSON tags must
