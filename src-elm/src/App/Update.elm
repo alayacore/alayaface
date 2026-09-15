@@ -6267,6 +6267,26 @@ mcpKit =
     , draftIdOf = \d -> d.id
     , itemOfDraft = mcpFromDraft
     , updateDraftField = updateMcpDraftField
+    -- Deliberately empty, and the reason is a comparison rather than an
+    -- omission. The model editor DOES validate here (`MC.draftProblems`), and
+    -- it has to: `model_sync` replaces the list, AlayaCore skips entries that
+    -- fail `validateModel` and then persists the SURVIVORS, so a bad entry is
+    -- deleted from the file and the error only arrives afterwards.
+    --
+    -- `sync_default_mcp` is not that shape. Both backends validate the WHOLE
+    -- payload and refuse the write before anything is stored
+    -- (`handlers/mcp.go` / `commands/mcp.rs`, whose error strings
+    -- `check-backend-parity.sh` compares), so one bad server costs every
+    -- server in the payload its save — nothing is silently dropped. And the
+    -- refusal reaches the user on a page of its own with Retry / Back /
+    -- Discard (`Overlay.Selector`'s `ModelSelSyncFailed`), not in a status line
+    -- they might miss.
+    --
+    -- So a client-side copy would add no safety, and would be the THIRD
+    -- implementation of one rule — the drift risk is the real cost, and it is
+    -- the reason `check-backend-parity.sh` exists at all. If MCP validation ever
+    -- becomes partial (per-server skip), this hook is the place it starts being
+    -- worth filling, and `Kit.problems` already wires it end to end.
     , problems = \_ -> []
     , inputId = \_ -> "mcp-selector-input-default"
     , editorId = \_ -> "mcp-editor-server-default"

@@ -160,7 +160,13 @@ partial save is the documented way to change one field. Consequences differ: the
 replace group needs a byte-exact key-list pin (`tests/AsrConfigTest.elm` has one;
 dropping a field fails five tests), while `settings.conf` needs its tests about the
 round trip instead (a failed read must not blank the form; a save still sends the
-whole form so a stale editor cannot write half of it). `global.conf` holds one key
+whole form so a stale editor cannot write half of it). A **third** shape exists:
+`sync_default_mcp` replaces its file too, but both backends validate the whole
+payload and refuse before storing anything, so one bad server costs the save
+rather than deleting that server quietly — which is why the MCP editor has no
+client-side `problems` and the model editor must have one. Determine which of the
+three a file is before adding a field, and before copying a validator.
+`global.conf` holds one key
 today, `recursion_limit`, whose default `8` is triplicated — `DefaultRecursionLimit`
 (Go), `DEFAULT_RECURSION_LIMIT` (Rust), `defaultRecursionLimit`
 (`App/GlobalConfig.elm`) — and `scripts/check-backend-parity.sh` now compares all
