@@ -170,6 +170,23 @@ button/overlay restyle renamed the selectors they matched) purely because
 they were in no list anyone ran: CI executed 2 of 12 and `make e2e` 7.
 A script that nothing runs is not a test.
 
+**When an e2e suite fails on CI and passes locally, read the annotation before
+blaming your change.** `pt-e2e` has failed this job three times. On `111085b` the
+failure provably was not caused by the commit: `pt` never opens the Session
+Manager (no `.sel-page-item`, no `list_session_dirs` anywhere in the file), and
+that was the only thing the G-series change touched on its way. The two earlier
+failures (`c4a749e`, `0406cc5`) were Elm dispatcher refactors, which sit closer
+to pt's path, so they are not evidence of a pure flake — they are evidence the
+suite is sensitive to something. All three announced themselves as
+`e2e pt failed` and nothing else, while the detail sat in a job log that needs
+repo admin to fetch. The CI step now quotes the failing assertion into the
+annotation and puts the last 40 lines in the job summary — read that first. Do
+NOT "fix" a suite that flakes there and passes here by adding a retry: it is a
+real signal about a real environment, and re-running it until it goes quiet
+destroys the only evidence. If the same quoted assertion fails twice more, that
+is a bug worth chasing, and the usual shape to look for is a fixed `sleep()`
+guarding something asynchronous.
+
 **The two backends are behaviorally symmetric, not just name-symmetric.**
 `check-backend-parity.sh` only proves command names match; it cannot see a
 divergent error path, default, or byte range — those have been found by
