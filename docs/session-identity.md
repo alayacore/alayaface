@@ -1,10 +1,10 @@
 # Session identity — a name for a session, and how to find it again
 
-**Status: G0 and G1 landed (2026-09-14); G2 is HALF landed (2026-09-14) — a window's
-title bar now says the name, and the checks that keep it the only read path are in
-with mutation proof. The Session Manager still shows the 8-char id and there is no
-rename editor yet** (the unticked G2 rows below), so the name is currently written but
-not editable, and `G3` has not started. The ⚑
+**Status: the G-series is LANDED (G0 + G1 2026-09-14, G2 + G3 2026-09-15). A name is
+derived, stored, read back, folded into the model, shown in a window's title bar and a
+manager row, editable from that row, filterable, and proved end to end by
+`e2e/label-e2e.mjs`.** Every checklist box below is ticked; what is left is in
+"Later" (proposals, not plans). The ⚑
 questions were put to the human on 2026-09-14 and
 every one was answered **"as recommended"**, so SD-G12 … SD-G15 below are confirmed
 decisions. Do not re-litigate an SD row in code: change the row here first and say so
@@ -114,10 +114,17 @@ encoding), and every trigger that sends one is spelled `withLabelSave` in
 `App/Labels.elm`, so the whole write set is one grep — mirroring how
 `App/UiLayout.elm`'s `withUiSave` makes the layout writes greppable (SD16's lesson):
 
-1. `withLabelSave` on **commit of the rename editor** (Save button / Enter / blur) —
-   never per keystroke;
+1. `withLabelSave` on **commit of the rename editor** (Save button or Enter);
 2. the auto-label at the **end of the first prompt send** of a session that has no
    label and is not `auto: false`.
+
+**A correction G2 made while implementing row 1.** This list said "Save button /
+Enter / blur". Blur cannot be a commit trigger here: the editor has a Cancel button,
+and a blur fires *before* the click that caused it, so "Cancel" would save what the
+user typed and then report success. (`App.Presets` has the same editor shape and made
+the same call for the same reason.) The two remaining triggers are Save and Enter, and
+`e2e/label-e2e.mjs` §3 asserts that Cancel changes nothing on disk — the assertion that
+keeps a later reader from restoring the blur.
 
 Both go out through **`sync_session_label`, a command of its own** (SD-G16).
 **No new port for reading, one for writing**, and `transport.js` gains one
@@ -140,7 +147,18 @@ dumb-pipe handler like the `get/sync` pairs `ui.conf`, `asr.conf` and
 
 A failed rename write surfaces in `sessionManagerError` (the manager's existing error
 row). A failed auto-label write is logged and **not** shown: a name is not worth
-interrupting a send, and the user has already seen their own prompt.
+interrupting a send, and the user has already seen their own prompt. One boolean tells
+the two apart — a rename can only be started from the manager, and the manager covers
+the board, so no send is in flight while it is open.
+
+**Which session failed is stated, not guessed.** `sync_session_label`'s reply is
+`{ok, error}` from both backends, and neither knows anything about the UI, so
+`transport.js` echoes the request's `sessionId` into the reply it synthesises: the
+bridge is the one place that has seen the request and the outcome together. Without it
+the message can only say "a name failed to save" while the manager lists thirty
+sessions — SD-G16's mis-attribution, surviving in a narrower form. It is read
+optionally in `App.Labels.onSyncResult`, so an older bridge degrades to a vaguer
+message rather than a lost one.
 
 **Delete.** Nothing to prune: `delete_session_dir` removes the directory and the label
 goes with it. That is the same property `ui.conf` had to build a prune path to obtain,
@@ -163,7 +181,7 @@ broken.
 
 | # | Invariant | Enforcement |
 |---|---|---|
-| **INV-G1** | A label reaches any renderer through exactly one read path: `App/Labels.elm`'s `titleFor : Model -> String -> String` (label → `Session <n>` fallback lives *inside* it, because the fallback needs `sessionNums`, which is model state). No module outside `App/Labels.elm` reads `sessionLabels`. | A new section in `scripts/check-layout-invariants.sh` — same elm_code-comment-stripping trick, ratchet at 0 raw reads outside `App/Labels.elm`, and the `"Session " ++` construction legal in exactly one file (plus `App/Labels.elm`). That script's premise is already "a second read path means two models of what is on screen"; window titles are that model too. The `WIN_READS=0` case in it shows why the check must also assert the accessor still exists: a renamed field makes a grep pass vacuously. |
+| **INV-G1** | A label reaches any renderer through exactly one module: `App/Labels.elm`. It has FOUR accessors now — `titleFor` / `titleTooltip` for a window's bar, `rowName` / `rowTooltip` for a manager row, plus `filteredRows` (which rows a term keeps) and `openRename`'s prefill — and `titleFor`'s `Session <n>` fallback lives *inside* it, because the fallback needs `sessionNums`, which is model state. No module outside `App/Labels.elm` reads `sessionLabels`. **Two of the accessors disagree about the fallback on purpose** (`titleFor` → seat number, `rowName` → 8-char id, SD-G15), which is the strongest argument for the rule: the disagreement is a decision, and a decision duplicated across screens is a decision someone will "fix" by accident. | A new section in `scripts/check-layout-invariants.sh` — same elm_code-comment-stripping trick, ratchet at 0 raw reads outside `App/Labels.elm`, and the `"Session " ++` construction legal in exactly one file (plus `App/Labels.elm`). That script's premise is already "a second read path means two models of what is on screen"; window titles are that model too. The `WIN_READS=0` case in it shows why the check must also assert the accessor still exists: a renamed field makes a grep pass vacuously — the anti-vacuity list names all seven functions now, and both directions are mutation-verified below. |
 | **INV-G2** | Only `Session/Labels.elm` builds a label payload, and every write trigger is spelled `withLabelSave` (in `App/Labels.elm`, which is the only module allowed to name it). | `grep -c 'withLabelSave'` ratchet in the same script, mirroring how `withUiSave`'s write set is kept greppable (documented in `docs/solo-view.md`). |
 | **INV-G3** | A Session Manager row carries `data-session-id`, and it is the row's stable identity for tests. Tests do not select session rows by displayed text. | Three scripts match session rows by text today: `fork-e2e` (`includes(rootSid.slice(0, 8))`, `name === fid.slice(0, 8)`), `restart-e2e` and `solo-e2e`. The moment a label replaces that text they fail — which is the F-series' lesson about Phase 7's restyle, except that `e2e/scripts.txt` now runs them, so this fails loudly in G2 instead of quietly later. **`.sel-page-item-name` is shared by three renderers** (`Overlay/Selector.elm`'s generic list, the Session Manager, and the version list's `v0`/`v1`), so `model-fields-e2e` and `two-plans-e2e` match the *other* two and must NOT be migrated. G2 adds the attribute and moves those three lookups before any row's text can change. Same direction as `f5129fe` (chain lookups by data attributes, not text scanning). |
 | **INV-G4** | No keyboard entry point is added. `Enter` inside the rename field commits (it is typing in a focused field, not a chord); `Escape` closes the editor through the existing topmost-overlay stack in the `KeyDown` arm, above the per-session overlays; no new `Ctrl+*` is introduced anywhere. | `tests/EscapeOverlayTest.elm` gains the editor's slot in the precedence chain — that test is the existing pin for "which overlay Esc closes first", and a new global overlay silently missing from it is exactly how an Esc press would start closing the wrong thing. Justified by the README's own argument: "the keyboard is where typing and reflexes live". |
@@ -172,14 +190,16 @@ broken.
 
 ## Side findings (worth knowing before G0, cheap to fix inside it)
 
-- **`preset` is computed by both backends and dropped by the client.** `SessionDirInfo`
-  / `list_session_dirs` carry it; `sessionDirDecoder` is a `D.map2` over `id` +
-  `created_at`, and `App.Update.SessionDir` has no slot for it. So the manager cannot
-  show what preset a session had, at the cost of a byte per row. Either carry it and
-  show it, or stop computing it — carrying it and showing it on the row's sub-line is
-  two lines of Elm and answers a question users ask.
+- **`preset` was computed by both backends and dropped by the client — fixed in G2.**
+  `SessionDirInfo` / `list_session_dirs` carried it; `sessionDirDecoder` was a `D.map2`
+  over `id` + `created_at`, so the manager could not show what preset a session had, at
+  the cost of a byte per row. It is now a `D.map3` and the value rides the row's
+  sub-line (`2026-09-15 08:58 · Simple`). Read **leniently**: `decodeSessionDir`
+  returns Nothing when the decoder fails and the manager drops that row, so a
+  required-but-absent key would make a whole session vanish — a different trade from
+  `asr.conf`'s deliberately strict decode, and the reason the two look inconsistent.
 - The `e2e/*.mjs` row-lookup-by-text (INV-G3) is the same defect class `f5129fe` fixed
-  in `chain.js`.
+  in `chain.js`. **Done in G2's first commit**, before any row's text could change.
 
 ## Phases
 
@@ -333,7 +353,7 @@ own.** G0 touches no Elm; if you find yourself editing `src-elm/src` during G0, 
    about a kill counted as a pass.
 
 
-### G2 — the surfaces
+### G2 — the surfaces ✅ landed 2026-09-15
 
 - [x] **e2e contract first** (INV-G3): `data-session-id` on the session row, and migrate
       `solo-e2e` / `restart-e2e` / `fork-e2e`'s three text lookups to the attribute.
@@ -345,35 +365,123 @@ own.** G0 touches no Elm; if you find yourself editing `src-elm/src` during G0, 
       unreadable on its own). **The manager row is deliberately untouched here**: it
       still shows the 8-char id, and changes with the rename editor below, because
       SD-G15's fallback only makes sense once there is something to fall back from.
-- [ ] Manager: label column content, filter box (reuse `Session/Selector.elm`), sort by
+- [x] Manager: label column content, filter box (reuse `Session/Selector.elm`), sort by
       name while filtering, `✎ Rename`, the editor overlay, with its
       `open / close / input / commit` transitions as pure `Session/Labels.elm`
       functions returning `Label` + effects-as-data (the F-series' rule: ports stay in
-      `App/Update.elm`).
-- [ ] `KeyDown` stack slot + `EscapeOverlayTest` case (INV-G4).
+      `App/Update.elm`). **Landed as designed**, with three notes a later reader needs:
+      the transitions return a `Commit` (`Reject String` / `Named Label` / `Blank`)
+      rather than a `Label`, because "the field is empty" is a request to REMOVE the
+      name and is not itself a name; `commit` hands back a CLOSED editor, so
+      `App.Labels.commitRename` captures the identity before calling it (pinned by a
+      test, since that ordering is otherwise invisible); and clearing must `forget` the
+      entry rather than store `""` — a `Just ""` renders an empty title bar, which is
+      worse than a seat number. The filter calls `Session.Selector.filterItems`
+      unchanged, and the id is part of the match key so an unnamed session stays
+      findable. `preset` arrived with this commit too (the side finding above), and the
+      row's editor is reached by `data-rename-session` / `#session-rename-input`, never
+      by row text (INV-G3).
+- [x] `KeyDown` stack slot + `EscapeOverlayTest` case (INV-G4). The slot is ABOVE the
+      session manager: the editor is opened from a row, so whenever both are up the
+      editor is the topmost thing on screen. Two tests, and the second is the one that
+      matters — it asserts the PAIR `(editor closed, manager still open)`, because with
+      the slot deleted the manager's own handler also closes the editor, so "closes the
+      rename editor" alone stays green while Escape silently discards the list
+      underneath the box the user is typing in. Verified by mutation (`else if False` on
+      the slot → exactly that one test red, and only it). No new chord anywhere; Enter
+      commits inside the focused field, which is what INV-G4 permits.
 - [x] `make check-invariants` extended with INV-G1/G2 sections, including the
       "accessor still exists" anti-vacuity assertion. **Mutation-verified**, both
       directions: a raw `Dict.get id model.sessionLabels` added to a renderer in
       `App/View.elm` → red naming the file, line and site; renaming `titleFor` in
       `App/Labels.elm` → red with "fix this script, do not delete the check", which is
       the case that turns a vacuous grep pass into a failure (the `WIN_READS=0` lesson
-      above applied to this feature).
-- [ ] Gate: full verification. Commit + push ×3.
+      above applied to this feature). G2's second half grew the accessor list to seven
+      names (proved by renaming `rowName` and `filteredRows` → both red), and added the
+      INV-G5 guard: a `labelEditor` field appearing in `Session/Types.elm` is red, which
+      is the only way "this overlay stays global" survives someone meeting
+      `sessionIsWaiting` and wanting to help.
+- [x] Gate: full verification. Commit + push ×3.
 
-### G3 — prove it end to end, then distil
+#### What G2 taught
 
-- [ ] `e2e/label-e2e.mjs` (add the basename to `e2e/scripts.txt` — a script in no list
+1. **The invariant caught the commit that added the invariant.** The view grew a
+   caption, `("Session " ++ String.left 8 id)`, and `check-invariants` went red on the
+   spot — a second place building a session's display string, introduced by the change
+   whose whole subject was display strings. The fix was a `targetCaption` accessor in
+   `App/Labels`, and it is worth noting WHY that caption is not `rowName`: while you are
+   renaming a session, showing it its own name is circular, and showing it the fallback
+   you are about to replace is worse. So the editor is the one surface that prints the
+   raw identity, on purpose.
+2. **An Escape test that cannot fail.** "Escape closes the rename editor" passes even
+   with the editor's slot deleted, because the manager's own handler below it also
+   closes the editor. Only asserting the PAIR — editor gone, manager still open — can
+   see the difference, and the difference is the bug (Escape would discard the list
+   underneath the box the user is typing in). Mutation confirmed it: disabling the slot
+   reddens exactly one of the two tests.
+3. **A corrupt-file assertion needs a reader that has never seen the good value.** The
+   first draft wrote garbage over a label and checked the row fell back to the id
+   prefix — in the same page that had already read the real name. `foldListing` keeps
+   what this process believes (that precedence is the point of it), so the test would
+   have been green forever. It reloads the page now.
+4. **A pre-filled field is not a cleared field.** Driving the editor by setting
+   `.value = ''` in the DOM and then typing appended to the old name, because Elm only
+   hears about the field through its `input` event. The symptom looked like an encoder
+   bug two hops away. Clear through an event, or select-all.
+5. **Run the suite through `make e2e`, or rebuild first.** `make e2e` depends on `elm`;
+   `node e2e/label-e2e.mjs` alone serves whatever `src-elm/elm.js` was left from last
+   time, which produced a confident false reading ("the row is not named, there is no
+   Rename button") about code that was fine.
+6. **A list-page container makes a three-line form look broken.** `.sel-page-status`
+   carries `flex: 1` — right for centring "No saved sessions." in an empty card, wrong
+   for a hint line, which then swallowed the card and pushed Save/Cancel to its bottom
+   edge. The fix is one class (`.label-editor`) that pins the lines and centres the
+   group; the symptom was only visible in a screenshot, and no assertion would have
+   caught it.
+7. **SD-G16's attribution fix was incomplete, and only the second half showed it.** A
+   dedicated reply message says *what kind* of write failed; it does not say *which
+   session*. Over thirty rows, "could not save the session name" is a shrug. The
+   backends cannot answer that question (neither knows the UI), so `transport.js` now
+   echoes the request's `sessionId` into the reply it synthesises — the one place that
+   has seen request and outcome together. Read optionally, so an older bridge degrades
+   to a vaguer message rather than a lost one.
+8. **The filter rule was already duplicated, and adding a third caller was the
+   moment to notice.** `Session.Selector.filterItems` and a private
+   `Overlay.Selector.filterItems` were byte-identical, so the design's instruction to
+   "reuse it, do not re-derive it" could be satisfied while the codebase kept two
+   implementations of the thing being reused. `Overlay/Selector.elm` already imported
+   that module, so the merge was one import and a deletion (plus the `Fuzzy` import
+   that went unused with it — the residue that tells you a removal was real). Now
+   there is one rule with three callers, which is what that sentence in the design
+   meant.
+
+
+
+### G3 — prove it end to end, then distil ✅ landed 2026-09-15
+
+- [x] `e2e/label-e2e.mjs` (add the basename to `e2e/scripts.txt` — a script in no list
       is not a test): name a session → the title bar shows it → a **real backend
       restart** → the manager shows it → Resume → the title bar shows it again → rename
       → the file on disk is the new one → delete the session → the label file is gone
       with the directory. Plus the auto-label case: send a prompt, never name it, and
       the row says something readable.
-- [ ] `docs/manual-acceptance.md` §10 (Session identity): the human's checklist,
+      **Landed: 30 assertions, all reading the FILE back from disk**, because what no
+      elm-test here can see is that the port fired (G1's lesson 6) — the auto-label
+      assertion is literally "the file appeared after the send". Two additions the list
+      above did not ask for and both turned out to matter: **Cancel discards** (§3, the
+      only thing standing between a later reader and re-adding the blur-commit), and
+      **the corrupt-file case needs a fresh process** (§7) — this one's model already
+      believes the good name and `foldListing` keeps what it knows, so asserting the
+      fallback without reloading would have passed forever while proving nothing.
+      Restart means `SIGKILL` + a new server on a new port, not `page.reload`.
+- [x] `docs/manual-acceptance.md` §10 (Session identity): the human's checklist,
       including one deliberate corrupt-label-file case (SD-G9) and the unnamed-old-
       session case (SD-G8's known gap).
-- [ ] README + README.zh-CN: the "Windows and solo view" section gains the naming
-      paragraph, in sync, and the Known Limitations row about old unnamed sessions.
-- [ ] `AGENTS.md`: this document joins the tracked-design table; the config-file
+- [x] README + README.zh-CN: the "Windows and solo view" section gains the naming
+      paragraph, in sync, and the Known Limitations row about old unnamed sessions
+      (there is no such section in the READMEs — the row went into
+      `manual-acceptance.md`'s Known Limitations, which is where that list lives).
+- [x] `AGENTS.md`: this document joins the tracked-design table; the config-file
       paragraph gains `session.label.json` (it is **client-owned, whole-file replaced**
       — the fourth member of the replace group, and the one with no `extras` carry for
       per-document keys, like `asr.conf`).

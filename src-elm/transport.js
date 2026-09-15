@@ -530,14 +530,29 @@
     // is the only place a refusal is meaningful (SD-G16: this reply is its own
     // message so a failed name cannot be blamed on another writer).
     on("syncSessionLabel", function (data) {
+      // `sessionId` is echoed into the reply on purpose. This pipe decides
+      // nothing about the name — but a failure has to say WHICH session it was
+      // about, or Elm can only report "a name failed to save" while the manager
+      // lists thirty of them. The backends cannot do this (both answer with
+      // their own success shape, and the error path throws a bare message that
+      // `invoke` turns into a rejection here), and this is the one place that
+      // has seen the request and the outcome together.
       transport.invoke("sync_session_label", {
         sessionId: data.sessionId,
         document: data.document,
-      }).then(function () {
-        app.ports.onSessionLabelSync.send({ ok: true, error: "" });
+      }).then(function (res) {
+        app.ports.onSessionLabelSync.send({
+          ok: true,
+          error: "",
+          sessionId: data.sessionId,
+          written: res && res.written,
+          removed: !!(res && res.removed),
+        });
       }).catch(function (err) {
         app.ports.onSessionLabelSync.send({
-          ok: false, error: String((err && err.message) || err),
+          ok: false,
+          error: String((err && err.message) || err),
+          sessionId: data.sessionId,
         });
       });
     });

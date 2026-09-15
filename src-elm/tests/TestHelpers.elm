@@ -12,6 +12,7 @@ import Set
 import App.Types as AT
 import Plan.MetaScan as MetaScan
 import Session.Types as T
+import Session.Labels as SL
 
 
 initModelWithSession : AT.Model
@@ -34,6 +35,8 @@ initModelWithSession =
     , sessionNums = Dict.empty
     , nextSessionNum = 1
     , sessionLabels = Dict.empty
+    , labelEditor = SL.emptyEditor
+    , sessionLabelFilter = ""
     , windowPositions = Dict.empty
     , uiLayout = Dict.empty
     , uiTouch = 0

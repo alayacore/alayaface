@@ -2,6 +2,14 @@ module App.Labels exposing
     ( foldListing
     , titleFor
     , titleTooltip
+    , rowName
+    , rowTooltip
+    , targetCaption
+    , filteredRows
+    , openRename
+    , closeRename
+    , renameInput
+    , commitRename
     , autoNameOnFirstPrompt
     , withLabelSave
     , forget
@@ -39,16 +47,18 @@ repo already made, which is the point of making it.
 
 ## The one read path (INV-G1)
 
-`titleFor` is the only place that may read `sessionLabels` for display, and the
-only place the `Session <n>` fallback may be built. A second construction site
-would be a second model of what a window is called — the same defect
-`scripts/check-layout-invariants.sh` forbids for geometry, and that same file now
-enforces it (section 5), including the anti-vacuity assertion that the accessor
-still exists.
+Four accessors read `sessionLabels` and nothing else may: `titleFor` (a window's
+bar), `titleTooltip`, `rowName` (a Session Manager row) and `openRename`'s
+prefill. Two of them disagree about the fallback ON PURPOSE — a window falls back
+to its seat number, a list row falls back to its id prefix (SD-G15) — which is
+exactly why they must sit in one file: a screen is not allowed a private idea of
+what a session is called. The `Session <n>` construction lives here and
+`scripts/check-layout-invariants.sh` (section 5) fails any other module that
+builds it, along with any other read of the map and any second caller of the
+write port.
 
-What is still not here: the `✎` rename control and the manager's filter box
-(G2's second half). This half answers "which window is which", which is the
-question the feature exists for.
+The list rules live here too (`filteredRows`), because "which rows does this
+filter keep" is a question about names.
 -}
 
 import Dict exposing (Dict)
@@ -57,6 +67,7 @@ import Json.Encode as E
 import App.Types exposing (Model, Msg(..))
 import Ports
 import Session.Labels as L
+import Session.Selector as Sel
 
 
 {-| Fold a `list_session_dirs` reply into what this process believes.
@@ -108,6 +119,143 @@ seatOf model id =
     "Session "
         ++ String.fromInt
             (Maybe.withDefault 0 (Dict.get id model.sessionNums))
+
+
+{-| The NAME a Session Manager row shows. Two differences from `titleFor`, both
+of them the design's (SD-G15):
+
+  * an unnamed session falls back to its **8-character id**, not to `Session <n>`.
+    A seat number is reassigned by the next page load, so it cannot help you find
+    a session again — which is the only thing a list of closed sessions is for.
+    A differing hex prefix at least discriminates between rows.
+  * so the two accessors disagree on purpose, and both live HERE: one screen is
+    not allowed a private idea of what a session is called (INV-G1).
+
+Used by the row, the filter, the sort and the rename editor's title — four
+callers, one rule.
+-}
+rowName : Model -> String -> String
+rowName model id =
+    Maybe.withDefault (String.left 8 id) (Dict.get id model.sessionLabels)
+
+
+{-| The identity line inside the rename editor: WHICH session this box is about.
+
+Neither of the two name accessors can serve here. `rowName`/`titleFor` would
+print the name the user is in the middle of replacing — and for a session that
+has none, the very string they are being asked to change. So this is the raw
+identity prefix, which no rename can alter.
+
+It lives here rather than in the view because this module owns what a session is
+called (INV-G1) — and the check that enforces it caught this exact line being
+built in `App/View.elm` while it was being written. `App/Labels` is where a
+reader looks for every string a session can be shown by.
+-}
+targetCaption : String -> String
+targetCaption sessionId =
+    "Renaming " ++ String.left 8 sessionId
+
+
+{-| A row's tooltip: the name it shows plus the identity behind it. The id is
+always there because a NAME is the thing most likely to be ambiguous — two
+sessions can be called the same thing, and the hex is the only tiebreaker.
+-}
+rowTooltip : Model -> String -> String
+rowTooltip model id =
+    rowName model id ++ "\n" ++ id
+
+
+{-| The manager's list after the filter box has had its say.
+
+Blank term → the list untouched, which is the backends' order (modification time).
+Non-blank → name-matched, then sorted by name: an alphabetised result is the
+point of typing three letters, and leaving it in mtime order would make the
+filter feel like it had shuffled the board.
+
+Matching goes through `Session.Selector.filterItems`, the function the model
+selector already uses — trimming, lower-casing and "empty term means everything"
+are its behaviour, not a re-derivation of it (INV-G1's argument applies to list
+rules too: a second implementation is a second opinion). It had one, in
+`Overlay/Selector.elm`, byte-identical; that copy is gone and the module imports
+the original, which is why this is the third caller of ONE rule rather than the
+third caller of two rules that happen to agree today.
+
+The id is part of the key, so a user who knows the hex prefix and does not know
+the name is not filtered out of finding their own session.
+-}
+filteredRows : Model -> String -> (item -> String) -> List item -> List item
+filteredRows model term idOf items =
+    let
+        key =
+            \item -> rowName model (idOf item) ++ " " ++ idOf item
+
+        sorted =
+            Sel.filterItems key items term
+                |> List.sortBy (\item -> String.toLower (key item))
+    in
+    if String.trim term == "" then
+        items
+
+    else
+        sorted
+
+
+{-| Open the rename editor for one session (INV-G1: the prefill reads the name
+map, so it belongs in this module). Prefilled with the name if it has one and
+blank if not — NOT with the row's fallback, or renaming a session you never
+named would quietly name it `1a2b3c4d`.
+-}
+openRename : String -> Model -> Model
+openRename sessionId model =
+    { model
+        | labelEditor =
+            L.open sessionId (Maybe.withDefault "" (Dict.get sessionId model.sessionLabels))
+    }
+
+
+closeRename : Model -> Model
+closeRename model =
+    { model | labelEditor = L.close model.labelEditor }
+
+
+renameInput : String -> Model -> Model
+renameInput text model =
+    { model | labelEditor = L.input text model.labelEditor }
+
+
+{-| Commit the rename editor: Save, Enter, or a blur. The rules are
+`Session.Labels.commit`'s (this function only decides what the outcome costs);
+this is the second of the design's two write triggers, and `withLabelSave` below
+keeps it the same single port call as the first.
+
+Clearing is the interesting one. A blank field is a request to REMOVE the name,
+so the model must lose the entry rather than store `""`: `titleFor` reads
+presence, and a `Just ""` would render a title bar with nothing in it — the one
+outcome worse than a seat number. The port still fires, because the file has to
+go away on disk too (the backend deletes it, SD-G15's no-tombstone rule).
+-}
+commitRename : String -> Model -> ( Model, Cmd Msg )
+commitRename sessionsDir model =
+    let
+        target =
+            model.labelEditor.targetId
+
+        ( editor, outcome ) =
+            L.commit model.labelEditor
+
+        m1 =
+            { model | labelEditor = editor }
+    in
+    case outcome of
+        L.Reject _ ->
+            ( m1, Cmd.none )
+
+        L.Named label ->
+            withLabelSave sessionsDir target label ( m1, Cmd.none )
+
+        L.Blank ->
+            withLabelSave sessionsDir target { text = "", auto = False } ( m1, Cmd.none )
+                |> (\( m2, cmd ) -> ( forget target m2, cmd ))
 
 
 {-| One listing item → (identity, name), or Nothing when it carries no usable
@@ -227,18 +375,35 @@ forgetAll ids model =
 updated by `withLabelSave`, and re-reading the file to confirm the bytes would
 be a second source of truth for a value we just wrote.
 
-A failure is reported and dropped (design: an auto-label failure must not
-interrupt a send; G2 shows a rename failure in the manager's error row from its
-own call site). Logging is the only thing that happens here — the write is
-fire-and-forget otherwise, and a silent failure is how a name ends up missing
-with nobody able to say why.
+A failure is logged always, and SHOWN when the manager is open. That is the
+design's split (a failed rename belongs in `sessionManagerError`, a failed
+auto-label must not interrupt a send), and one boolean decides between them
+because a rename can only be started from the manager and the manager covers the
+board, so no send is in flight while it is up. The reply carries the identity
+this write was for (the bridge echoes it — `transport.js`), so the message names
+the session rather than saying "a name failed": with thirty rows on screen, an
+unattributed failure is the mis-attribution SD-G16 exists to prevent, just
+narrower.
 -}
-onSyncResult : E.Value -> Model -> (Model, Cmd Msg)
+onSyncResult : E.Value -> Model -> ( Model, Cmd Msg )
 onSyncResult raw model =
     case D.decodeValue syncDecoder raw |> Result.toMaybe of
-        Just { ok, error } ->
+        Just { ok, error, sessionId } ->
             if ok then
                 ( model, Cmd.none )
+
+            else if model.showSessionManager then
+                ( { model
+                    | sessionManagerError =
+                        Just
+                            ("Could not save the name of "
+                                ++ rowName model sessionId
+                                ++ ": "
+                                ++ error
+                            )
+                  }
+                , Ports.logWarn ("could not save the session name: " ++ error)
+                )
 
             else
                 ( model, Ports.logWarn ("could not save the session name: " ++ error) )
@@ -247,8 +412,11 @@ onSyncResult raw model =
             ( model, Cmd.none )
 
 
-syncDecoder : D.Decoder { ok : Bool, error : String }
+syncDecoder : D.Decoder { ok : Bool, error : String, sessionId : String }
 syncDecoder =
-    D.map2 (\ok error -> { ok = ok, error = error })
+    D.map3 (\ok error sessionId -> { ok = ok, error = error, sessionId = sessionId })
         (D.field "ok" D.bool)
         (D.maybe (D.field "error" D.string) |> D.map (Maybe.withDefault ""))
+        -- Absent on a reply from a bridge older than the rename editor, and
+        -- harmless then: the id is only used to name the session in the message.
+        (D.maybe (D.field "sessionId" D.string) |> D.map (Maybe.withDefault ""))

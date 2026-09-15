@@ -95,6 +95,9 @@ tests =
         , readTableAgreesWithTheBackends
         , autoNameGroup
         , policyGroup
+        , editorGroup
+        , renameGroup
+        , syncResultGroup
         , autoDecisionGroup
         , dispatcherGroup
         ]
@@ -603,6 +606,389 @@ dispatcherGroup =
                         AU.update AT.SendPrompt model
                 in
                 Expect.equal (Just "my name") (Dict.get "s1" m.sessionLabels)
+        ]
+
+
+{-| G2's rename editor: the pure transitions (`Session.Labels`) and what the
+policy module does with them (`App.Labels` + the dispatcher).
+-}
+editorGroup : Test
+editorGroup =
+    let
+        openFor =
+            L.open "s1"
+
+        outcomeText outcome =
+            case outcome of
+                L.Reject why ->
+                    "Reject " ++ why
+
+                L.Named label ->
+                    "Named " ++ label.text
+
+                L.Blank ->
+                    "Blank"
+
+        isNamed outcome =
+            case outcome of
+                L.Named _ ->
+                    True
+
+                _ ->
+                    False
+
+        commitText text =
+            openFor "" |> L.input text |> L.commit |> Tuple.second
+    in
+    describe "the rename editor"
+        [ test "open prefills with the name and starts with no refusal" <|
+            \_ ->
+                Expect.equal
+                    { show = True, targetId = "s1", input = "refactor the parser", error = "" }
+                    (openFor "refactor the parser")
+
+        , test "a keystroke drops the previous refusal" <|
+            \_ ->
+                -- That message described text that is no longer in the field;
+                -- leaving it up warns about a sentence the user already fixed.
+                openFor ""
+                    |> L.input "way too long"
+                    |> L.commit
+                    |> Tuple.first
+                    |> L.input "short now"
+                    |> .error
+                    |> Expect.equal ""
+
+        , test "normalising happens at COMMIT, not per keystroke" <|
+            \_ ->
+                -- `normalise` collapses whitespace runs. Running it while typing
+                -- would eat the space just typed to start the next word, so the
+                -- editor would fight the keyboard.
+                let
+                    typed =
+                        openFor "" |> L.input "  refactor   the\n  parser  "
+                in
+                Expect.all
+                    [ \ed -> Expect.equal "  refactor   the\n  parser  " ed.input
+                    , \ed -> Expect.equal (L.Named { text = "refactor the parser", auto = False }) (L.commit ed |> Tuple.second)
+                    ]
+                    typed
+
+        , test "a user's words are never auto again (SD-G8)" <|
+            \_ ->
+                -- `auto: true` means "replaceable by a derivation". Committing
+                -- the editor is the user speaking, whichever way the text got
+                -- into the field.
+                case commitText "typed by hand" of
+                    L.Named label ->
+                        Expect.equal False label.auto
+
+                    other ->
+                        Expect.fail ("expected a name, got " ++ outcomeText other)
+
+        , test "too long REFUSES instead of truncating" <|
+            \_ ->
+                -- Eating the end of a name silently is the same lie as a reader
+                -- that repairs values (SD-G9), and the user would only find out
+                -- later, from the title bar.
+                let
+                    ( ed, outcome ) =
+                        openFor "" |> L.input (String.repeat 121 "a") |> L.commit
+                in
+                Expect.all
+                    [ \() -> Expect.equal True ed.show
+                    , \() -> Expect.equal True (String.contains "120" ed.error)
+                    , \() -> Expect.equal True (String.contains "121" ed.error)
+                    , \() -> Expect.equal True (String.startsWith "Reject" (outcomeText outcome))
+                    ]
+                    ()
+
+        , test "the cap is in CHARACTERS, so 120 hanzi fits and 121 does not" <|
+            \_ ->
+                -- SD-G10's unit on the client side: a byte-measuring client would
+                -- refuse a Chinese name the store keeps.
+                Expect.all
+                    [ \() -> Expect.equal True (isNamed (commitText (String.repeat 120 "中")))
+                    , \() -> Expect.equal False (isNamed (commitText (String.repeat 121 "中")))
+                    ]
+                    ()
+
+        , test "blank is a REQUEST, not a no-op" <|
+            \_ ->
+                -- Emptying the field is the only way back to the id fallback
+                -- (SD-G15), so it commits as `Blank` rather than being refused.
+                Expect.equal L.Blank (commitText "   ")
+
+        , test "committing closes the editor — so the caller must keep the id" <|
+            \_ ->
+                -- A documented trap: `commit` returns a CLOSED editor, whose
+                -- targetId is gone, which is why `App.Labels.commitRename`
+                -- captures the identity before calling it.
+                Expect.equal L.emptyEditor (openFor "a name" |> L.commit |> Tuple.first)
+
+        , test "a refusal keeps the target, so a retry can still save" <|
+            \_ ->
+                openFor ""
+                    |> L.input (String.repeat 200 "b")
+                    |> L.commit
+                    |> Tuple.first
+                    |> .targetId
+                    |> Expect.equal "s1"
+
+        , test "a pasted multi-line prompt cannot become a title" <|
+            \_ ->
+                -- A title bar holds one line; `normalise` is what keeps that true.
+                case commitText "one\n\ntwo" of
+                    L.Named label ->
+                        Expect.equal "one two" label.text
+
+                    other ->
+                        Expect.fail ("expected a name, got " ++ outcomeText other)
+        ]
+
+
+{-| G2's manager surface: what a row is called, which rows a filter keeps, and
+what a commit costs.
+-}
+renameGroup : Test
+renameGroup =
+    let
+        sessionsDir =
+            "/home/u/.alayaface/sessions"
+
+        namedList pairs model =
+            List.foldl (\( id, text ) m -> { m | sessionLabels = Dict.insert id text m.sessionLabels }) model pairs
+
+        openAndCommit text model =
+            model
+                |> AL.openRename "s1"
+                |> AL.renameInput text
+                |> AL.commitRename sessionsDir
+    in
+    describe "naming a session from the manager"
+        [ test "rowName: the name when there is one" <|
+            \_ ->
+                AL.rowName (named True "refactor the parser" board) "s1"
+                    |> Expect.equal "refactor the parser"
+
+        , test "rowName: an unnamed row shows its id prefix, NOT its seat number" <|
+            \_ ->
+                -- SD-G15. The disagreement with `titleFor` is deliberate: a seat
+                -- number is reassigned on every page load, so it cannot name a
+                -- CLOSED session you are trying to find again. If these two ever
+                -- agree, one of them stopped being its screen's accessor.
+                let
+                    seated =
+                        { board | sessionNums = Dict.insert "s1" 7 board.sessionNums }
+                in
+                Expect.all
+                    [ \() -> Expect.equal "Session 7" (AL.titleFor seated "s1")
+                    , \() -> Expect.equal "s1" (AL.rowName seated "s1")
+                    ]
+                    ()
+
+        , test "rowName: the fallback is 8 characters of identity" <|
+            \_ ->
+                AL.rowName board "0f4c3a9e-72b1-4c0a-9f3d-11ab90c7d5e2"
+                    |> Expect.equal "0f4c3a9e"
+
+        , test "a blank filter leaves the backends' order alone" <|
+            \_ ->
+                -- Modification time is the order the list arrives in; sorting it
+                -- unasked would reshuffle the board on every open.
+                let
+                    model =
+                        namedList [ ( "s1", "zeta" ), ( "s2", "alpha" ) ] board
+                in
+                Expect.equal [ "s1", "s2" ] (AL.filteredRows model "" identity [ "s1", "s2" ])
+
+        , test "filtering keeps the name matches and puts them in name order" <|
+            \_ ->
+                let
+                    model =
+                        namedList
+                            [ ( "s1", "refactor the parser" )
+                            , ( "s2", "write docs" )
+                            , ( "s3", "aardvark" )
+                            ]
+                            board
+                in
+                -- Note the input order is NOT name order, so a pass here means
+                -- the sort ran rather than that the fixture happened to be
+                -- sorted. "ar" is a FUZZY subsequence (Fuzzy.fuzzyMatch, not a
+                -- regex): it hits "p-ar-ser" and "a-ardvark" and misses
+                -- "write docs", which has no `a` at all.
+                Expect.equal [ "s3", "s1" ] (AL.filteredRows model "ar" identity [ "s1", "s2", "s3" ])
+
+        , test "the sort ignores case, so a capitalised name does not jump the queue" <|
+            \_ ->
+                let
+                    model =
+                        namedList [ ( "s1", "Zebra" ), ( "s2", "apple" ) ] board
+                in
+                Expect.equal [ "s2", "s1" ] (AL.filteredRows model "a" identity [ "s1", "s2" ])
+
+        , test "an unnamed session is still findable by its id" <|
+            \_ ->
+                -- Someone who knows the hex and not the name must not be filtered
+                -- out of their own session.
+                AL.filteredRows board "0f4c" identity [ "0f4c3a9e-72b1" ]
+                    |> Expect.equal [ "0f4c3a9e-72b1" ]
+
+        , test "openRename prefills an unnamed session with NOTHING, not its id" <|
+            \_ ->
+                -- Otherwise renaming a session you never named would quietly
+                -- name it `1a2b3c4d` the first time Save was pressed.
+                Expect.equal "" ((AL.openRename "s1" board).labelEditor.input)
+
+        , test "openRename prefills a named session with its name" <|
+            \_ ->
+                Expect.equal "keep me"
+                    ((AL.openRename "s1" (named True "keep me" board)).labelEditor.input)
+
+        , test "type → commit names the session and closes the editor" <|
+            \_ ->
+                let
+                    ( m, _ ) =
+                        openAndCommit "the parser refactor" board
+                in
+                Expect.all
+                    [ \() -> Expect.equal (Just "the parser refactor") (Dict.get "s1" m.sessionLabels)
+                    , \() -> Expect.equal False m.labelEditor.show
+                    ]
+                    ()
+
+        , test "clearing REMOVES the entry rather than storing an empty name" <|
+            \_ ->
+                -- A `Just ""` in the map would render a title bar with nothing in
+                -- it: the one outcome worse than a seat number.
+                Expect.equal Nothing
+                    (Dict.get "s1" (Tuple.first (openAndCommit "" (named True "was named" board))).sessionLabels)
+
+        , test "clearing an unnamed session leaves the map empty all the same" <|
+            \_ ->
+                -- The write still goes out (a delete of a file that may exist on
+                -- disk and not in the model), but the model must not gain a
+                -- blank entry either way.
+                Expect.equal Nothing
+                    (Dict.get "s1" (Tuple.first (openAndCommit "  " board)).sessionLabels)
+
+        , test "a refused commit keeps the editor open and changes nothing" <|
+            \_ ->
+                let
+                    ( m, _ ) =
+                        openAndCommit (String.repeat 150 "z") (named True "keep me" board)
+                in
+                Expect.all
+                    [ \() -> Expect.equal True m.labelEditor.show
+                    , \() -> Expect.equal True (String.contains "120" m.labelEditor.error)
+                    , \() -> Expect.equal (Just "keep me") (Dict.get "s1" m.sessionLabels)
+                    ]
+                    ()
+
+        , test "the dispatcher's four arms reach the same outcome as the direct calls" <|
+            \_ ->
+                -- The arms are thin, but "thin" is where a wiring bug lives: an
+                -- arm that forgot to thread `homeDir` would open an editor whose
+                -- Save writes to the wrong path, and no function-level test sees
+                -- that.
+                let
+                    ( m, _ ) =
+                        board
+                            |> Tuple.first << AU.update (AT.OpenSessionRename "s1")
+                            |> Tuple.first << AU.update (AT.SessionRenameInput "via the dispatcher")
+                            |> AU.update AT.CommitSessionRename
+                in
+                Expect.all
+                    [ \() -> Expect.equal "s1" ((AL.openRename "s1" board).labelEditor.targetId)
+                    , \() -> Expect.equal (Just "via the dispatcher") (Dict.get "s1" m.sessionLabels)
+                    ]
+                    ()
+
+        , test "closing the manager closes the editor with it" <|
+            \_ ->
+                -- The editor is opened FROM a row: a list that is gone cannot
+                -- host a box editing one of its rows.
+                AU.update AT.CloseSessionManager
+                    (Tuple.first (AU.update (AT.OpenSessionRename "s1") board))
+                    |> Tuple.first
+                    |> .labelEditor
+                    |> .show
+                    |> Expect.equal False
+        ]
+
+
+{-| The manager's error row — SD-G16's payoff, that this reply can be attributed.
+-}
+syncResultGroup : Test
+syncResultGroup =
+    let
+        reply ok error sessionId =
+            E.object
+                [ ( "ok", E.bool ok )
+                , ( "error", E.string error )
+                , ( "sessionId", E.string sessionId )
+                ]
+
+        openManager model =
+            { model | showSessionManager = True }
+
+        errorOf m =
+            Maybe.withDefault "" m.sessionManagerError
+    in
+    describe "a name that failed to save"
+        [ test "success changes nothing (the model already believes it)" <|
+            \_ ->
+                let
+                    ( m, _ ) =
+                        AL.onSyncResult (reply True "" "s1") (openManager (named True "mine" board))
+                in
+                Expect.all
+                    [ \() -> Expect.equal Nothing m.sessionManagerError
+                    , \() -> Expect.equal (Just "mine") (Dict.get "s1" m.sessionLabels)
+                    ]
+                    ()
+
+        , test "a failure with the manager open says WHICH session failed" <|
+            \_ ->
+                -- A rename can only start from the manager, and the manager
+                -- covers the board (so no send is in flight while it is up). The
+                -- reply carries the identity, so the message names the session
+                -- instead of saying "a name failed" over thirty rows.
+                let
+                    ( m, _ ) =
+                        AL.onSyncResult (reply False "read-only store" "s1")
+                            (openManager (named True "refactor the parser" board))
+                in
+                Expect.all
+                    [ \() -> Expect.equal True (String.contains "refactor the parser" (errorOf m))
+                    , \() -> Expect.equal True (String.contains "read-only store" (errorOf m))
+                    , \() -> Expect.equal True (m.sessionManagerError /= Nothing)
+                    ]
+                    ()
+
+        , test "a failure with the manager closed is logged, not shown" <|
+            \_ ->
+                -- An auto-label failure must never interrupt a send: the user has
+                -- already seen their own prompt, and a name is not worth a modal.
+                let
+                    ( m, _ ) =
+                        AL.onSyncResult (reply False "read-only store" "s1") board
+                in
+                Expect.equal Nothing m.sessionManagerError
+
+        , test "a reply with no sessionId still reports the failure" <|
+            \_ ->
+                -- `sessionId` is read leniently: an older transport.js does not
+                -- echo it, and then the name falls back to the id prefix. A worse
+                -- message, not a lost one.
+                let
+                    ( m, _ ) =
+                        AL.onSyncResult
+                            (E.object [ ( "ok", E.bool False ), ( "error", E.string "nope" ) ])
+                            (openManager board)
+                in
+                Expect.equal True (String.endsWith "nope" (errorOf m))
         ]
 
 

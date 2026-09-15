@@ -38,6 +38,7 @@ import Plan.Runner as R
 import Plan.Meta as PM
 import Plan.Cascade as PC
 import Session.Selector as Sel
+import Session.Labels as SL
 import Session.Types as T
 import App.NodeConnection as NC
 import App.Pointer as P
@@ -92,6 +93,18 @@ type alias Model =
     -- This is display metadata with its own file: no spawn decision, resume
     -- path, or plan behaviour reads it (INV-G6).
     , sessionLabels : Dict String String
+      -- The GLOBAL rename editor (G2, `Session.Labels.Editor`): one at a time,
+      -- opened from a Session Manager row. Global rather than per-session
+      -- because that is where a name is chosen for a session that is not open —
+      -- and because INV-G5 keeps it out of `App.Windows.sessionIsWaiting`,
+      -- whose count means "a prompt is waiting on this window", not "a prompt
+      -- is on screen right now".
+    , labelEditor : SL.Editor
+    , sessionLabelFilter : String
+      -- Text in the Session Manager's filter box. Model state rather than DOM
+      -- state so that (a) the list it filters is testable without a browser and
+      -- (b) reopening the manager starts from a clean filter, the way
+      -- `sessionManagerError` is reset on open.
     , windowPositions : Dict String WindowPos
     -- LAYOUT STORE (F3, ui.conf). TWO dictionaries, TWO lifetimes:
     -- `windowPositions` is the board that exists now — it loses an entry the
@@ -567,6 +580,16 @@ type Msg
       -- (SD-G16 — `fs_write_file_text`'s reply cannot tell the two writers
       -- apart, and a name that silently never saved is the bug this avoids).
     | SessionLabelSyncResult E.Value
+      -- The rename editor (G2). Four messages, no more: open carries the target
+      -- identity, input is a keystroke, commit is Save/Enter/blur, close is the
+      -- backdrop, the ✕ and Escape. `CommitSessionRename` takes no argument so
+      -- the SAME handler serves Enter, the Save button and a blur — three
+      -- triggers, one rule (Session.Labels.commit).
+    | OpenSessionRename String
+    | CloseSessionRename
+    | SessionRenameInput String
+    | CommitSessionRename
+    | SessionLabelFilter String
       -- Voice input (recording / transcription, per-session)
     | VoiceError E.Value
     | AsrResult E.Value

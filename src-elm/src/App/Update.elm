@@ -2898,14 +2898,51 @@ update msg model =
 
         -- Session Manager
         OpenSessionManager ->
-            ( { model | showSessionManager = True, showGlobalMenu = False, sessionManagerError = Nothing }
+            ( { model
+                | showSessionManager = True
+                , showGlobalMenu = False
+                , sessionManagerError = Nothing
+                , sessionLabelFilter = ""
+              }
             , Ports.listSessionDirs {}
             )
 
         CloseSessionManager ->
-            ( { model | showSessionManager = False }
+            -- `closeRename` rather than a record update: the editor's state is
+            -- App/Labels' to own, even when the reason it dies is that the
+            -- manager above it closed. The filter resets for the same reason
+            -- `sessionManagerError` already did — a reopened manager shows the
+            -- board, not last visit's search.
+            ( Labels.closeRename { model | showSessionManager = False, sessionLabelFilter = "" }
             , focusInput model
             )
+
+        -- The rename editor (G2). Four arms, and none of them names the write
+        -- port: `commitRename` in App/Labels is the only producer of a
+        -- `sync_session_label` (INV-G2), which is what keeps "when is a name
+        -- saved" a one-module answer.
+        OpenSessionRename sid ->
+            -- `focusAfterDelay`, the same helper the file picker and model
+            -- selector use (docs/overlay-focus.md): the input does not exist
+            -- until this Msg's view has rendered, so a `Dom.focus` issued in the
+            -- same tick looks for an element that is not there yet. Without it
+            -- the editor is reachable by mouse only, and SD11 asks a new global
+            -- overlay for a keyboard path in as well as an Escape path out.
+            ( Labels.openRename sid model
+            , focusAfterDelay "session-rename-input"
+            )
+
+        CloseSessionRename ->
+            ( Labels.closeRename model, Cmd.none )
+
+        SessionRenameInput text ->
+            ( Labels.renameInput text model, Cmd.none )
+
+        CommitSessionRename ->
+            Labels.commitRename (PU.sessionsDir model.homeDir) model
+
+        SessionLabelFilter term ->
+            ( { model | sessionLabelFilter = term }, Cmd.none )
 
         -- C4: version browsing (read-only view of historical versions;
         -- D8 does not materialize).
@@ -4790,6 +4827,17 @@ update msg model =
                                 if model.ctxVisible then
                                     ( { model | ctxVisible = False }, Cmd.none )
 
+                                else if model.labelEditor.show then
+                                    -- Above the manager on purpose: the editor
+                                    -- is opened FROM a manager row, so it is the
+                                    -- topmost thing on screen whenever both are
+                                    -- up, and Escape must not close the list
+                                    -- underneath the box the user is typing in
+                                    -- (INV-G4). Committing is Save/Enter/blur's
+                                    -- job; Escape discards.
+
+                                    update CloseSessionRename model
+
                                 else if model.showSessionManager then
                                     update CloseSessionManager model
 
@@ -5682,14 +5730,28 @@ updateAfterConfirm model sid =
 type alias SessionDir =
     { id : String
     , createdAt : String
+      -- Both backends have computed this for every row since before the G-series
+      -- (it is read out of the dir's own session.spawn.json); the client decoded
+      -- `D.map2` and dropped it, so the manager could not answer "which preset
+      -- was this" while the byte was already on the wire. Carried now, and
+      -- shown on the row's sub-line. NOT the label: a name has exactly one home
+      -- in the model (`sessionLabels`, INV-G1) and a second copy in this list
+      -- would be a second opinion about what a session is called.
+    , preset : String
+      -- Read LENIENTLY on purpose, unlike the strict `asr.conf` decode:
+      -- `decodeSessionDir` returns Nothing when this decoder fails, and the
+      -- manager drops a row whose value it cannot decode. A required-but-absent
+      -- key would therefore make a session vanish from the list — losing a
+      -- preset from a sub-line is not worth that.
     }
 
 
 sessionDirDecoder : D.Decoder SessionDir
 sessionDirDecoder =
-    D.map2 SessionDir
+    D.map3 SessionDir
         (D.field "id" D.string)
         (D.field "created_at" D.string)
+        (D.maybe (D.field "preset" D.string) |> D.map (Maybe.withDefault ""))
 
 
 decodeSessionDir : E.Value -> Maybe SessionDir

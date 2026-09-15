@@ -21,6 +21,7 @@ import App.Labels as Labels
 import App.Windows as Win
 import Icons
 import Session.Types as T
+import Session.Labels as SL
 import Session.ModelConfig as MC
 import Session.Selector as Sel exposing (Page(..))
 import Session.FilePicker as FP
@@ -117,6 +118,11 @@ view model =
         , viewGlobalMenu model
         , viewContextMenu model
         , viewSessionManagerOverlay model
+        -- AFTER the manager on purpose: it is opened from a row, so it is
+        -- always drawn on top of the list (INV-G4 gives it the matching slot in
+        -- the Escape chain, and the two orders must agree or Esc closes the list
+        -- that is behind the box you are typing in).
+        , viewSessionRenameOverlay model
         , viewVersionOverlays model
         , viewPresetManagerOverlay model
         , viewDefaultModelsEditorOverlay model
@@ -710,9 +716,19 @@ viewSessionManagerOverlay model =
             -- directories with a refs record (registered by plain creation
             -- and by the restart scan). Work-copy directories
             -- (sessions/<forkId>/) are not session identities and are not shown.
-            dirs =
+            roots =
                 List.filterMap decodeSessionDir model.sessionDirs
                     |> List.filter (\d -> Dict.member d.id model.sessionRefs)
+
+            -- G2: the filter and the name-ordering are `App/Labels`' business
+            -- (INV-G1 — a screen may not hold its own idea of what a session is
+            -- called, and "which rows does this term keep" is a question about
+            -- names).
+            dirs =
+                Labels.filteredRows model model.sessionLabelFilter .id roots
+
+            filtering =
+                String.trim model.sessionLabelFilter /= ""
         in
         viewOverlay
             { onClose = CloseSessionManager
@@ -728,8 +744,29 @@ viewSessionManagerOverlay model =
 
                     Nothing ->
                         Html.text ""
-                , if List.isEmpty dirs then
+
+                -- The filter box. A name is only worth having if a long list can
+                -- be searched by it: "find it again" is exactly what the
+                -- hex-prefix list could never do.
+                , Html.div [ Attr.class "sel-page-input-row" ]
+                    [ Html.input
+                        [ Attr.class "input"
+                        , Attr.id "session-filter-input"
+                        , Attr.type_ "text"
+                        , Attr.placeholder "Filter by name…"
+                        , Attr.value model.sessionLabelFilter
+                        , Ev.onInput SessionLabelFilter
+                        ]
+                        []
+                    ]
+                , if List.isEmpty roots then
                     Html.div [ Attr.class "sel-page-status" ] [ Html.text "No saved sessions." ]
+
+                  else if List.isEmpty dirs then
+                    -- A different sentence from the one above, because the next
+                    -- action differs: empty list vs wrong term.
+                    Html.div [ Attr.class "sel-page-status" ]
+                        [ Html.text "No session matches that filter." ]
 
                   else
                     Html.div [ Attr.class "sel-page-list" ]
@@ -740,6 +777,24 @@ viewSessionManagerOverlay model =
 
                                 canResume =
                                     not active
+
+                                versionCount =
+                                    List.length (Maybe.withDefault [] (Maybe.map .versions (Dict.get dir.id model.sessionRefs)))
+
+                                -- The preset rides the sub-line (G0's side
+                                -- finding: both backends computed it and the
+                                -- client decoded it away). Appended rather than
+                                -- always present, because a session created
+                                -- before the field existed has no preset and a
+                                -- row ending in "· " reads as broken.
+                                sub =
+                                    formatEpoch dir.createdAt
+                                        ++ (if dir.preset == "" then
+                                                ""
+
+                                            else
+                                                " · " ++ dir.preset
+                                           )
                             in
                             Html.div
                                 [ Attr.class "sel-page-item"
@@ -757,11 +812,18 @@ viewSessionManagerOverlay model =
                                 [ Html.div [ Attr.class "sel-page-item-main" ]
                                     [ Html.span
                                         [ Attr.class "sel-page-item-name"
-                                        , Attr.title dir.id
+                                        -- SD-G15: the name, or the 8-char id when
+                                        -- the session has none. NOT the window's
+                                        -- `Session <n>` fallback: a seat number is
+                                        -- reassigned per page load, so it cannot
+                                        -- help you find a closed session again —
+                                        -- and the two accessors disagreeing in one
+                                        -- module is the point of INV-G1.
+                                        , Attr.title (Labels.rowTooltip model dir.id)
                                         ]
-                                        [ Html.text (String.left 8 dir.id) ]
+                                        [ Html.text (Labels.rowName model dir.id) ]
                                     , Html.span [ Attr.class "sel-page-item-sub" ]
-                                        [ Html.text (formatEpoch dir.createdAt) ]
+                                        [ Html.text sub ]
                                     , if active then
                                         Html.span [ Attr.class "sel-page-item-sub sel-page-item-active" ] [ Html.text "· active" ]
 
@@ -784,10 +846,17 @@ viewSessionManagerOverlay model =
                                         [ Html.text "Resume" ]
                                     , Html.button
                                         [ Attr.class "btn btn-sm"
+                                        , Ev.onClick (OpenSessionRename dir.id)
+                                        , Attr.attribute "data-rename-session" dir.id
+                                        , Attr.title "Name this session"
+                                        ]
+                                        [ Html.text "✎ Rename" ]
+                                    , Html.button
+                                        [ Attr.class "btn btn-sm"
                                         , Ev.onClick (OpenVersionList dir.id)
                                         , Attr.title "Browse this session's versions (read-only history)"
                                         ]
-                                        [ Html.text ("Versions (" ++ String.fromInt (List.length (Maybe.withDefault [] (Maybe.map .versions (Dict.get dir.id model.sessionRefs)))) ++ ")") ]
+                                        [ Html.text ("Versions (" ++ String.fromInt versionCount ++ ")") ]
                                     , Html.button
                                         [ Attr.class "btn btn-danger btn-sm"
                                         , Ev.onClick (DeleteSession dir.id)
@@ -798,6 +867,104 @@ viewSessionManagerOverlay model =
                                 ]
                             ) dirs
                         )
+                , if filtering then
+                    -- How many rows the filter hid, so a search that left one row
+                    -- on screen does not read as a lost board.
+                    Html.div [ Attr.class "sel-page-status sel-page-status-fixed" ]
+                        [ Html.text (String.fromInt (List.length dirs) ++ " of " ++ String.fromInt (List.length roots) ++ " sessions") ]
+
+                  else
+                    Html.text ""
+                ]
+            ]
+    else
+        Html.text ""
+
+
+{-| The rename editor (G2, `Session.Labels.Editor`): one name at a time, opened
+from a Session Manager row.
+
+Two things it deliberately does not do:
+
+  * **commit on blur.** A blur-commit and a Cancel button cannot coexist: the
+    blur fires first, so Cancel would save what you typed. The design listed
+    blur as a third trigger; it is Save / Enter only, and the design says so now.
+  * **disable Save when the field is empty.** That is the preset manager's rule,
+    and copying it here would make the name impossible to take back — an empty
+    field is how SD-G15's fallback is restored, so the button says which of the
+    two it is about to do.
+-}
+viewSessionRenameOverlay : Model -> Html Msg
+viewSessionRenameOverlay model =
+    if model.labelEditor.show then
+        let
+            ed =
+                model.labelEditor
+
+            blank =
+                String.trim ed.input == ""
+        in
+        viewOverlay
+            { onClose = CloseSessionRename
+            , onBack = Nothing
+            , title = "Name this session"
+            }
+            [ Html.div [ Attr.class "sel-page label-editor" ]
+                [ Html.div
+                    [ Attr.class "sel-page-status sel-page-status-fixed"
+                    , Attr.title ed.targetId
+                    ]
+                    [ Html.text (Labels.targetCaption ed.targetId) ]
+                , if ed.error == "" then
+                    Html.text ""
+
+                  else
+                    Html.div [ Attr.class "sel-page-status sel-page-status-error" ] [ Html.text ed.error ]
+                , Html.div [ Attr.class "sel-page-input-row" ]
+                    [ Html.input
+                        [ Attr.class "input"
+                        , Attr.id "session-rename-input"
+                        , Attr.type_ "text"
+                        , Attr.maxlength SL.maxLabelChars
+                        , Attr.placeholder "e.g. refactor the parser"
+                        , Attr.value ed.input
+                        , Ev.onInput SessionRenameInput
+                        , Ev.preventDefaultOn "keydown" <|
+                            D.map2
+                                (\key shift ->
+                                    if key == "Enter" && not shift then
+                                        ( CommitSessionRename, True )
+
+                                    else
+                                        ( NoOp, False )
+                                )
+                                (D.field "key" D.string)
+                                (D.field "shiftKey" D.bool)
+                        ]
+                        []
+                    ]
+                , Html.div [ Attr.class "sel-page-status" ]
+                    [ Html.text
+                        (if blank then
+                            "Leave it clear to fall back to this session's id. A name is at most 120 characters."
+
+                         else
+                            "Enter or Save names this session. A name is at most 120 characters."
+                        )
+                    ]
+                , Html.div [ Attr.class "confirm-page-buttons" ]
+                    [ Html.button
+                        [ Attr.class "btn btn-primary"
+                        , Ev.onClick CommitSessionRename
+                        , Attr.attribute "data-rename-commit" ""
+                        ]
+                        [ Html.text (if blank then "Clear name" else "Save") ]
+                    , Html.button
+                        [ Attr.class "btn"
+                        , Ev.onClick CloseSessionRename
+                        ]
+                        [ Html.text "Cancel" ]
+                    ]
                 ]
             ]
     else

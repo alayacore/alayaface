@@ -13,13 +13,15 @@ rendering callbacks. The page shell handles the editor/sync/loading
 pages so every selector gets identical behavior.
 -}
 
-import Fuzzy
 import Html exposing (Html)
 import Html.Attributes as Attr
 import Html.Events as Ev
 import Icons
 import Json.Decode as D
-import Session.Selector exposing (Page(..))
+-- `filterItems` is imported rather than restated: this file had a private copy
+-- byte-identical to `Session.Selector`'s, which is the second-model-of-the-screen
+-- defect AGENTS.md forbids for geometry, applied to a list rule.
+import Session.Selector exposing (Page(..), filterItems)
 
 
 -- Page shell (list / edit / sync prompt / syncing / failed / loading)
@@ -264,22 +266,6 @@ viewItem idx item cfg =
 
 
 -- Internal helpers
-
-filterItems : (item -> String) -> List item -> String -> List item
-filterItems search items term =
-    let
-        trimmed =
-            String.trim term
-
-        needle =
-            String.toLower trimmed
-    in
-    if String.isEmpty trimmed then
-        items
-
-    else
-        List.filter (\m -> Fuzzy.fuzzyMatch needle (String.toLower (search m))) items
-
 
 statusPage : String -> Bool -> String -> Html msg
 statusPage _ dirty status =

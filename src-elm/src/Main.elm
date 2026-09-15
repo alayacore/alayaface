@@ -18,6 +18,7 @@ import App.AsrConfig as AS
 import App.Presets as PS
 import App.SettingsConfig as SC
 import App.GlobalConfig as GC
+import Session.Labels as SL
 import App.Update
 import App.View
 import Plan.MetaScan as MetaScan
@@ -55,6 +56,8 @@ init _ =
       , sessionNums = Dict.empty
       , nextSessionNum = 1
       , sessionLabels = Dict.empty
+      , labelEditor = SL.emptyEditor
+      , sessionLabelFilter = ""
       , windowPositions = Dict.empty
       , uiLayout = Dict.empty
       , uiTouch = 0

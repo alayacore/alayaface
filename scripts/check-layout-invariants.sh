@@ -196,10 +196,13 @@ done
 # name, or the reverse).
 #
 #   INV-G1  reads of `sessionLabels` and the `Session <n>` construction live only
-#           in App/Labels.elm (titleFor / titleTooltip).
+#           in App/Labels.elm (titleFor / titleTooltip for a window's bar,
+#           rowName / rowTooltip / filteredRows for a manager row).
 #   INV-G2  `Ports.syncSessionLabel` — the write — is called from exactly one
 #           module, App/Labels.elm, so "when is a name saved" stays one grep
 #           (the `withUiSave` rule, applied to a name).
+#   INV-G5  the rename editor stays global — no per-session field, so it can
+#           never join `sessionIsWaiting` by accident.
 #
 # Writes to the field stay legal where a record must be built whole
 # (App/Types' declaration, Main.elm's init, tests/TestHelpers.elm's init), and
@@ -265,13 +268,29 @@ fi
 
 # Anti-vacuity (the lesson of the `WIN_READS -eq 0` branch above): a grep that
 # matches nothing because the accessor was renamed passes as "no stray reads".
-# Assert the accessors are still the real ones.
-for fn in titleFor foldListing withLabelSave autoNameOnFirstPrompt; do
-  if ! grep -qE "^${fn} :|^${fn} :" src-elm/src/App/Labels.elm; then
+# Assert the accessors are still the real ones. G2's second half added the row
+# side, so the list names both screens' readers: `titleFor`/`titleTooltip` for a
+# window's bar, `rowName`/`rowTooltip` for a manager row, `filteredRows` for the
+# filter, and the four editor steps.
+for fn in titleFor titleTooltip foldListing withLabelSave autoNameOnFirstPrompt \
+          rowName rowTooltip filteredRows openRename closeRename renameInput commitRename; do
+  if ! grep -qE "^${fn} :" src-elm/src/App/Labels.elm; then
     echo "✗ INV-G1/G2 check broken: $fn is gone from src-elm/src/App/Labels.elm — fix this script, do not delete the check"
     fail=1
   fi
 done
+
+# INV-G5: the rename editor is a GLOBAL overlay, so it must never join
+# `App.Windows.sessionIsWaiting` — that counter means "a hidden window has a
+# prompt waiting in it", and a global editor is by definition on screen right
+# now. Adding it would make solo report a window that is not blocked.
+# The counter is built from `T.SessionState` fields, so the way an editor gets
+# in there is by growing a per-session field: watch for the state, not the call.
+if grep -qn "labelEditor" src-elm/src/Session/Types.elm; then
+  echo "✗ INV-G5: Session/Types.elm grew a labelEditor field — the rename editor is global (docs/session-identity.md INV-G5) and must not join sessionIsWaiting"
+  grep -n "labelEditor" src-elm/src/Session/Types.elm | sed 's/^/      /'
+  fail=1
+fi
 
 # ─── Result ──────────────────────────────────────────────────────────
 

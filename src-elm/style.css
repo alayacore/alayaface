@@ -1938,6 +1938,26 @@ body {
   flex: none;
 }
 
+/* The rename editor (G2, docs/session-identity.md): a three-line FORM, dropped
+   into a container built for a scrolling LIST. `.sel-page-status` flexes to
+   fill its parent — right for "No saved sessions.", wrong for a hint, which
+   would then swallow the card and push Save/Cancel to its bottom edge. Pin the
+   lines and centre the group instead. */
+.label-editor {
+  justify-content: center;
+  gap: 10px;
+}
+
+.label-editor .sel-page-status,
+.label-editor .sel-page-input-row,
+.label-editor .confirm-page-buttons {
+  flex: none;
+}
+
+.label-editor .confirm-page-buttons {
+  margin-top: 6px;
+}
+
 .sel-page-status-error {
   color: #f87171;
   flex: none;

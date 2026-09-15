@@ -45,6 +45,18 @@ withPresetManager m0 =
     { m0 | presetManager = { pm | show = True } }
 
 
+withRenameEditor : AT.Model -> AT.Model
+withRenameEditor m0 =
+    -- The state a row's ✎ produces: the manager is up (that is where the editor
+    -- is opened from) and the editor sits on top of it. Written as a literal
+    -- rather than by calling `App.Labels.openRename`, so this file pins the
+    -- Escape chain's INPUT and cannot quietly follow a change in that function.
+    { m0
+        | showSessionManager = True
+        , labelEditor = { show = True, targetId = "s1", input = "", error = "" }
+    }
+
+
 withFilePickerOpen : T.SessionState -> T.SessionState
 withFilePickerOpen s =
     let
@@ -57,7 +69,28 @@ withFilePickerOpen s =
 tests : Test
 tests =
     describe "Escape closes overlays"
-        [ test "closes the session manager" <|
+        [ test "closes the rename editor" <|
+            \_ ->
+                initModelWithSession
+                    |> withRenameEditor
+                    |> escape
+                    |> .labelEditor
+                    |> .show
+                    |> Expect.equal False
+        , test "closes the rename editor BEFORE the manager it was opened from" <|
+            \_ ->
+                -- INV-G4's real content. The editor is opened from a Session
+                -- Manager row, so whenever both are up the editor is the topmost
+                -- thing on screen — and an Escape that closed the list
+                -- underneath the box the user is typing in would discard the
+                -- prompt while leaving the thing they wanted. The pair, not just
+                -- the first half: `showSessionManager` must survive.
+                initModelWithSession
+                    |> withRenameEditor
+                    |> escape
+                    |> (\m -> ( m.labelEditor.show, m.showSessionManager ))
+                    |> Expect.equal ( False, True )
+        , test "closes the session manager" <|
             \_ ->
                 let
                     m0 =

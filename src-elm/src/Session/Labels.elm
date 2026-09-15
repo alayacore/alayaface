@@ -10,6 +10,13 @@ module Session.Labels exposing
     , normalise
     , autoFromPrompt
     , storedPath
+    , Editor
+    , emptyEditor
+    , open
+    , close
+    , input
+    , Commit(..)
+    , commit
     )
 
 {-| The schema of `session.label.json` — one session's user-visible name
@@ -234,6 +241,125 @@ truncateAt limit text =
 
         Nothing ->
             head
+
+
+{-| The rename editor's view state (G2, `docs/session-identity.md` "Rename
+editor"). A GLOBAL overlay — one at a time, its own record in the Model — the
+same shape as `App.Presets.Manager` and the config editors, which is why it
+carries a `targetId` rather than living per-session (INV-G5: it must NOT join
+`App.Windows.sessionIsWaiting`, whose counter means "a prompt is waiting on this
+window").
+
+`input` holds the raw keystrokes, `error` a refusal from the last commit attempt
+(`""` = none). Neither is normalised while typing: `normalise` collapses runs of
+whitespace, and applying it to a field the user is editing would eat the space
+they just typed to start the next word — the editor would fight the keyboard.
+Normalising happens once, at commit.
+-}
+type alias Editor =
+    { show : Bool
+    , targetId : String
+    , input : String
+    , error : String
+    }
+
+
+emptyEditor : Editor
+emptyEditor =
+    { show = False
+    , targetId = ""
+    , input = ""
+    , error = ""
+    }
+
+
+{-| Open it for one session, prefilled with the name it is currently called by
+(`current`, resolved by the caller — this module cannot read the Model, and
+prefilling from `sessionLabels` is `App.Labels`' job).
+
+Prefilled with the CURRENT name rather than blank so that editing a name means
+changing a word in it, and so the difference between "rename" and "clear" is
+visible: emptying the field and committing clears the name (SD-G15's fallback
+comes back), which a blank-on-open editor cannot express.
+-}
+open : String -> String -> Editor
+open targetId current =
+    { show = True
+    , targetId = targetId
+    , input = current
+    , error = ""
+    }
+
+
+close : Editor -> Editor
+close _ =
+    emptyEditor
+
+
+{-| A keystroke. The refusal from a failed commit goes away as soon as the user
+types again — it described the text that is no longer in the field, and leaving
+it up would be a stale warning about a sentence they have already fixed.
+-}
+input : String -> Editor -> Editor
+input text ed =
+    { ed | input = text, error = "" }
+
+
+{-| What committing amounts to — DATA, never a command. `App/Labels.elm` turns
+`Named` into one `withLabelSave` and `Blank` into a save plus a forgotten entry;
+`App/Update.elm` is the only place a port is named (the F-series rule this file
+follows by returning values instead of effects).
+-}
+type Commit
+    = Reject String
+    | Named Label
+    | Blank
+
+
+{-| Save / Enter / blur. Three outcomes, and the two interesting ones are
+adjacent:
+
+  * **too long** → `Reject` with a message naming the limit and the actual count.
+    REFUSE, do not truncate: silently eating the end of a name the user typed is
+    the same lie as a reader that repairs values (SD-G9), and they would only
+    find out by reading the title bar later.
+  * **blank** → `Blank`, a real request. Clearing a name is the only way back to
+    the fallback, and the backend removes the file for a blank rather than
+    writing a tombstone.
+  * **anything else** → `Named`, always with `auto = False` (SD-G8: from now on
+    these are the user's words and no later derivation may replace them).
+
+Every accepted name is `normalise`d first, so a pasted multi-line prompt becomes
+one line the title bar can hold.
+
+There is deliberately no "unchanged, skip the write" case: the model stores only
+the NAME and not its `auto` flag, so a commit cannot tell "same text, typed by
+hand now" from "same text, derived". The first of those is a real change (the
+name stops being replaceable), so a redundant one-file write is the honest price
+of getting it right.
+-}
+commit : Editor -> ( Editor, Commit )
+commit ed =
+    let
+        text =
+            normalise ed.input
+    in
+    if text == "" then
+        ( emptyEditor, Blank )
+
+    else if String.length text > maxLabelChars then
+        let
+            message =
+                "A name is at most "
+                    ++ String.fromInt maxLabelChars
+                    ++ " characters; this one is "
+                    ++ String.fromInt (String.length text)
+                    ++ "."
+        in
+        ( { ed | error = message }, Reject message )
+
+    else
+        ( emptyEditor, Named { text = text, auto = False } )
 
 
 {-| Where the document lives: the identity's ROOT directory, never the work copy
