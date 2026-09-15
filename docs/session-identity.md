@@ -1,8 +1,10 @@
 # Session identity — a name for a session, and how to find it again
 
-**Status: G0 and G1 landed (2026-09-14). A name is derived, stored, read back and
-folded into the model — and NO SURFACE SHOWS IT YET** (that is G2, plus G2's
-`titleFor` accessor and its enforcement). G2–G3 are unchecked below. The ⚑
+**Status: G0 and G1 landed (2026-09-14); G2 is HALF landed (2026-09-14) — a window's
+title bar now says the name, and the checks that keep it the only read path are in
+with mutation proof. The Session Manager still shows the 8-char id and there is no
+rename editor yet** (the unticked G2 rows below), so the name is currently written but
+not editable, and `G3` has not started. The ⚑
 questions were put to the human on 2026-09-14 and
 every one was answered **"as recommended"**, so SD-G12 … SD-G15 below are confirmed
 decisions. Do not re-litigate an SD row in code: change the row here first and say so
@@ -333,20 +335,29 @@ own.** G0 touches no Elm; if you find yourself editing `src-elm/src` during G0, 
 
 ### G2 — the surfaces
 
-- [ ] **e2e contract first** (INV-G3): `data-session-id` on the session row, and migrate
+- [x] **e2e contract first** (INV-G3): `data-session-id` on the session row, and migrate
       `solo-e2e` / `restart-e2e` / `fork-e2e`'s three text lookups to the attribute.
       Commit this before any row's text can change, so a red run means a real defect —
       and leave `model-fields-e2e` / `two-plans-e2e` alone: they match the version and
       model lists, which share `.sel-page-item-name`.
-- [ ] Title bar text through `App/Labels.titleFor` (INV-G1) + tooltip.
+- [x] Title bar text through `App/Labels.titleFor` (INV-G1) + tooltip (`titleTooltip`
+      carries the whole name plus the id, since width-truncation SD-G13 makes the bar
+      unreadable on its own). **The manager row is deliberately untouched here**: it
+      still shows the 8-char id, and changes with the rename editor below, because
+      SD-G15's fallback only makes sense once there is something to fall back from.
 - [ ] Manager: label column content, filter box (reuse `Session/Selector.elm`), sort by
       name while filtering, `✎ Rename`, the editor overlay, with its
       `open / close / input / commit` transitions as pure `Session/Labels.elm`
       functions returning `Label` + effects-as-data (the F-series' rule: ports stay in
       `App/Update.elm`).
 - [ ] `KeyDown` stack slot + `EscapeOverlayTest` case (INV-G4).
-- [ ] `make check-invariants` extended with INV-G1/G2 sections, including the
-      "accessor still exists" anti-vacuity assertion.
+- [x] `make check-invariants` extended with INV-G1/G2 sections, including the
+      "accessor still exists" anti-vacuity assertion. **Mutation-verified**, both
+      directions: a raw `Dict.get id model.sessionLabels` added to a renderer in
+      `App/View.elm` → red naming the file, line and site; renaming `titleFor` in
+      `App/Labels.elm` → red with "fix this script, do not delete the check", which is
+      the case that turns a vacuous grep pass into a failure (the `WIN_READS=0` lesson
+      above applied to this feature).
 - [ ] Gate: full verification. Commit + push ×3.
 
 ### G3 — prove it end to end, then distil
