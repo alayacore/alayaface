@@ -131,9 +131,13 @@ field dropped here is a line deleted from the user's config. That is what
 `tests/AsrConfigTest.elm` pins by asserting the serialized key list, and what a
 deliberately **strict** decode is for — the backends decode into typed structs and
 re-serialise every field, so a reply missing one means the shape changed, and
-guessing through it would write the guess back. `check-backend-parity.sh` compares
-the protocol list and the default-model table between Rust and Go but **not**
-against this module, so the third copy moves by hand: all three together, or none.
+guessing through it would write the guess back. `check-backend-parity.sh` now
+compares the protocol list, the default-model table **and the field names**
+across Rust, Go and this module — the third copy no longer moves by hand, because
+a key the client's encoder omits is a value the user had and the next save
+overwrites with the struct's zero. Extracted from the encoder and the structs
+only (never a whole file), with a count guard, so a renamed function turns the
+check red instead of quietly comparing nothing.
 
 **`session.label.json` is the same rule in a fourth file — one document per session.**
 `src-elm/src/Session/Labels.elm` owns the document (three keys `{v, label, auto}`,

@@ -28,9 +28,14 @@ trap 'rm -rf "$tmp"' EXIT
 # expect_same <label> <file-a> <file-b> — compare two normalized lists.
 expect_same() {
   local label=$1 a=$2 b=$3
+  # The side names default to the two backends, which is what every existing
+  # caller compares. A third kind of comparison exists now (the CLIENT's encoder
+  # against a backend), and hard-coding "Rust vs Go" there would name a file that
+  # is not in the comparison — a misleading diff is worse than no diff.
+  local la=${4:-Rust} lb=${5:-Go}
   if ! diff -q "$a" "$b" >/dev/null; then
-    echo "✗ parity mismatch: $label (Rust vs Go)"
-    diff "$a" "$b" | sed -e 's/^< /    only in Rust: /' -e 's/^> /    only in Go:   /' | head -30
+    echo "✗ parity mismatch: $label ($la vs $lb)"
+    diff "$a" "$b" | sed -e "s/^< /    only in $la: /" -e "s/^> /    only in $lb:   /" | head -30
     fail=1
   fi
 }
@@ -345,7 +350,72 @@ if [ "$(wc -l < "$tmp/models_rust")" -lt 2 ] || [ "$(wc -l < "$tmp/models_go")" 
 fi
 expect_same "ASR default models" "$tmp/models_rust" "$tmp/models_go"
 
-# 2f. User-facing error strings the client displays verbatim or matches on.
+# 2f. `asr.conf` field names, THREE copies — and the third one is the client.
+#
+# Why this exists: `sync_asr_config` REPLACES the file, and both backends do it
+# by decoding into a typed struct and re-serialising (`json.MarshalIndent(cfg)`,
+# `serde_json::to_string`). So a key the Elm encoder omits is not merely unseen,
+# it is written back as the struct's zero value: a user's stored value is gone.
+# `AsrConfigTest.elm` pins the client's own key list, which catches the client
+# dropping a key it knows — nothing caught the BACKENDS adding one, which is the
+# drift AGENTS.md describes as "the third copy moves by hand: all three
+# together, or none". This makes it mechanical.
+#
+# Extracted from the encoder/structs only, never from a whole file: the same key
+# strings appear in decoders, tests and comments, and a file-wide grep stays
+# "equal" after a real change (the lesson already recorded for
+# `default_asr_model`).
+block() { awk -v pat="$1" '$0 ~ pat {f=1; next} f && /^[^ \t]/ {exit} f' "$2"; }
+
+# Elm needs a second shape: an encoder is a type signature AND a value, both at
+# column 0, so `block`'s "stop at the next column-0 line" ends it before the
+# body starts. Print the matched line, then stop at the NEXT one.
+elm_block() { awk -v pat="$1" '$0 ~ pat {print; f=1; next} f && /^[^ \t]/ {exit} f' "$2"; }
+
+E_ELM=src-elm/src/App/AsrConfig.elm
+elm_asr_keys() {
+  {
+    elm_block '^profileEncoder p =' "$E_ELM"
+    elm_block '^encode doc =' "$E_ELM"
+  } | grep -oE '\( "[a-z_0-9]+"' | sed 's/( "//; s/"//' | sort -u
+}
+go_asr_keys() {
+  {
+    block '^type AsrProfile struct' "$G_ASR"
+    block '^type AsrConfig struct' "$G_ASR"
+  } | grep -oE 'json:"[a-z_0-9]+"' | sed 's/json:"//; s/"//' | sort -u
+}
+rust_asr_keys() {
+  # A `#[serde(rename)]` would make the field name a lie about the JSON key, so
+  # refuse to guess rather than compare the wrong strings.
+  if block '^pub struct AsrProfile' "$R_ASR" | grep -q 'rename'; then
+    echo "✗ parity check broken: serde rename in AsrProfile — teach rust_asr_keys about it" >&2
+    fail=1
+  fi
+  {
+    block '^pub struct AsrProfile' "$R_ASR"
+    block '^pub struct AsrConfig' "$R_ASR"
+  } | sed -nE 's/^[[:space:]]*pub ([a-z_0-9]+):.*/\1/p' | sort -u
+}
+
+elm_asr_keys > "$tmp/asr_elm" || true
+go_asr_keys > "$tmp/asr_go" || true
+rust_asr_keys > "$tmp/asr_rust" || true
+# Anti-vacuity: an extractor that returns nothing makes the comparison pass
+# while proving nothing, and a rename of a struct or the encoder is exactly how
+# that happens. 9 = 7 profile fields + 2 document fields, and every one is
+# required to be present on every side.
+for side in elm go rust; do
+  n=$(wc -l < "$tmp/asr_$side")
+  if [ "$n" -lt 9 ]; then
+    echo "✗ parity check broken: asr.conf $side extractor found $n of 9 field names — fix the extractor, do not delete the check"
+    fail=1
+  fi
+done
+expect_same "asr.conf field names" "$tmp/asr_rust" "$tmp/asr_go" "Rust" "Go"
+expect_same "asr.conf field names" "$tmp/asr_go" "$tmp/asr_elm" "Go" "Elm client"
+
+# 2g. User-facing error strings the client displays verbatim or matches on.
 #     Each must exist in both backends; a renamed one silently breaks the
 #     frontend's error handling on only one deployment. File pointers follow
 #     where the string is actually produced today (the sessions command files
@@ -376,4 +446,4 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 
-echo "✓ backend parity OK — commands (Rust: $(echo "$rust_cmds" | wc -l), Go: $(echo "$go_cmds" | wc -l), bridge: $(echo "$bridge_cmds" | wc -l)) plus MIME, TLV tags, caps, seeds, ASR protocols/defaults and error strings"
+echo "✓ backend parity OK — commands (Rust: $(echo "$rust_cmds" | wc -l), Go: $(echo "$go_cmds" | wc -l), bridge: $(echo "$bridge_cmds" | wc -l)) plus MIME, TLV tags, caps, seeds, ASR protocols/defaults/field names and error strings"
