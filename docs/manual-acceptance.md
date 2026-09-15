@@ -172,9 +172,35 @@
 - [ ] **Two clients**: run the browser UI and the Tauri window against the same `~/.alayaface` at once, move windows in each, quit both → the file is valid JSON matching whichever wrote last. There is no merge by design; what must NOT happen is a torn or half-written file
 - [ ] **Hand-editable**: delete or comment out the whole file → the app behaves exactly as it did before F3 (fresh cascade placement), and starts saving again on the first interaction end
 
+## 10. Session Names (`~/.alayaface/sessions/<id>/session.label.json`, G-series)
+
+> Most of this is machine-proved: `e2e/label-e2e.mjs` runs the whole life cycle on
+> the Go backend (auto-name on the first prompt → rename by Enter → Cancel discards →
+> a real backend restart → Resume → the filter → a corrupt file → delete), and
+> `LabelsTest` (29 cases) plus the shared `label_cases.json` table pin the document
+> across all three implementations. The rows below are what a headless test cannot
+> judge — whether a name is actually *useful* to read. Design record:
+> `docs/session-identity.md`.
+
+- [ ] **The name is yours, not the app's guess**: type a first prompt into a new session → its title bar shows what you typed (trimmed to a line, `…` if it was long). It should read as a summary of your question, not as a sentence the app invented
+- [ ] **A window is called by its name**: two sessions open side by side → each bar says which is which. Truncation is by WIDTH as you narrow the window (SD-G13), and the tooltip carries the full name plus the id — a name you cannot read is never a name you have lost
+- [ ] **The model name survives a rename**: `<name> — <model>` is the title. If the `— <model>` half ever disappears, that is a defect (SD-G14: which model a window is talking to is the load-bearing part while debugging)
+- [ ] **Renaming sticks where you left it**: ✎ Rename in the Session Manager → type → Save → the row and the window change at once; restart the app → still that name. Then rename it to the SAME words it was auto-given → it now survives forever (it stops being replaceable, SD-G8)
+- [ ] **Cancel means cancel**: ✎ Rename → type something → Cancel (or Escape) → nothing changed, on screen or in the file. There is deliberately no commit-on-blur, so clicking Cancel with text in the field must not save it
+- [ ] **Clearing is not broken**: ✎ Rename → delete all the text → the button reads **Clear name** → commit → the row falls back to its 8-character id and the window to `Session <n>`. That is the way back, and it should not look like data loss
+- [ ] **A long list is searchable**: with several sessions, type three letters of a name into the filter → matching rows only, in name order, and a "N of M sessions" line. A term that matches nothing must say "No session matches that filter", NOT "No saved sessions" — those need different next actions
+- [ ] **You can still find an unnamed session**: filter by the hex prefix of a session that has no name → it is found (the id is part of the match, so a name never becomes the only way to reach your own work)
+- [ ] **A corrupt name file is dropped, not guessed**: with the app closed, put garbage in a session's `session.label.json` → start → that session shows its id prefix and is STILL in the list; no error dialog, no missing session (SD-G9). Do the same with `"label": ""` or a 200-character label: same graceful drop
+- [ ] **A fork keeps the name**: fork a named session (re-run its plan) → the continued window is still called the same thing, because a name belongs to the identity, not the work copy (SD-G1)
+- [ ] **Plan nodes stay unnamed**: open a plan's node session → no name of its own; the bar keeps its `[Plan · planId/nodeId]` badge (SD-G15)
+- [ ] **Deleting takes it with the directory**: delete a named session → `sessions/<id>/` is gone including `session.label.json`. There is no prune step to forget, which is the point of one file per session
+- [ ] **Tauri**: all of the above on the desktop build — the write path is a different command implementation, and only this checklist covers both
+
 ## Known Limitations (acceptance: confirm "as expected")
 
 - Killing the app mid-task loses the in-flight turn (alayacore only saves at task end; C1 forbids modifying alayacore)
 - Long tasks not finished within the 5s grace are still SIGKILLed (the save frame has already flushed first)
 - Two plans opened within ~50ms of each other may interfere with the auto-restore chain (planReadTarget is single-slot)
+- Sessions created before the G-series have no name and stay unnamed (their rows show the 8-character id, their bars `Session <n>`) until you name one or send a prompt in it — nothing back-fills a name from history, because the only content AlayaFace owns is what a freeze put in the object store, and a backfill whose coverage depends on freeze boundaries would be a worse guess than an honest blank (see `docs/session-identity.md` "Later")
+- A seat number (`Session 3`) is reassigned on every page load, so an unnamed session's window title is NOT a stable handle; the Session Manager's id prefix is. Naming it is the fix
 - `ui.conf` is last-writer-wins: two clients open at once each save their own whole board, so one client's layout is overwritten (no merge, by design — see `docs/solo-view.md`). Stacking order is never restored (SD17), and a deleted session's rect is erased rather than kept in reserve

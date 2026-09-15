@@ -120,9 +120,23 @@ guessing through it would write the guess back. `check-backend-parity.sh` compar
 the protocol list and the default-model table between Rust and Go but **not**
 against this module, so the third copy moves by hand: all three together, or none.
 
+**`session.label.json` is the same rule in a fourth file — one document per session.**
+`src-elm/src/Session/Labels.elm` owns the document (three keys `{v, label, auto}`,
+plus `usableText`, `normalise`, `autoFromPrompt` and the rename editor's pure
+transitions) and `App/Labels.elm` owns the policy: it is the ONLY module that reads
+`Model.sessionLabels` or calls `Ports.syncSessionLabel`. `scripts/check-layout-invariants.sh`
+section 5 enforces both halves (INV-G1/G2) and carries an anti-vacuity list of the
+accessor names, so renaming `titleFor` cannot turn the check green by matching
+nothing. `sync_session_label` replaces the file and there is no `extras` carry: three
+keys, all modelled, so a dropped one is a line lost from the user's file. Two decisions
+are easy to undo by accident — the Model stores the NAME and not the document (the
+`auto` flag has no reader there; the SD-G8 guard is "an entry exists"), and the client
+is deliberately the STRICTEST of the three implementations about length, because Elm
+counts UTF-16 units where Go counts runes and Rust counts `chars()`.
+
 **Not every config file is written the same way — check before you add a field.**
-`model.conf`, `ui.conf`, `asr.conf` and `global.conf` are all **REPLACED** by their
-sync command (the backend decodes into a typed struct, or takes the client's whole
+`model.conf`, `ui.conf`, `asr.conf`, `global.conf` and `session.label.json` are all
+**REPLACED** by their sync command (the backend decodes into a typed struct, or takes the client's whole
 document, and writes it back), so a key the client does not model is a key deleted
 from the user's file. `settings.conf` is the exception: `sync_global_settings`
 **MERGES** in both backends — only the keys present in the payload are applied, and

@@ -246,6 +246,28 @@ sides, and its text sits on that rule's edge: the horizontal padding that kept
 text off a side border went with the border. Only the window's own inset from
 its frame stays.
 
+### What a window is called
+
+A session window is titled by **its name**: `<name> — <model>`. That name is
+yours. The first thing you type into a session becomes it, and **✎ Rename** in
+the Session Manager replaces it with whatever you would rather call that work.
+It belongs to the session rather than to a window or to a fork of it, so it
+survives a re-run and a restart — and once you have committed the editor, nothing
+derives over it again, even if you type back the very words it suggested.
+
+A session you never named and never sent a prompt in shows what it always
+showed: `Session <n>` in its bar, an 8-character id in the manager. That number
+is a seat assignment for the page currently open, which is exactly why the list
+uses the id instead of it, and why naming a session is worth one keystroke. Plan
+node sessions are never named — their `[Plan · planId/nodeId]` badge already says
+what they are.
+
+The Session Manager filters by name and sorts what it matches alphabetically. It
+matches the id too, so a session you have not named is still findable. A name is
+capped at 120 characters in storage and truncated by width on screen, with the
+whole name and the id in the tooltip: a name you cannot read is never a name you
+have lost.
+
 **Solo view** is a presentation mode for one window at a time: it fills the
 viewport, and every other window stops being drawn.
 
