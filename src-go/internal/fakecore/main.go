@@ -51,16 +51,23 @@ import (
 // sessionFile is the --session flag value; `save` writes to it (empty
 // filename semantics, like real alayacore). configDir is the
 // --config-path value; model_set writes runtime.conf into it (mirrors
-// real alayacore). readySent tracks whether the ready SM has been
-// emitted: prompts before it are rejected (MCP_NOT_READY).
+// real alayacore). inputEnded tracks whether the adapter declared its input
+// over — CE (v12) or EOF, which the real session treats as the same fact: no
+// more prompts, commands may still follow.
 var sessionFile string
 var configDir string
+var inputEnded bool
 
 // modelSyncRecord is the file inside --config-path that holds the payload of
 // the last model_sync, for tests that assert what the client actually sent.
 const modelSyncRecord = "model_sync.last.json"
 
-var readySent bool
+// quitting is set when a `quit` CI has been answered, so main can end the
+// session in the real core's order: CO, then the terminal `closed` frame.
+// There is deliberately no "ready sent" flag any more: v11 needed one because
+// prompts before `ready` were rejected, and v12 holds them instead, which this
+// fake gets for free by not reading its input until the frame goes out.
+var quitting bool
 
 // histMsg is one recorded message of this session's history. The fake
 // maintains it so `fork` can truncate it into the new session file and
@@ -202,6 +209,16 @@ type cmdMsg struct {
 
 func writeFrame(tag, value string) {
 	_ = tlv.WriteFrame(os.Stdout, tag, value)
+}
+
+// writeSessionState emits one SM lifecycle frame. Real alayacore sends
+// exactly two per session — `ready` when it becomes interactive and `closed`
+// as its LAST act, with nothing after it on stdout (protocol v12) — and both
+// backends now read `closed` as the end of the session instead of inferring
+// that from EOF. A fake that never sends it would leave that whole reader path
+// untested, which is the only reason this helper exists.
+func writeSessionState(state string) {
+	writeFrame("SM", `{"type":"session","data":{"state":"`+state+`"}}`)
 }
 
 // echo replies with a NUL-delimited history-ID prefix, like alayacore.
@@ -404,6 +421,18 @@ func coErr(id, message string) {
 	writeFrame("CO", string(payload))
 }
 
+// coNull answers a fire-and-forget command: the adapter-guide documents
+// `output` as `null` for those (`cancel`, and v12's `quit`), so the fake must
+// not invent an object where the real core sends none.
+func coNull(id string) {
+	payload, _ := json.Marshal(map[string]any{
+		"id":       id,
+		"output":   nil,
+		"is_error": false,
+	})
+	writeFrame("CO", string(payload))
+}
+
 func smModelList() {
 	// Full ModelInfo shape, mirroring real alayacore's protocol.ModelInfo
 	// field for field: id, name, protocol_type, base_url, api_key,
@@ -558,6 +587,21 @@ func handleCmd(raw string) {
 		coOk(msg.ID, map[string]any{"id": msg.Input, "allowed": msg.Name == "tool_confirm"})
 	case "cancel":
 		coOk(msg.ID, map[string]any{"cancelled": true})
+	case "quit", "q":
+		// `quit` became a session command in protocol v12 (with the `q`
+		// alias, which the real core resolves through commands.Canonical
+		// before dispatch, so a client may send either word). It answers
+		// with a null CO, stops accepting new work with SHUTTING_DOWN, and
+		// lets a task already in flight finish before ending. The fake has no
+		// task to drain, so what it must get right is the ORDER: CO first,
+		// then the terminal `closed` frame, then exit — which main() writes
+		// when it sees quitting.
+		if strings.TrimSpace(msg.Input) != "" {
+			coErr(msg.ID, "usage: :quit (no arguments)")
+			return
+		}
+		coNull(msg.ID)
+		quitting = true
 	case "mcp_decline", "mcp_cancel":
 		coOk(msg.ID, map[string]any{"server": msg.Input})
 	default:
@@ -702,16 +746,21 @@ func main() {
 		replayForkedHistory()
 		replayResumedHistory()
 	}
-	// ALAYACORE_DELAY_READY_MS delays the ready SM (and thus prompt
-	// acceptance) so the E2E can exercise the frontend's readiness gate:
-	// prompts sent before this point are rejected as MCP_NOT_READY.
+	// ALAYACORE_DELAY_READY_MS delays the ready SM — and, because this fake
+	// reads its input only after the delay, that is also how the v12
+	// deferral is reproduced: a prompt written during the wait stays in the
+	// pipe and is processed once the session is ready. Real alayacore used to
+	// ANSWER such a prompt with an MCP_NOT_READY error (v11); from v12 a
+	// stage the session is passing through is a reason to postpone a prompt,
+	// not to refuse it. The fake has no MCP init to gate on, so the delayed
+	// read IS the hold — do not add an error frame back here: it would test
+	// the client's readiness gate against a behavior the core no longer has.
 	if ms := os.Getenv("ALAYACORE_DELAY_READY_MS"); ms != "" {
 		if n, err := time.ParseDuration(ms + "ms"); err == nil {
 			time.Sleep(n)
 		}
 	}
-	readySent = true
-	writeFrame("SM", `{"type":"session","data":{"state":"ready"}}`)
+	writeSessionState("ready")
 
 	reader := bufio.NewReader(os.Stdin)
 	staged := 0
@@ -721,7 +770,19 @@ func main() {
 			break
 		}
 		switch frame.Tag {
+		case "CE":
+			// Input end (protocol v12): the adapter has no more PROMPTS but
+			// the stream stays open, so commands may still follow. Mirrors
+			// real alayacore, where CE and EOF mean the same thing to run()
+			// and the difference is only that the command path survives.
+			// Nothing in AlayaFace sends one today (see tlv.go's TagInputEnd);
+			// the fake understands it so a client that does gets a core that
+			// behaves like the real one.
+			inputEnded = true
 		case "UT", "UI", "UV", "UA", "UD":
+			if inputEnded {
+				continue
+			}
 			echo(frame.Tag, frame.Value)
 			staged++
 			if frame.Tag == "UT" {
@@ -738,11 +799,14 @@ func main() {
 				// seen this frame (so the boot in_progress:false is not a
 				// completion), so a hung task can still be aborted by the
 				// cancel-first close below (which emits in_progress:false).
-				// Before the ready SM, prompts are REJECTED like real
-				// alayacore's MCP_NOT_READY — the frontend's readiness
-				// gate must hold them until then.
-				if !readySent {
-					writeFrame("SM", `{"type":"error","data":{"text":"MCP servers are still initializing. Please wait."}}`)
+				//
+				// A prompt that arrives after CE (input ended) is dropped
+				// silently — there is no more input to answer. Before
+				// `ready` it is HELD (see the ready comment above: this fake
+				// reads only after the delay, so the pipe is the holding
+				// slot), which is v12's behavior; v11 answered it with an
+				// MCP_NOT_READY error frame and that emulation is gone.
+				if inputEnded {
 					staged = 0
 					stagedText = ""
 					continue
@@ -803,11 +867,25 @@ func main() {
 				streamReply()
 			}
 			handleCmd(frame.Value)
+			if quitting {
+				// handleQuit answered the CI frame; the session's last act
+				// is the terminal SM, then the process is done — exactly the
+				// real core's order (CO, then `closed`, then exit).
+				break
+			}
 		}
 	}
 
-	// stdin closed (probe pattern): report the model list, then exit.
-	smModelList()
+	// stdin closed (probe pattern): report the model list, then exit. Skipped
+	// after `quit`, whose answer was the CO above — a frame after the terminal
+	// one would break the guarantee the backends now rely on.
+	if !quitting {
+		smModelList()
+	}
+	// The terminal frame, last on stdout, nothing after it — the real core
+	// guarantees this and both backends now END a session on it, so the fake
+	// has to produce it or that reader path goes untested.
+	writeSessionState("closed")
 }
 
 // planSeq numbers plan documents emitted by planReply: the SECOND plan

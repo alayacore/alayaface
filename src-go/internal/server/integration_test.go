@@ -18,6 +18,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"alayaface/src-go/internal/dirs"
+	"alayaface/src-go/internal/session"
 )
 
 // ─── Fake alayacore binary ──────────────────────────────────────────
@@ -1156,5 +1157,79 @@ func TestIntegrationCoreStatusOrderingImmediateExit(t *testing.T) {
 	}
 	if firstConnected != "true" {
 		t.Fatalf("first core-status for a dying session must be connected:true (the disconnect must follow), got %s", firstConnected)
+	}
+}
+
+// ─── The core's terminal frame (protocol v12: session state "closed") ──
+
+// TestIntegrationSessionEndsOnTheTerminalFrame pins the whole chain over a
+// real subprocess: fakecore ends its output with
+// SM {"type":"session","data":{"state":"closed"}} like the real core does, the
+// reader reports the end FROM THAT FRAME, and the EOF which follows it stays
+// quiet.
+//
+// Two things are being protected. The message: "Session closed by alayacore"
+// says the core finished, "Connection closed" says the pipe went away, and the
+// user needs the difference (the second one may carry a stderr reason, the
+// first one never does). And the count: the client's plan runner fails its node
+// on every connected:false it is told about, so announcing the same death twice
+// reports one failure as two.
+func TestIntegrationSessionEndsOnTheTerminalFrame(t *testing.T) {
+	e := newTestEnv(t, "")
+	sid := e.createSession(t)
+	e.waitEvent(t, "core-status", func(p map[string]any) bool {
+		return p["session_id"] == sid && p["connected"] == true
+	})
+
+	var ends []string
+	sawFrame := false
+	// The collector sees EVERY event on the way to the end status, so this is
+	// where to check that the reader forwards the frame it interpreted: a
+	// client that wants to render the lifecycle later must still be able to.
+	note := func(typ string, payload map[string]any) {
+		if typ == "core-status" && payload["session_id"] == sid && payload["connected"] == false {
+			ends = append(ends, fmt.Sprintf("%v", payload["message"]))
+		}
+		if typ != "tlv-frame" || payload["tag"] != "SM" {
+			return
+		}
+		js, _ := payload["json"].(map[string]any)
+		if js == nil || js["type"] != "session" {
+			return
+		}
+		if data, _ := js["data"].(map[string]any); data["state"] == "closed" {
+			sawFrame = true
+		}
+	}
+
+	e.rpcOK(t, "close_session", map[string]any{"sessionId": sid})
+	end := e.collectUntil(t, "core-status", func(p map[string]any) bool {
+		return p["session_id"] == sid && p["connected"] == false
+	}, note)
+
+	if got, want := fmt.Sprintf("%v", end["message"]), session.SessionClosedMessage; got != want {
+		t.Errorf("end message = %q, want %q — the terminal frame, not EOF, must decide how a clean end is described", got, want)
+	}
+	if !sawFrame {
+		t.Error("the SM session/closed frame must also reach the client as a tlv-frame")
+	}
+
+	// Now wait out the EOF: nothing may arrive after the one announcement.
+	e.ws.SetReadDeadline(time.Now().Add(700 * time.Millisecond))
+	for {
+		_, msg, err := e.ws.ReadMessage()
+		if err != nil {
+			break // deadline: the quiet we want
+		}
+		var ev struct {
+			Type    string         `json:"type"`
+			Payload map[string]any `json:"payload"`
+		}
+		if json.Unmarshal(msg, &ev) == nil && ev.Type == "core-status" && ev.Payload["session_id"] == sid && ev.Payload["connected"] == false {
+			ends = append(ends, fmt.Sprintf("%v", ev.Payload["message"]))
+		}
+	}
+	if len(ends) != 1 {
+		t.Errorf("exactly one end announcement expected, got %d: %v", len(ends), ends)
 	}
 }

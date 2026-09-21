@@ -11,6 +11,8 @@
 //	UD   User document
 //	UE   User message end — flushes staged content
 //	CI   Command input (JSON CmdMsg: {"id":"...","name":"...","input":"..."})
+//	CE   Control-plane input end — no more PROMPTS; the stream stays open, so
+//	     commands may still follow (v12; see TagInputEnd)
 //
 // Tags (stdout ← agent):
 //
@@ -50,6 +52,21 @@ const (
 	TagUserDoc   = "UD"
 	TagUserEnd   = "UE"
 	TagCmdInput  = "CI"
+	// TagInputEnd is the control-plane input end (protocol v12): "no more
+	// prompts, but this stream stays open", so commands can still follow —
+	// TCP's FIN rather than a torn down connection. alayacore treats it
+	// exactly like EOF on stdin.
+	//
+	// This backend never SENDS it, and that is a decision rather than an
+	// omission: AlayaFace has no end of prompts to declare (a window that
+	// stops prompting may prompt again), and close_session wants the opposite
+	// — the process gone — so it closes stdin outright, which ends the command
+	// path too and is the point there. It is carried because the tag alphabet
+	// is a fact about the wire: check-backend-parity.sh compares the two
+	// backends' tag lists, so a tag that exists in the protocol exists here,
+	// and a future half-close is not a surprise to whoever reads this file.
+	// Port of tlv.rs::TAG_INPUT_END.
+	TagInputEnd = "CE"
 )
 
 // Output tags (received from AlayaCore stdout).
