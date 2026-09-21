@@ -464,6 +464,11 @@ R_READ=src-tauri/src/reader.rs
 G_READ=src-go/internal/session/reader.go
 expect_both "status string" "Connection closed" "$R_READ" "$G_READ"
 expect_both "status string" "more stderr lines in the backend log" "$R_READ" "$G_READ"
+#     The terminal frame's message (protocol v12's session state `closed`).
+#     The client shows it in place of "Connection closed" when alayacore ends a
+#     session itself, and the plan runner fails a node on whichever arrives —
+#     so both backends must name the fact the same way.
+expect_both "status string" "Session closed by alayacore" "$R_READ" "$G_READ"
 
 # ─── Result ──────────────────────────────────────────────────────────
 

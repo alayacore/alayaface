@@ -658,6 +658,54 @@ tests =
                     in
                     Expect.equal 8192 s.contextLimit
             ]
+        , describe "session lifecycle frames (protocol v12)"
+            [ test "ready is the only state that changes anything" <|
+                \_ ->
+                    let
+                        apply name =
+                            emptySession "s1"
+                                |> applyFrame
+                                    (frame "SM"
+                                        (E.object
+                                            [ ( "type", E.string "session" )
+                                            , ( "data", E.object [ ( "state", E.string name ) ] )
+                                            ]
+                                        )
+                                    )
+
+                        -- `closed` is v12's terminal frame. The client's END comes
+                        -- from the backend's core-status (which is also what fails a
+                        -- plan node), so this arm must stay a no-op for it: a second
+                        -- producer of `connected` here would announce one death
+                        -- twice.
+                        unchanged name =
+                            Expect.equal (emptySession "s1") (apply name)
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal True (apply "ready").ready
+                        , \_ -> unchanged "closed"
+                        , \_ -> unchanged "starting"
+                        , \_ -> unchanged "initializing"
+                        , \_ -> unchanged ""
+                        ]
+                    <|
+                        \_ -> ()
+            , test "a state that is not a string is ignored, not a crash" <|
+                \_ ->
+                    let
+                        s =
+                            emptySession "s1"
+                                |> applyFrame
+                                    (frame "SM"
+                                        (E.object
+                                            [ ( "type", E.string "session" )
+                                            , ( "data", E.object [ ( "state", E.null ) ] )
+                                            ]
+                                        )
+                                    )
+                    in
+                    Expect.equal (emptySession "s1") s
+            ]
         ]
 
 

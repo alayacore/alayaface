@@ -50,6 +50,34 @@ func disconnectMessage(base string, tail *core.StderrTail) string {
 	)
 }
 
+// SessionClosedMessage is the `core-status` message for a session the core
+// ended itself — SM {"type":"session","data":{"state":"closed"}}.
+//
+// Distinct from "Connection closed" on purpose: that one means the pipe went
+// away and the reason (if any) is on stderr, while this one means alayacore
+// said it was finished. The client shows whichever it gets, so both backends
+// use this exact text (scripts/check-backend-parity.sh compares them).
+const SessionClosedMessage = "Session closed by alayacore"
+
+// endsTheSession reports whether an SM envelope is the core's terminal frame.
+//
+// v12 of the protocol added it precisely so a client does not have to INFER the
+// end from EOF. That inference is not free here: stdout stays open while
+// anything still holds the write end, so a core that has finished can leave the
+// reader parked on a read and the window showing a running session.
+func endsTheSession(env *tlv.SystemMsgEnvelope) bool {
+	if env == nil || env.Type != "session" {
+		return false
+	}
+	var data struct {
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return false
+	}
+	return data.State == "closed"
+}
+
 // startReader spawns the background goroutine that reads TLV frames from
 // alayacore's stdout and broadcasts them to the hub (tlv-delta,
 // tlv-frame, core-status). Port of reader.rs spawn_stdout_reader.
@@ -57,27 +85,42 @@ func (s *Session) startReader(h *hub.Hub, cache *ModelCache) {
 	go func() {
 		defer s.Stdout.Close()
 		reader := bufio.NewReader(s.Stdout)
+		// One `core-status: false` per session. The terminal frame and the EOF
+		// that follows it describe the same fact, and the client's plan runner
+		// fails its node on each one it receives.
+		announced := false
 
 		for {
 			frame, err := tlv.ReadFrame(reader)
-			if err != nil {
-				s.disconnect(h, disconnectMessage(fmt.Sprintf("Read error: %v", err), s.StderrTail))
+			if err != nil || frame == nil {
+				base := "Connection closed"
+				if err != nil {
+					base = fmt.Sprintf("Read error: %v", err)
+				}
+				s.disconnect(h, announced, disconnectMessage(base, s.StderrTail))
 				return
 			}
-			if frame == nil { // clean EOF
-				s.disconnect(h, disconnectMessage("Connection closed", s.StderrTail))
-				return
+			if s.dispatchFrame(h, cache, frame) && !announced {
+				// The core's terminal frame: report the end from the frame
+				// rather than inferring it from EOF, which is what v12 added
+				// it for.
+				//
+				// Deliberately does NOT clear `connected` or reap: this
+				// backend's `connected` means "the pipe is usable", and EOF is
+				// what decides that. Close waits on the child actually exiting
+				// (Rust `try_wait`, Go `Connected()`), and moving that earlier
+				// on one side only would be exactly the behavioral drift
+				// AGENTS.md warns about.
+				announced = true
+				s.announce(h, SessionClosedMessage)
 			}
-			s.dispatchFrame(h, cache, frame)
 		}
 	}()
 }
 
-// disconnect marks the session disconnected, reaps the child, and
-// broadcasts core-status. Called from the reader goroutine only.
-func (s *Session) disconnect(h *hub.Hub, message string) {
-	s.setConnected(false)
-	s.kill()
+// announce broadcasts the core-status event that ends a session, for callers
+// that have already decided this is the one and only end announcement.
+func (s *Session) announce(h *hub.Hub, message string) {
 	h.Broadcast(hub.NewEvent("core-status", StatusEvent{
 		SessionID: s.ID,
 		Connected: false,
@@ -86,9 +129,28 @@ func (s *Session) disconnect(h *hub.Hub, message string) {
 	log.Printf("[reader] %s disconnected: %s", s.ID, message)
 }
 
+// disconnect marks the session disconnected, reaps the child, and broadcasts
+// core-status — unless the terminal frame already announced the end
+// (`announced`), which is the normal order: alayacore writes `closed`, then
+// exits, and EOF follows.
+//
+// Called from the reader goroutine only.
+func (s *Session) disconnect(h *hub.Hub, announced bool, message string) {
+	s.setConnected(false)
+	s.kill()
+	if !announced {
+		s.announce(h, message)
+	}
+}
+
 // dispatchFrame routes a single TLV frame to the appropriate event(s).
-// Port of reader.rs dispatch_frame.
-func (s *Session) dispatchFrame(h *hub.Hub, cache *ModelCache, frame *tlv.Frame) {
+//
+// Returns true when the frame ENDED the session (endsTheSession), which is the
+// reader's cue to announce the end. Every other frame returns false, and the
+// reader keeps going.
+//
+// Port of reader.rs::dispatch_frame.
+func (s *Session) dispatchFrame(h *hub.Hub, cache *ModelCache, frame *tlv.Frame) bool {
 	tag := frame.Tag
 	rawValue := frame.Value
 
@@ -129,7 +191,7 @@ func (s *Session) dispatchFrame(h *hub.Hub, cache *ModelCache, frame *tlv.Frame)
 		s.handleCmdOutputFrame(h, rawValue)
 	// ─── System message (SM) ─────────────────────────────────────
 	case "SM":
-		s.handleSMFrame(h, cache, rawValue)
+		return s.handleSMFrame(h, cache, rawValue)
 	// ─── Everything else (user echoes, unknown) ──────────────────
 	default:
 		var uct *string
@@ -139,6 +201,7 @@ func (s *Session) dispatchFrame(h *hub.Hub, cache *ModelCache, frame *tlv.Frame)
 		}
 		s.emitFrame(h, tag, rawValue, nil, uct, false)
 	}
+	return false
 }
 
 // handleJSONFrame handles AF/UF/Uf/Af JSON frames: parse the payload
@@ -177,12 +240,13 @@ func (s *Session) handleCmdOutputFrame(h *hub.Hub, rawValue string) {
 }
 
 // handleSMFrame handles SM system message frames: caches model_list and
-// forwards the envelope as {type, data}.
-func (s *Session) handleSMFrame(h *hub.Hub, cache *ModelCache, rawValue string) {
+// forwards the envelope as {type, data}. Returns true for the core's terminal
+// frame (see endsTheSession).
+func (s *Session) handleSMFrame(h *hub.Hub, cache *ModelCache, rawValue string) bool {
 	var env tlv.SystemMsgEnvelope
 	if err := json.Unmarshal([]byte(rawValue), &env); err != nil {
 		s.emitFrame(h, "SM", rawValue, nil, nil, false)
-		return
+		return false
 	}
 
 	// Cache model_list (before any other processing).
@@ -195,11 +259,13 @@ func (s *Session) handleSMFrame(h *hub.Hub, cache *ModelCache, rawValue string) 
 		}
 	}
 
+	ended := endsTheSession(&env)
 	wrapped, _ := json.Marshal(map[string]any{
 		"type": env.Type,
 		"data": env.Data,
 	})
 	s.emitFrame(h, "SM", rawValue, wrapped, nil, false)
+	return ended
 }
 
 // emitFrame builds and broadcasts a tlv-frame event from a raw frame

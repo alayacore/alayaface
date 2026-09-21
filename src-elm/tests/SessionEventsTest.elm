@@ -107,9 +107,16 @@ smFrame sid json =
 
 readyJson : E.Value
 readyJson =
+    sessionStateJson "ready"
+
+
+{-| The core's `session` lifecycle frame for one state. v12 broadcasts two:
+`ready` (interactive) and `closed` (terminal, last frame on stdout). -}
+sessionStateJson : String -> E.Value
+sessionStateJson state =
     E.object
         [ ( "type", E.string "session" )
-        , ( "data", E.object [ ( "state", E.string "ready" ) ] )
+        , ( "data", E.object [ ( "state", E.string state ) ] )
         ]
 
 
@@ -892,6 +899,30 @@ tests =
                     Expect.all
                         [ \_ -> Expect.equal [ ( "s1", "the queued prompt" ) ] (touched m).queuedPrompts
                         , \_ -> Expect.equal False (List.member "sendPrompt" (actionsOf actions))
+                        ]
+                        ()
+            , test "the terminal frame is not readiness either" <|
+                \_ ->
+                    -- v12's `closed` arrives on the same `session` type as
+                    -- `ready`. Reading it as readiness would flush a held node
+                    -- prompt into a session that has stopped taking work (the
+                    -- core answers it with SHUTTING_DOWN at best, and at worst
+                    -- never sees it), and would lift replay suppression.
+                    let
+                        held =
+                            { initModelWithSession
+                                | pendingNodePrompts = Dict.fromList [ ( "s1", "the queued prompt" ) ]
+                                , planReplaySessions = Set.singleton "s1"
+                            }
+
+                        ( m, actions ) =
+                            SE.frameEvent held (smFrame "s1" (sessionStateJson "closed"))
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal [ ( "s1", "the queued prompt" ) ] (touched m).queuedPrompts
+                        , \_ -> Expect.equal False (List.member "sendPrompt" (actionsOf actions))
+                        , \_ -> Expect.equal True (Set.member "s1" m.planReplaySessions)
+                        , \_ -> Expect.equal False ((touched m).sessions |> List.head |> Maybe.map .ready |> Maybe.withDefault False)
                         ]
                         ()
             , test "ready ends replay suppression" <|

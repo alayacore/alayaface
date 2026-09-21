@@ -348,9 +348,24 @@ handleSystemMsg s env =
         _ -> s
 
 
-{-| SM {"type":"session","data":{"state":"ready"}} — the core's explicit
-readiness signal (MCP init done, replay ended, session interactive).
-Node prompts are held until this flips (see App/Update's readiness gate).
+{-| SM {"type":"session","data":{"state":...}} — the core's lifecycle signal.
+
+`ready` is the only state this writes. It means MCP init is done, replay
+ended, and the session is interactive (node prompts are held until it flips —
+see App/Update's readiness gate).
+
+`closed` (protocol v12) is deliberately NOT handled here. It is the session's
+last frame, and the BACKEND already turns that frame into the one
+`core-status connected:false` this client treats as the end of a session
+(`Session/Events.elm statusEvent`, which also injects the runner's
+`SessionDisconnected`). Marking the session disconnected a second time from
+here would produce two producers of one fact — and two node failures, because
+the runner reacts to each `connected:false` it is told about. What is pinned in
+the tests below is exactly that: this arm changes nothing about `closed`.
+
+The other two states the core can name (`starting`, `initializing`) are startup
+phases it does not broadcast per-adapter; an unknown `state` is ignored so a
+newer core cannot be read as ready by accident.
 -}
 handleSystemSession : SessionState -> D.Value -> SessionState
 handleSystemSession s data =

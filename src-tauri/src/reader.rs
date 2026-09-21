@@ -52,6 +52,7 @@ fn is_user_echo_tag(tag: &str) -> bool {
     matches!(tag, "UT" | "UI" | "UV" | "UA" | "UD")
 }
 
+
 /// Spawn a background thread that reads TLV frames from alayacore's stdout
 /// and emits them as Tauri events (`tlv-delta`, `tlv-frame`, `core-status`).
 pub fn spawn_stdout_reader(
@@ -66,6 +67,10 @@ pub fn spawn_stdout_reader(
 ) {
     std::thread::spawn(move || {
         let sid = session_id;
+        // One `core-status: false` per session. The terminal frame and the EOF
+        // that follows it describe the same fact, and the client's plan runner
+        // fails its node on each one it receives.
+        let mut announced = false;
 
         let reap_child = || {
             if let Ok(mut guard) = child.lock() {
@@ -78,28 +83,52 @@ pub fn spawn_stdout_reader(
         loop {
             match tlv::read_frame(&mut stdout) {
                 Ok(Some(frame)) => {
-                    dispatch_frame(&app, &sid, &frame, &model_cache, &pending_commands);
+                    if dispatch_frame(&app, &sid, &frame, &model_cache, &pending_commands)
+                        && !announced
+                    {
+                        // The core's terminal frame: report the end from the
+                        // frame rather than inferring it from EOF, which is
+                        // what v12 added it for.
+                        //
+                        // Deliberately does NOT store `connected = false` or
+                        // reap: this backend's `connected` means "the pipe is
+                        // usable", and EOF is what decides that. Close waits on
+                        // the child actually exiting (Rust `try_wait`, Go
+                        // `Connected()`), and moving that earlier on one side
+                        // only would be exactly the behavioral drift AGENTS.md
+                        // warns about.
+                        announced = true;
+                        let _ = app.emit("core-status", StatusEvent {
+                            session_id: sid.clone(),
+                            connected: false,
+                            message: SESSION_CLOSED_MESSAGE.to_string(),
+                        });
+                    }
                 }
                 Ok(None) => {
                     connected.store(false, Ordering::SeqCst);
                     reap_child();
-                    let message = disconnect_message("Connection closed", &stderr_tail);
-                    let _ = app.emit("core-status", StatusEvent {
-                        session_id: sid.clone(),
-                        connected: false,
-                        message,
-                    });
+                    if !announced {
+                        let message = disconnect_message("Connection closed", &stderr_tail);
+                        let _ = app.emit("core-status", StatusEvent {
+                            session_id: sid.clone(),
+                            connected: false,
+                            message,
+                        });
+                    }
                     break;
                 }
                 Err(e) => {
                     connected.store(false, Ordering::SeqCst);
                     reap_child();
-                    let message = disconnect_message(&format!("Read error: {e}"), &stderr_tail);
-                    let _ = app.emit("core-status", StatusEvent {
-                        session_id: sid.clone(),
-                        connected: false,
-                        message,
-                    });
+                    if !announced {
+                        let message = disconnect_message(&format!("Read error: {e}"), &stderr_tail);
+                        let _ = app.emit("core-status", StatusEvent {
+                            session_id: sid.clone(),
+                            connected: false,
+                            message,
+                        });
+                    }
                     break;
                 }
             }
@@ -108,13 +137,17 @@ pub fn spawn_stdout_reader(
 }
 
 /// Dispatch a single TLV frame to the appropriate event channel(s).
+///
+/// Returns true when the frame ENDED the session (`ends_the_session`), which is
+/// the reader's cue to announce the end. Every other frame returns false, and
+/// the reader keeps going.
 fn dispatch_frame(
     app: &AppHandle,
     sid: &str,
     frame: &tlv::Frame,
     model_cache: &Arc<crate::ModelCacheInner>,
     pending_commands: &Arc<crate::session::PendingCommands>,
-) {
+) -> bool {
     let tag = &frame.tag;
     let raw_value = &frame.value;
 
@@ -135,17 +168,29 @@ fn dispatch_frame(
 
     match tag.as_str() {
         // ─── Streaming deltas (At, Ar) ───────────────────────────
-        "At" | "Ar" => handle_delta_frame(app, sid, tag, raw_value),
+        "At" | "Ar" => {
+            handle_delta_frame(app, sid, tag, raw_value);
+            false
+        }
         // ─── Complete/authoritative (AT, AR) ──────────────────────
         // Delta mode: content is empty (terminator). Replay/--no-delta: full text.
-        "AT" | "AR" => emit_frame(app, sid, tag, raw_value, None, None, true),
+        "AT" | "AR" => {
+            emit_frame(app, sid, tag, raw_value, None, None, true);
+            false
+        }
         // ─── JSON frames (Af, AF, UF, Uf) ────────────────────────
         // All share the same wire format: raw JSON or a NUL-delimited
         // history ID prefix followed by JSON. The parsed JSON (when
         // present) is forwarded so the frontend can decode it by tag.
-        "Af" | "AF" | "UF" | "Uf" => handle_json_frame(app, sid, tag, raw_value),
+        "Af" | "AF" | "UF" | "Uf" => {
+            handle_json_frame(app, sid, tag, raw_value);
+            false
+        }
         // ─── Command output (CO) ─────────────────────────────────
-        "CO" => handle_cmd_output_frame(app, sid, raw_value, pending_commands),
+        "CO" => {
+            handle_cmd_output_frame(app, sid, raw_value, pending_commands);
+            false
+        }
         // ─── System message (SM) ─────────────────────────────────
         "SM" => handle_sm_frame(app, sid, raw_value),
         // ─── Everything else (user echoes, unknown) ─────────────
@@ -156,6 +201,7 @@ fn dispatch_frame(
                 None
             };
             emit_frame(app, sid, tag, raw_value, None, user_content_type, false);
+            false
         }
     }
 }
@@ -217,12 +263,48 @@ fn handle_cmd_output_frame(
     emit_frame(app, sid, "CO", raw_value, Some(json_val), None, false);
 }
 
+/// The `core-status` message for a session the core ended itself.
+///
+/// Distinct from "Connection closed" on purpose: that one means the pipe went
+/// away and the reason (if any) is on stderr, while this one means alayacore
+/// said it was finished. The client shows whichever it gets, so both backends
+/// use this exact text (scripts/check-backend-parity.sh compares them).
+pub const SESSION_CLOSED_MESSAGE: &str = "Session closed by alayacore";
+
+/// True for the core's terminal frame, `SM {"type":"session","data":{"state":
+/// "closed"}}` — sent exactly once, after every other frame, with nothing
+/// following it on stdout (adapter-guide, "Session lifecycle signal").
+///
+/// v12 of the protocol added it precisely so a client does not have to INFER
+/// the end from EOF. That inference is not free here: stdout stays open while
+/// anything still holds the write end, so a core that has finished can leave
+/// the reader waiting on a pipe and the window showing a running session.
+fn ends_the_session(msg_type: &str, data: &serde_json::Value) -> bool {
+    msg_type == "session" && data.get("state").and_then(|v| v.as_str()) == Some("closed")
+}
+
 /// Handle SM system message frames.
-fn handle_sm_frame(app: &AppHandle, sid: &str, raw_value: &str) {
-    let json_val = serde_json::from_str::<tlv::SystemMsgEnvelope>(raw_value).ok().map(|env| {
-        serde_json::json!({ "type": env.msg_type, "data": env.data })
-    });
-    emit_frame(app, sid, "SM", raw_value, json_val, None, false);
+///
+/// Returns true for the terminal frame (see [`ends_the_session`]) so the reader
+/// can end the loop; every other SM returns false.
+fn handle_sm_frame(app: &AppHandle, sid: &str, raw_value: &str) -> bool {
+    let (json_val, ended) = match serde_json::from_str::<tlv::SystemMsgEnvelope>(raw_value) {
+        Ok(env) => (
+            serde_json::json!({ "type": env.msg_type, "data": env.data }),
+            ends_the_session(&env.msg_type, &env.data),
+        ),
+        Err(_) => (serde_json::Value::Null, false),
+    };
+    emit_frame(
+        app,
+        sid,
+        "SM",
+        raw_value,
+        (!json_val.is_null()).then_some(json_val),
+        None,
+        false,
+    );
+    ended
 }
 
 /// Build and emit a `tlv-frame` event from a raw frame value.
@@ -264,8 +346,36 @@ fn emit_frame(
 
 #[cfg(test)]
 mod tests {
-    use super::disconnect_message;
+    use super::{disconnect_message, ends_the_session};
     use crate::alayacore::{StderrTail, STDERR_TAIL_MAX_CHARS};
+    use serde_json::json;
+
+    // ─── the terminal frame ───────────────────────────────────
+    //
+    // Protocol v12's `session` states, and the one that matters: only
+    // `closed` ends the session, so a predicate that got this wrong either
+    // drops the end (a ready frame) or kills the session mid-boot (a startup
+    // state, or another type carrying the same word).
+
+    #[test]
+    fn only_the_closed_session_state_ends_it() {
+        let cases: &[(&str, serde_json::Value, bool)] = &[
+            ("session", json!({"state": "closed"}), true),
+            ("session", json!({"state": "ready"}), false),
+            ("session", json!({"state": "initializing"}), false),
+            ("session", json!({"state": "starting"}), false),
+            ("session", json!({}), false),
+            ("session", json!(null), false),
+            // The state travels in a `session` envelope; the same word in
+            // another one is content, not a lifecycle signal.
+            ("error", json!({"state": "closed"}), false),
+            ("mcp", json!({"status": "closed"}), false),
+        ];
+        for (msg_type, data, want) in cases {
+            let got = ends_the_session(msg_type, data);
+            assert_eq!(got, *want, "type={msg_type} data={data} → {got}, want {want}");
+        }
+    }
 
     fn tail_with(lines: &[&str]) -> StderrTail {
         let tail = StderrTail::default();
@@ -316,8 +426,7 @@ mod tests {
     }
 
     #[test]
-    fn a_long_line_is_clipped_without_splitting_a_character() {
-        // The core prints paths, which can carry non-ASCII; a byte slice here
+    fn a_long_line_is_clipped_without_splitting_a_character() {        // The core prints paths, which can carry non-ASCII; a byte slice here
         // would panic on the read path that reports a dead session.
         let long = "é".repeat(STDERR_TAIL_MAX_CHARS + 200);
         let msg = disconnect_message("Connection closed", &tail_with(&[&long]));

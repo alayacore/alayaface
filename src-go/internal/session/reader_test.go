@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -245,7 +246,7 @@ func TestDisconnect(t *testing.T) {
 	// Child is nil on purpose: disconnect → kill() must not panic.
 	s, h, c := newTestSession()
 	s.setConnected(true)
-	s.disconnect(h, "Connection closed")
+	s.disconnect(h, false, "Connection closed")
 
 	if s.Connected() {
 		t.Error("session still marked connected")
@@ -260,11 +261,124 @@ func TestDisconnect(t *testing.T) {
 	}
 	// Calling disconnect again must not panic and emits again (the
 	// reader only calls it once, but be safe).
-	s.disconnect(h, "again")
+	s.disconnect(h, false, "again")
+}
+
+func TestDisconnectStaysQuietWhenTheTerminalFrameAlreadyAnnounced(t *testing.T) {
+	// The normal v12 order: SM session/closed (announced), then the process
+	// exits and the pipe EOFs. The second end must NOT reach the client — the
+	// plan runner fails its node on every core-status:false it sees.
+	s, h, c := newTestSession()
+	s.setConnected(true)
+	s.disconnect(h, true, "Connection closed")
+
+	if s.Connected() {
+		t.Error("the pipe is gone; connected must be cleared even when the end was already announced")
+	}
+	select {
+	case raw := <-c.Chan():
+		t.Fatalf("no second core-status expected, got %s", raw)
+	case <-time.After(100 * time.Millisecond):
+	}
 }
 
 func frame(tag, value string) *tlv.Frame {
 	return &tlv.Frame{Tag: tag, Value: value}
+}
+
+// ─── The core's terminal frame (protocol v12: session state "closed") ──
+
+func TestDispatchFrameReportsOnlyTheTerminalFrame(t *testing.T) {
+	cases := []struct {
+		name  string
+		tag   string
+		value string
+		want  bool
+	}{
+		{"closed is terminal", "SM", `{"type":"session","data":{"state":"closed"}}`, true},
+		{"ready is not", "SM", `{"type":"session","data":{"state":"ready"}}`, false},
+		{"a startup state is not", "SM", `{"type":"session","data":{"state":"initializing"}}`, false},
+		{"another type is not", "SM", `{"type":"error","data":{"state":"closed"}}`, false},
+		{"no state is not", "SM", `{"type":"session","data":{}}`, false},
+		{"malformed json is not", "SM", `not-json`, false},
+		// The state travels in an SM envelope; the same words on another tag
+		// are content, not a lifecycle signal.
+		{"not on a non-SM tag", "UT", `{"type":"session","data":{"state":"closed"}}`, false},
+	}
+	for _, tc := range cases {
+		s, h, _ := newTestSession()
+		if got := s.dispatchFrame(h, NewModelCache(), frame(tc.tag, tc.value)); got != tc.want {
+			t.Errorf("%s: dispatchFrame = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestReaderAnnouncesTheEndAtTheTerminalFrame(t *testing.T) {
+	// The frame is the session's last word, so the client learns the session
+	// is over from it — even if the process then lingers with stdout held open
+	// (a grandchild inheriting the pipe is the realistic case). The EOF that
+	// follows must not produce a second announcement: the plan runner fails
+	// its node on every core-status:false it receives.
+	s, h, c := newTestSession()
+	s.setConnected(true)
+
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Stdout = pr
+	go s.startReader(h, NewModelCache())
+
+	write := func(tag, value string) {
+		t.Helper()
+		if _, err := pw.Write(tlv.Encode(tag, value)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("SM", `{"type":"session","data":{"state":"ready"}}`)
+	write("AT", "\x007\x00the last reply")
+	write("SM", `{"type":"session","data":{"state":"closed"}}`)
+
+	var statuses []string
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && len(statuses) == 0 {
+		select {
+		case raw := <-c.Chan():
+			var ev hub.Event
+			if json.Unmarshal(raw, &ev) == nil && ev.Type == "core-status" {
+				statuses = append(statuses, decodePayload(t, ev)["message"].(string))
+			}
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	if len(statuses) != 1 {
+		t.Fatalf("the terminal frame must announce the end once, got %v", statuses)
+	}
+	if statuses[0] != SessionClosedMessage {
+		t.Errorf("message = %q, want %q", statuses[0], SessionClosedMessage)
+	}
+	if !s.Connected() {
+		t.Error("the pipe is still open, so this backend's `connected` must stay true — close_session waits on it")
+	}
+
+	// Now let the process go: EOF arrives, the session ends, and nothing is
+	// announced a second time.
+	_ = pw.Close()
+	deadline = time.Now().Add(2 * time.Second)
+	for s.Connected() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if s.Connected() {
+		t.Fatal("EOF must clear `connected`")
+	}
+	select {
+	case raw := <-c.Chan():
+		var ev hub.Event
+		if json.Unmarshal(raw, &ev) == nil && ev.Type == "core-status" {
+			t.Errorf("EOF must not announce a second end: %s", raw)
+		}
+	case <-time.After(200 * time.Millisecond):
+	}
 }
 
 // disconnectMessage: what a user is told when the pipe dies. The reason a core
