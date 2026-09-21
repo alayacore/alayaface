@@ -20,7 +20,26 @@ use crate::tlv;
 /// installed — silently sending prompts into a binary that parses them
 /// differently is worse than refusing to start, so `check_alayacore`
 /// hard-fails on mismatch with the same UX as a missing binary.
-pub const SUPPORTED_MESSAGE_VERSION: i64 = 11;
+///
+/// The number tracks the ADAPTER protocol — the tags, the SM types, and the
+/// states those carry — and alayacore moves it for additive changes too,
+/// because a client that knows only the older format has no other way to
+/// learn that a newer one exists (adapter-guide, "Protocol Version").
+///
+/// v12: `CE` (input end) joined the tag alphabet, the `session` SM gained the
+/// terminal state `closed`, and `quit` (alias `q`) joined the command
+/// vocabulary. All additive: an adapter that knows none of them still speaks
+/// v11 — except in one place, see the note below.
+///
+/// NOTE: the same number is written into every session file's frontmatter
+/// (`message_version: N`) and alayacore's loader demands an EXACT match, so a
+/// v11 file is refused by a v12 core before a single TLV frame is written —
+/// the failure is startup exit 1 with the reason on stderr only. Users'
+/// existing sessions are affected by every bump, not just this one, and the
+/// reason is invisible in a GUI build (the core's stderr is not the terminal)
+/// unless this backend reads it — see `close_child_gracefully`'s twin, the
+/// disconnect path in `reader.rs`, for what reaches the user.
+pub const SUPPORTED_MESSAGE_VERSION: i64 = 12;
 
 /// How long `check_message_version` waits for the boot version frame
 /// before giving up. The version frame is the FIRST thing alayacore
@@ -1122,6 +1141,18 @@ mod tests {
         tlv::encode(tag, value)
     }
 
+    /// The boot version frame a core speaking `version` announces. Built from
+    /// the argument (always a constant or a constant ± 1, never a literal
+    /// number), because a version-frame fixture written as `11` is correct at
+    /// v11 and then silently tests the wrong thing on every later bump: the
+    /// "accepts matching" case would fail loudly, but the "rejects wrong" case
+    /// keeps passing while no longer describing a real mismatch.
+    fn version_frame(version: i64) -> String {
+        format!(
+            r#"{{"type":"version","data":{{"message_version":{version},"core_version":"test"}}}}"#
+        )
+    }
+
     #[test]
     fn read_version_frame_accepts_matching_version() {
         // Real alayacore boot: version FIRST, then everything else.
@@ -1130,7 +1161,7 @@ mod tests {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&encode(
             "SM",
-            r#"{"type":"version","data":{"message_version":11,"core_version":"test"}}"#,
+            &version_frame(SUPPORTED_MESSAGE_VERSION),
         ));
         bytes.extend_from_slice(&encode(
             "SM",
@@ -1142,17 +1173,18 @@ mod tests {
 
     #[test]
     fn read_version_frame_rejects_wrong_version() {
+        // One behind: the ordinary case (an installed core older than this
+        // adapter). Derived from the constant so it stays a REAL mismatch
+        // after every bump.
+        let observed = SUPPORTED_MESSAGE_VERSION - 1;
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(&encode(
-            "SM",
-            r#"{"type":"version","data":{"message_version":10,"core_version":"old"}}"#,
-        ));
+        bytes.extend_from_slice(&encode("SM", &version_frame(observed)));
         let mut r = Cursor::new(bytes);
         let err = read_version_frame(&mut r).expect_err("mismatch must error");
         // User-facing: include the observed AND the expected number so
         // the home-screen banner tells the user which upgrade to fetch.
         assert!(
-            err.contains("message version 10"),
+            err.contains(&format!("message version {observed}")),
             "error must name the observed version: {err:?}"
         );
         assert!(
@@ -1294,7 +1326,7 @@ mod tests {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&encode(
             "SM",
-            r#"{"type":"version","data":{"message_version":11}}"#,
+            &version_frame(SUPPORTED_MESSAGE_VERSION),
         ));
         // Pad with a bunch of unread frames — the helper must return
         // before reading them.

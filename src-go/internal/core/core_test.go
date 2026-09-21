@@ -384,11 +384,21 @@ func encodeFrame(tag, value string) []byte {
 	return out
 }
 
+// versionFrame is the boot version frame a core speaking `version` announces.
+// Built from the argument (always a constant or a constant ± 1, never a
+// literal number), because a version-frame fixture written as `11` is correct
+// at v11 and then silently tests the wrong thing on every later bump: the
+// "accepts matching" case would fail loudly, but the "rejects wrong" case
+// keeps passing while no longer describing a real mismatch.
+func versionFrame(version int) string {
+	return fmt.Sprintf(`{"type":"version","data":{"message_version":%d,"core_version":"test"}}`, version)
+}
+
 func TestReadVersionFrameAcceptsMatchingVersion(t *testing.T) {
 	// Real alayacore boot: version FIRST, then everything else.
 	// readVersionFrame should accept the version frame and stop.
 	buf := []byte{}
-	buf = append(buf, encodeFrame("SM", `{"type":"version","data":{"message_version":11,"core_version":"test"}}`)...)
+	buf = append(buf, encodeFrame("SM", versionFrame(SupportedMessageVersion))...)
 	buf = append(buf, encodeFrame("SM", `{"type":"task","data":{"in_progress":false}}`)...)
 	r := bufio.NewReader(bytes.NewReader(buf))
 	if err := readVersionFrame(r); err != nil {
@@ -397,7 +407,11 @@ func TestReadVersionFrameAcceptsMatchingVersion(t *testing.T) {
 }
 
 func TestReadVersionFrameRejectsWrongVersion(t *testing.T) {
-	buf := encodeFrame("SM", `{"type":"version","data":{"message_version":10,"core_version":"old"}}`)
+	// One behind: the ordinary case (an installed core older than this
+	// adapter). Derived from the constant so it stays a REAL mismatch
+	// after every bump.
+	observed := SupportedMessageVersion - 1
+	buf := encodeFrame("SM", versionFrame(observed))
 	r := bufio.NewReader(bytes.NewReader(buf))
 	err := readVersionFrame(r)
 	if err == nil {
@@ -406,7 +420,7 @@ func TestReadVersionFrameRejectsWrongVersion(t *testing.T) {
 	// User-facing: include the observed AND the expected number so
 	// the home-screen banner tells the user which upgrade to fetch.
 	msg := err.Error()
-	if !strings.Contains(msg, "message version 10") {
+	if !strings.Contains(msg, fmt.Sprintf("message version %d", observed)) {
 		t.Errorf("error must name the observed version: %q", msg)
 	}
 	if !strings.Contains(msg, fmt.Sprintf("expected version %d", SupportedMessageVersion)) {
@@ -491,7 +505,7 @@ func TestReadVersionFrameSkipsUnknownFramesAfterVersion(t *testing.T) {
 	// etc. that the live session reader will consume. Drive that with
 	// a NOOP: the helper must NOT block on unread data after Ok.
 	var buf []byte
-	buf = append(buf, encodeFrame("SM", `{"type":"version","data":{"message_version":11}}`)...)
+	buf = append(buf, encodeFrame("SM", versionFrame(SupportedMessageVersion))...)
 	// Pad with a bunch of unread frames — the helper must return
 	// before reading them.
 	for i := 0; i < 32; i++ {

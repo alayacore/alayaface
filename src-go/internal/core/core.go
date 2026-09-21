@@ -31,9 +31,28 @@ import (
 // differently is worse than refusing to start, so `CheckAlayacore`
 // hard-fails on mismatch with the same UX as a missing binary.
 //
+// The number tracks the ADAPTER protocol — the tags, the SM types, and the
+// states those carry — and alayacore moves it for additive changes too,
+// because a client that knows only the older format has no other way to
+// learn that a newer one exists (adapter-guide, "Protocol Version").
+//
+// v12: `CE` (input end) joined the tag alphabet, the `session` SM gained the
+// terminal state `closed`, and `quit` (alias `q`) joined the command
+// vocabulary. All additive: an adapter that knows none of them still speaks
+// v11 — except in one place, see the note below.
+//
+// NOTE: the same number is written into every session file's frontmatter
+// (`message_version: N`) and alayacore's loader demands an EXACT match, so a
+// v11 file is refused by a v12 core before a single TLV frame is written —
+// the failure is startup exit 1 with the reason on stderr only. Users'
+// existing sessions are affected by every bump, not just this one, and the
+// reason is invisible in a GUI build (the core's stderr is not the terminal)
+// unless this backend reads it — see the disconnect path in reader.go for
+// what reaches the user.
+//
 // Must stay in sync with src-tauri/src/alayacore.rs::SUPPORTED_MESSAGE_VERSION
 // (AGENTS.md: "two backends must stay symmetric").
-const SupportedMessageVersion = 11
+const SupportedMessageVersion = 12
 
 // VersionProbeTimeout is how long CheckMessageVersion waits for the
 // boot version frame before giving up. The version frame is the
