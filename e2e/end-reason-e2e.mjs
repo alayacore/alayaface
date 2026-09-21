@@ -36,6 +36,14 @@ function assert(cond, msg) {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.listen(0, '127.0.0.1', () => { const p = srv.address().port; srv.close(() => resolve(p)); });
+    srv.on('error', reject);
+  });
+}
+
 async function waitPort(port, ms = 25000) {
   const deadline = Date.now() + ms;
   for (;;) {
@@ -68,7 +76,7 @@ exec "${SRCGO}/bin/fakecore" "$@"
 `);
 execSync(`chmod +x "${wrapper}"`);
 
-const port = 8790 + (process.pid % 100);
+const port = await freePort();
 const server = spawn(path.join(SRCGO, 'bin/alayaface-server'),
   ['--addr', `127.0.0.1:${port}`, '--static', path.join(ROOT, 'src-elm'), '--config-path', home],
   { stdio: ['ignore', 'ignore', 'ignore'], env: { ...process.env, HOME: home, ALAYACORE_BIN: wrapper } });
