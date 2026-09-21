@@ -1,8 +1,9 @@
 //! Background readers for alayacore subprocess pipes.
 //!
 //! `spawn_stdout_reader` reads TLV frames from stdout and emits them as
-//! Tauri events. (alayacore's stderr is inherited by the parent process
-//! — see alayacore::spawn — so no stderr collector is needed.)
+//! Tauri events. (alayacore's stderr is drained by a pump in
+//! `alayacore::spawn` into a `StderrTail`, which this reader quotes when the
+//! pipe dies — see `disconnect_message`.)
 
 use crate::event::{DeltaEvent, FrameEvent, StatusEvent};
 use crate::tlv;
@@ -10,6 +11,41 @@ use crate::tlv;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
+
+/// Compose the `core-status` message for a pipe that just died.
+///
+/// With nothing on stderr this returns the base text unchanged, so the common
+/// case (a session closed on purpose) reads exactly as it always did. With a
+/// tail, the LAST line is quoted: for a startup failure it is the whole reason
+/// (`Error: failed to load session: session file version mismatch: got 11,
+/// expected 12`), and `core-status.message` is a one-line UI field, so a stack
+/// trace does not belong in it. Everything the core wrote is still in the
+/// backend log (the pump forwards each line there), which is what the count
+/// suffix points at.
+///
+/// Ported to Go as `disconnectMessage` in session/reader.go — the two must
+/// produce the same string, because the client shows whichever it gets.
+fn disconnect_message(
+    base: &str,
+    tail: &crate::alayacore::StderrTail,
+) -> String {
+    let lines = tail.lines();
+    let Some(last) = lines.last() else {
+        return base.to_string();
+    };
+    let clipped: String = last
+        .chars()
+        .take(crate::alayacore::STDERR_TAIL_MAX_CHARS)
+        .collect();
+    if lines.len() <= 1 {
+        format!("{base}: {clipped}")
+    } else {
+        format!(
+            "{base}: {clipped} (+{} more stderr lines in the backend log)",
+            lines.len() - 1
+        )
+    }
+}
 
 /// User-role content tags that appear on stdout (echoes).
 fn is_user_echo_tag(tag: &str) -> bool {
@@ -26,6 +62,7 @@ pub fn spawn_stdout_reader(
     model_cache: Arc<crate::ModelCacheInner>,
     child: Arc<std::sync::Mutex<Option<std::process::Child>>>,
     pending_commands: Arc<crate::session::PendingCommands>,
+    stderr_tail: crate::alayacore::StderrTail,
 ) {
     std::thread::spawn(move || {
         let sid = session_id;
@@ -46,20 +83,22 @@ pub fn spawn_stdout_reader(
                 Ok(None) => {
                     connected.store(false, Ordering::SeqCst);
                     reap_child();
+                    let message = disconnect_message("Connection closed", &stderr_tail);
                     let _ = app.emit("core-status", StatusEvent {
                         session_id: sid.clone(),
                         connected: false,
-                        message: "Connection closed".to_string(),
+                        message,
                     });
                     break;
                 }
                 Err(e) => {
                     connected.store(false, Ordering::SeqCst);
                     reap_child();
+                    let message = disconnect_message(&format!("Read error: {e}"), &stderr_tail);
                     let _ = app.emit("core-status", StatusEvent {
                         session_id: sid.clone(),
                         connected: false,
-                        message: format!("Read error: {e}"),
+                        message,
                     });
                     break;
                 }
@@ -221,4 +260,73 @@ fn emit_frame(
         json,
         user_content_type,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::disconnect_message;
+    use crate::alayacore::{StderrTail, STDERR_TAIL_MAX_CHARS};
+
+    fn tail_with(lines: &[&str]) -> StderrTail {
+        let tail = StderrTail::default();
+        for line in lines {
+            tail.push(line);
+        }
+        tail
+    }
+
+    #[test]
+    fn a_clean_death_keeps_the_message_it_always_had() {
+        // The ordinary case: a session closed on purpose, nothing on stderr.
+        // This must stay byte-identical to the pre-StderrTail text — the plan
+        // runner quotes it in a node failure reason.
+        assert_eq!(
+            disconnect_message("Connection closed", &tail_with(&[])),
+            "Connection closed"
+        );
+    }
+
+    #[test]
+    fn the_last_stderr_line_is_quoted() {
+        // The real startup failure this exists for, verbatim from a v12 core
+        // handed a v11 session file.
+        let tail = tail_with(&[
+            "Warning: something earlier",
+            "Error: failed to load session: session file version mismatch: got 11, expected 12",
+        ]);
+        let msg = disconnect_message("Connection closed", &tail);
+        assert!(
+            msg.contains("session file version mismatch: got 11, expected 12"),
+            "the reason must reach the user: {msg}"
+        );
+        assert!(
+            !msg.contains("something earlier"),
+            "only the last line goes in the one-line status: {msg}"
+        );
+        assert!(
+            msg.contains("(+1 more stderr lines in the backend log)"),
+            "the user must be told where the rest is: {msg}"
+        );
+    }
+
+    #[test]
+    fn one_line_is_quoted_without_the_counter() {
+        let msg = disconnect_message("Connection closed", &tail_with(&["boom"]));
+        assert_eq!(msg, "Connection closed: boom");
+    }
+
+    #[test]
+    fn a_long_line_is_clipped_without_splitting_a_character() {
+        // The core prints paths, which can carry non-ASCII; a byte slice here
+        // would panic on the read path that reports a dead session.
+        let long = "é".repeat(STDERR_TAIL_MAX_CHARS + 200);
+        let msg = disconnect_message("Connection closed", &tail_with(&[&long]));
+        assert_eq!(
+            msg.chars()
+                .count()
+                .cmp(&("Connection closed: ".chars().count() + STDERR_TAIL_MAX_CHARS)),
+            std::cmp::Ordering::Equal,
+            "clipping is counted in characters: {msg}"
+        );
+    }
 }

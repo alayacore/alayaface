@@ -1,12 +1,16 @@
 //! AlayaCore subprocess manager.
 //!
 //! Spawns `alayacore --rawio` as a child process and provides
-//! access to its stdin/stdout for TLV communication.
+//! access to its stdin/stdout for TLV communication. stderr is piped
+//! and drained into a `StderrTail`, because the failures that matter
+//! most (an unloadable session file) happen before the first TLV frame
+//! exists and have nowhere else to go.
 
 use std::io;
 use std::process::{Child, Command, Stdio};
 
-use std::io::{BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::tlv;
@@ -54,6 +58,100 @@ pub struct CoreProcess {
     pub child: Child,
     pub stdin: std::process::ChildStdin,
     pub stdout: std::process::ChildStdout,
+    /// The child's trailing stderr, collected by the pump `spawn` starts.
+    /// The session's reader quotes it when the pipe dies (see [`StderrTail`]).
+    pub stderr_tail: StderrTail,
+}
+
+/// How many trailing stderr lines [`StderrTail`] keeps.
+///
+/// Must stay in sync with Go's `StderrTailLines`
+/// (scripts/check-backend-parity.sh compares the two).
+pub const STDERR_TAIL_LINES: usize = 20;
+
+/// The longest stderr line that may be put into a user-facing status message,
+/// counted in CHARACTERS (a byte slice would panic mid-UTF-8, and the core
+/// prints paths).
+///
+/// Must stay in sync with Go's `StderrTailMaxChars`.
+pub const STDERR_TAIL_MAX_CHARS: usize = 400;
+
+/// The last few lines a spawned alayacore wrote to stderr.
+///
+/// alayacore reports here everything it cannot report over TLV, because TLV
+/// only exists once a session has started: a session file whose
+/// `message_version` it will not load, an unusable config, a tool it could not
+/// exec. Those abort startup BEFORE the first frame is written, so all the
+/// adapter used to observe was stdout EOF, and the whole story the user got
+/// was "Connection closed". In a packaged desktop build there is no terminal
+/// behind the process, so the reason was written nowhere they could find.
+///
+/// Cloneable and shared between the pump (writer) and the reader (reader).
+/// Lines are kept oldest-first and the buffer is bounded, so a verbose core
+/// cannot grow it without limit.
+#[derive(Clone, Default)]
+pub struct StderrTail(Arc<std::sync::Mutex<std::collections::VecDeque<String>>>);
+
+impl StderrTail {
+    /// Record one line, dropping the oldest when full. Blank lines are skipped
+    /// rather than stored: alayacore's stderr is line-based, an empty line
+    /// carries no reason, and letting them in would push real lines out of the
+    /// window.
+    ///
+    /// `pub(crate)` so the reader's tests can build a tail with content in it;
+    /// the pump stays the only production writer.
+    pub(crate) fn push(&self, line: &str) {
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if trimmed.trim().is_empty() {
+            return;
+        }
+        let Ok(mut guard) = self.0.lock() else {
+            // A poisoned mutex means the pump panicked while holding it;
+            // losing the tail must not take the session down with it.
+            return;
+        };
+        if guard.len() >= STDERR_TAIL_LINES {
+            guard.pop_front();
+        }
+        guard.push_back(trimmed.to_string());
+    }
+
+    /// The recorded lines, oldest first. Empty when the child wrote nothing —
+    /// the normal case, and one that must leave the status message exactly as
+    /// it read before this existed.
+    pub fn lines(&self) -> Vec<String> {
+        let Ok(guard) = self.0.lock() else {
+            return Vec::new();
+        };
+        guard.iter().cloned().collect()
+    }
+}
+
+/// Drain a child's stderr until EOF: forward every line to this backend's own
+/// log, and record it in the tail.
+///
+/// The forwarding matters. stderr used to go to the terminal directly, so a
+/// backend run in a foreground shell showed alayacore's output live; piping it
+/// without re-logging would have taken that away to fix a problem on the other
+/// side. `log::info!` keeps both.
+fn spawn_stderr_pump(stderr: std::process::ChildStderr, tail: StderrTail) {
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        for line in reader.lines() {
+            match line {
+                Ok(line) => {
+                    log::info!("[alayacore] {line}");
+                    tail.push(&line);
+                }
+                Err(e) => {
+                    // The pipe closing when the child exits is the normal end
+                    // of this loop, not a failure worth an error line.
+                    log::debug!("[alayacore] stderr ended: {e}");
+                    break;
+                }
+            }
+        }
+    });
 }
 
 /// Start alayacore with `--rawio` and return the process + pipes.
@@ -71,7 +169,10 @@ pub struct CoreProcess {
 /// If `work_dir` is Some, the child's working directory is set to it
 /// (per-plan isolation for Plan Mode nodes; None = inherit the backend's
 /// cwd, the pre-isolation behavior).
-/// stderr is inherited so alayacore's own logs reach the terminal.
+/// stderr is piped and drained by a pump thread into a `StderrTail`, which
+/// the session reader quotes when the pipe dies — every other log line
+/// reaches the backend's own logger, so nothing that used to be printed is
+/// lost.
 pub fn spawn(
     binary_path: &str,
     config_path: &str,
@@ -120,16 +221,24 @@ pub fn spawn(
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::piped())
         .spawn()?;
 
     let stdin = child.stdin.take().expect("failed to capture stdin");
     let stdout = child.stdout.take().expect("failed to capture stdout");
+    let stderr = child.stderr.take().expect("failed to capture stderr");
+
+    // Start the pump before returning: an unread pipe fills its OS buffer, and
+    // a core that writes enough log lines would then block on write — which
+    // looks exactly like a hung session from here.
+    let stderr_tail = StderrTail::default();
+    spawn_stderr_pump(stderr, stderr_tail.clone());
 
     Ok(CoreProcess {
         child,
         stdin,
         stdout,
+        stderr_tail,
     })
 }
 
@@ -1122,6 +1231,81 @@ mod tests {
     // mutations are process-global, not per-module). Same shim
     // rationale as in commands/cmd::tests — per-module statics can't
     // borrow a sibling module's static.
+
+    // ─── StderrTail ───────────────────────────────────────────
+    //
+    // The reason a session died is only on stderr when it died before the
+    // protocol started (an unloadable session file, a bad config). These
+    // tests pin the collection; the message it turns into is
+    // `reader.rs::disconnect_message`.
+
+    #[test]
+    fn stderr_tail_keeps_the_last_lines_in_order() {
+        let tail = StderrTail::default();
+        for i in 0..(STDERR_TAIL_LINES + 5) {
+            tail.push(&format!("line {i}"));
+        }
+        let lines = tail.lines();
+        assert_eq!(
+            lines.len(),
+            STDERR_TAIL_LINES,
+            "the buffer is bounded — a chatty core must not grow it"
+        );
+        assert_eq!(
+            lines.first().unwrap().as_str(),
+            &format!("line 5"),
+            "the OLDEST lines are the ones dropped"
+        );
+        assert_eq!(
+            lines.last().unwrap().as_str(),
+            &format!("line {}", STDERR_TAIL_LINES + 4),
+            "the newest line must be last — that is the one the user is shown"
+        );
+    }
+
+    #[test]
+    fn stderr_tail_skips_blank_lines_and_trims_the_ending() {
+        // A blank line carries no reason, and storing them would push real
+        // lines out of the window. "\\r" survives from a CRLF core on Windows.
+        let tail = StderrTail::default();
+        tail.push("");
+        tail.push("   ");
+        tail.push("Error: failed to load session\r");
+        tail.push("\n");
+        assert_eq!(tail.lines(), vec!["Error: failed to load session"]);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn spawn_collects_the_childs_stderr_into_the_tail() {
+        // Drives the pump for real: a stub that dies the way a refused session
+        // file does — reason on stderr, nothing on stdout, exit 1.
+        let dir = temp_path("stderr-pump");
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("fake-alayacore");
+        std::fs::write(
+            &bin,
+            "#!/bin/sh\nprintf '%s\\n' 'Error: failed to load session: version mismatch' >&2\nexit 1\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut core = spawn_stub(&bin).expect("stub spawns");
+        // Drain stdout to EOF first: that is what the session reader does, and
+        // it is the ordering that makes the pump's line observable (the child
+        // cannot exit while stdout is unread and its buffer full).
+        let mut sink = String::new();
+        let _ = core.stdout.read_to_string(&mut sink);
+        let _ = core.child.wait();
+
+        let lines = core.stderr_tail.lines();
+        assert!(
+            lines.iter().any(|l| l.contains("failed to load session")),
+            "the pump must record the child's stderr, got {lines:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     // ─── check_message_version ────────────────────────────────
     //

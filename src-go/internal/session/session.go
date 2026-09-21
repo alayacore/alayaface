@@ -33,6 +33,11 @@ type Session struct {
 	Stdout     io.ReadCloser // owned by the reader goroutine
 	Child      *exec.Cmd
 	SessionDir string
+	// StderrTail holds the child's trailing stderr (the pump in core.Spawn
+	// fills it). The reader quotes it when the pipe dies, so a core that dies
+	// at startup — before any TLV frame exists — reports WHY rather than
+	// leaving "Connection closed" as the whole story.
+	StderrTail *core.StderrTail
 	// Owner is the client identity that created/resumed this session
 	// (empty = legacy/unknown). close_all_sessions reclaims only the
 	// caller's own sessions, so one browser tab's page load never kills
@@ -235,6 +240,7 @@ func (m *Manager) Create(cfg CreateConfig, h *hub.Hub, cache *ModelCache) (*Sess
 		Stdout:      proc.Stdout,
 		Child:       proc.Cmd,
 		SessionDir:  cfg.SessionDir,
+		StderrTail:  proc.StderrTail,
 		Owner:       cfg.Owner,
 		PendingCmds: newPendingCmds(),
 	}

@@ -10,11 +10,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"alayaface/src-go/internal/tlv"
@@ -68,6 +71,104 @@ type CoreProcess struct {
 	Cmd    *exec.Cmd
 	Stdin  io.WriteCloser
 	Stdout io.ReadCloser
+	// StderrTail holds the child's trailing stderr, collected by the pump
+	// Spawn starts. The session's reader quotes it when the pipe dies.
+	StderrTail *StderrTail
+}
+
+// StderrTailLines is how many trailing stderr lines a StderrTail keeps.
+//
+// Must stay in sync with src-tauri/src/alayacore.rs::STDERR_TAIL_LINES
+// (scripts/check-backend-parity.sh compares the two).
+const StderrTailLines = 20
+
+// StderrTailMaxChars is the longest stderr line that may be put into a
+// user-facing status message, counted in RUNES — the same unit Rust counts when
+// it takes `STDERR_TAIL_MAX_CHARS` `chars()`, and the reason the limit is not
+// in bytes: a byte slice can cut a multi-byte character in half, and the core
+// prints paths that may contain one.
+//
+// Must stay in sync with src-tauri/src/alayacore.rs::STDERR_TAIL_MAX_CHARS.
+const StderrTailMaxChars = 400
+
+// StderrTail is the last few lines a spawned alayacore wrote to stderr.
+//
+// alayacore reports here everything it cannot report over TLV, because TLV
+// only exists once a session has started: a session file whose
+// `message_version` it will not load, an unusable config, a tool it could not
+// exec. Those abort startup BEFORE the first frame is written, so all the
+// adapter used to observe was stdout EOF, and the whole story the user got
+// was "Connection closed". The Go backend may be reached over SSH or the LAN
+// with no terminal attached at all, so the reason was written nowhere they
+// could find.
+//
+// Port of alayacore.rs::StderrTail. Safe for concurrent use: one pump goroutine
+// writes, reader goroutines read.
+type StderrTail struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+// Push records one line, dropping the oldest when full. Blank lines are
+// skipped rather than stored: alayacore's stderr is line-based, an empty line
+// carries no reason, and letting them in would push real lines out of the
+// window.
+//
+// Exported for the same reason Rust's is `pub(crate)`: the reader's tests need
+// a tail with content in it, and the pump stays the only production writer.
+func (t *StderrTail) Push(line string) {
+	trimmed := strings.TrimRight(line, "\r\n")
+	if strings.TrimSpace(trimmed) == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.lines) >= StderrTailLines {
+		t.lines = t.lines[1:]
+	}
+	t.lines = append(t.lines, trimmed)
+}
+
+// Lines returns the recorded lines, oldest first. Empty when the child wrote
+// nothing — the normal case, and one that must leave the status message
+// exactly as it read before this existed.
+func (t *StderrTail) Lines() []string {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]string, len(t.lines))
+	copy(out, t.lines)
+	return out
+}
+
+// startStderrPump drains a child's stderr until EOF: forward every line to
+// this backend's own log, and record it in the tail.
+//
+// The forwarding matters. stderr used to go to the terminal directly, so a
+// backend run in a foreground shell showed alayacore's output live; piping it
+// without re-logging would have taken that away to fix a problem on the other
+// side. log.Printf keeps both.
+//
+// Port of alayacore.rs::spawn_stderr_pump.
+func startStderrPump(stderr io.ReadCloser, tail *StderrTail) {
+	go func() {
+		defer stderr.Close()
+		scanner := bufio.NewScanner(stderr)
+		// A core that prints one enormous line (a stack dump, a base64 blob
+		// on stderr) must not be able to out-grow the default 64 KiB token and
+		// silently end the scan: 1 MiB is roomier than any real line and still
+		// bounded.
+		scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
+		for scanner.Scan() {
+			line := scanner.Text()
+			log.Printf("[alayacore] %s", line)
+			tail.Push(line)
+		}
+		// scanner.Err() is deliberately not logged as an error: the pipe
+		// closing when the child exits is the normal end of this loop.
+	}()
 }
 
 // Spawn starts alayacore with --rawio and returns the process + pipes.
@@ -86,7 +187,8 @@ type CoreProcess struct {
 // If workDir is non-empty, the child's working directory is set to it
 // (per-plan isolation for Plan Mode nodes; empty = inherit the backend's
 // cwd, the pre-isolation behavior).
-// stderr is inherited so alayacore's own logs reach the terminal.
+// stderr is piped and drained into a StderrTail by a goroutine this starts,
+// and every line is forwarded to the backend's own log — see StderrTail.
 func Spawn(binaryPath, configPath, sessionPath, toolConfirm string, builtinTools *string, systemPrompt string, reasoningLevel int, workDir string) (*CoreProcess, error) {
 	args := []string{"--rawio"}
 	if configPath != "" {
@@ -121,13 +223,37 @@ func Spawn(binaryPath, configPath, sessionPath, toolConfirm string, builtinTools
 		_ = stdin.Close()
 		return nil, err
 	}
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
+	// stderr is piped and drained, not inherited: a core that dies at startup
+	// says why only there (a refused session file, a bad config), and a full
+	// stderr buffer would otherwise block a chatty core on write — which reads
+	// exactly like a hung session.
+	//
+	// An explicit os.Pipe rather than cmd.StderrPipe(), because cmd.Wait()
+	// closes a pipe it created itself, and reaping happens on the reader's
+	// disconnect path while this pump is still draining. Losing the last
+	// lines is losing the whole point of the feature: the reason. With our own
+	// descriptors, Wait cannot touch the read end, and EOF arrives when the
+	// child's copy of the write end goes away with it.
+	stderrRead, stderrWrite, err := os.Pipe()
+	if err != nil {
 		_ = stdin.Close()
 		_ = stdout.Close()
 		return nil, err
 	}
-	return &CoreProcess{Cmd: cmd, Stdin: stdin, Stdout: stdout}, nil
+	cmd.Stderr = stderrWrite
+	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
+		_ = stdout.Close()
+		_ = stderrRead.Close()
+		_ = stderrWrite.Close()
+		return nil, err
+	}
+	// The parent's copy of the write end is not ours to keep: holding it open
+	// would mean the pipe never reaches EOF after the child exits.
+	_ = stderrWrite.Close()
+	stderrTail := &StderrTail{}
+	startStderrPump(stderrRead, stderrTail)
+	return &CoreProcess{Cmd: cmd, Stdin: stdin, Stdout: stdout, StderrTail: stderrTail}, nil
 }
 
 // FindBinary detects the alayacore binary.

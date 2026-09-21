@@ -236,8 +236,95 @@ func TestSpawnArgsAndCommunication(t *testing.T) {
 	}
 }
 
-func TestSpawnError(t *testing.T) {
-	if _, err := Spawn("/nonexistent/alayacore", "", "", "", nil, "", 1, ""); err == nil {
+// StderrTail: the reason a core died at startup lives only on stderr, so
+// collecting it is what turns "Connection closed" into something the user can
+// act on. The message it becomes is session/reader.go's disconnectMessage.
+
+func TestStderrTailKeepsTheLastLinesInOrder(t *testing.T) {
+	tail := &StderrTail{}
+	for i := 0; i < StderrTailLines+5; i++ {
+		tail.Push(fmt.Sprintf("line %d", i))
+	}
+	lines := tail.Lines()
+	if len(lines) != StderrTailLines {
+		t.Fatalf("the buffer is bounded — a chatty core must not grow it: got %d", len(lines))
+	}
+	if lines[0] != "line 5" {
+		t.Errorf("the OLDEST lines are the ones dropped: got %q", lines[0])
+	}
+	if last := lines[len(lines)-1]; last != fmt.Sprintf("line %d", StderrTailLines+4) {
+		t.Errorf("the newest line must be last — that is the one the user is shown: got %q", last)
+	}
+}
+
+func TestStderrTailSkipsBlankLinesAndTrimsTheEnding(t *testing.T) {
+	// A blank line carries no reason, and storing them would push real lines
+	// out of the window. "\r" survives from a CRLF core on Windows.
+	tail := &StderrTail{}
+	tail.Push("")
+	tail.Push("   ")
+	tail.Push("Error: failed to load session\r")
+	tail.Push("\n")
+	lines := tail.Lines()
+	if len(lines) != 1 || lines[0] != "Error: failed to load session" {
+		t.Errorf("got %#v", lines)
+	}
+}
+
+func TestStderrTailNilIsSafe(t *testing.T) {
+	// A Session built by a test (or by any path that never spawned a child)
+	// has no tail; the disconnect path must still produce a message rather
+	// than panic on the way to reporting a dead session.
+	var tail *StderrTail
+	if got := tail.Lines(); len(got) != 0 {
+		t.Errorf("nil tail = %#v, want empty", got)
+	}
+}
+
+func TestSpawnCollectsTheChildsStderrIntoTheTail(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the stub is a /bin/sh script")
+	}
+	// Drives the pump for real: a stub that dies the way a refused session
+	// file does — reason on stderr, nothing on stdout, exit 1.
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "fake-alayacore")
+	stub := "#!/bin/sh\nprintf '%s\\n' 'Error: failed to load session: version mismatch' >&2\nexit 1\n"
+	if err := os.WriteFile(bin, []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	proc, err := Spawn(bin, "", "", "", nil, "", 1, "")
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	// Drain stdout to EOF first: that is what the session reader does, and the
+	// pump runs on its own goroutine, so waiting for the child to be gone is
+	// how we know its stderr has all arrived.
+	if _, err := io.Copy(io.Discard, proc.Stdout); err != nil {
+		t.Fatalf("drain stdout: %v", err)
+	}
+	if err := proc.Cmd.Wait(); err != nil {
+		// exit 1 is the stub's report that it failed; only a signal or a
+		// Wait() plumbing error here would be unexpected.
+		if _, ok := err.(*exec.ExitError); !ok {
+			t.Fatalf("Wait: %v", err)
+		}
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for len(proc.StderrTail.Lines()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	lines := proc.StderrTail.Lines()
+	if len(lines) == 0 {
+		t.Fatal("the pump must record the child's stderr")
+	}
+	if !strings.Contains(lines[len(lines)-1], "failed to load session") {
+		t.Errorf("tail = %#v, want the core's reason", lines)
+	}
+}
+
+func TestSpawnError(t *testing.T) {	if _, err := Spawn("/nonexistent/alayacore", "", "", "", nil, "", 1, ""); err == nil {
 		t.Fatal("Spawn with missing binary should error")
 	}
 }

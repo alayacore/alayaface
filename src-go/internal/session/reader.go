@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 
+	"alayaface/src-go/internal/core"
 	"alayaface/src-go/internal/hub"
 	"alayaface/src-go/internal/tlv"
 )
@@ -14,6 +15,40 @@ import (
 var userEchoTags = map[string]bool{"UT": true, "UI": true, "UV": true, "UA": true, "UD": true}
 
 func isUserEchoTag(tag string) bool { return userEchoTags[tag] }
+
+// disconnectMessage composes the `core-status` message for a pipe that just
+// died.
+//
+// With nothing on stderr this returns the base text unchanged, so the common
+// case (a session closed on purpose) reads exactly as it always did. With a
+// tail, the LAST line is quoted: for a startup failure it is the whole reason
+// (`Error: failed to load session: session file version mismatch: got 11,
+// expected 12`), and `core-status.message` is a one-line UI field, so a stack
+// trace does not belong in it. Everything the core wrote is still in the
+// backend log (the pump forwards each line there), which is what the count
+// suffix points at.
+//
+// Port of reader.rs::disconnect_message — the two must produce the same
+// string, because the client shows whichever backend it is talking to.
+func disconnectMessage(base string, tail *core.StderrTail) string {
+	lines := tail.Lines()
+	if len(lines) == 0 {
+		return base
+	}
+	last := lines[len(lines)-1]
+	runes := []rune(last)
+	if len(runes) > core.StderrTailMaxChars {
+		runes = runes[:core.StderrTailMaxChars]
+	}
+	clipped := string(runes)
+	if len(lines) <= 1 {
+		return fmt.Sprintf("%s: %s", base, clipped)
+	}
+	return fmt.Sprintf(
+		"%s: %s (+%d more stderr lines in the backend log)",
+		base, clipped, len(lines)-1,
+	)
+}
 
 // startReader spawns the background goroutine that reads TLV frames from
 // alayacore's stdout and broadcasts them to the hub (tlv-delta,
@@ -26,11 +61,11 @@ func (s *Session) startReader(h *hub.Hub, cache *ModelCache) {
 		for {
 			frame, err := tlv.ReadFrame(reader)
 			if err != nil {
-				s.disconnect(h, fmt.Sprintf("Read error: %v", err))
+				s.disconnect(h, disconnectMessage(fmt.Sprintf("Read error: %v", err), s.StderrTail))
 				return
 			}
 			if frame == nil { // clean EOF
-				s.disconnect(h, "Connection closed")
+				s.disconnect(h, disconnectMessage("Connection closed", s.StderrTail))
 				return
 			}
 			s.dispatchFrame(h, cache, frame)

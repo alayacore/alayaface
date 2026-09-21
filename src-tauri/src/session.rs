@@ -264,6 +264,7 @@ pub async fn create(cfg: SessionConfig<'_>) -> Result<String, String> {
         cfg.model_cache.0.clone(),
         child.clone(),
         pending_commands,
+        proc.stderr_tail,
     );
 
     Ok(session_id)

@@ -221,6 +221,22 @@ check_scalar "graceful close timeout (secs)" \
   "$(sed -nE 's/^[^\/]*GRACEFUL_CLOSE_TIMEOUT[^;]*from_secs\(([0-9]+)\).*/\1/p' "$R_CORE" | head -1)" \
   "$(plain_num 'gracefulCloseTimeout' "$G_SESS")"
 
+# 2c-quater. The stderr tail — what a user is told when alayacore dies before
+#     the protocol starts. The core reports an unloadable session file, an
+#     unusable config and a failed tool exec ONLY on stderr, and every one of
+#     those aborts before the first TLV frame, so the tail is the only channel
+#     that carries a reason. Both backends quote it in the same one-line
+#     `core-status.message`, which the client shows verbatim: the clip and the
+#     buffer size are the duplicated scalars, and the suffix is the duplicated
+#     string — any one of them drifting means one deployment truncates or says
+#     something else than the other.
+check_scalar "stderr tail lines kept" \
+  "$(plain_num 'STDERR_TAIL_LINES' "$R_CORE")" \
+  "$(plain_num 'StderrTailLines' "$G_CORE")"
+check_scalar "stderr tail quote clip (characters)" \
+  "$(plain_num 'STDERR_TAIL_MAX_CHARS' "$R_CORE")" \
+  "$(plain_num 'StderrTailMaxChars' "$G_CORE")"
+
 check_scalar "fs data-URI cap" \
   "$(shift_expr 'MAX_DATA_URI_FILE_SIZE' "$R_FS")" \
   "$(shift_expr 'maxDataUriFileSize' "$G_FS")"
@@ -439,6 +455,15 @@ expect_both "error string" "file too large" "$R_FS" "$G_FS"
 expect_both "error string" "Invalid session id" "$R_DIRS" "$G_DIRS"
 expect_both "error string" "escapes the sessions directory" "$R_DIRS" "$G_DIRS"
 expect_both "error string" "Cannot read object: invalid hash" "$R_OBJ" "$G_OBJ"
+
+# 2g-bis. The disconnect status message, composed by each reader from the same
+#     two pieces. "Connection closed" is quoted by the plan runner's node
+#     failure reason and by tests on both sides, so a rename on one backend
+#     changes what one deployment tells the user while the other stays old.
+R_READ=src-tauri/src/reader.rs
+G_READ=src-go/internal/session/reader.go
+expect_both "status string" "Connection closed" "$R_READ" "$G_READ"
+expect_both "status string" "more stderr lines in the backend log" "$R_READ" "$G_READ"
 
 # ─── Result ──────────────────────────────────────────────────────────
 

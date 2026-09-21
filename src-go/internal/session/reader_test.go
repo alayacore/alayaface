@@ -2,9 +2,11 @@ package session
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
+	"alayaface/src-go/internal/core"
 	"alayaface/src-go/internal/hub"
 	"alayaface/src-go/internal/tlv"
 )
@@ -263,4 +265,60 @@ func TestDisconnect(t *testing.T) {
 
 func frame(tag, value string) *tlv.Frame {
 	return &tlv.Frame{Tag: tag, Value: value}
+}
+
+// disconnectMessage: what a user is told when the pipe dies. The reason a core
+// gives at startup exists only on stderr, and the client shows whichever
+// backend it is talking to — so this text is shared with Rust's
+// reader.rs::disconnect_message, and pinned the same way on both sides.
+
+func TestDisconnectMessageKeepsThePlainTextWithoutAStderrTail(t *testing.T) {
+	// The ordinary case: a session closed on purpose, nothing on stderr.
+	// This must stay byte-identical to the pre-StderrTail text — the plan
+	// runner quotes it in a node failure reason.
+	if got := disconnectMessage("Connection closed", nil); got != "Connection closed" {
+		t.Errorf("nil tail = %q, want the plain text", got)
+	}
+	if got := disconnectMessage("Connection closed", &core.StderrTail{}); got != "Connection closed" {
+		t.Errorf("empty tail = %q, want the plain text", got)
+	}
+}
+
+func TestDisconnectMessageQuotesTheLastStderrLine(t *testing.T) {
+	// The real startup failure this exists for, verbatim from a v12 core
+	// handed a v11 session file.
+	tail := &core.StderrTail{}
+	tail.Push("Warning: something earlier")
+	tail.Push("Error: failed to load session: session file version mismatch: got 11, expected 12")
+	msg := disconnectMessage("Connection closed", tail)
+	if !strings.Contains(msg, "session file version mismatch: got 11, expected 12") {
+		t.Errorf("the reason must reach the user: %q", msg)
+	}
+	if strings.Contains(msg, "something earlier") {
+		t.Errorf("only the last line goes in the one-line status: %q", msg)
+	}
+	if !strings.Contains(msg, "(+1 more stderr lines in the backend log)") {
+		t.Errorf("the user must be told where the rest is: %q", msg)
+	}
+}
+
+func TestDisconnectMessageQuotesOneLineWithoutTheCounter(t *testing.T) {
+	tail := &core.StderrTail{}
+	tail.Push("boom")
+	if got := disconnectMessage("Connection closed", tail); got != "Connection closed: boom" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestDisconnectMessageClipsALongLineWithoutSplittingACharacter(t *testing.T) {
+	// The core prints paths, which can carry multi-byte characters; the limit
+	// is counted in runes in both backends so neither cuts one in half.
+	long := strings.Repeat("é", core.StderrTailMaxChars+200)
+	tail := &core.StderrTail{}
+	tail.Push(long)
+	msg := disconnectMessage("Connection closed", tail)
+	want := len([]rune("Connection closed: ")) + core.StderrTailMaxChars
+	if got := len([]rune(msg)); got != want {
+		t.Errorf("clipping is counted in characters: got %d runes, want %d", got, want)
+	}
 }
