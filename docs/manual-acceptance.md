@@ -113,9 +113,13 @@
 - [ ] **Why it ended, in words**: closing a session whose core finished cleanly reports
       "Session closed by alayacore"; a pipe that died reports "Connection closed" —
       and if the core wrote a reason to stderr, that reason is quoted after it.
-      Trigger the second one for real by taking a session written by an older core
-      (its `session.alaya` frontmatter says `message_version: 11`) and resuming it
-      with a core that announces 12: the window must say
+      It appears in the TRANSCRIPT as a SYSTEM ERROR line, not in a status strip:
+      7c99f83 dropped the title-bar status line, and `SessionState.statusMsg` has
+      no reader, so a reason that is not a message is a reason nobody sees
+      (`e2e/end-reason-e2e.mjs` asserts exactly this, and fails if the line is
+      only stored). Trigger the second one for real by taking a session written by
+      an older core (its `session.alaya` frontmatter says `message_version: 11`)
+      and resuming it with a core that announces 12: the window must say
       `Connection closed: Error: failed to load session: session file version
       mismatch: got 11, expected 12`, **not** a bare "Connection closed" — the core
       exits before it sends any frame, so stderr is the only thing that ever said

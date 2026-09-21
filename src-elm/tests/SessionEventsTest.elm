@@ -696,6 +696,86 @@ tests =
                         , \_ -> Expect.equal (Just "Session disconnected during sync") s.modelSelector.syncError
                         ]
                         ()
+            , describe "the end reason, in the transcript"
+                [ test "a disconnect says WHY, as a message" <|
+                  \_ ->
+                    -- The backend's whole reason for existing: a core that dies
+                    -- at startup has no frame to carry its reason, so the
+                    -- status message is all there is — and `statusMsg` has no
+                    -- reader (7c99f83 dropped the status line), so a reason that
+                    -- is not in the transcript is a reason nobody sees.
+                    let
+                        reason =
+                            "Connection closed: Error: failed to load session: session file version mismatch: got 11, expected 12"
+
+                        ( m, _ ) =
+                            SE.statusEvent initModelWithSession (statusJson "s1" False reason)
+
+                        s =
+                            Dict.get "s1" m.sessions |> Maybe.withDefault session
+
+                        last =
+                            s.messages |> List.reverse |> List.head
+                    in
+                    Expect.all
+                        [ \_ ->
+                            Expect.equal (Just reason) (last |> Maybe.map .content)
+                        , \_ ->
+                            Expect.equal (Just T.Error) (last |> Maybe.map .role)
+                        , \_ ->
+                            -- The transcript grew by exactly one line.
+                            Expect.equal (List.length session.messages + 1) (List.length s.messages)
+                        ]
+                        ()
+            , test "connected:true never writes to the transcript" <|
+                \_ ->
+                    let
+                        ( m, _ ) =
+                            SE.statusEvent initModelWithSession (statusJson "s1" True "Connected to alayacore (/usr/bin/alayacore)")
+
+                        s =
+                            Dict.get "s1" m.sessions |> Maybe.withDefault session
+                    in
+                    Expect.equal (List.length session.messages) (List.length s.messages)
+            , test "one death is reported once, even if the status event is applied twice" <|
+                \_ ->
+                    -- The reader promises one announcement per session, but the
+                    -- buffered replay path can hand the same event to a session
+                    -- that already took it.
+                    let
+                        ( once, _ ) =
+                            SE.statusEvent initModelWithSession (statusJson "s1" False "gone")
+
+                        ( twice, _ ) =
+                            SE.statusEvent once (statusJson "s1" False "gone")
+
+                        count dict =
+                            dict
+                                |> Dict.get "s1"
+                                |> Maybe.map (\s -> List.length (List.filter (\msg -> msg.role == T.Error) s.messages))
+                                |> Maybe.withDefault -1
+                    in
+                    Expect.all
+                        [ \_ ->
+                            -- Asserted on its own: without it a build that
+                            -- appends NOTHING also has equal counts, and this
+                            -- test would pass by proving nothing.
+                            Expect.equal 1 (count once.sessions)
+                        , \_ ->
+                            Expect.equal 1 (count twice.sessions)
+                        ]
+                        ()
+            , test "an empty reason adds no line at all" <|
+                \_ ->
+                    let
+                        ( m, _ ) =
+                            SE.statusEvent initModelWithSession (statusJson "s1" False "   ")
+
+                        s =
+                            Dict.get "s1" m.sessions |> Maybe.withDefault session
+                    in
+                    Expect.equal (List.length session.messages) (List.length s.messages)
+            ]
             , test "a connected:true during a sync leaves the sync running" <|
                 \_ ->
                     let

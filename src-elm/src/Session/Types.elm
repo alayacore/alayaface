@@ -266,9 +266,10 @@ type alias SessionState =
     , connected : Bool
     -- True once the core's explicit readiness signal arrives
     -- (SM {"type":"session","data":{"state":"ready"}}): MCP servers are
-    -- initialized, replay ended, the session is interactive. Node
-    -- prompts are held until this flips (alayacore rejects prompts with
-    -- MCP_NOT_READY before it).
+    -- initialized, replay ended, the session is interactive. Node prompts are
+    -- held until this flips — see Plan/Update.elm's SendPrompt arm for why the
+    -- client still gates on it now that a pre-ready prompt is held core-side
+    -- rather than refused.
     , ready : Bool
     , statusMsg : String
     , messages : List Message

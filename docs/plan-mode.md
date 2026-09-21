@@ -839,6 +839,17 @@ bump makes the user's existing sessions unloadable until they are edited or
 rewritten by a run of the matching core. AlayaFace neither migrates nor edits
 them (it is not our file to rewrite); it reports why they failed.
 
+The client finishes the chain: `core-status.message` is turned into one
+transcript line (`Session.Handlers.appendEndNotice`, applied by
+`Session/Events.elm statusEvent` on a disconnect only). Not into a status strip —
+7c99f83 dropped the title-bar status line, which is why `statusMsg` has no
+reader and why writing it was not the same as telling the user. The append is
+idempotent on the text, because a buffered status event can reach a session that
+already announced its own end. `e2e/end-reason-e2e.mjs` covers the whole chain in
+a browser: a core that dies at startup with a stderr reason (the transcript must
+carry that reason), a live core killed under a window (no stderr, so the plain
+text), and one death never producing two lines.
+
 **`quit` is not used.** The v12 `quit`/`q` CI command ends the session *after
 letting a task in flight finish* — the opposite of close_session's cancel-first
 policy (§8.3), which exists because Stop means stop. It is documented here so the

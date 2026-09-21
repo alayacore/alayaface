@@ -314,12 +314,13 @@ deltaEvent model raw =
 {-| A `SM` status frame: the core reports connection state (and, for
 `type: "session"`, readiness — which arrives as a `FrameEvent`, not here).
 
-Writes `sessions` — `connected`, `statusMsg`, `sendPending`, and on a
-disconnect mid-sync the model-selector page too. A session owned by a plan node
-additionally fails that node: the runner needs `SessionDisconnected` whether or
-not this client still has the session registered, which is why the runner action
-is computed from `model` before the session lookup and is batched with the
-buffer path as well.
+Writes `sessions` — `connected`, `statusMsg`, `sendPending`, the transcript line
+naming the reason (a disconnect only, via `Session.Handlers.appendEndNotice`),
+and on a disconnect mid-sync the model-selector page too. A session owned by a
+plan node additionally fails that node: the runner needs `SessionDisconnected`
+whether or not this client still has the session registered, which is why the
+runner action is computed from `model` before the session lookup and is batched
+with the buffer path as well.
 -}
 statusEvent : Model -> E.Value -> ( Model, List Action )
 statusEvent model raw =
@@ -385,6 +386,22 @@ statusEvent model raw =
                                         else
                                             False
                                 }
+
+                            -- The reason goes into the transcript. `statusMsg`
+                            -- has no reader (7c99f83 dropped the title-bar
+                            -- status line and sent failures to the messages
+                            -- instead), so a disconnect that only writes it
+                            -- leaves the window with a dead input and no
+                            -- explanation — which is exactly the hole the
+                            -- backend had to close over stderr for, because an
+                            -- unloadable session file says its reason BEFORE
+                            -- there is any frame to carry it.
+                            updated2 =
+                                if ev.connected then
+                                    updated
+
+                                else
+                                    H.appendEndNotice ev.message updated
                         in
                         if not ev.connected && session.modelSelector.page == ModelSelSyncing then
                             -- A disconnect means the model_sync CO will
@@ -393,8 +410,8 @@ statusEvent model raw =
                             ( { model
                                 | sessions =
                                     Dict.insert sid
-                                        { updated
-                                            | modelSelector = Sel.syncFailed "Session disconnected during sync" updated.modelSelector
+                                        { updated2
+                                            | modelSelector = Sel.syncFailed "Session disconnected during sync" updated2.modelSelector
                                         }
                                         model.sessions
                               }
@@ -402,7 +419,7 @@ statusEvent model raw =
                             )
 
                         else
-                            ( { model | sessions = Dict.insert sid updated model.sessions }
+                            ( { model | sessions = Dict.insert sid updated2 model.sessions }
                             , runnerActions
                             )
 
@@ -757,11 +774,24 @@ applyPendingEvent sidFor raw sessions =
                             in
                             case Dict.get sid sessions of
                                 Just session ->
+                                    let
+                                        updated =
+                                            { session
+                                                | connected = ev.connected
+                                                , statusMsg = ev.message
+                                            }
+                                    in
+                                    -- The same content rule as the live path:
+                                    -- a disconnect is reported in the
+                                    -- transcript, because that is the only
+                                    -- place this client shows a failure.
                                     Dict.insert sid
-                                        { session
-                                            | connected = ev.connected
-                                            , statusMsg = ev.message
-                                        }
+                                        (if ev.connected then
+                                            updated
+
+                                         else
+                                            H.appendEndNotice ev.message updated
+                                        )
                                         sessions
 
                                 Nothing ->

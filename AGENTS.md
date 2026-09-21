@@ -100,6 +100,15 @@ unloadable session file, a bad config) only there, before any frame exists, so
 disconnect message. Piping without re-logging every line to the backend's own
 log would take output away from a developer to fix a problem on the other side.
 
+And the reason has to reach the SCREEN, which is a separate fact from being
+carried: this client shows a failure in the TRANSCRIPT
+(`Session.Handlers.appendEndNotice`, applied by `Session/Events.elm` on a
+disconnect), not in a status strip — 7c99f83 removed the title-bar status line,
+which is why `SessionState.statusMsg` has no reader and why writing it is NOT
+the same as telling the user. `e2e/end-reason-e2e.mjs` is what keeps that
+honest: a unit test on the message string passes whether or not anyone sees
+it.
+
 **`model.conf`: the schema lives in ONE module.** `src-elm/src/Session/ModelConfig.elm`
 owns the field list, the `model_list` decoder, the `model_sync` encoder and the
 editor form (`Overlay.ModelEditor` renders `ModelConfig.fields` and names no

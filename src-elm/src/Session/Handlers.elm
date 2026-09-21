@@ -1,6 +1,7 @@
 module Session.Handlers exposing
     ( handleDeltaEvent
     , handleFrameEvent
+    , appendEndNotice
     )
 
 import Dict exposing (Dict)
@@ -782,6 +783,51 @@ appendSystemMessage s role text =
             }
     in
     { s | messages = s.messages ++ [ newMsg ] }
+
+
+{-| The transcript line that says a session ENDED, carrying the reason the
+backend reported (`core-status.message`).
+
+Why it goes into the messages and not into a status line: commit 7c99f83 dropped
+the title-bar status line and routed failures into the transcript instead, so
+`SessionState.statusMsg` has no reader — a reason that only lands there is a
+reason nobody sees. This is the one place that turns it into something visible.
+
+Idempotent on the text: the reader already promises one end announcement per
+session, but a buffered status event can be replayed onto a session that has
+already taken it, and the transcript must not say one death twice.
+-}
+appendEndNotice : String -> SessionState -> SessionState
+appendEndNotice text s =
+    let
+        trimmed =
+            String.trim text
+
+        already =
+            s.messages
+                |> List.reverse
+                |> List.head
+                |> Maybe.map (\m -> m.role == Error && m.content == trimmed)
+                |> Maybe.withDefault False
+    in
+    if trimmed == "" || already then
+        s
+
+    else
+        { s
+            | messages =
+                s.messages
+                    ++ [ { id = "end-" ++ String.fromInt (List.length s.messages)
+                         , role = Error
+                         , content = trimmed
+                         , toolId = Nothing
+                         , toolName = Nothing
+                         , isError = True
+                         , historyId = Nothing
+                         , media = Nothing
+                         }
+                       ]
+        }
 
 
 -- Tool Call Frame (AF)

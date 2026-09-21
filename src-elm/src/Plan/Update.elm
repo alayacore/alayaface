@@ -2139,13 +2139,27 @@ applyEffectIn dispatch planId e ( m, cmds ) =
                 ( m, cmds )
 
             else
-                -- Readiness gate: alayacore rejects prompts with
-                -- MCP_NOT_READY while its MCP servers are still
-                -- initializing, which would fail the node on a race
-                -- (Load run reviving a node is a common hit). If the
-                -- session hasn't signalled ready yet, HOLD the prompt and
-                -- flush it when the ready SM arrives (App/Update flushes
-                -- pendingNodePrompts).
+                -- Readiness gate: if the session hasn't signalled ready yet,
+                -- HOLD the prompt here and flush it when the ready SM arrives
+                -- (App/Update flushes pendingNodePrompts).
+                --
+                -- This used to be about avoiding a refusal — before protocol
+                -- v12, alayacore answered a pre-ready prompt with
+                -- MCP_NOT_READY, which failed a node on a race (Load run
+                -- reviving a node is a common hit). v12 made the core HOLD
+                -- such a prompt instead, so the refusal is gone. The gate
+                -- stays, for three reasons the hold does not cover:
+                --   * the core holds ONE prompt, and a second is refused as
+                --     busy — a runner that releases two nodes at once would
+                --     hand it the second;
+                --   * a held prompt is dropped if the session ends before it
+                --     was ever ready (run() returns, the slot is never
+                --     started), and nothing tells the client: the node would
+                --     sit there believed-running. Flushing on the ready frame
+                --     means the prompt is only ever sent to a session that can
+                --     answer it;
+                --   * readiness is the same signal that lifts replay
+                --     suppression, so one event orders both.
                 case Dict.get sid m.sessions of
                     Just s ->
                         if s.ready then

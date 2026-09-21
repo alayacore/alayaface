@@ -302,9 +302,11 @@ type alias Model =
     , planCreating : Maybe CreateTask
     , planCreateQueue : List CreateTask
     -- Node prompts held until their session's readiness signal arrives
-    -- (sessionId → prompt text). alayacore rejects prompts with
-    -- MCP_NOT_READY before MCP init completes, so the runner's
-    -- SendPrompt effect is deferred and flushed on the ready SM.
+    -- (sessionId → prompt text): the runner's SendPrompt effect is deferred
+    -- and flushed on the ready SM. Not the same thing as the core's v12
+    -- hold-and-start slot — see Plan/Update.elm's SendPrompt arm, which owns
+    -- the reasons (and note this dict survives a session that ends before it
+    -- was ready, which is the case the core's hold does not report).
     , pendingNodePrompts : Dict String String
     , planReadTarget : Maybe PlanReadTarget
     , planNodeSessions : Dict String String
