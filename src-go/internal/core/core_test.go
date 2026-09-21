@@ -324,7 +324,8 @@ func TestSpawnCollectsTheChildsStderrIntoTheTail(t *testing.T) {
 	}
 }
 
-func TestSpawnError(t *testing.T) {	if _, err := Spawn("/nonexistent/alayacore", "", "", "", nil, "", 1, ""); err == nil {
+func TestSpawnError(t *testing.T) {
+	if _, err := Spawn("/nonexistent/alayacore", "", "", "", nil, "", 1, ""); err == nil {
 		t.Fatal("Spawn with missing binary should error")
 	}
 }
