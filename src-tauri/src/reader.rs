@@ -25,10 +25,7 @@ use tauri::{AppHandle, Emitter};
 ///
 /// Ported to Go as `disconnectMessage` in session/reader.go — the two must
 /// produce the same string, because the client shows whichever it gets.
-fn disconnect_message(
-    base: &str,
-    tail: &crate::alayacore::StderrTail,
-) -> String {
+fn disconnect_message(base: &str, tail: &crate::alayacore::StderrTail) -> String {
     let lines = tail.lines();
     let Some(last) = lines.last() else {
         return base.to_string();
@@ -51,7 +48,6 @@ fn disconnect_message(
 fn is_user_echo_tag(tag: &str) -> bool {
     matches!(tag, "UT" | "UI" | "UV" | "UA" | "UD")
 }
-
 
 /// Spawn a background thread that reads TLV frames from alayacore's stdout
 /// and emits them as Tauri events (`tlv-delta`, `tlv-frame`, `core-status`).
