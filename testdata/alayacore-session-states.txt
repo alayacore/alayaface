@@ -1,0 +1,7 @@
+# the session lifecycle states AlayaCore BROADCASTS, i.e. the phases named in setState's guard — NOT the whole SessionState vocabulary (starting and initializing exist but never reach an adapter)
+# Source: internal/agent/session.go (setState), via SessionState.String().
+# Refreshed by scripts/check-alayacore-protocol.sh whenever it runs with
+# AlayaCore checked out. AlayaCore is a separate repo and absent from CI,
+# so this file is what the check compares against there.
+closed
+ready

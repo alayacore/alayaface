@@ -1,0 +1,6 @@
+# message_version AlayaCore announces as its first boot frame
+# Source: internal/agent/session_types.go (const messageVersion).
+# Refreshed by scripts/check-alayacore-protocol.sh whenever it runs with
+# AlayaCore checked out. AlayaCore is a separate repo and absent from CI,
+# so this file is what the check compares against there.
+12

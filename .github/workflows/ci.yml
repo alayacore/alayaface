@@ -51,6 +51,13 @@ jobs:
       # repo, absent from CI).
       - name: Model schema check
         run: ./scripts/check-model-schema.sh
+      # Protocol drift guard: message_version, the TLV tag alphabet, the session
+      # states AlayaCore broadcasts, the command names we send. Uses the
+      # testdata/alayacore-*.txt fixtures here (AlayaCore is a separate repo,
+      # absent from CI) — the check that would have caught the v12 bump while
+      # the adapter still pinned 11.
+      - name: AlayaCore protocol check
+        run: ./scripts/check-alayacore-protocol.sh
       # Stylesheet parse guard: a rule the browser cannot read is dropped
       # silently, so a whole palette can be dead with a green build. Runs
       # where elm-test runs — it is node-only, no Chrome needed.

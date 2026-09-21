@@ -1,4 +1,4 @@
-.PHONY: all elm run-tauri dev build-tauri test-tauri clean-tauri run-go build-go test-go check-parity check-invariants check-schema e2e clean-go
+.PHONY: all elm run-tauri dev build-tauri test-tauri clean-tauri run-go build-go test-go check-parity check-invariants check-schema check-protocol e2e clean-go
 
 ELM       := elm
 CARGO     := cargo
@@ -74,6 +74,15 @@ check-invariants:
 .PHONY: check-schema
 check-schema:
 	./scripts/check-model-schema.sh
+
+# Protocol drift check: the four facts about AlayaCore's wire format that this
+# repo duplicates — message_version, the TLV tag alphabet, the session states it
+# broadcasts, and the command names we send. Compares them against AlayaCore
+# when it is checked out next door (refreshing testdata/alayacore-*.txt), and
+# against those fixtures otherwise, which is what CI has.
+.PHONY: check-protocol
+check-protocol:
+	./scripts/check-alayacore-protocol.sh
 
 # Stylesheet parse check: a CSS rule the browser cannot read is dropped with
 # no error at all. style.css carried exactly that — `//` prose above :root ate
