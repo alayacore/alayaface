@@ -71,6 +71,35 @@ not). `scripts/check-backend-parity.sh` asserts the command names match
 spawn arguments (`--tool-confirm`, `--builtin-tools`, `--system`, work dir)
 and the config files (`model.conf`, `mcp.conf`, `settings.conf`, `global.conf`).
 
+**The protocol is a second thing AlayaCore owns, and this repo duplicates four
+facts about it**: the `message_version` pin (both backends), the TLV tag
+alphabet (both `tlv` modules), the session states AlayaCore broadcasts (read by
+`reader.rs`/`reader.go`, not by the client — see below), and the command names
+we send. `make check-protocol`
+(`scripts/check-alayacore-protocol.sh`) is the guard: against the core when it
+is checked out next door, refreshing `testdata/alayacore-{message-version,tlv-tags,
+session-states,commands}.txt`; against those fixtures in CI, where the core does
+not exist. It exists because v12 (`CE`, the `closed` state, the `quit` command,
+prompts-held-before-ready) landed with the pin at 11 and nothing noticed — the
+only symptom was a home-screen banner telling users to *downgrade* their core,
+while sessions kept running against a format the adapter claimed not to know.
+The check is mutation-verified on all four axes; an extractor that finds nothing
+fails as "fix the extractor, do not delete the check".
+
+Two consequences of that split are worth knowing before you touch a reader. A
+session's END has one producer: the `core-status connected:false` emitted by the
+reader — from the core's terminal `closed` frame if it arrives, otherwise from
+EOF — and never from the client's SM handler, because the plan runner fails its
+node on every `connected:false` it is told about (`Session/Events.elm
+statusEvent`), so a second producer reports one death twice. `handlers.elm`'s
+`handleSystemSession` therefore reads `ready` and ignores `closed` on purpose,
+and `SessionEventsTest`/`HandlersTest` pin that. Second, stderr is a channel,
+not a debug aid: AlayaCore reports the failures that abort startup (an
+unloadable session file, a bad config) only there, before any frame exists, so
+`spawn` pipes it into a bounded tail and the reader quotes its last line in the
+disconnect message. Piping without re-logging every line to the backend's own
+log would take output away from a developer to fix a problem on the other side.
+
 **`model.conf`: the schema lives in ONE module.** `src-elm/src/Session/ModelConfig.elm`
 owns the field list, the `model_list` decoder, the `model_sync` encoder and the
 editor form (`Overlay.ModelEditor` renders `ModelConfig.fields` and names no
@@ -185,6 +214,7 @@ cd src-tauri && cargo test          # (and cargo clippy --lib: no errors)
 ./scripts/check-backend-parity.sh
 make check-invariants               # windowPositions read path + JS-bridge freeze
 make check-schema                   # model.conf fields vs AlayaCore
+make check-protocol                 # message_version, tags, session states, commands
 make check-css                      # stylesheets the browser can actually parse
 make e2e                            # every script in e2e/scripts.txt
 ```

@@ -578,11 +578,12 @@ so closing a window = discarding the in-flight turn (same when the app is
 killed). C1 forbids modifying alayacore, so we can only control **what we send /
 how long we wait** (alayacore's exit paths were verified read-only).
 
-**Verified alayacore facts**:
+**Verified alayacore facts** (re-verified against v0.83.0 / message_version 12):
 - `save` CI command with empty args = save to the `--session` file (`session.alaya`);
 - `cancel` CI command = cancel the current task (`activeTask.cancel()` via the per-task context) → the task goes through `taskResultCh` → `handleTaskDone` **auto-saves** up to the cancel point; with no task it returns `NOTHING_TO_CANCEL`;
-- stdin EOF + active task → `drainUntilTaskDone()`: runs the task to completion (`handleTaskDone` auto-saves) then exits; EOF + no task → exits immediately (no save);
-- rawio has no SIGINT handling (only plainio/terseio do); EOF is the only graceful exit signal.
+- stdin EOF ends the session: `drainUntilTaskDone()` **no longer exists** (removed in alayacore's prompt-deferral work), so EOF now means "no more prompts" and `run()` returns once nothing is in flight — it does not run a task to completion;
+- rawio has no SIGINT handling (only plainio/terseio do);
+- **EOF is no longer the only graceful exit signal**: the `quit` CI command (alias `q`) ends the session from inside it, and the session's last act on stdout is `SM {"type":"session","data":{"state":"closed"}}`, after which nothing follows. AlayaFace does not send `quit` — its close is cancel-first and `quit`'s "let the task finish" semantics are the opposite — but the terminal frame is what both readers now end a session on (§8.8).
 
 **AlayaFace-side implementation (dual-backend symmetric, P25: cancel-first, no backward compat)**:
 
@@ -785,6 +786,78 @@ There is **no top-level `plans/` root** anymore.
   document/meta/run inside the session dir, no Browse/import tab).
 
 ---
+
+### 8.8 How a Session Ends (protocol v12)
+
+Three things the adapter used to guess, and no longer has to. All are
+dual-backend symmetric (`reader.rs` / `session/reader.go`), and
+`scripts/check-alayacore-protocol.sh` is what keeps the wire facts from going
+stale (§8.9).
+
+**The terminal frame.** Since message_version 12 the session's last act on
+stdout is `SM {"type":"session","data":{"state":"closed"}}` — sent exactly once,
+after every other frame, with nothing after it. Both readers recognise it and
+announce the session's end from it, because EOF is a worse source of that fact
+than it looks: stdout stays open while *anyone* holds the write end, so a
+grandchild of alayacore inheriting the pipe keeps a finished session looking
+live to the reader, and therefore to the window.
+
+**Exactly one end announcement per session.** The client's plan runner fails its
+node on every `core-status connected:false` it receives, so the frame and the
+EOF that follows it describe one death and must produce one event. The reader
+keeps an `announced` flag for that; the EOF still reaps the child (the only
+thing it can still decide by itself). `TestIntegrationSessionEndsOnTheTerminalFrame`
+holds the whole chain — real subprocess, WebSocket client, one event, its
+wording — and was mutation-checked both ways.
+
+**What the reader does NOT do on the frame:** clear its own `connected` flag, or
+reap. That flag means "the pipe is usable", and EOF is what decides that;
+`close_session` waits on the child actually exiting (Rust `try_wait`, Go
+`Connected()`), and moving that moment earlier on one side only would be the
+nominal-vs-behavioural drift recorded as B2. The wording is the visible
+difference: "Session closed by alayacore" (the core finished) versus
+"Connection closed" (the pipe went away, and the reason may be on stderr).
+
+**The stderr tail.** alayacore puts every failure it cannot send as a frame on
+stderr, because TLV only exists once a session has started — a session file whose
+`message_version` it will not load, an unusable config, a tool it could not exec.
+Those abort startup before the first frame, so the reader used to observe stdout
+EOF and report "Connection closed" as the whole story; with a packaged desktop
+app there is no terminal behind the process, so the reason was written nowhere the
+user could find. `spawn` now pipes stderr, drains it through the backend's own
+log (nothing that used to be visible is lost) into a bounded `StderrTail`, and the
+reader quotes its last line:
+
+```
+Connection closed: Error: failed to load session: session file version
+mismatch: got 11, expected 12
+```
+
+That message is the price of a version bump being user-visible: session files
+carry `message_version` and alayacore's loader demands an exact match, so every
+bump makes the user's existing sessions unloadable until they are edited or
+rewritten by a run of the matching core. AlayaFace neither migrates nor edits
+them (it is not our file to rewrite); it reports why they failed.
+
+**`quit` is not used.** The v12 `quit`/`q` CI command ends the session *after
+letting a task in flight finish* — the opposite of close_session's cancel-first
+policy (§8.3), which exists because Stop means stop. It is documented here so the
+absence reads as a decision, and `CE` (input end) is carried in both tag
+alphabets for the same reason: this adapter has no end-of-prompts to declare and
+closes stdin outright when it wants the process gone.
+
+### 8.9 Keeping the wire facts current
+
+`make check-protocol` (`scripts/check-alayacore-protocol.sh`) compares the four
+things AlayaFace duplicates from AlayaCore — `message_version`, the TLV tag
+alphabet, the session states the core broadcasts, and the command names we send —
+against the core when it is checked out next door (and refreshes
+`testdata/alayacore-*.txt`), against those fixtures otherwise. It is the twin of
+`make check-schema` for the protocol rather than the config, and it exists
+because the v12 bump arrived and nothing noticed: the pin sat at 11, so the home
+screen told users to *downgrade* their core while sessions went on running
+against a format the adapter claimed not to know.
+
 
 ## 9. Presets & Seed Presets
 

@@ -216,6 +216,8 @@ AlayaFace 通过 stdin/stdout 上的 TLV（Tag-Length-Value，标签-长度-值�
 | UT  | stdin  | 用户文本输入 |
 | UI  | stdin  | 用户图片（data URI 或 URL） |
 | UE  | stdin  | 用户消息结束（flush） |
+| CI  | stdin  | 命令输入（JSON：id、name、input） |
+| CE  | stdin  | 输入结束——不再有新 prompt，但命令仍可继续（协议 v12；AlayaFace 用不到，见 plan-mode.md §8.8） |
 | At  | stdout | 助手文本流式增量 |
 | Ar  | stdout | 助手推理流式增量 |
 | Af  | stdout | 工具参数流式增量 |

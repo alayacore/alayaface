@@ -378,6 +378,8 @@ Key tags:
 | UT  | stdin     | User text input |
 | UI  | stdin     | User image (data URI or URL) |
 | UE  | stdin     | User message end (flush) |
+| CI  | stdin     | Command input (JSON: id, name, input) |
+| CE  | stdin     | Input end — no more prompts, commands may still follow (protocol v12; AlayaFace has no use for it, see plan-mode.md §8.8) |
 | At  | stdout    | Assistant text streaming delta |
 | Ar  | stdout    | Assistant reasoning streaming delta |
 | Af  | stdout    | Tool argument streaming delta |
@@ -390,6 +392,14 @@ Key tags:
 
 All stdout frames are prefixed with `\x00<history_id>\x00` for streaming
 correlation.
+
+The session reports its lifecycle in `SM {"type":"session",...}`: `ready` when
+it can accept prompts, and — since protocol version 12 — `closed` as its last
+frame. Both backends pin the version they implement
+(`SUPPORTED_MESSAGE_VERSION`) and refuse a core that announces another one;
+`make check-protocol` compares that pin, the tag table above, the states
+AlayaCore broadcasts and the commands AlayaFace sends against AlayaCore itself
+(or against `testdata/alayacore-*.txt` where the core is not checked out).
 
 ## Debugging
 

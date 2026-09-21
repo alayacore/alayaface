@@ -82,7 +82,7 @@ One-way push (server → client), message format:
 |--------------|-------------|------------------|--------|
 | `create_session` | `POST /rpc/create_session` | `binaryPath`, `configPath`, `toolConfirm`(nullable), `preset`(nullable), `builtinTools`(nullable), `systemPrompt`(nullable), `reasoningLevel`(nullable, 0|1|2), `workDir`(nullable), `planId`(nullable), `nodeId`(nullable), `originSessionId`(nullable), `clientId` | string sessionId (spawn args persisted to `<sessionDir>/session.spawn.json` for resume, incl. `reasoning_level`; the level is resolved from the preset's settings.conf by default and passed as `--reasoning-level=<n>`) |
 | `resume_session` | `POST /rpc/resume_session` | `sessionId`, `binaryPath`, `workDir`(nullable), `planId`(nullable), `nodeId`(nullable), `originSessionId`(nullable), `clientId` | string sessionId (re-applies the persisted spawn args: tool-confirm policy, builtin-tools restriction, system prompt, reasoning level, work dir) |
-| `close_session` | `POST /rpc/close_session` | `sessionId` | — (graceful: CI cancel → CI save → stdin EOF → ≤5s natural exit → SIGKILL fallback) |
+| `close_session` | `POST /rpc/close_session` | `sessionId` | — (graceful: CI cancel → CI save → stdin EOF → ≤5s natural exit → SIGKILL fallback; the client-visible end usually arrives earlier, from the core's `closed` frame — see plan-mode.md §8.8) |
 | `close_all_sessions` | `POST /rpc/close_all_sessions` | `clientId` | — (graceful close of the CALLING client's sessions only — empty `clientId` = all; the frontend fires it once on page load so sessions orphaned by a page refresh are reclaimed — otherwise `resume_session` fails with "Session is already active" until the backend restarts) |
 | `list_session_dirs` | `POST /rpc/list_session_dirs` | — | `[{id, created_at}]` (top-level session dirs only; plan subtrees excluded) |
 | `delete_session_dir` | `POST /rpc/delete_session_dir` | `sessionId`, `planId`(nullable), `nodeId`(nullable), `originSessionId`(nullable) | — |
@@ -179,6 +179,17 @@ Rust `Option` fields serialize as `null` (no `skip_serializing_if`); Go must use
 - `SM`: transform to `{type, data}` before emitting (same as Rust `handle_sm_frame`).
 - Any `SM model_list` updates the model cache first (global, shared across sessions).
 - Reader on EOF/error: `connected=false`, kill the child, emit `core-status`, exit loop.
+  `core-status.message` quotes the last line of the child's stderr when there is one
+  (`disconnectMessage`), because a core that dies at startup — an unloadable
+  session file, a bad config — says why only there, before any frame exists. The
+  tail is collected by `core.Spawn`'s stderr pump and bounded (20 lines).
+- `SM {"type":"session","data":{"state":"closed"}}` (protocol v12) ends the
+  session: `dispatchFrame` returns "terminal", and the reader announces
+  `core-status connected:false` with the message `SessionClosedMessage` at that
+  point. Exactly one announcement per session (`announced`) — the EOF that follows
+  the frame reaps the child but must not emit a second one, or the plan runner
+  fails one node twice. The frame is still forwarded to the client as a
+  `tlv-frame`. This is the port of `reader.rs`'s `ends_the_session`.
 
 ---
 
@@ -245,7 +256,10 @@ Prefer the standard library; only one third-party dependency is required:
 - `findBinary`: `ALAYACORE_BIN` → `which/where alayacore` → common paths → fallback
   `"alayacore"`.
 - `spawn(binary, configPath, sessionPath, toolConfirm)`: `--rawio`, optional
-  `--config-path / --session / --tool-confirm=`; piped stdin/stdout, inherited stderr.
+  `--config-path / --session / --tool-confirm=`; stdin/stdout piped, and stderr
+  piped into a `StderrTail` by a draining goroutine that also logs every line (an
+  explicit `os.Pipe`, not `StderrPipe`, because `cmd.Wait()` closes a pipe it
+  created and the reader reaps while the pump is still draining).
 - `killChild`: close stdin (EOF) → wait ≤3s for natural exit → force kill.
   `Manager.Close` additionally sends the CI `save` command before closing
   stdin and waits ≤5s (`gracefulCloseTimeout`) for the reader to observe
@@ -389,11 +403,11 @@ runtimes auto-switch on the presence of `window.__TAURI__`, avoiding two bridge 
 
 | Suite | Content | Reference |
 |-------|---------|-----------|
-| Go unit tests | tlv encode/decode/partial-read/EOF/NUL edges; dirs creation/exclusion of settings.conf; preset lifecycle; settings normalize; mcp.conf parse roundtrip; reader dispatch (delta-only, empty→null, JSON frames, CO name injection, SM wrap/cache, echoes, disconnect); core spawn/kill/find; hub broadcast/unregister/slow-client drop | port the same-named Rust tests one by one |
+| Go unit tests | tlv encode/decode/partial-read/EOF/NUL edges; dirs creation/exclusion of settings.conf; preset lifecycle; settings normalize; mcp.conf parse roundtrip; reader dispatch (delta-only, empty→null, JSON frames, CO name injection, SM wrap/cache, echoes, disconnect, the terminal frame and its one-announcement rule, the stderr tail in the message); core spawn/kill/find; hub broadcast/unregister/slow-client drop | port the same-named Rust tests one by one |
 | Go integration | `internal/fakecore` (scriptable TLV rawio stand-in) + `internal/server/integration_test.go`: full end-to-end over HTTP+WS against a real subprocess — conversation flow, every CI command roundtrip with CO name injection, fork, model probes (live + fallback), sync error paths, resume/delete, token auth | implemented 2026-08-05 (commit 7838e93); run with `go test ./... -race` |
 | Elm tests | unchanged — verify the shared client is not broken | `make test` |
 | Dual-backend smoke | run the same Elm frontend against both Tauri and Go, diff the event streams | manual (GUI env) |
-| CI | `.github/workflows/ci.yml`: Go (`go vet` + `go test -race`), Elm (0.19.2 toolchain: `elm make` + `elm-test`), Rust (Tauri system deps + `cargo test`) | — |
+| CI | `.github/workflows/ci.yml`: Go (`go vet` + `go test -race`), Elm (0.19.2 toolchain: `elm make` + `elm-test`), Rust (Tauri system deps + `cargo test`), plus the schema, layout-invariant, CSS and AlayaCore-protocol guards (fixture mode — AlayaCore is absent there) | — |
 
 ---
 

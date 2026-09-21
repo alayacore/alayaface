@@ -110,6 +110,23 @@
 - [ ] **Stop**: a Running node's task is canceled → node Canceled, process exits, window closes (no more "node keeps executing after Stop")
 - [ ] Closing an idle session (no task) → session.alaya is saved too (`save` applies; cancel returns NOTHING_TO_CANCEL which is ignored, no side effects)
 - [ ] Rapidly closing several sessions in a row → no leftover alayacore processes (`pgrep -f alayacore`)
+- [ ] **Why it ended, in words**: closing a session whose core finished cleanly reports
+      "Session closed by alayacore"; a pipe that died reports "Connection closed" —
+      and if the core wrote a reason to stderr, that reason is quoted after it.
+      Trigger the second one for real by taking a session written by an older core
+      (its `session.alaya` frontmatter says `message_version: 11`) and resuming it
+      with a core that announces 12: the window must say
+      `Connection closed: Error: failed to load session: session file version
+      mismatch: got 11, expected 12`, **not** a bare "Connection closed" — the core
+      exits before it sends any frame, so stderr is the only thing that ever said
+      why, and a packaged app has no terminal behind it
+- [ ] A session that cannot be loaded is still on disk and still listed: the
+      failure is reported, the history is not touched (AlayaFace neither edits nor
+      migrates another program's session file)
+- [ ] A core whose protocol version differs still gets one clear home-screen
+      banner naming both numbers, and the check is `make check-protocol` — which
+      compares the pin, the tag table, the broadcast session states and the
+      commands we send against the core itself when it is checked out
 
 ## 6. Presets / Tool Sets (P4.5)
 
