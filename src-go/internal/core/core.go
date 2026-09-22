@@ -57,6 +57,82 @@ import (
 // (AGENTS.md: "two backends must stay symmetric").
 const SupportedMessageVersion = 12
 
+// SessionHeaderWindow is how far into a session file its frontmatter is
+// searched. The block is eight short scalar lines, so this is generous by
+// orders of magnitude; the window exists so a file with no header is reported
+// as "unknown" rather than costing a read of the whole TLV body.
+const SessionHeaderWindow = 4096
+
+// SessionFileMessageVersion returns the `message_version` recorded in a session
+// file's frontmatter, and false when the file has no readable header carrying
+// the key.
+//
+// false means "unknown", NOT "compatible": the caller must let the core decide,
+// because the core owns the load rule. This exists to turn the ONE case
+// AlayaFace can identify cheaply — a file written under a different protocol
+// version, which alayacore refuses outright — into an error the user sees where
+// they were acting (the Session Manager row, the owning plan window), instead of
+// a window that opens, dies, and says "Connection closed".
+//
+// A file may legitimately have no frontmatter at all: the e2e double writes JSON
+// there. That reports false and resumes, as it must.
+//
+// Port of alayacore.rs::session_file_message_version.
+func SessionFileMessageVersion(path string) (int64, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, false
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(io.LimitReader(f, SessionHeaderWindow))
+	if !scanner.Scan() || strings.TrimRight(scanner.Text(), "\r") != "---" {
+		return 0, false
+	}
+	for scanner.Scan() {
+		line := strings.TrimRight(scanner.Text(), "\r")
+		if strings.TrimSpace(line) == "---" {
+			return 0, false // header ended without the key
+		}
+		if rest, ok := strings.CutPrefix(line, "message_version:"); ok {
+			var v int64
+			if _, err := fmt.Sscanf(strings.TrimSpace(rest), "%d", &v); err != nil {
+				return 0, false
+			}
+			return v, true
+		}
+	}
+	return 0, false
+}
+
+// SessionFileRejection is the refusal for a session file this build's protocol
+// pin cannot load, or nil when the file matches OR its version is unknown —
+// unknown is the core's call to make, not ours.
+//
+// Port of alayacore.rs::session_file_rejection; read, compare and message are
+// together so the DECISION is testable, not just the parsing.
+func SessionFileRejection(path string) error {
+	found, known := SessionFileMessageVersion(path)
+	if !known || found == int64(SupportedMessageVersion) {
+		return nil
+	}
+	return errors.New(SessionVersionRejection(path, found))
+}
+
+// SessionVersionRejection is the refusal message for a session file this pair
+// cannot load.
+//
+// The wording is shared with Rust's `session_version_rejection`
+// (scripts/check-backend-parity.sh compares the distinctive tail), and it says
+// the one thing a user needs reassured about: nothing was written to their file.
+// AlayaFace does not migrate or edit another program's session files.
+func SessionVersionRejection(file string, found int64) string {
+	return fmt.Sprintf(
+		"Session file %s is alayacore protocol v%d; this AlayaFace and the alayacore it bundles speak v%d and will not load it (the file was not modified)",
+		filepath.Base(file), found, SupportedMessageVersion,
+	)
+}
+
 // VersionProbeTimeout is how long CheckMessageVersion waits for the
 // boot version frame before giving up. The version frame is the
 // FIRST thing alayacore emits on stdout (before any

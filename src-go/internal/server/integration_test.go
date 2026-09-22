@@ -17,6 +17,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"alayaface/src-go/internal/core"
 	"alayaface/src-go/internal/dirs"
 	"alayaface/src-go/internal/session"
 )
@@ -1105,6 +1106,84 @@ func TestIntegrationTokenAuth(t *testing.T) {
 	if resp2.StatusCode != http.StatusOK {
 		t.Fatalf("rpc with token: status %d", resp2.StatusCode)
 	}
+}
+
+// ─── The resume pre-flight: another protocol version ────────────────
+
+// TestIntegrationResumeRefusesAnotherProtocolVersion covers the refusal that
+// keeps an unloadable session file from opening a window that dies.
+//
+// The core aborts on such a file BEFORE it writes any TLV frame, so without the
+// pre-flight the user gets: a window, "Connection closed", and — worse — a
+// registered session whose directory then answers every retry with "Session is
+// already active". Refusing up front turns that into one readable error,
+// repeatable, and nothing registered.
+func TestIntegrationResumeRefusesAnotherProtocolVersion(t *testing.T) {
+	e := newTestEnv(t, "")
+	sid := e.createSession(t)
+	waitSessionFile(t, sid)
+	e.rpcOK(t, "close_session", map[string]any{"sessionId": sid})
+	// Wait for the child to be GONE before replacing its file: close sends CI
+	// `save`, and the dying process writes session.alaya itself. Overwriting
+	// during that window races a rewrite back to the fake's JSON — which reads
+	// as "no version" and would let the resume through.
+	e.waitEvent(t, "core-status", func(p map[string]any) bool {
+		return p["session_id"] == sid && p["connected"] == false
+	})
+
+	path := filepath.Join(dirs.AlayafaceDir(), "sessions", sid, "session.alaya")
+	writeHeader := func(version int) {
+		t.Helper()
+		body := fmt.Sprintf("---\ncreated_at: 2026-09-08T22:26:51+08:00\nmessage_version: %d\n---\n\x00history bytes", version)
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// One behind this build's pin: what a user's existing sessions look like
+	// after AlayaFace ships with a newer bundled core.
+	writeHeader(core.SupportedMessageVersion - 1)
+	msg := e.rpcErr(t, "resume_session", map[string]any{"sessionId": sid, "binaryPath": ""})
+	for _, want := range []string{
+		fmt.Sprintf("v%d", core.SupportedMessageVersion-1),
+		fmt.Sprintf("v%d", core.SupportedMessageVersion),
+		"session.alaya",
+		"was not modified",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("refusal %q lacks %q", msg, want)
+		}
+	}
+
+	// Repeatable: nothing was registered, so the second attempt must report the
+	// same reason rather than the orphan-guard's "Session is already active".
+	if again := e.rpcErr(t, "resume_session", map[string]any{"sessionId": sid, "binaryPath": ""}); again != msg {
+		t.Errorf("second refusal = %q, want the same reason again (%q)", again, msg)
+	}
+
+	// A same-version header resumes: the pre-flight is a version test, not a
+	// blanket ban on files it can read.
+	writeHeader(core.SupportedMessageVersion)
+	body := e.rpcOK(t, "resume_session", map[string]any{"sessionId": sid, "binaryPath": ""})
+	var newID string
+	if err := json.Unmarshal(body, &newID); err != nil || newID == "" {
+		t.Fatalf("resume of a matching-version file: %s", body)
+	}
+	e.rpcOK(t, "close_session", map[string]any{"sessionId": newID})
+
+	// And a file with NO header (what fakecore writes, and what every other
+	// resume test in this file relies on) is unknown rather than refused.
+	e.rpcOK(t, "close_all_sessions", map[string]any{"clientId": ""})
+	if err := os.WriteFile(path, []byte(`{"version":1,"saved":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// rpcOK, not rpcErr: "not refused" here means the RPC went through and the
+	// core was allowed to decide. Asserting on an error would invert the case.
+	body = e.rpcOK(t, "resume_session", map[string]any{"sessionId": sid, "binaryPath": ""})
+	if err := json.Unmarshal(body, &newID); err != nil || newID == "" {
+		t.Fatalf("a headerless file must reach the core, not the pre-flight: %s", body)
+	}
+	e.rpcOK(t, "close_session", map[string]any{"sessionId": newID})
 }
 
 // ─── Core-status ordering (B5) ──────────────────────────────────────

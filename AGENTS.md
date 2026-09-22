@@ -106,8 +106,18 @@ carried: this client shows a failure in the TRANSCRIPT
 disconnect), not in a status strip — 7c99f83 removed the title-bar status line,
 which is why `SessionState.statusMsg` has no reader and why writing it is NOT
 the same as telling the user. `e2e/end-reason-e2e.mjs` is what keeps that
-honest: a unit test on the message string passes whether or not anyone sees
+honest; a unit test on the message string would pass whether or not anyone sees
 it.
+
+Because the bundled core always matches the pin, `resume_session` also REFUSES a
+session file whose recorded `message_version` differs — BEFORE spawning, so the
+user reads the reason on the row they clicked instead of watching a window open,
+die, and then answer every retry with "Session is already active" (the entry was
+registered). Unknown is NOT incompatible: a file with no frontmatter (what
+fakecore writes), an unreadable file or a non-numeric value goes through to the
+core, which owns the load rule. Read + compare + message sit in one function per
+backend (`session_file_rejection` / `core.SessionFileRejection`) so the DECISION
+is what a test covers.
 
 **`model.conf`: the schema lives in ONE module.** `src-elm/src/Session/ModelConfig.elm`
 owns the field list, the `model_list` decoder, the `model_sync` encoder and the

@@ -110,9 +110,14 @@
 - [ ] **Stop**: a Running node's task is canceled → node Canceled, process exits, window closes (no more "node keeps executing after Stop")
 - [ ] Closing an idle session (no task) → session.alaya is saved too (`save` applies; cancel returns NOTHING_TO_CANCEL which is ignored, no side effects)
 - [ ] Rapidly closing several sessions in a row → no leftover alayacore processes (`pgrep -f alayacore`)
-- [ ] **Why it ended, in words**: closing a session whose core finished cleanly reports
-      "Session closed by alayacore"; a pipe that died reports "Connection closed" —
-      and if the core wrote a reason to stderr, that reason is quoted after it.
+- [ ] **Why it ended, in words**: closing a session whose core finished cleanly
+      reports "Session closed by alayacore"; a pipe that died reports
+      "Connection closed" — and if the core wrote a reason to stderr, that reason
+      is quoted after it. A session file from another protocol version is refused
+      BEFORE the core starts, so it shows up as an error on the Session Manager
+      row (or in the plan window that asked for the node), never as a dead window —
+      and clicking it twice must give the same sentence, not "Session is already
+      active".
       It appears in the TRANSCRIPT as a SYSTEM ERROR line, not in a status strip:
       7c99f83 dropped the title-bar status line, and `SessionState.statusMsg` has
       no reader, so a reason that is not a message is a reason nobody sees

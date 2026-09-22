@@ -839,6 +839,30 @@ bump makes the user's existing sessions unloadable until they are edited or
 rewritten by a run of the matching core. AlayaFace neither migrates nor edits
 them (it is not our file to rewrite); it reports why they failed.
 
+**The one case refused before spawning.** `resume_session` reads that
+frontmatter key (`session_file_message_version` /
+`core.SessionFileMessageVersion`, over a 4 KiB header window) and refuses a file
+whose recorded version differs from the pin. AlayaFace ships pinned to a specific
+alayacore, so the pin IS that core's number, and the refusal is not a second copy
+of the load rule — it is the same rule applied where the user still has the
+context: the Session Manager row they clicked, or the plan window that asked for
+the node. Without it they get a window that opens, dies, and then answers every
+retry with "Session is already active", because the entry was registered.
+
+Three things the check must get right, and each is tested: **unknown is not
+incompatible** (a file with no frontmatter — which is what fakecore writes, so
+every e2e that resumes one leans on this — goes through to the core, as does an
+unreadable file or a non-numeric value); a matching version goes through (it is a
+version test, not a ban on reading files); and the refusal registers nothing, so
+repeating it gives the same sentence. Read, compare and message live together in
+one function per backend (`session_file_rejection` / `core.SessionFileRejection`)
+so a test covers the DECISION rather than the parsing: flipping `!=` to `==`
+would refuse every session on disk, and only that test says so.
+
+Everything else remains the core's call, which is what the stderr tail is for. A
+bad config, a corrupt file and a tool the core cannot exec abort the same way —
+before any frame exists — and none of them can be pre-checked.
+
 The client finishes the chain: `core-status.message` is turned into one
 transcript line (`Session.Handlers.appendEndNotice`, applied by
 `Session/Events.elm statusEvent` on a disconnect only). Not into a status strip —

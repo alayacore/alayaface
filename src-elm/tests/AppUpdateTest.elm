@@ -60,7 +60,69 @@ malformedEventTests =
 tests : Test
 tests =
     describe "App/Update (C2b session ownership)"
-        [ describe "work-copy routing helpers"
+        [ describe "a failed resume releases what ResumeSession armed"
+            [ test "the reason reaches the manager and nothing stays armed" <|
+                \_ ->
+                    -- Every user whose session file was written under another
+                    -- alayacore protocol version lands here: the backend now
+                    -- refuses before spawning. A failed resume that only showed
+                    -- the error left planResumeFrom + pendingSwitchOnCreate +
+                    -- the replay marker set, so the NEXT session created was
+                    -- mistaken for this one — its plan markers attributed to a
+                    -- session that does not exist, and the active window stolen.
+                    let
+                        armed =
+                            { initModelWithSession
+                                | pendingSwitchOnCreate = True
+                                , planResumeFrom = Just "s1"
+                                , planReplaySessions = Set.singleton "s1"
+                            }
+
+                        failed =
+                            E.object
+                                [ ( "ok", E.bool False )
+                                , ( "error", E.string "Session file session.alaya is alayacore protocol v11" )
+                                , ( "kind", E.string "resume" )
+                                ]
+
+                        ( m, _ ) =
+                            App.Update.update (AT.SessionActionResult failed) armed
+                    in
+                    Expect.all
+                        [ \mm -> Expect.equal (Just "Session file session.alaya is alayacore protocol v11") mm.sessionManagerError
+                        , \mm -> Expect.equal True (mm.planResumeFrom == Nothing)
+                        , \mm -> Expect.equal False mm.pendingSwitchOnCreate
+                        , \mm -> Expect.equal False (Set.member "s1" mm.planReplaySessions)
+                        ]
+                        m
+            , test "an unrelated replay marker survives" <|
+                \_ ->
+                    -- The removal is keyed to the session that was being
+                    -- resumed, not "clear everything".
+                    let
+                        armed =
+                            { initModelWithSession
+                                | planResumeFrom = Just "s1"
+                                , planReplaySessions = Set.fromList [ "s1", "other" ]
+                            }
+
+                        failed =
+                            E.object
+                                [ ( "ok", E.bool False )
+                                , ( "error", E.string "boom" )
+                                , ( "kind", E.string "resume" )
+                                ]
+
+                        ( m, _ ) =
+                            App.Update.update (AT.SessionActionResult failed) armed
+                    in
+                    Expect.all
+                        [ \mm -> Expect.equal True (Set.member "other" mm.planReplaySessions)
+                        , \mm -> Expect.equal False (Set.member "s1" mm.planReplaySessions)
+                        ]
+                        m
+            ]
+        , describe "work-copy routing helpers"
             [ test "workCopyId resolves Session.id → core id; falls back to itself" <|
                 \_ ->
                     let

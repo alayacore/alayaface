@@ -3863,7 +3863,34 @@ update msg model =
                                 )
 
                             Nothing ->
-                                ( { model | sessionManagerError = Just res.error }, Cmd.none )
+                                ( { model
+                                    | sessionManagerError = Just res.error
+                                    -- The resume never happened, so the three
+                                    -- things `ResumeSession` armed have to be
+                                    -- disarmed here. Left set, the NEXT
+                                    -- SessionCreated is mistaken for this one:
+                                    -- `planResumeFrom` attributes that session's
+                                    -- plan markers to a session that does not
+                                    -- exist, and `pendingSwitchOnCreate` steals
+                                    -- the active window from whatever the user
+                                    -- opens next. The plan-owner branch above
+                                    -- already clears them; this is the Session
+                                    -- Manager path — which is now the COMMON
+                                    -- one, because a session file written under
+                                    -- another protocol version is refused here
+                                    -- before the core is even spawned.
+                                    , planResumeFrom = Nothing
+                                    , pendingSwitchOnCreate = False
+                                    , planReplaySessions =
+                                        case model.planResumeFrom of
+                                            Just from ->
+                                                Set.remove from model.planReplaySessions
+
+                                            Nothing ->
+                                                model.planReplaySessions
+                                  }
+                                , Cmd.none
+                                )
 
                 Err _ ->
                     ( model, Cmd.none )

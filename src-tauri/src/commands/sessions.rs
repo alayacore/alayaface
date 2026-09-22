@@ -3,6 +3,7 @@
 //! Commands for creating, resuming, closing, and forking sessions,
 //! plus listing/deleting session directories.
 
+use crate::alayacore;
 use crate::commands::{resolve_binary, wait_for_file, SessionDirInfo};
 use crate::dirs;
 use crate::session::{self, SessionMap};
@@ -221,6 +222,18 @@ pub async fn resume_session(
     }
     if !config_dir.exists() {
         return Err(format!("Config directory not found: {:?}", config_dir));
+    }
+
+    // Refuse a session file the bundled alayacore will not load BEFORE
+    // spawning it. The core aborts on such a file before writing a single TLV
+    // frame, so the alternative is a window that opens, dies, and reports
+    // "Connection closed" — and an entry in the session map that then answers
+    // every later retry with "Session is already active". AlayaFace bundles a
+    // core that speaks SUPPORTED_MESSAGE_VERSION, so this pin is that core's
+    // number; anything else the core itself decides (and the reader surfaces
+    // its stderr reason).
+    if let Some(err) = alayacore::session_file_rejection(&session_file) {
+        return Err(err);
     }
 
     // Check not already running. Resumed sessions are keyed by a fresh

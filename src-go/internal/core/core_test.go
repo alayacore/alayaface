@@ -324,6 +324,94 @@ func TestSpawnCollectsTheChildsStderrIntoTheTail(t *testing.T) {
 	}
 }
 
+// ─── SessionFileMessageVersion (the resume pre-flight) ──────────────
+//
+// The cases that matter are the ones that must NOT refuse: no frontmatter (the
+// e2e double writes plain JSON there) and a header without the key.
+
+func writeSessionFile(t *testing.T, dir, name, head string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(head), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestSessionFileMessageVersionReadsAVersionedHeader(t *testing.T) {
+	dir := t.TempDir()
+	head := "---\ncreated_at: 2026-09-08T22:26:51+08:00\nmessage_version: 11\nreasoning_level: 2\n---\n\x00TLVbody"
+	got, ok := SessionFileMessageVersion(writeSessionFile(t, dir, "session.alaya", head))
+	if !ok || got != 11 {
+		t.Errorf("got (%d,%v), want (11,true)", got, ok)
+	}
+	// Windows session files carry CRLF; lines() leaves the \r behind.
+	got, ok = SessionFileMessageVersion(writeSessionFile(t, dir, "crlf.alaya", "---\r\nmessage_version: 12\r\n---\r\n"))
+	if !ok || got != 12 {
+		t.Errorf("CRLF: got (%d,%v), want (12,true)", got, ok)
+	}
+}
+
+func TestSessionFileMessageVersionUnknownIsNotARefusal(t *testing.T) {
+	dir := t.TempDir()
+	cases := map[string]string{
+		// fakecore's session.alaya is bare JSON. Reading "no version" as
+		// "incompatible" would break every e2e that resumes one.
+		"json":        `{"version":1,"saved":true,"history":[]}`,
+		"no key":      "---\ncreated_at: 2026-09-08\nactive_model: \"M\"\n---\n",
+		"unclosed":    "---\ncreated_at: x\n",
+		"not numeric": "---\nmessage_version: twelve\n---\n",
+		// The TLV body after `---` is opaque bytes that may contain the same
+		// words (a user pasting a session header into a prompt).
+		"key in body": "---\ncreated_at: x\n---\n\x00user message\x00message_version: 3\n",
+	}
+	for name, head := range cases {
+		if _, ok := SessionFileMessageVersion(writeSessionFile(t, dir, name+".alaya", head)); ok {
+			t.Errorf("%s: reported a version where there is none to trust", name)
+		}
+	}
+	if _, ok := SessionFileMessageVersion(filepath.Join(dir, "missing.alaya")); ok {
+		t.Error("an unreadable file must be unknown, not refused")
+	}
+}
+
+func TestSessionFileRejectionFiresOnlyOnAKnownMismatch(t *testing.T) {
+	// The decision, not the parsing — mirroring Rust's
+	// session_file_rejection test. `==` in place of `!=` would refuse every
+	// session on disk, and this is what says so.
+	dir := t.TempDir()
+	matching := writeSessionFile(t, dir, "matching.alaya",
+		fmt.Sprintf("---\nmessage_version: %d\n---\n", SupportedMessageVersion))
+	if err := SessionFileRejection(matching); err != nil {
+		t.Errorf("a matching version must load: %v", err)
+	}
+	stale := writeSessionFile(t, dir, "stale.alaya", "---\nmessage_version: 11\n---\n")
+	if err := SessionFileRejection(stale); err == nil || !strings.Contains(err.Error(), "v11") {
+		t.Errorf("a v11 file must be refused by name, got %v", err)
+	}
+	unknown := writeSessionFile(t, dir, "json.alaya", `{"version":1,"saved":true}`)
+	if err := SessionFileRejection(unknown); err != nil {
+		t.Errorf("unknown is the core's call, not a refusal: %v", err)
+	}
+	if err := SessionFileRejection(filepath.Join(dir, "missing.alaya")); err != nil {
+		t.Errorf("an unreadable file is not this check's business: %v", err)
+	}
+}
+
+func TestSessionVersionRejectionNamesBothVersionsAndSaysUntouched(t *testing.T) {
+	msg := SessionVersionRejection("/x/sessions/abc/session.alaya", 11)
+	for _, want := range []string{"v11", fmt.Sprintf("v%d", SupportedMessageVersion), "session.alaya", "was not modified"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message %q lacks %q", msg, want)
+		}
+	}
+	// The directory must not leak into the message: the user clicked a row, and
+	// the path is long, absolute, and identical for every session.
+	if strings.Contains(msg, "/x/sessions/") {
+		t.Errorf("message should name the file, not the whole path: %q", msg)
+	}
+}
+
 func TestSpawnError(t *testing.T) {
 	if _, err := Spawn("/nonexistent/alayacore", "", "", "", nil, "", 1, ""); err == nil {
 		t.Fatal("Spawn with missing binary should error")

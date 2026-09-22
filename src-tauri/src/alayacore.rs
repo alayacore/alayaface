@@ -45,6 +45,81 @@ use crate::tlv;
 /// disconnect path in `reader.rs`, for what reaches the user.
 pub const SUPPORTED_MESSAGE_VERSION: i64 = 12;
 
+/// How far into a session file its frontmatter is searched.
+///
+/// The block is eight short scalar lines (created_at, updated_at,
+/// active_model, message_version, reasoning_level, context_tokens,
+/// video_fps, video_res), so this is generous by orders of magnitude; the
+/// window exists so a file whose header is missing or absurd is reported as
+/// "unknown" rather than costing a read of the whole TLV body.
+const SESSION_HEADER_WINDOW: u64 = 4096;
+
+/// The `message_version` recorded in a session file's frontmatter, `None` when
+/// the file has no readable header carrying the key.
+///
+/// `None` means "unknown", NOT "compatible": the caller must let the core
+/// decide, because the core owns the load rule. This function exists to turn
+/// the ONE case AlayaFace can identify cheaply — a file written under a
+/// different protocol version, which alayacore refuses outright — into an error
+/// the user sees where they were acting (the Session Manager row, the owning
+/// plan window), instead of a window that opens, dies, and says
+/// "Connection closed".
+///
+/// Note that a file may legitimately have no frontmatter at all: the e2e double
+/// writes JSON there. That reports `None` and resumes, as it must.
+pub fn session_file_message_version(path: &std::path::Path) -> Option<i64> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut head = Vec::new();
+    let mut limited = file.take(SESSION_HEADER_WINDOW);
+    limited.read_to_end(&mut head).ok()?;
+
+    let text = String::from_utf8_lossy(&head);
+    let mut lines = text.lines();
+    if lines.next()?.trim_end_matches('\r') != "---" {
+        return None;
+    }
+    for line in lines {
+        let line = line.trim_end_matches('\r');
+        if line.trim() == "---" {
+            break; // header ended without the key
+        }
+        if let Some(value) = line.strip_prefix("message_version:") {
+            return value.trim().parse::<i64>().ok();
+        }
+    }
+    None
+}
+
+/// The refusal for a session file this build's protocol pin cannot load, or
+/// `None` when the file matches OR its version is unknown — unknown is the
+/// core's call to make, not ours.
+///
+/// The read, the comparison and the message live here together so a test can
+/// cover the DECISION rather than only the parsing: the version pin moves on
+/// every bump, and `!=` becoming `==` (or the unknown case defaulting to
+/// "refuse") is the shape of the bug that would block every resume, or none.
+pub fn session_file_rejection(path: &std::path::Path) -> Option<String> {
+    let found = session_file_message_version(path)?;
+    (found != SUPPORTED_MESSAGE_VERSION).then(|| session_version_rejection(path, found))
+}
+
+/// The rejection message for a session file this pair cannot load.
+///
+/// The wording is shared with Go's `SessionVersionRejection`
+/// (scripts/check-backend-parity.sh compares the distinctive tail), and it says
+/// the one thing a user needs reassured about: nothing was written to their file.
+/// AlayaFace does not migrate or edit another program's session files — the
+/// documented way to load an old file is to edit that number yourself, which is
+/// a decision for the user, not something to do on their behalf by accident.
+pub fn session_version_rejection(file: &std::path::Path, found: i64) -> String {
+    format!(
+        "Session file {} is alayacore protocol v{found}; this AlayaFace and the alayacore it bundles speak v{SUPPORTED_MESSAGE_VERSION} and will not load it (the file was not modified)",
+        file.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "?".to_string()),
+    )
+}
+
 /// How long `check_message_version` waits for the boot version frame
 /// before giving up. The version frame is the FIRST thing alayacore
 /// emits on stdout (before any task/model/reasoning/ready SMs, and
@@ -1232,6 +1307,134 @@ mod tests {
     // rationale as in commands/cmd::tests — per-module statics can't
     // borrow a sibling module's static.
 
+    // ─── session_file_message_version ──────────────────────────
+    //
+    // The pre-flight read that lets resume_session refuse a file the bundled
+    // core will not load, instead of opening a window that dies. The cases that
+    // matter are the ones where it must NOT refuse: no frontmatter (the e2e
+    // double writes plain JSON there) and a header without the key.
+
+    fn write_session(dir: &std::path::Path, head: &str) -> std::path::PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        let p = dir.join("session.alaya");
+        std::fs::write(&p, head).unwrap();
+        p
+    }
+
+    #[test]
+    fn a_versioned_header_is_read() {
+        let dir = temp_path("sfv-v11");
+        let p = write_session(
+            &dir,
+            "---\ncreated_at: 2026-09-08T22:26:51+08:00\nmessage_version: 11\nreasoning_level: 2\n---\n\x00TLVbody",
+        );
+        assert_eq!(session_file_message_version(&p), Some(11));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_crlf_header_is_read() {
+        // Windows session files; `lines()` leaves the \r behind.
+        let dir = temp_path("sfv-crlf");
+        let p = write_session(&dir, "---\r\nmessage_version: 12\r\n---\r\n");
+        assert_eq!(session_file_message_version(&p), Some(12));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_without_frontmatter_is_unknown_not_refused() {
+        // fakecore's session.alaya is bare JSON. Reading "no version" as
+        // "incompatible" would break every e2e that resumes one.
+        let dir = temp_path("sfv-json");
+        let p = write_session(&dir, r#"{"version":1,"saved":true,"history":[]}"#);
+        assert_eq!(session_file_message_version(&p), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_header_without_the_key_is_unknown() {
+        let dir = temp_path("sfv-nokey");
+        let p = write_session(&dir, "---\ncreated_at: 2026-09-08\nactive_model: \"M\"\n---\n");
+        assert_eq!(session_file_message_version(&p), None);
+        // A truncated/unclosed header is the same answer: do not guess.
+        let unclosed = dir.join("unclosed.alaya");
+        std::fs::write(&unclosed, "---\ncreated_at: x\n").unwrap();
+        assert_eq!(session_file_message_version(&unclosed), None);
+        // And neither is a header whose value is not a number.
+        let junk = dir.join("junk.alaya");
+        std::fs::write(&junk, "---\nmessage_version: twelve\n---\n").unwrap();
+        assert_eq!(session_file_message_version(&junk), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_unreadable_file_is_unknown() {
+        // resume_session has already checked the file exists; a vanished or
+        // unreadable file must fall through to the core rather than panic.
+        assert_eq!(
+            session_file_message_version(std::path::Path::new("/nonexistent/session.alaya")),
+            None
+        );
+    }
+
+    #[test]
+    fn only_a_key_before_the_closing_marker_is_picked_up() {
+        // The TLV body after `---` is opaque bytes that may contain the same
+        // words (a user pasting a session header into a prompt).
+        let dir = temp_path("sfv-body");
+        let p = write_session(
+            &dir,
+            "---\ncreated_at: x\n---\n\x00user message\x00message_version: 3\n",
+        );
+        assert_eq!(session_file_message_version(&p), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_rejection_fires_only_on_a_known_mismatch() {
+        // The decision, not the parsing: a version that matches loads, a
+        // version that differs does not, and an unknown version is left to the
+        // core. `!=` -> `==` here would refuse every session on disk, and this
+        // is the test that says so.
+        let dir = temp_path("sfv-decide");
+        let matching = write_session(&dir, &format!("---\nmessage_version: {SUPPORTED_MESSAGE_VERSION}\n---\n"));
+        assert_eq!(session_file_rejection(&matching), None);
+        let stale = write_session(&dir, "---\nmessage_version: 11\n---\n");
+        assert!(
+            session_file_rejection(&stale)
+                .is_some_and(|m| m.contains("v11")),
+            "a v11 file must be refused by name"
+        );
+        let unknown = write_session(&dir, r#"{"version":1,"saved":true}"#);
+        assert_eq!(session_file_rejection(&unknown), None);
+        assert_eq!(
+            session_file_rejection(std::path::Path::new("/nonexistent/x.alaya")),
+            None,
+            "an unreadable file is the core's problem, not a refusal"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_rejection_names_both_versions_and_says_the_file_is_untouched() {
+        let dir = temp_path("sfv-msg");
+        let p = write_session(&dir, "---\nmessage_version: 11\n---\n");
+        let msg = session_version_rejection(&p, 11);
+        assert!(
+            msg.contains("v11") && msg.contains(&format!("v{SUPPORTED_MESSAGE_VERSION}")),
+            "must name the observed and required version: {msg}"
+        );
+        assert!(
+            msg.contains("session.alaya"),
+            "must name the file the user clicked: {msg}"
+        );
+        assert!(
+            msg.contains("was not modified"),
+            "must say nothing was written to it: {msg}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // ─── StderrTail ───────────────────────────────────────────
     //
     // The reason a session died is only on stderr when it died before the
@@ -1299,7 +1502,19 @@ mod tests {
         let _ = core.stdout.read_to_string(&mut sink);
         let _ = core.child.wait();
 
-        let lines = core.stderr_tail.lines();
+        // Then POLL the tail rather than reading once: the pump is a separate
+        // thread and the child being gone does not mean its last stderr line
+        // has been taken off the pipe and stored yet. A fixed sleep would be the
+        // wrong fix (too short on a loaded runner, too long to notice); a
+        // bounded wait with a real deadline fails loudly instead.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let lines = loop {
+            let lines = core.stderr_tail.lines();
+            if !lines.is_empty() || std::time::Instant::now() > deadline {
+                break lines;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
         assert!(
             lines.iter().any(|l| l.contains("failed to load session")),
             "the pump must record the child's stderr, got {lines:?}"

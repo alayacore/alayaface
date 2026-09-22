@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"alayaface/src-go/internal/core"
 	"alayaface/src-go/internal/dirs"
 	"alayaface/src-go/internal/session"
 )
@@ -283,6 +284,18 @@ func ResumeSession(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	}
 	if _, err := os.Stat(configDir); err != nil {
 		return fmt.Errorf("Config directory not found: %s", configDir)
+	}
+
+	// Refuse a session file the bundled alayacore will not load BEFORE
+	// spawning it. The core aborts on such a file before writing a single TLV
+	// frame, so the alternative is a window that opens, dies, and reports
+	// "Connection closed" — and an entry in the session map that then answers
+	// every later retry with "Session is already active". AlayaFace bundles a
+	// core that speaks SupportedMessageVersion, so this pin is that core's
+	// number; anything else the core itself decides (and the reader surfaces
+	// its stderr reason). Mirrors Rust resume_session.
+	if err := core.SessionFileRejection(sessionFile); err != nil {
+		return err
 	}
 
 	// Check not already running: resumed sessions are keyed by a fresh

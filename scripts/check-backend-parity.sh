@@ -469,6 +469,10 @@ expect_both "status string" "more stderr lines in the backend log" "$R_READ" "$G
 #     session itself, and the plan runner fails a node on whichever arrives —
 #     so both backends must name the fact the same way.
 expect_both "status string" "Session closed by alayacore" "$R_READ" "$G_READ"
+#     The resume pre-flight's refusal (a session file written under another
+#     protocol version). The check itself lives in the spawn modules, where the
+#     message is built from the version pin.
+expect_both "status string" "will not load it (the file was not modified)" "$R_CORE" "$G_CORE"
 
 # ─── Result ──────────────────────────────────────────────────────────
 
