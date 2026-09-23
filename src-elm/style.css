@@ -666,7 +666,11 @@ body {
   padding: 12px 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  /* 1px: a transcript is mostly folded rows, so this + the title row's line
+     box is the label→label pitch (see .msg-header's line-height). It used to
+     be 6, then 3; the air after an EXPANDED body still comes from
+     .msg-body's own bottom padding, which this does not touch. */
+  gap: 1px;
   position: relative;
   z-index: 1;
   width: 100%;
@@ -717,9 +721,12 @@ body {
 
 /* Every message renders as a TITLE ROW above a BODY BOX: a clickable
    header row (chevron + role label, optional tool info, collapsed
-   preview) followed — when expanded — by a bordered box containing the
-   body. Collapsed messages show only the title row (no box). Tool and
-   reasoning messages start collapsed; user/assistant start expanded. */
+   preview) followed — when expanded — by a box containing the body. The
+   box is borderless and unfilled; what it exists for is to give the body a
+   node of its own — overlay.js measures it to decide when a sticky title
+   row is pinned, and the plan status bar rides inside it. Collapsed
+   messages show only the title row (no box). Tool and reasoning messages
+   start collapsed; user/assistant start expanded. */
 
 .msg-header {
   /* Sticky: while a long body scrolls, the title row stays pinned to
@@ -733,12 +740,23 @@ body {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  /* 0 horizontal: the title row, the block's two rules and the body text
-     share ONE left edge (see .msg-body). */
-  padding: 2px 0;
+  /* 0 horizontal: the title row and the body text under it share ONE left
+     edge (see .msg-body). 0 vertical in BOTH states on purpose: the header
+     used to carry 2px that `.message.collapsed` then dropped, so the same
+     label sat 4px below a block's top when expanded and 2px when collapsed —
+     it visibly jumped as the row folded. The row's line box and
+     `.messages`' gap now do all the spacing. */
+  padding: 0;
   cursor: pointer;
   user-select: none;
   font-size: 0.72rem;
+  /* 1.2, not the 1.5 `.message` hands down: that made the label's own line box
+     17.28px around 11.5px of glyph, and a folded transcript is nothing but
+     these rows, so the half-leading above and below the label WAS the row
+     pitch. The other half of the row's height is `.msg-preview`'s min-height —
+     change one without the other and the taller of the two decides the
+     outcome. */
+  line-height: 1.2;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: #777;
@@ -789,17 +807,22 @@ body {
 .msg-preview {
   flex: 1;
   min-width: 0;
-  /* At least one line, even when the text is empty: keeps the collapsed
-     header height (and baseline alignment) stable while streaming
-     deltas toggle the preview between empty and non-empty. */
-  min-height: 1.5em;
+  /* 1.2em: the preview's own line box at the 1.2 `.msg-header` now sets, so the
+     two agree and a folded row is no taller than an unfolded one. The floor is
+     still needed: an empty preview (streaming has not produced text yet) would
+     otherwise collapse and let the row jump when the first delta lands. */
+  min-height: 1.2em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.78rem;
+  /* No font-size and no color: a folded row's text is the SAME ink and the
+     SAME size as the role label in front of it (user decision, 2026-09) — both
+     now inherit from `.msg-header` (0.72rem, #777, and the role hue where one
+     exists, which is why .msg-preview sits in those rules too). What stays
+     different is only what belongs to CONTENT rather than to a tag: the text
+     keeps its own case and spacing. */
   letter-spacing: 0;
   text-transform: none;
-  color: #888;
 }
 
 .msg-tool-info {
@@ -812,7 +835,9 @@ body {
 .msg-name {
   /* 700: no 600 face in the fallback fonts (see .message / .msg-label). */
   font-weight: 700;
-  color: #aaa;
+  /* No color: like the preview, the tool name is part of the title row's text
+     and takes the row's ink (see .msg-preview). It used to sit a step lighter
+     (#aaa / #666), which made one line read as two different greys. */
   letter-spacing: 0;
   text-transform: none;
 }
@@ -832,87 +857,55 @@ body {
 .msg-status-icon.icon-running { color: #fbbf24; }
 .msg-status-icon.icon-cross { color: #fca5a5; }
 
-/* The body box: exists only while expanded. Role borders attach here (see
-   the rules below), so the collapsed title row stays borderless.
+/* The body box: exists only while expanded and draws nothing of its own — no
+   border, fill, radius or tint (user decisions, 2026-09, each step undoing the
+   one before: side borders, fills, top/bottom rules, role colours). What a
+   block still shows of its role is the title row's own text — .msg-label, plus
+   the .msg-preview behind it when folded — and the hue that goes with it (see
+   the note above .message-system). The box exists because
+   overlay.js measures it for the sticky title row and the plan status bar
+   lives inside it. With no rule to lean on, .msg-body's own vertical padding
+   is what separates an expanded body from the rows around it.
 
-   A MESSAGE BLOCK IS A PAIR OF COLOURED RULES, NOTHING ELSE (user decision,
-   2026-09): the top and bottom edges carry the role's line, the left and
-   right edges carry nothing — the block spans the window (see
-   .session-panel's --content-width), so a side border would sit at the
-   panel's edge and say "window", not "this message". Hence the role rules
-   below set border-top/-bottom only, and the radius is zero: a rounded corner
-   on a box with no side borders reads as a line with two hooks on the end,
-   not as a curve.
-
-   NO FILL: the role's colour lives in the two rules alone. The blocks used to
-   tint their whole body too (assistant grey, notify amber, error red) and a
-   chat full of tinted slabs is louder than the same chat as rules — and the
-   tint duplicated what the rule already says. So: one signal per block, and
-   it is the border. That also means no role may fall back to a transparent
-   rule (the assistant used to): with no fill behind it a colourless line
-   would leave the block with no edge at all. */
+   One exception: the prompt input still draws its pair of rules
+   (.input-bubble) — the live field's frame, not a transcript row. */
 .msg-window {
   background: transparent;
-  border-radius: 0;
 }
 
 .msg-body {
-  /* Vertical only. The 14px of horizontal padding was there to keep text off
-     the block's side borders; with those gone (see .msg-window) it became a
-     silent indent between a block's rule and its own text, and it broke the
-     single left edge the title row above already sits on. The window's own
-     inset is `.chat-area`'s padding — that one stays: it is the margin from
-     the FRAME, not from a block border. */
-  padding: 8px 0 10px;
+  /* Vertical only. The 14px of horizontal padding cleared the block's side
+     borders, which were dropped before the top/bottom ones (see .msg-window);
+     what it became instead was a silent indent between a block's edge and its
+     own text, breaking the single left edge the title row above sits on. The
+     window's own inset is `.chat-area`'s padding — that one stays: it is the
+     margin from the FRAME, not from a block border.
+     Vertical: 4 above / 8 below. The top half used to be 8, which read as a gap
+     between a label and its own body; the body now sits close under its title
+     row, and the bottom stays the larger half so a block reads as attached to
+     the row above it, not the one below. */
+  padding: 4px 0 8px;
 }
 
-/* Collapsed: title row only, visually lighter. Drop the header's
-   vertical padding so consecutive folded rows pack tighter (the gap
-   in .messages stays unchanged so expanded windows keep their
-   breathing room); the preview min-height is left intact on purpose —
-   it stabilizes the row height while streaming deltas toggle the
-   preview between empty and non-empty, and shrinking it would let the
-   row jump during streaming. */
+/* Collapsed: title row only, visually lighter. (The header's padding used to
+   be dropped here too — see the note in .msg-header: it was the label's
+   2px jump, and the row pitch is set by `.messages`' gap instead.) The preview
+   min-height is left intact on purpose — it stabilizes the row height while
+   streaming deltas toggle the preview between empty and non-empty, and
+   shrinking it would let the row jump during streaming. */
 .message.collapsed {
   opacity: 0.8;
 }
 
-.message.collapsed .msg-header {
-  padding-top: 0;
-  padding-bottom: 0;
-}
-
-.message-user .msg-window {
-  border-top: 2px solid #2563eb;
-  border-bottom: 2px solid #2563eb;
-}
-
-.message-assistant .msg-window {
-  /* Neutral, not `transparent` as it used to be: the assistant block lost
-     its grey fill, so a colourless rule would leave a reply with no edge at
-     all. Lighter than the user's blue, heavier than a hairline. */
-  border-top: 2px solid rgba(255, 255, 255, 0.22);
-  border-bottom: 2px solid rgba(255, 255, 255, 0.22);
-}
-
-.message-reasoning .msg-window {
-  border-top: 1px solid rgba(255, 255, 255, 0.18);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.18);
-}
-.message-reasoning .msg-body {
-  color: #aaa;
-}
-
-.message-tool {
-  color: #aaa;
-}
-.message-tool .msg-window {
-  border-top: 1px solid rgba(255, 255, 255, 0.18);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.18);
-}
-.message-tool .msg-body {
-  color: #aaa;
-}
+/* No role-level body colour: every body sits on the default text colour, and
+   the only thing a role paints is the hue on `.msg-label` (see the note above
+   .message-system). Reasoning and tool bodies used to be dimmed to #aaa
+   (`#888` light); the assistant's `#e2e8f0` is the theme's own ink, not a dim,
+   and stays. Inside a tool block the greys that remain are per-element, not
+   per-role: the INPUT strip (`.tool-input-head`, `.tool-tag`), the raw args
+   (`.tool-fallback`), the result text (`.tool-output`), the command line
+   (`.tool-cmd`) and the diff's ctx/del/add trio — the last two carry a HUE,
+   which is the content's own meaning (a removed line), not a role tint. */
 
 /* ─── Tool call per-tool views (Session/ToolView.elm) ──────────────── */
 
@@ -923,8 +916,10 @@ body {
 }
 
 .tool-input {
-  /* A block inside a tool message — same flat treatment as the message
-     itself: two rules, no side borders (see .msg-window). */
+  /* The two hairlines stay here even though the message box around them no
+     longer has any (see .msg-window): this one is not a role signal, it is a
+     region boundary — it holds the "INPUT" head off the tool's own text.
+     Flat, as everywhere: no side borders, no radius. */
   border-top: 1px solid rgba(255, 255, 255, 0.14);
   border-bottom: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 0;
@@ -1002,7 +997,7 @@ body {
   white-space: pre-wrap;
   color: #9ca3af;
   /* No background of its own, so no horizontal inset either: it sits on the
-     same left edge as the tool block's rules (see .msg-body). */
+     same left edge as the .tool-input rules (see .msg-body). */
   padding: 8px 0;
 }
 
@@ -1014,16 +1009,34 @@ body {
 
 .tool-output-error { color: #fca5a5; }
 
+/* ─── ROLE COLOUR LIVES IN THE TITLE ROW'S TEXT (user decisions, 2026-09) ─
+   These three roles used to tint their whole block (amber / pale amber / red).
+   The borders went, then the fills, then the tint: the body of a SYSTEM /
+   NOTIFY / ERROR row is now drawn exactly like any other message, and the hue
+   stays where the role is actually stated — the word in .msg-label.
+
+   The split to respect: a `.message-<role>` ROOT sets layout and NEUTRAL INK
+   only (the theme's text colour; chroma max−min across channels is 0–20). A
+   hue (87–215) sits on the TITLE ROW'S TEXT — `.msg-label` and, when the row
+   is folded, the `.msg-preview` behind it — and never in the body: the folded
+   row reads as one coloured line, the prose stays neutral. Chevron keeps the
+   row's grey; it is furniture.
+
+   `.msg-label` and `.msg-preview` must be named together. The preview takes
+   the row's ink by inheritance (it has no `color` of its own — see there), so
+   a rule that colours only the label re-creates exactly the half-coloured row
+   this note is about.
+
+   No `:hover` companion is needed: `.msg-header:hover` paints the ROW, and a
+   direct rule on the label/preview beats an inherited value whatever its
+   weight. (The `color: inherit` pair that briefly sat on `.msg-header` itself
+   did need one, and had to out-specify each theme's own hover rule — that
+   trap is gone with those rules.) */
 .message-system {
   align-self: center;
-  color: #fbbf24;
   font-size: 0.8rem;
   text-align: center;
   max-width: 90%;
-}
-/* System rows stay borderless (a status line, not a window). */
-.message-system .msg-window {
-  border: none;
 }
 .message-system .msg-body {
   white-space: nowrap;
@@ -1033,24 +1046,15 @@ body {
 
 .message-notify {
   align-self: flex-start;
-  color: #fde68a;
-}
-.message-notify .msg-window {
-  /* No fill (see .msg-window): the amber rule is the whole signal, so it is
-     drawn stronger than the 0.35 it was when the background carried weight
-     too. */
-  border-top: 2px solid rgba(250, 204, 21, 0.65);
-  border-bottom: 2px solid rgba(250, 204, 21, 0.65);
 }
 
 .message-error {
   align-self: flex-start;
-  color: #fca5a5;
 }
-.message-error .msg-window {
-  border-top: 2px solid rgba(239, 68, 68, 0.65);
-  border-bottom: 2px solid rgba(239, 68, 68, 0.65);
-}
+
+.message-system .msg-label, .message-system .msg-preview { color: #fbbf24; }
+.message-notify .msg-label, .message-notify .msg-preview { color: #fde68a; }
+.message-error .msg-label, .message-error .msg-preview { color: #fca5a5; }
 
 .message-content {
   line-height: 1.5;
@@ -1650,14 +1654,18 @@ body {
 
 .input-bubble {
   /* Vertical only — the 14px cleared a side border that no longer exists
-     (see .msg-body / .msg-window). */
+     (see .msg-body). */
   padding: 10px 0;
-  /* The prompt input reuses the `message message-user` classes (it
-     renders as a user-style bubble), but the message border now lives
-     on .msg-window — give the input bubble its own border/radius so it
-     keeps the user-blue frame. Like every other block it is bounded by a
-     TOP and a BOTTOM rule only (see .msg-window): the input spans the
-     window, so a side border would draw the window's own edge twice. */
+  /* The prompt input reuses the `message message-user` classes (it renders
+     as a user-style echo), and the transcript blocks that class names —
+     .msg-window, all of them — are now borderless (user decision,
+     2026-09). So the bubble declares its OWN pair of rules: this is the live
+     field, not a transcript row, and the frame is what says "type here".
+     It is therefore the last block in the chat still drawn as two
+     horizontals — TOP and BOTTOM only, no side border, no radius, for the
+     reasons recorded in .msg-window (the input spans the window, so a side
+     border would draw the window's own edge twice). e2e/solo-e2e.mjs pins
+     it: bt > 0, bb > 0, bl == br == 0. */
   border-top: 2px solid #2563eb;
   border-bottom: 2px solid #2563eb;
   border-radius: 0;
@@ -1836,26 +1844,22 @@ body {
   .input-text { background: transparent; color: #1a1a2e; }
 }
 @media (prefers-color-scheme: light) {
-  /* Rules only, no fills (see .msg-window): each role keeps its line colour,
-     darkened where it was picked to sit on a tinted background. */
-  .message-assistant .msg-window { border-color: rgba(0, 0, 0, 0.22); }
+  /* The theme's own text colours: the light twin of the assistant's
+     near-white, and the darkened label/preview hues (see "ROLE COLOUR LIVES IN
+     THE LABEL ONLY" above .message-system — the same value as the dark block,
+     and the (0,2,0) tie there is won by source order alone). */
   .message-assistant { color: #1a202c; }
-  .message-system { color: #854d0e; }
-  .message-notify .msg-window { border-color: #b45309; }
-  .message-notify { color: #854d0e; }
-  .message-error .msg-window { border-color: #dc2626; }
-  .message-error { color: #991b1b; }
-  .message-user .msg-window { border-color: #2563eb; }
-  .message-reasoning .msg-window, .message-tool .msg-window { border-color: rgba(0, 0, 0, 0.2); }
-  .message-reasoning .msg-body, .message-tool .msg-body { color: #888; }
+  .message-system .msg-label, .message-system .msg-preview,
+  .message-notify .msg-label, .message-notify .msg-preview { color: #854d0e; }
+  .message-error .msg-label, .message-error .msg-preview { color: #991b1b; }
   .msg-header { color: #999; }
   .msg-header:hover { color: #444; }
   .msg-header.msg-header-pinned {
     background: #f8f8f8; /* opaque light app bg */
     border-bottom-color: rgba(0, 0, 0, 0.08);
   }
-  .msg-preview { color: #999; }
-  .msg-name { color: #666; }
+  /* No .msg-preview / .msg-name colour here: both take the row's ink now, and
+     `.msg-header { color: #999 }` two lines above is that ink in this scheme. */
   .msg-status-icon.icon-check { color: #16a34a; }
   .msg-status-icon.icon-running { color: #d97706; }
   .msg-status-icon.icon-cross { color: #dc2626; }
