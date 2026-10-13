@@ -233,7 +233,7 @@ getActiveSession model =
 {-| Shared send path for SendPrompt and the raw-audio flow: builds the
 media list from the session's staged items, clears the input, marks the
 prompt pending, and fires the sendPrompt port (the backend packs the
-staged URIs into UA/UI/UV/UD frames + UE).
+staged URIs into UX content frames + UE).
 -}
 doSendPrompt : Model -> T.SessionState -> ( Model, Cmd Msg )
 doSendPrompt model s =

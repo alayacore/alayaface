@@ -48,7 +48,20 @@ deltaJson sid tag content =
         , ( "history_id", E.string "h1" )
         , ( "content", E.string content )
         , ( "tag", E.string tag )
+        , ( "content_type", E.string (contentKind tag) )
         ]
+
+
+{-| The content item's kind for a test frame. v14 puts the kind in the JSON
+(not the tag): UX/AX for text, and the "AXR" marker for assistant reasoning.
+-}
+contentKind : String -> String
+contentKind tag =
+    if tag == "AXR" then
+        "reasoning"
+
+    else
+        "text"
 
 
 statusJson : String -> Bool -> String -> E.Value
@@ -76,27 +89,35 @@ field is spelled out here: a missing one would test the Err branch, not the arm.
 -}
 frameJson : String -> String -> Maybe String -> String -> Maybe E.Value -> E.Value
 frameJson sid tag historyId content json =
+    let
+        ( realTag, kind ) =
+            case tag of
+                "UX" -> ( "UX", E.string "text" )
+                "AX" -> ( "AX", E.string "text" )
+                "AXR" -> ( "AX", E.string "reasoning" )
+                _ -> ( tag, E.null )
+    in
     E.object
         [ ( "session_id", E.string sid )
-        , ( "tag", E.string tag )
+        , ( "tag", E.string realTag )
         , ( "raw_value", E.string content )
         , ( "history_id", Maybe.map E.string historyId |> Maybe.withDefault E.null )
         , ( "content", E.string content )
         , ( "json", Maybe.withDefault E.null json )
-        , ( "user_content_type", E.null )
+        , ( "content_type", kind )
         ]
 
 
 {-| A completed assistant-text frame carrying `content` as its final message. -}
 atFrame : String -> E.Value
 atFrame content =
-    frameJson "s1" "AT" (Just "h1") content Nothing
+    frameJson "s1" "AX" (Just "h1") content Nothing
 
 
 {-| A user echo: the same content, but the message's role is User. -}
 utFrame : String -> E.Value
 utFrame content =
-    frameJson "s1" "UT" (Just "h2") content Nothing
+    frameJson "s1" "UX" (Just "h2") content Nothing
 
 
 {-| An `SM` system frame — readiness, task and error signals all arrive this way. -}
@@ -559,7 +580,7 @@ tests =
                 \_ ->
                     let
                         ( m, actions ) =
-                            SE.deltaEvent modelAfterFork (deltaJson "s1" "At" "late text from the dying core")
+                            SE.deltaEvent modelAfterFork (deltaJson "s1" "Ax" "late text from the dying core")
                     in
                     Expect.all
                         [ \_ -> Expect.equal (sessionsOf modelAfterFork) (sessionsOf m)
@@ -585,7 +606,7 @@ tests =
                 \_ ->
                     let
                         ( m, _ ) =
-                            SE.deltaEvent initModelWithSession (deltaJson "s1" "At" "hello")
+                            SE.deltaEvent initModelWithSession (deltaJson "s1" "Ax" "hello")
 
                         msgs =
                             Dict.get "s1" m.sessions |> Maybe.withDefault session |> .messages
@@ -600,14 +621,14 @@ tests =
                 \_ ->
                     let
                         ( _, actions ) =
-                            SE.deltaEvent (withAtBottom True) (deltaJson "s1" "At" "hello")
+                            SE.deltaEvent (withAtBottom True) (deltaJson "s1" "Ax" "hello")
                     in
                     Expect.equal [ SE.ScrollToBottom "s1" ] actions
             , test "a view the user scrolled up is not dragged down, but the text still arrives" <|
                 \_ ->
                     let
                         ( m, actions ) =
-                            SE.deltaEvent (withAtBottom False) (deltaJson "s1" "At" "hello")
+                            SE.deltaEvent (withAtBottom False) (deltaJson "s1" "Ax" "hello")
                     in
                     Expect.all
                         [ \_ -> Expect.equal [] actions
@@ -618,10 +639,10 @@ tests =
                 \_ ->
                     let
                         ( once, _ ) =
-                            SE.deltaEvent initModelWithSession (deltaJson "s1" "At" fencedPlan)
+                            SE.deltaEvent initModelWithSession (deltaJson "s1" "Ax" fencedPlan)
 
                         ( twice, _ ) =
-                            SE.deltaEvent once (deltaJson "s1" "At" "\nmore text\n")
+                            SE.deltaEvent once (deltaJson "s1" "Ax" "\nmore text\n")
                     in
                     Expect.equal
                         ( Just 1, Just 1 )
@@ -630,7 +651,7 @@ tests =
                 \_ ->
                     let
                         ( m, _ ) =
-                            SE.deltaEvent initModelWithSession (deltaJson "s1" "At" "just prose")
+                            SE.deltaEvent initModelWithSession (deltaJson "s1" "Ax" "just prose")
                     in
                     Expect.equal Dict.empty m.planMessageCounts
             ]
@@ -640,7 +661,7 @@ tests =
                 \_ ->
                     let
                         ( m, actions ) =
-                            SE.deltaEvent initModelWithSession (deltaJson "core-9" "At" "racing frame")
+                            SE.deltaEvent initModelWithSession (deltaJson "core-9" "Ax" "racing frame")
                     in
                     Expect.all
                         [ \_ -> Expect.equal [ ( "core-9", 1 ) ] (bufferKeys m)
@@ -655,7 +676,7 @@ tests =
                     -- under the routed id would leave the queue unreachable.
                     let
                         ( m, _ ) =
-                            SE.deltaEvent modelWithUnregisteredWorkCopy (deltaJson "core-2" "At" "early frame")
+                            SE.deltaEvent modelWithUnregisteredWorkCopy (deltaJson "core-2" "Ax" "early frame")
                     in
                     Expect.equal [ ( "core-2", 1 ) ] (bufferKeys m)
             ]
@@ -910,7 +931,7 @@ tests =
                         ()
             , test "a user echo wrapped in a plan fence is not a plan" <|
                 \_ ->
-                    -- The role guard: only an assistant message can offer. UT is
+                    -- The role guard: only an assistant message can offer. A user content frame is
                     -- the user's own text echoed back, and users paste plans too.
                     let
                         ( m, actions ) =
@@ -1136,7 +1157,7 @@ tests =
                 \_ ->
                     let
                         ( m, actions ) =
-                            SE.frameEvent modelAfterFork (frameJson "s1" "AT" (Just "h1") "from the old core" Nothing)
+                            SE.frameEvent modelAfterFork (frameJson "s1" "AX" (Just "h1") "from the old core" Nothing)
                     in
                     Expect.all
                         [ \_ -> Expect.equal (touched modelAfterFork) (touched m)
@@ -1147,7 +1168,7 @@ tests =
                 \_ ->
                     let
                         ( m, actions ) =
-                            SE.frameEvent modelWithUnregisteredWorkCopy (frameJson "core-2" "AT" (Just "h1") "early" Nothing)
+                            SE.frameEvent modelWithUnregisteredWorkCopy (frameJson "core-2" "AX" (Just "h1") "early" Nothing)
                     in
                     Expect.all
                         [ \_ -> Expect.equal [ ( "core-2", 1 ) ] (touched m).buffer
@@ -1169,7 +1190,7 @@ tests =
                             SE.applyPendingEvent (\core -> core) (atFrame "a complete message") sessions
 
                         afterDelta =
-                            SE.applyPendingEvent (\core -> core) (deltaJson "s1" "At" " more") afterFrame
+                            SE.applyPendingEvent (\core -> core) (deltaJson "s1" "Ax" " more") afterFrame
 
                         afterStatus =
                             SE.applyPendingEvent (\core -> core) (statusJson "s1" False "gone") afterDelta
@@ -1177,7 +1198,7 @@ tests =
                     Expect.all
                         [ \_ -> Expect.equal (Just T.Assistant) (Dict.get "s1" afterFrame |> Maybe.map (\s -> List.head s.messages |> Maybe.map .role) |> Maybe.withDefault Nothing)
                         , \_ -> Expect.equal 1 (Dict.get "s1" afterFrame |> Maybe.map (\s -> List.length s.messages) |> Maybe.withDefault -1)
-                        , \_ -> Expect.equal 2 (Dict.get "s1" afterDelta |> Maybe.map (\s -> List.length s.messages) |> Maybe.withDefault -1)
+                        , \_ -> Expect.equal (Just "a complete message more") (Dict.get "s1" afterDelta |> Maybe.andThen (\s -> List.head (List.reverse s.messages)) |> Maybe.map .content)
                         , \_ -> Expect.equal False (Dict.get "s1" afterStatus |> Maybe.map .connected |> Maybe.withDefault True)
                         ]
                         ()
@@ -1208,7 +1229,7 @@ tests =
                                     else
                                         core
                                 )
-                                (frameJson "core-2" "AT" (Just "h1") "routed" Nothing)
+                                (frameJson "core-2" "AX" (Just "h1") "routed" Nothing)
                                 (Dict.fromList [ ( "s1", session ) ])
                     in
                     Expect.all

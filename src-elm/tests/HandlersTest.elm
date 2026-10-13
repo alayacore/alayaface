@@ -33,28 +33,37 @@ frame tag json =
     , historyId = Nothing
     , content = Nothing
     , json = Just json
-    , userContentType = Nothing
+    , contentType = Nothing
     }
 
 
--- A text-content frame as alayacore emits on resume history replay
--- (content + history id).
+-- A content frame as alayacore v14 emits it: one plane tag (UX user echo,
+-- AX assistant) plus the content item's kind. "AXR" marks assistant
+-- reasoning (the kind is not in the tag).
 textFrame : String -> Maybe String -> String -> FrameEvent
 textFrame tag hid text =
+    let
+        ( realTag, kind ) =
+            case tag of
+                "UX" -> ( "UX", "text" )
+                "AX" -> ( "AX", "text" )
+                "AXR" -> ( "AX", "reasoning" )
+                _ -> ( tag, "text" )
+    in
     { sessionId = "s1"
-    , tag = tag
+    , tag = realTag
     , rawValue = ""
     , historyId = hid
     , content = Just text
     , json = Nothing
-    , userContentType = Nothing
+    , contentType = Just kind
     }
 
 
 toolCall : String -> String -> D.Value
 toolCall id name =
     E.object
-        [ ( "id", E.string id )
+        [ ( "call_id", E.string id )
         , ( "name", E.string name )
         , ( "input", E.object [] )
         ]
@@ -65,7 +74,7 @@ toolCall id name =
 toolCallStart : String -> String -> D.Value
 toolCallStart id name =
     E.object
-        [ ( "id", E.string id )
+        [ ( "call_id", E.string id )
         , ( "name", E.string name )
         ]
 
@@ -75,7 +84,7 @@ toolCallStart id name =
 toolCallInput : String -> D.Value -> D.Value
 toolCallInput id input =
     E.object
-        [ ( "id", E.string id )
+        [ ( "call_id", E.string id )
         , ( "input", input )
         ]
 
@@ -83,7 +92,7 @@ toolCallInput id input =
 toolCallInputWithEmptyName : String -> D.Value -> D.Value
 toolCallInputWithEmptyName id input =
     E.object
-        [ ( "id", E.string id )
+        [ ( "call_id", E.string id )
         , ( "name", E.string "" )
         , ( "input", input )
         ]
@@ -92,7 +101,7 @@ toolCallInputWithEmptyName id input =
 toolResult : String -> D.Value -> D.Value
 toolResult id output =
     E.object
-        [ ( "id", E.string id )
+        [ ( "call_id", E.string id )
         , ( "output", output )
         ]
 
@@ -100,7 +109,7 @@ toolResult id output =
 toolPreview : String -> String -> D.Value
 toolPreview id text =
     E.object
-        [ ( "id", E.string id )
+        [ ( "call_id", E.string id )
         , ( "text", E.string text )
         ]
 
@@ -233,7 +242,7 @@ tests =
                         s =
                             emptySession "s1"
                                 |> applyFrame (frame "AF" (toolCallStart "t1" "edit_file"))
-                                |> applyFrame (frame "Af" (E.object [ ( "id", E.string "t1" ), ( "delta", E.string "{\"path\":" ) ]))
+                                |> applyFrame (frame "Af" (E.object [ ( "call_id", E.string "t1" ), ( "delta", E.string "{\"path\":" ) ]))
                                 |> applyFrame (frame "AF" (toolCallInput "t1" (E.object [])))
                     in
                     Expect.equal "" (msgContent s)
@@ -272,7 +281,7 @@ tests =
                                 |> applyFrame
                                     (frame "UF"
                                         (E.object
-                                            [ ( "id", E.string "t1" )
+                                            [ ( "call_id", E.string "t1" )
                                             , ( "is_error", E.bool True )
                                             , ( "output"
                                               , E.object
@@ -310,7 +319,7 @@ tests =
                         delta v =
                             frame "Af"
                                 (E.object
-                                    [ ( "id", E.string "t1" )
+                                    [ ( "call_id", E.string "t1" )
                                     , ( "delta", E.string v )
                                     ]
                                 )
@@ -381,7 +390,7 @@ tests =
                         delta v =
                             frame "Af"
                                 (E.object
-                                    [ ( "id", E.string "t1" )
+                                    [ ( "call_id", E.string "t1" )
                                     , ( "delta", E.string v )
                                     ]
                                 )
@@ -399,8 +408,8 @@ tests =
                     let
                         s =
                             emptySession "s1"
-                                |> applyFrame (textFrame "UT" (Just "1") "Collect data from sales.db")
-                                |> applyFrame (textFrame "AT" (Just "2") "I will read the file now.")
+                                |> applyFrame (textFrame "UX" (Just "1") "Collect data from sales.db")
+                                |> applyFrame (textFrame "AX" (Just "2") "I will read the file now.")
                                 |> applyFrame (frame "AF" (toolCall "t1" "read_file"))
                                 |> applyFrame
                                     (frame "UF"
@@ -414,7 +423,7 @@ tests =
                                             )
                                         )
                                     )
-                                |> applyFrame (textFrame "AT" (Just "5") "Done. 42 rows collected.")
+                                |> applyFrame (textFrame "AX" (Just "5") "Done. 42 rows collected.")
                     in
                     Expect.all
                         [ \st -> Expect.equal 4 (List.length st.messages)
@@ -435,13 +444,13 @@ tests =
 
                         s =
                             emptySession "s1"
-                                |> applyFrame (textFrame "UT" (Just "1") "make a plan")
-                                |> applyFrame (textFrame "AT" (Just "2") planJson)
+                                |> applyFrame (textFrame "UX" (Just "1") "make a plan")
+                                |> applyFrame (textFrame "AX" (Just "2") planJson)
                                 -- plan runs, completes: feedback prompt is
                                 -- echoed as a NEW user message (hid 3) and
                                 -- the model's continuation as AT (hid 4).
-                                |> applyFrame (textFrame "UT" (Just "3") "[Plan Result] The plan has completed. Results:\n\n## t1\nok\n\n[Plan: p1]")
-                                |> applyFrame (textFrame "AT" (Just "4") "The plan finished; here is the outcome.")
+                                |> applyFrame (textFrame "UX" (Just "3") "[Plan Result] The plan has completed. Results:\n\n## t1\nok\n\n[Plan: p1]")
+                                |> applyFrame (textFrame "AX" (Just "4") "The plan finished; here is the outcome.")
                     in
                     Expect.all
                         [ \st -> Expect.equal 4 (List.length st.messages)
@@ -465,14 +474,15 @@ tests =
                             { sessionId = "s1"
                             , historyId = "4"
                             , content = v
-                            , tag = "At"
+                            , tag = "Ax"
+                            , contentType = "text"
                             }
 
                         s0 =
                             emptySession "s1"
-                                |> applyFrame (textFrame "UT" (Just "1") "make a plan")
-                                |> applyFrame (textFrame "AT" (Just "2") planJson)
-                                |> applyFrame (textFrame "UT" (Just "3") "[Plan Result] done")
+                                |> applyFrame (textFrame "UX" (Just "1") "make a plan")
+                                |> applyFrame (textFrame "AX" (Just "2") planJson)
+                                |> applyFrame (textFrame "UX" (Just "3") "[Plan Result] done")
 
                         s =
                             H.handleDeltaEvent (H.handleDeltaEvent s0 (delta "The plan ")) (delta "finished.")
@@ -498,9 +508,9 @@ tests =
                         -- overwritten).
                         s =
                             emptySession "s1"
-                                |> applyFrame (textFrame "UT" (Just "1") "hello")
-                                |> applyFrame (textFrame "AT" (Just "2") "first answer")
-                                |> applyFrame (textFrame "AT" (Just "2") "second answer")
+                                |> applyFrame (textFrame "UX" (Just "1") "hello")
+                                |> applyFrame (textFrame "AX" (Just "2") "first answer")
+                                |> applyFrame (textFrame "AX" (Just "2") "second answer")
                     in
                     Expect.all
                         [ \st -> Expect.equal 2 (List.length st.messages)
@@ -523,10 +533,10 @@ tests =
                         -- echo behavior), NOT appended as its own message.
                         s =
                             emptySession "s1"
-                                |> applyFrame (textFrame "UT" (Just "1") "make a plan")
-                                |> applyFrame (textFrame "AT" (Just "2") planJson)
-                                |> applyFrame (textFrame "UT" (Just "3") "meanwhile, check X")
-                                |> applyFrame (textFrame "UT" (Just "4") "[Plan Result] done")
+                                |> applyFrame (textFrame "UX" (Just "1") "make a plan")
+                                |> applyFrame (textFrame "AX" (Just "2") planJson)
+                                |> applyFrame (textFrame "UX" (Just "3") "meanwhile, check X")
+                                |> applyFrame (textFrame "UX" (Just "4") "[Plan Result] done")
                     in
                     Expect.all
                         [ \st -> Expect.equal 3 (List.length st.messages)
@@ -709,10 +719,10 @@ tests =
         ]
 
 
-{-| A user message is echoed as SEVERAL frames that all share ONE history
-id: UT for the text plus UI/UV/UA/UD per attachment (real alayacore and
-fakecore both emit `hist-<n>` for every frame of the message). Echo dedup
-keyed on the history id alone therefore threw away every frame after the
+{-| A user message is echoed as SEVERAL UX frames. v14 gives each item its own
+history id, but this suite deliberately reuses ONE id across a text item and
+its attachments: an adapter that does so must still render every item, and
+keying the echo dedup on the history id alone threw away every frame after the
 first — a voice message lost its audio chip, an image+text message lost the
 image preview (the attachment still reached the model, so the bug was only
 visible in the transcript). `voice-e2e.mjs`'s "UA echo rendered an audio
@@ -721,14 +731,14 @@ chip" assertion is the same observation from the browser side.
 userEchoMediaTests : Test
 userEchoMediaTests =
     let
-        echoFrame tag text =
+        echoFrame kind text =
             { sessionId = "s1"
-            , tag = tag
+            , tag = "UX"
             , rawValue = ""
             , historyId = Just "hist-1"
             , content = Just text
             , json = Nothing
-            , userContentType = Just tag
+            , contentType = Just kind
             }
     in
     describe "user echo frames sharing one history id"
@@ -737,8 +747,8 @@ userEchoMediaTests =
                 let
                     s =
                         emptySession "s1"
-                            |> applyFrame (echoFrame "UT" "hello")
-                            |> applyFrame (echoFrame "UA" "data:audio/wav;base64,AAAA")
+                            |> applyFrame (echoFrame "text" "hello")
+                            |> applyFrame (echoFrame "audio" "data:audio/wav;base64,AAAA")
                 in
                 case List.head (List.reverse s.messages) of
                     Just msg ->
@@ -761,8 +771,8 @@ userEchoMediaTests =
                 let
                     s =
                         emptySession "s1"
-                            |> applyFrame (echoFrame "UT" "hello")
-                            |> applyFrame (echoFrame "UT" "hello")
+                            |> applyFrame (echoFrame "text" "hello")
+                            |> applyFrame (echoFrame "text" "hello")
                 in
                 Expect.equal 1 (List.length s.messages)
         , test "two attachments on one message both render" <|
@@ -770,9 +780,9 @@ userEchoMediaTests =
                 let
                     s =
                         emptySession "s1"
-                            |> applyFrame (echoFrame "UT" "two files")
-                            |> applyFrame (echoFrame "UI" "data:image/png;base64,AA")
-                            |> applyFrame (echoFrame "UD" "data:application/pdf;base64,BB")
+                            |> applyFrame (echoFrame "text" "two files")
+                            |> applyFrame (echoFrame "image" "data:image/png;base64,AA")
+                            |> applyFrame (echoFrame "document" "data:application/pdf;base64,BB")
                 in
                 case List.head (List.reverse s.messages) of
                     Just msg ->

@@ -3,11 +3,16 @@
 //
 // It speaks the same TLV rawio protocol as the real thing:
 //
-//   - stdin: UT/UI/UV/UA/UD (user content) and CI (command input) frames
-//   - stdout: SM task on startup, user echoes, At/Ar deltas + AT/AR
-//     terminators for a canned assistant reply, SM model_list on EOF,
-//     and CO replies to CI commands (with the caller's call ID echoed
-//     so the backend's pending-command name injection can be verified)
+//   - stdin: UX (user content, a JSON content item) and CI (command input)
+//     frames
+//   - stdout: SM task on startup, UX echoes, Ax deltas + AX terminators for
+//     a canned assistant reply, SM model_list on EOF, and CO replies to CI
+//     commands (with the caller's call ID echoed so the backend's
+//     pending-command name injection can be verified)
+//
+// v14: every content frame's value is JSON and the concrete kind is the
+// content item's "type"; the history id is the top-level "id" and the
+// tool-call id is "call_id".
 //
 // Scripted CI commands (matching what the backend sends):
 //
@@ -129,13 +134,13 @@ var stagedText string
 // hung task instead of waiting for the grace-period SIGKILL).
 var hanging bool
 
-// msgSeq numbers user messages (echo history ids): real alayacore gives
-// every message a unique history id — the client dedupes echoes by it,
-// so a constant id would drop the SECOND user message (e.g. the plan
-// feedback prompt).
-var msgSeq int
+// echoSeq numbers echoed USER CONTENT ITEMS. v14 gives every content item its
+// own history id — a message's image and its text do not share one — and the
+// client dedupes echoes by it, so a constant id would drop the SECOND user
+// message (e.g. the plan feedback prompt).
+var echoSeq int
 
-// replySeq numbers ASSISTANT content blocks (Ar/At/AT/AR echo ids).
+// replySeq numbers ASSISTANT content blocks (Ax/AX echo ids).
 // Real alayacore gives every content block a unique history id; constant
 // ids (the historical "t1"/"p1"/"r1") made every reply share one id —
 // echo dedup then dropped or misattributed messages in the same session.
@@ -202,9 +207,9 @@ var (
 )
 
 type cmdMsg struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Input string `json:"input"`
+	CallID string `json:"call_id"`
+	Name   string `json:"name"`
+	Input  string `json:"input"`
 }
 
 func writeFrame(tag, value string) {
@@ -221,17 +226,35 @@ func writeSessionState(state string) {
 	writeFrame("SM", `{"type":"session","data":{"state":"`+state+`"}}`)
 }
 
-// echo replies with a NUL-delimited history-ID prefix, like alayacore.
-// Each USER MESSAGE gets its own id (msgSeq, incremented per UE flush).
-func echo(tag, content string) {
-	writeFrame(tag, "\x00"+fmt.Sprintf("hist-%d", msgSeq)+"\x00"+content)
+// contentFrame writes a JSON content frame (a UX echo or an AX block) with a
+// history id and a content kind ("text"/"reasoning"). Mirrors alayacore v14.
+func contentFrame(tag, id, kind, text string) {
+	body, _ := json.Marshal(tlv.ContentData{
+		ContentMeta: tlv.ContentMeta{ID: id},
+		ContentItem: tlv.ContentItem{Type: kind, Text: text},
+	})
+	writeFrame(tag, string(body))
 }
 
-// echoID is echo with an explicit history id. Real alayacore gives every
-// content block a unique id (Ar/At/AF never share one); the fake mirrors
-// that so the client's per-(role,id) delta accumulation is exercised.
-func echoID(tag, id, content string) {
-	writeFrame(tag, "\x00"+id+"\x00"+content)
+// contentDelta / contentComplete are the streaming and authoritative halves of
+// an assistant content block: Ax carries the fragment, AX terminates it (empty
+// content, like the real core in delta mode). Real alayacore gives every
+// content block a unique id (reasoning and text never share one); the fake
+// mirrors that so the client's per-(type,id) delta accumulation is exercised.
+func contentDelta(id, kind, text string)    { contentFrame("Ax", id, kind, text) }
+func contentComplete(id, kind, text string) { contentFrame("AX", id, kind, text) }
+
+// echoUser echoes a staged user content item back on stdout with a fresh
+// history id (one per item, like the real core in v14) and returns that id.
+func echoUser(cd tlv.ContentData) string {
+	echoSeq++
+	id := fmt.Sprintf("hist-%d", echoSeq)
+	body, _ := json.Marshal(tlv.ContentData{
+		ContentMeta: tlv.ContentMeta{ID: id},
+		ContentItem: cd.ContentItem,
+	})
+	writeFrame(tlv.TagUserX, string(body))
+	return id
 }
 
 // streamReply emits either a canned assistant reply OR — when llmURL is
@@ -254,11 +277,11 @@ func streamReply() {
 	rid := nextReplyID()
 	aid1 := nextReplyID()
 	aid2 := nextReplyID()
-	echoID("Ar", rid, "Thinking about it...")
-	echoID("At", aid1, "Hello")
-	echoID("At", aid1, " world")
-	echoID("AT", aid1, "")
-	echoID("AR", rid, "")
+	contentDelta(rid, "reasoning", "Thinking about it...")
+	contentDelta(aid1, "text", "Hello")
+	contentDelta(aid1, "text", " world")
+	contentComplete(aid1, "text", "")
+	contentComplete(rid, "reasoning", "")
 	// Step 1 just finished — broadcast an in_progress:true task frame
 	// with this step's speed metrics (mirrors real alayacore's
 	// SM-task-step.bin). Without this, the session-bar stays empty
@@ -268,8 +291,8 @@ func streamReply() {
 		`{"type":"task","data":{"in_progress":true,"current_step":2,"context":%d,"step_tps":%.1f,"ttft_ms":%d}}`,
 		contextTokens, lastStepTps, lastTtftMs,
 	))
-	echoID("At", aid2, "Received prompt: "+stagedText+versionSuffix())
-	echoID("AT", aid2, "")
+	contentDelta(aid2, "text", "Received prompt: "+stagedText+versionSuffix())
+	contentComplete(aid2, "text", "")
 	writeFrame("SM", taskDoneFrame())
 	// Record the reply (merged) for fork-history replay.
 	history = append(history, histMsg{"assistant", "Hello world\n\nReceived prompt: " + stagedText + versionSuffix(), aid2})
@@ -364,7 +387,7 @@ func realLLMReply() {
 				firstTokenAt = time.Now()
 			}
 			fullText.WriteString(c.Delta.Content)
-			echoID("At", aid, c.Delta.Content)
+			contentDelta(aid, "text", c.Delta.Content)
 			if chunk.Usage == nil {
 				tokenCount += len(c.Delta.Content) / 4
 			}
@@ -394,7 +417,7 @@ func realLLMReply() {
 	lastStepTps = stepTps
 	lastTtftMs = int(ttftMs)
 
-	echoID("AT", aid, "")
+	contentComplete(aid, "text", "")
 	contextTokens += tokenCount * 4 // rough context bump
 	writeFrame("SM", fmt.Sprintf(
 		`{"type":"task","data":{"in_progress":false,"context":%d,"step_tps":%.1f,"ttft_ms":%d}}`,
@@ -405,7 +428,7 @@ func realLLMReply() {
 
 func coOk(id string, output map[string]any) {
 	payload, _ := json.Marshal(map[string]any{
-		"id":       id,
+		"call_id":  id,
 		"output":   output,
 		"is_error": false,
 	})
@@ -414,7 +437,7 @@ func coOk(id string, output map[string]any) {
 
 func coErr(id, message string) {
 	payload, _ := json.Marshal(map[string]any{
-		"id":       id,
+		"call_id":  id,
 		"output":   map[string]any{"message": message},
 		"is_error": true,
 	})
@@ -426,7 +449,7 @@ func coErr(id, message string) {
 // not invent an object where the real core sends none.
 func coNull(id string) {
 	payload, _ := json.Marshal(map[string]any{
-		"id":       id,
+		"call_id":  id,
 		"output":   nil,
 		"is_error": false,
 	})
@@ -500,13 +523,13 @@ func handleCmd(raw string) {
 		// input = "<historyId> <targetFile>"
 		fields := strings.Fields(msg.Input)
 		if len(fields) < 2 {
-			coErr(msg.ID, "fork needs <historyId> <targetFile>")
+			coErr(msg.CallID, "fork needs <historyId> <targetFile>")
 			return
 		}
 		historyID := fields[0]
 		target := fields[len(fields)-1]
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			coErr(msg.ID, "cannot create fork dir")
+			coErr(msg.CallID, "cannot create fork dir")
 			return
 		}
 		// The fork's session.alaya carries exactly the truncated history
@@ -518,10 +541,10 @@ func handleCmd(raw string) {
 			"history": truncateHistory(historyID),
 		})
 		if err := os.WriteFile(target, payload, 0o644); err != nil {
-			coErr(msg.ID, "cannot write session file")
+			coErr(msg.CallID, "cannot write session file")
 			return
 		}
-		coOk(msg.ID, map[string]any{"message": "forked"})
+		coOk(msg.CallID, map[string]any{"message": "forked"})
 	case "save":
 		// Empty input = save to the --session file (real alayacore
 		// semantics). Write the session's COMPLETE history (the replayed
@@ -540,11 +563,11 @@ func handleCmd(raw string) {
 				payload = []byte(`{"version":1,"saved":true}`)
 			}
 			if err := os.WriteFile(sessionFile, payload, 0o644); err != nil {
-				coErr(msg.ID, "cannot write session file")
+				coErr(msg.CallID, "cannot write session file")
 				return
 			}
 		}
-		coOk(msg.ID, map[string]any{"path": sessionFile})
+		coOk(msg.CallID, map[string]any{"path": sessionFile})
 	case "model_set":
 		// Mirror real alayacore: model_set persists the active model to
 		// the config dir's runtime.conf (`active_model: <name>`), so the
@@ -552,20 +575,20 @@ func handleCmd(raw string) {
 		if configDir != "" {
 			name := fmt.Sprintf("fake-model-%s", msg.Input)
 			if err := writeRuntimeConf(configDir, name); err != nil {
-				coErr(msg.ID, "cannot write runtime.conf")
+				coErr(msg.CallID, "cannot write runtime.conf")
 				return
 			}
 		}
-		coOk(msg.ID, map[string]any{"modelId": msg.Input})
+		coOk(msg.CallID, map[string]any{"modelId": msg.Input})
 	case "model_load":
 		smModelList()
-		coOk(msg.ID, map[string]any{"ok": true})
+		coOk(msg.CallID, map[string]any{"ok": true})
 	case "reason":
 		// Mirror real alayacore: accepts a level (0|1|2) and echoes it.
-		coOk(msg.ID, map[string]any{"level": msg.Input})
+		coOk(msg.CallID, map[string]any{"level": msg.Input})
 	case "model_sync":
 		if strings.Contains(msg.Input, `"invalid"`) {
-			coErr(msg.ID, "invalid config")
+			coErr(msg.CallID, "invalid config")
 			return
 		}
 		// Real alayacore REWRITES model.conf from this payload, which is why
@@ -574,19 +597,19 @@ func handleCmd(raw string) {
 		// modelSyncRecord is fakecore-only and no production code reads it.
 		if configDir != "" {
 			if err := os.MkdirAll(configDir, 0o755); err != nil {
-				coErr(msg.ID, "cannot write config dir")
+				coErr(msg.CallID, "cannot write config dir")
 				return
 			}
 			if err := os.WriteFile(filepath.Join(configDir, modelSyncRecord), []byte(msg.Input), 0o644); err != nil {
-				coErr(msg.ID, "cannot write "+modelSyncRecord)
+				coErr(msg.CallID, "cannot write "+modelSyncRecord)
 				return
 			}
 		}
-		coOk(msg.ID, map[string]any{"message": "synced"})
+		coOk(msg.CallID, map[string]any{"message": "synced"})
 	case "tool_confirm", "tool_decline":
-		coOk(msg.ID, map[string]any{"id": msg.Input, "allowed": msg.Name == "tool_confirm"})
+		coOk(msg.CallID, map[string]any{"tool_id": msg.Input, "allowed": msg.Name == "tool_confirm"})
 	case "cancel":
-		coOk(msg.ID, map[string]any{"cancelled": true})
+		coOk(msg.CallID, map[string]any{"cancelled": true})
 	case "quit", "q":
 		// `quit` became a session command in protocol v12 (with the `q`
 		// alias, which the real core resolves through commands.Canonical
@@ -597,15 +620,15 @@ func handleCmd(raw string) {
 		// then the terminal `closed` frame, then exit — which main() writes
 		// when it sees quitting.
 		if strings.TrimSpace(msg.Input) != "" {
-			coErr(msg.ID, "usage: :quit (no arguments)")
+			coErr(msg.CallID, "usage: :quit (no arguments)")
 			return
 		}
-		coNull(msg.ID)
+		coNull(msg.CallID)
 		quitting = true
 	case "mcp_decline", "mcp_cancel":
-		coOk(msg.ID, map[string]any{"server": msg.Input})
+		coOk(msg.CallID, map[string]any{"server": msg.Input})
 	default:
-		coErr(msg.ID, "unknown command: "+msg.Name)
+		coErr(msg.CallID, "unknown command: "+msg.Name)
 	}
 }
 
@@ -779,17 +802,21 @@ func main() {
 			// the fake understands it so a client that does gets a core that
 			// behaves like the real one.
 			inputEnded = true
-		case "UT", "UI", "UV", "UA", "UD":
+		case tlv.TagUserX:
 			if inputEnded {
 				continue
 			}
-			echo(frame.Tag, frame.Value)
+			var cd tlv.ContentData
+			if json.Unmarshal([]byte(frame.Value), &cd) != nil {
+				continue
+			}
+			id := echoUser(cd)
 			staged++
-			if frame.Tag == "UT" {
-				stagedText += frame.Value
-				// Record the user message (echo id = current msgSeq, the
-				// same id the echo carries) for fork-history replay.
-				history = append(history, histMsg{"user", frame.Value, "hist-" + fmt.Sprint(msgSeq)})
+			if cd.Type == "text" {
+				stagedText += cd.Text
+				// Record the user message under the id its echo carried, for
+				// fork-history replay.
+				history = append(history, histMsg{"user", cd.Text, id})
 			}
 		case "UE":
 			if staged > 0 {
@@ -855,7 +882,6 @@ func main() {
 					staged = 0
 					stagedText = ""
 				}
-				msgSeq++
 			}
 		case "CI":
 			if hanging && strings.Contains(frame.Value, `"name":"cancel"`) {
@@ -906,8 +932,8 @@ func planReply() {
 	}
 	body := strings.Replace(planJSON, `"name": "E2E Demo"`, `"name": "`+name+`"`, 1)
 	pid := nextReplyID()
-	echoID("AT", pid, "Here is the plan:\n```json\n"+body+"\n```\nI'll wait for you to create it.")
-	echoID("AR", nextReplyID(), "")
+	contentComplete(pid, "text", "Here is the plan:\n```json\n"+body+"\n```\nI'll wait for you to create it.")
+	contentComplete(nextReplyID(), "reasoning", "")
 	history = append(history, histMsg{"assistant", "Here is the plan:\n```json\n" + body + "\n```\nI'll wait for you to create it.", pid})
 	// Mark the task complete (in_progress:false) so the frontend leaves
 	// "task running" state (send button back to Send) — without this a
@@ -938,7 +964,7 @@ func truncateHistory(historyID string) []histMsg {
 // suppression and status-bar binding are exercised against the real
 // history. The replayed messages are ALSO recorded into `history`, so a
 // later `save` writes the complete conversation (real alayacore appends
-// everything to session.alaya); msgSeq/replySeq advance past the
+// everything to session.alaya); echoSeq/replySeq advance past the
 // replayed ids so new messages cannot collide with them. No-op when the
 // session file carries no history.
 func replayForkedHistory() {
@@ -969,15 +995,15 @@ func replayForkedHistory() {
 		}
 		switch m.Role {
 		case "user":
-			writeFrame("UT", "\x00"+m.ID+"\x00"+m.Content)
+			contentFrame("UX", m.ID, "text", m.Content)
 		case "assistant":
-			writeFrame("At", "\x00"+m.ID+"\x00"+m.Content)
-			writeFrame("AT", "\x00"+m.ID+"\x00")
+			// Replay sends only the authoritative frame (no deltas).
+			contentComplete(m.ID, "text", m.Content)
 		}
 	}
 	// New messages get ids AFTER the replayed ones (no collision: every
 	// fakecore process numbers its own messages from 0).
-	msgSeq = len(f.History)
+	echoSeq = len(f.History)
 	replySeq = assistantCount
 }
 
@@ -1008,9 +1034,8 @@ func replayResumedHistory() {
 	// would all arrive before SessionCreated and be buffered, and the
 	// E2E would never exercise the replay-suppression path.
 	time.Sleep(400 * time.Millisecond)
-	writeFrame("UT", "\x00u-replay\x00Give me a plan")
-	echoID("At", "p-replay-1", "Here is the plan:\n```json\n"+planJSON+"\n```\nI'll wait for you to create it.")
-	echoID("AT", "p-replay-1", "")
+	contentFrame("UX", "u-replay", "text", "Give me a plan")
+	contentComplete("p-replay-1", "text", "Here is the plan:\n```json\n"+planJSON+"\n```\nI'll wait for you to create it.")
 }
 
 // failOnceReply simulates a task that fails on its first attempt and
@@ -1080,12 +1105,12 @@ const loadRunPlanJSON = `{
 
 // loadRunPlanReply emits the one-task always-failing plan (triggered by a
 // user prompt containing "load-run-plan"). Mirrors planReply's framing:
-// AT/AR streaming + history recording + task-done.
+// Ax/AX streaming + history recording + task-done.
 func loadRunPlanReply() {
 	pid := nextReplyID()
 	msg := "Here is the plan:\n```json\n" + loadRunPlanJSON + "\n```\nI'll wait for you to create it."
-	echoID("AT", pid, msg)
-	echoID("AR", nextReplyID(), "")
+	contentComplete(pid, "text", msg)
+	contentComplete(nextReplyID(), "reasoning", "")
 	history = append(history, histMsg{"assistant", msg, pid})
 	writeFrame("SM", taskDoneFrame())
 }

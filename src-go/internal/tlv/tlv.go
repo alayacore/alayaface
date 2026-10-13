@@ -2,40 +2,36 @@
 //
 // Wire format: [2-byte tag][4-byte big-endian length][N bytes of value]
 //
-// Tags (stdin → agent):
+// Protocol v14: every frame's value is either a zero-length control payload
+// (UE, CE) or a JSON object. The two-character tag names the frame's PLANE,
+// not the concrete content kind — the kind travels inside the JSON as a
+// content item's "type". The vocabulary is a 2x2 over {into the model (U),
+// out of the model (A)} x {content (X), function (F)}:
 //
-//	UT   User text
-//	UI   User image (data:image/...;base64,... or URL)
-//	UV   User video
-//	UA   User audio
-//	UD   User document
-//	UE   User message end — flushes staged content
-//	CI   Command input (JSON CmdMsg: {"id":"...","name":"...","input":"..."})
-//	CE   Control-plane input end — no more PROMPTS; the stream stays open, so
-//	     commands may still follow (v12; see TagInputEnd)
+//	UX  ↔   User content — JSON content item (both directions: input + echo)
+//	AX  ←   Assistant content — JSON content item, complete/authoritative
+//	AF  ←   Assistant function/tool call (JSON: call_id, name, input)
+//	UF  ←   User function/tool result (JSON: call_id, output, is_error)
+//	UE  →   User message end — flushes staged content as one message
+//	CI  →   Command input (JSON CmdMsg: {"call_id":...,"name":...,"input":...})
+//	CE  →   Control-plane input end — no more PROMPTS; the stream stays
+//	        open, so commands may still follow (v12; see TagInputEnd)
+//	CO  ←   Command output (JSON CmdResultMsg: {"call_id":...,"output":...})
+//	SM  ←   System message (JSON: {"type":"...","data":{...}})
 //
-// Tags (stdout ← agent):
+// Lowercase tags carry streaming delta / incremental content:
 //
-//	At   Assistant text streaming delta (\x00<id>\x00<content>)
-//	Ar   Assistant reasoning streaming delta (\x00<id>\x00<content>)
-//	Af   Function/tool argument streaming delta (\x00<id>\x00<JSON delta>)
-//	Uf   Function/tool result preview snapshot, ephemeral/display-only
-//	     (\x00<id>\x00<JSON {"id","text"}>; never authoritative — UF overwrites)
-//	AT   Assistant text complete/authoritative (\x00<id>\x00<content>; empty if deltas preceded it)
-//	AR   Assistant reasoning complete/authoritative (\x00<id>\x00<content>; empty if deltas preceded it)
-//	AF   Function/tool lifecycle (\x00<id>\x00<JSON>)
-//	UF   Function/tool result (\x00<id>\x00<JSON>)
-//	CO   Command output (JSON CmdResultMsg: {"id":"...","output":...,"is_error":...})
-//	SM   System message (JSON: {"type":"...","data":{...}})
-//	UT   User text echo (\x00<id>\x00<content>)
-//	UI   User image echo (\x00<id>\x00<data URI or URL>)
-//	UV   User video echo (\x00<id>\x00<data URI or URL>)
-//	UA   User audio echo (\x00<id>\x00<data URI or URL>)
-//	UD   User document echo (\x00<id>\x00<data URI or URL>)
+//	Ax  ←   Assistant content delta (type inside the JSON: text or reasoning)
+//	Af  ←   Assistant function/tool call delta (partial JSON argument)
+//	Uf  ←   Tool result preview snapshot (ephemeral, display-only; UF overwrites)
+//
+// History id: output content/function frames carry it as the JSON top-level
+// "id" (an ordinary field — there is no NUL-delimited prefix any more), and
+// authoritative frames also carry "time" (RFC3339). Input frames carry
+// neither. The tool-call id is "call_id", so "id" means history id everywhere.
 package tlv
 
 import (
-	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -45,13 +41,12 @@ import (
 
 // Input tags (sent to AlayaCore stdin).
 const (
-	TagUserText  = "UT"
-	TagUserImage = "UI"
-	TagUserVideo = "UV"
-	TagUserAudio = "UA"
-	TagUserDoc   = "UD"
-	TagUserEnd   = "UE"
-	TagCmdInput  = "CI"
+	// TagUserX is user content: a JSON content item (type + text/uri/…).
+	// It is used in BOTH directions — the adapter sends new user content on
+	// stdin, and the agent echoes it back on stdout with a history id.
+	TagUserX    = "UX"
+	TagUserEnd  = "UE"
+	TagCmdInput = "CI"
 	// TagInputEnd is the control-plane input end (protocol v12): "no more
 	// prompts, but this stream stays open", so commands can still follow —
 	// TCP's FIN rather than a torn down connection. alayacore treats it
@@ -71,19 +66,17 @@ const (
 
 // Output tags (received from AlayaCore stdout).
 const (
-	TagAssistantText      = "AT"
-	TagAssistantReasoning = "AR"
-	TagAssistantTool      = "AF"
-	TagUserToolResult     = "UF"
-	TagSystemMsg          = "SM"
-	TagCmdOutput          = "CO"
+	TagAssistantX = "AX"
+	TagAssistantF = "AF"
+	TagUserF      = "UF"
+	TagSystemMsg  = "SM"
+	TagCmdOutput  = "CO"
 )
 
 // Delta/streaming tags (lowercase).
 const (
-	TagAssistantTextDelta      = "At"
-	TagAssistantReasoningDelta = "Ar"
-	TagToolArgDelta            = "Af"
+	TagAssistantXDelta = "Ax"
+	TagAssistantFDelta = "Af"
 	// TagUserFDelta is an ephemeral tool result preview snapshot
 	// (display-only; never authoritative — UF overwrites).
 	TagUserFDelta = "Uf"
@@ -155,56 +148,69 @@ func ReadFrame(r io.Reader) (*Frame, error) {
 	return &Frame{Tag: tag, Value: string(value)}, nil
 }
 
-// DeltaParts is the result of parsing a NUL-delimited delta frame value.
-type DeltaParts struct {
-	// HistoryID is the history ID extracted from the NUL prefix, or empty.
-	HistoryID string
-	// Content is the content after the NUL-delimited prefix, or the full value.
-	Content string
-	// HasDelta reports whether a valid NUL-delimited prefix was found.
-	HasDelta bool
+// ─── JSON Payload Types ───────────────────────────────────────────────
+//
+// Mirrors of alayacore's internal/protocol payloads (the field names are
+// the wire contract). Used to build input frames and to parse output frames.
+
+// ContentMeta is the frame-level metadata embedded in every content/function
+// frame body.
+//
+//   - ID is the history id (set only on *output* frames; absent on input and
+//     in the session file).
+//   - Time is the message time (RFC3339): it rides the authoritative frames
+//     and the session file; deltas (ephemeral) and input do not carry it.
+type ContentMeta struct {
+	ID   string `json:"id,omitempty"`
+	Time string `json:"time,omitempty"`
 }
 
-// UnwrapDelta parses a NUL-delimited history ID prefix:
-//
-//	\x00<history-id>\x00<content>
-//
-// Same history ID → continuation; different → new content block.
-func UnwrapDelta(value string) DeltaParts {
-	b := []byte(value)
-	if len(b) == 0 || b[0] != 0 {
-		return DeltaParts{Content: value}
-	}
-	// Find the closing NUL in b[1:]; idx is relative to b[1:].
-	if idx := bytes.IndexByte(b[1:], 0); idx >= 0 {
-		endIdx := idx + 1 // index within b
-		id := string(b[1:endIdx])
-		if id == "" {
-			return DeltaParts{Content: value}
-		}
-		return DeltaParts{
-			HistoryID: id,
-			Content:   string(b[endIdx+1:]),
-			HasDelta:  true,
-		}
-	}
-	return DeltaParts{Content: value}
+// ContentItem is one piece of content: the body of a UX or AX frame, and each
+// element of a tool result's output. Type selects which payload field is
+// meaningful; the same shape is used at the top level and when nested.
+type ContentItem struct {
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+	URI  string `json:"uri,omitempty"`
+	FPS  int    `json:"fps,omitempty"` // video only
+	Res  int    `json:"res,omitempty"` // video only
+}
+
+// ContentData is the JSON payload for a content frame (UX/AX): a content item
+// plus the frame-level metadata.
+type ContentData struct {
+	ContentMeta
+	ContentItem
 }
 
 // ToolInputData is the AF frame payload.
 type ToolInputData struct {
-	ID    string          `json:"id"`
-	Name  *string         `json:"name,omitempty"`
-	Input json.RawMessage `json:"input,omitempty"`
-	// Delta is present in Af (tool argument delta) frames.
-	Delta *string `json:"delta,omitempty"`
+	CallID string          `json:"call_id"`
+	Name   string          `json:"name,omitempty"`
+	Input  json.RawMessage `json:"input,omitempty"`
+	ContentMeta
 }
 
-// ToolOutputData is the UF frame payload.
+// ToolInputDeltaData is the Af frame payload: a partial JSON argument chunk.
+type ToolInputDeltaData struct {
+	CallID string `json:"call_id"`
+	Delta  string `json:"delta"`
+	ContentMeta
+}
+
+// ToolOutputData is the UF frame payload. Output is an array of content items.
 type ToolOutputData struct {
-	ID      string          `json:"id"`
+	CallID  string          `json:"call_id"`
 	Output  json.RawMessage `json:"output"`
 	IsError bool            `json:"is_error,omitempty"`
+	ContentMeta
+}
+
+// ToolOutputDeltaData is the Uf frame payload: a display-only preview snapshot.
+type ToolOutputDeltaData struct {
+	CallID string `json:"call_id"`
+	Text   string `json:"text"`
+	ContentMeta
 }
 
 // SystemMsgEnvelope is the SM frame payload.
@@ -214,17 +220,17 @@ type SystemMsgEnvelope struct {
 }
 
 // CmdMsg is the CI frame payload (adapter → agent).
-// ID is generated by the adapter and echoed back in the matching CO.
+// CallID is generated by the adapter and echoed back in the matching CO.
 // Input is an opaque argument string whose syntax is defined per command.
 type CmdMsg struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Input string `json:"input,omitempty"`
+	CallID string `json:"call_id"`
+	Name   string `json:"name"`
+	Input  string `json:"input,omitempty"`
 }
 
 // CmdResultMsg is the CO frame payload (agent → adapter).
 type CmdResultMsg struct {
-	ID      string          `json:"id"`
+	CallID  string          `json:"call_id"`
 	Output  json.RawMessage `json:"output"`
 	IsError bool            `json:"is_error,omitempty"`
 }

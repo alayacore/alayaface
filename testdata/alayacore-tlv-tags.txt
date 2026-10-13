@@ -5,19 +5,13 @@
 # so this file is what the check compares against there.
 Af
 AF
-Ar
-AR
-At
-AT
+Ax
+AX
 CE
 CI
 CO
 SM
-UA
-UD
 UE
 Uf
 UF
-UI
-UT
-UV
+UX

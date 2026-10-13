@@ -1,7 +1,7 @@
 //! Simple command Tauri commands.
 //!
 //! Commands are sent to the session as CI (Command Input) frames:
-//! `{"id":"<call-id>","name":"<command>","input":"<args-string>"}`.
+//! `{"call_id":"<call-id>","name":"<command>","input":"<args-string>"}`.
 //! Results arrive asynchronously as CO (Command Output) frames with the
 //! same `id`, which the frontend renders (see reader.rs / Handlers.elm).
 //! Uses the `send_cmd!` macro for fixed, argument-less commands.

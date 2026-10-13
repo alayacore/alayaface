@@ -144,21 +144,21 @@ One-way push (server → client), message format:
 The Elm decoders in `Session/Protocol.elm` decode the following keys; the Go side must
 match them field-for-field:
 
-### DeltaEvent (At/Ar streaming deltas)
+### DeltaEvent (Ax streaming deltas)
 ```json
-{ "session_id": "…", "history_id": "…", "content": "…", "tag": "At" }
+{ "session_id": "…", "history_id": "…", "content": "…", "tag": "Ax", "content_type": "text|reasoning" }
 ```
 
 ### FrameEvent (complete frames)
 ```json
 {
   "session_id": "…",
-  "tag": "AT",
+  "tag": "AX",
   "raw_value": "…",
   "history_id": "…|null",
   "content": "…|null",
   "json": { } | null,
-  "user_content_type": "…|null"
+  "content_type": "text|reasoning|image|…|null"
 }
 ```
 Rust `Option` fields serialize as `null` (no `skip_serializing_if`); Go must use
@@ -170,10 +170,12 @@ Rust `Option` fields serialize as `null` (no `skip_serializing_if`); Go must use
 ```
 
 ### Behavior contract (matches reader.rs)
-- `At/Ar` emit **only** `tlv-delta`, never `tlv-frame` (double dispatch causes
-  unnecessary re-renders on the Elm side).
-- `AT/AR` go through `tlv-frame`; empty content maps to `content: null` (`empty_to_none`).
-- `Af/AF/UF/Uf`: parse the NUL prefix and attach `json` (null if parsing fails).
+- `Ax` emits **only** `tlv-delta`, never `tlv-frame` (double dispatch causes
+  unnecessary re-renders on the Elm side); `content_type` carries the kind.
+- `AX`/`UX` go through `tlv-frame`; the content is the item's `text` (text /
+  reasoning) or `uri` (media), and `content_type` carries the item's `type`.
+- `Af/AF/UF/Uf`: attach `json` (null if parsing fails); the history id rides the
+  top-level `"id"`, the tool-call id is `"call_id"`.
 - `CO`: **command-name injection** — look up `pending_commands[callId]` and inject the
   command name into the JSON `name` field before emitting.
 - `SM`: transform to `{type, data}` before emitting (same as Rust `handle_sm_frame`).

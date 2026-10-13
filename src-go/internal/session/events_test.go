@@ -27,13 +27,13 @@ type frameCase struct {
 }
 
 type frameInput struct {
-	SessionID       string  `json:"session_id"`
-	Tag             string  `json:"tag"`
-	RawValue        string  `json:"raw_value"`
-	HistoryID       *string `json:"history_id"`
-	Content         *string `json:"content"`
-	JSON            *string `json:"json"` // raw JSON text, or null
-	UserContentType *string `json:"user_content_type"`
+	SessionID   string  `json:"session_id"`
+	Tag         string  `json:"tag"`
+	RawValue    string  `json:"raw_value"`
+	HistoryID   *string `json:"history_id"`
+	Content     *string `json:"content"`
+	JSON        *string `json:"json"` // raw JSON text, or null
+	ContentType *string `json:"content_type"`
 }
 
 type deltaCase struct {
@@ -43,10 +43,11 @@ type deltaCase struct {
 }
 
 type deltaInput struct {
-	SessionID string `json:"session_id"`
-	HistoryID string `json:"history_id"`
-	Content   string `json:"content"`
-	Tag       string `json:"tag"`
+	SessionID   string `json:"session_id"`
+	HistoryID   string `json:"history_id"`
+	Content     string `json:"content"`
+	Tag         string `json:"tag"`
+	ContentType string `json:"content_type"`
 }
 
 type statusCase struct {
@@ -84,13 +85,13 @@ func TestFrameEventSerializationMatchesSharedFixture(t *testing.T) {
 				jm = json.RawMessage(*c.Input.JSON)
 			}
 			ev := FrameEvent{
-				SessionID:       c.Input.SessionID,
-				Tag:             c.Input.Tag,
-				RawValue:        c.Input.RawValue,
-				HistoryID:       c.Input.HistoryID,
-				Content:         c.Input.Content,
-				JSON:            jm,
-				UserContentType: c.Input.UserContentType,
+				SessionID:   c.Input.SessionID,
+				Tag:         c.Input.Tag,
+				RawValue:    c.Input.RawValue,
+				HistoryID:   c.Input.HistoryID,
+				Content:     c.Input.Content,
+				JSON:        jm,
+				ContentType: c.Input.ContentType,
 			}
 			got, err := json.Marshal(ev)
 			if err != nil {
@@ -108,10 +109,11 @@ func TestDeltaEventSerializationMatchesSharedFixture(t *testing.T) {
 	for _, c := range fx.Delta {
 		t.Run(c.Name, func(t *testing.T) {
 			ev := DeltaEvent{
-				SessionID: c.Input.SessionID,
-				HistoryID: c.Input.HistoryID,
-				Content:   c.Input.Content,
-				Tag:       c.Input.Tag,
+				SessionID:   c.Input.SessionID,
+				HistoryID:   c.Input.HistoryID,
+				Content:     c.Input.Content,
+				Tag:         c.Input.Tag,
+				ContentType: c.Input.ContentType,
 			}
 			got, err := json.Marshal(ev)
 			if err != nil {

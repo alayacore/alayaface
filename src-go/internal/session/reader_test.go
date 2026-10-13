@@ -59,56 +59,86 @@ func decodePayload(t *testing.T, ev hub.Event) map[string]any {
 	return m
 }
 
-// ─── Delta frames (At/Ar) ───────────────────────────────────────────
+// contentBody builds a v14 content-frame body: a JSON content item plus the
+// optional history id.
+func contentBody(id, kind, text string) string {
+	b, _ := json.Marshal(tlv.ContentData{
+		ContentMeta: tlv.ContentMeta{ID: id},
+		ContentItem: tlv.ContentItem{Type: kind, Text: text},
+	})
+	return string(b)
+}
 
-func TestDispatchAtDelta(t *testing.T) {
+// ─── Delta frames (Ax) ──────────────────────────────────────────────
+
+func TestDispatchAxDelta(t *testing.T) {
 	s, h, c := newTestSession()
-	s.dispatchFrame(h, NewModelCache(), frame("At", "\x00h1\x00hello"))
+	s.dispatchFrame(h, NewModelCache(), frame("Ax", contentBody("h1", "text", "hello")))
 
 	ev := nextEvent(t, c)
 	if ev.Type != "tlv-delta" {
 		t.Fatalf("type = %s, want tlv-delta", ev.Type)
 	}
 	m := decodePayload(t, ev)
-	if m["session_id"] != "s1" || m["history_id"] != "h1" || m["content"] != "hello" || m["tag"] != "At" {
+	if m["session_id"] != "s1" || m["history_id"] != "h1" || m["content"] != "hello" || m["tag"] != "Ax" || m["content_type"] != "text" {
 		t.Errorf("delta payload = %v", m)
 	}
-	// At must NEVER emit a tlv-frame (double dispatch).
+	// Ax must NEVER emit a tlv-frame (double dispatch).
 	assertNoEvent(t, c)
 }
 
-func TestDispatchAtMalformed(t *testing.T) {
-	// No NUL prefix → not a valid delta → raw tlv-frame fallback.
+func TestDispatchAxReasoningDeltaCarriesTheKind(t *testing.T) {
 	s, h, c := newTestSession()
-	s.dispatchFrame(h, NewModelCache(), frame("At", "no-prefix"))
+	s.dispatchFrame(h, NewModelCache(), frame("Ax", contentBody("h2", "reasoning", "thinking")))
+
+	m := decodePayload(t, nextEvent(t, c))
+	if m["content_type"] != "reasoning" || m["content"] != "thinking" {
+		t.Errorf("reasoning delta payload = %v", m)
+	}
+}
+
+func TestDispatchAxMalformed(t *testing.T) {
+	// Not JSON → not a valid delta → raw tlv-frame fallback.
+	s, h, c := newTestSession()
+	s.dispatchFrame(h, NewModelCache(), frame("Ax", "no-json"))
 
 	ev := nextEvent(t, c)
 	if ev.Type != "tlv-frame" {
 		t.Fatalf("type = %s, want tlv-frame", ev.Type)
 	}
 	m := decodePayload(t, ev)
-	if m["tag"] != "At" || m["content"] != "no-prefix" || m["history_id"] != nil || m["json"] != nil {
+	if m["tag"] != "Ax" || m["content"] != "no-json" || m["history_id"] != nil || m["json"] != nil {
 		t.Errorf("malformed delta payload = %v", m)
 	}
 	assertNoEvent(t, c)
 }
 
-// ─── Complete frames (AT/AR): empty → content null ──────────────────
+// ─── Complete content frames (AX): empty terminator ─────────────────
 
-func TestDispatchATEmpty(t *testing.T) {
+func TestDispatchAXEmpty(t *testing.T) {
 	s, h, c := newTestSession()
-	s.dispatchFrame(h, NewModelCache(), frame("AT", "\x00h1\x00"))
+	s.dispatchFrame(h, NewModelCache(), frame("AX", contentBody("h1", "text", "")))
 
 	ev := nextEvent(t, c)
 	if ev.Type != "tlv-frame" {
 		t.Fatalf("type = %s, want tlv-frame", ev.Type)
 	}
 	m := decodePayload(t, ev)
-	if m["tag"] != "AT" || m["content"] != nil {
-		t.Errorf("AT payload = %v, want content null", m)
+	if m["tag"] != "AX" || m["content"] != "" || m["content_type"] != "text" {
+		t.Errorf("AX payload = %v, want empty text terminator", m)
 	}
 	if m["history_id"] != "h1" {
-		t.Errorf("AT history_id = %v", m["history_id"])
+		t.Errorf("AX history_id = %v", m["history_id"])
+	}
+}
+
+func TestDispatchAXReasoning(t *testing.T) {
+	s, h, c := newTestSession()
+	s.dispatchFrame(h, NewModelCache(), frame("AX", contentBody("h3", "reasoning", "because")))
+
+	m := decodePayload(t, nextEvent(t, c))
+	if m["content_type"] != "reasoning" || m["content"] != "because" || m["history_id"] != "h3" {
+		t.Errorf("AX reasoning payload = %v", m)
 	}
 }
 
@@ -116,7 +146,8 @@ func TestDispatchATEmpty(t *testing.T) {
 
 func TestDispatchAFJSON(t *testing.T) {
 	s, h, c := newTestSession()
-	s.dispatchFrame(h, NewModelCache(), frame("AF", "\x00h1\x00{\"id\":\"t1\",\"name\":\"read\"}"))
+	raw := `{"id":"h1","call_id":"t1","name":"read"}`
+	s.dispatchFrame(h, NewModelCache(), frame("AF", raw))
 
 	ev := nextEvent(t, c)
 	m := decodePayload(t, ev)
@@ -124,17 +155,35 @@ func TestDispatchAFJSON(t *testing.T) {
 	if !ok {
 		t.Fatalf("AF json = %v, want object", m["json"])
 	}
-	if js["id"] != "t1" || js["name"] != "read" {
+	if js["call_id"] != "t1" || js["name"] != "read" {
 		t.Errorf("AF json = %v", js)
 	}
-	if m["content"] != "{\"id\":\"t1\",\"name\":\"read\"}" {
+	if m["content"] != raw {
 		t.Errorf("AF content = %v", m["content"])
+	}
+	// The authoritative function frame carries the history id in "id".
+	if m["history_id"] != "h1" {
+		t.Errorf("AF history_id = %v, want h1", m["history_id"])
+	}
+}
+
+func TestDispatchAFDeltasHaveNoHistoryID(t *testing.T) {
+	s, h, c := newTestSession()
+	s.dispatchFrame(h, NewModelCache(), frame("Af", `{"call_id":"t1","delta":"{\"path\":"}`))
+
+	m := decodePayload(t, nextEvent(t, c))
+	if m["history_id"] != nil {
+		t.Errorf("Af history_id = %v, want null", m["history_id"])
+	}
+	js := m["json"].(map[string]any)
+	if js["call_id"] != "t1" || js["delta"] != `{"path":` {
+		t.Errorf("Af json = %v", js)
 	}
 }
 
 func TestDispatchUFInvalidJSON(t *testing.T) {
 	s, h, c := newTestSession()
-	s.dispatchFrame(h, NewModelCache(), frame("UF", "\x00h1\x00this-is-not-json"))
+	s.dispatchFrame(h, NewModelCache(), frame("UF", "this-is-not-json"))
 
 	m := decodePayload(t, nextEvent(t, c))
 	if m["json"] != nil {
@@ -147,7 +196,7 @@ func TestDispatchUFInvalidJSON(t *testing.T) {
 func TestDispatchCOInjection(t *testing.T) {
 	s, h, c := newTestSession()
 	s.PendingCmds.Store("call-1", "model_set")
-	s.dispatchFrame(h, NewModelCache(), frame("CO", `{"id":"call-1","output":{"ok":true},"is_error":false}`))
+	s.dispatchFrame(h, NewModelCache(), frame("CO", `{"call_id":"call-1","output":{"ok":true},"is_error":false}`))
 
 	m := decodePayload(t, nextEvent(t, c))
 	js := m["json"].(map[string]any)
@@ -162,7 +211,7 @@ func TestDispatchCOInjection(t *testing.T) {
 
 func TestDispatchCOUnknownID(t *testing.T) {
 	s, h, c := newTestSession()
-	s.dispatchFrame(h, NewModelCache(), frame("CO", `{"id":"nobody","output":{},"is_error":false}`))
+	s.dispatchFrame(h, NewModelCache(), frame("CO", `{"call_id":"nobody","output":{},"is_error":false}`))
 
 	m := decodePayload(t, nextEvent(t, c))
 	js := m["json"].(map[string]any)
@@ -218,15 +267,29 @@ func TestDispatchSMInvalid(t *testing.T) {
 	}
 }
 
-// ─── User echoes: user_content_type ─────────────────────────────────
+// ─── User echoes: content_type ──────────────────────────────────────
 
 func TestDispatchUserEcho(t *testing.T) {
 	s, h, c := newTestSession()
-	s.dispatchFrame(h, NewModelCache(), frame("UT", "\x00h1\x00hi"))
+	s.dispatchFrame(h, NewModelCache(), frame("UX", contentBody("h1", "text", "hi")))
 
 	m := decodePayload(t, nextEvent(t, c))
-	if m["user_content_type"] != "UT" || m["content"] != "hi" {
+	if m["content_type"] != "text" || m["content"] != "hi" || m["history_id"] != "h1" {
 		t.Errorf("echo payload = %v", m)
+	}
+}
+
+func TestDispatchUserMediaEchoUsesURI(t *testing.T) {
+	s, h, c := newTestSession()
+	body, _ := json.Marshal(tlv.ContentData{
+		ContentMeta: tlv.ContentMeta{ID: "h2"},
+		ContentItem: tlv.ContentItem{Type: "image", URI: "data:image/png;base64,AA"},
+	})
+	s.dispatchFrame(h, NewModelCache(), frame("UX", string(body)))
+
+	m := decodePayload(t, nextEvent(t, c))
+	if m["content_type"] != "image" || m["content"] != "data:image/png;base64,AA" {
+		t.Errorf("media echo payload = %v", m)
 	}
 }
 
@@ -235,7 +298,7 @@ func TestDispatchNonEchoTag(t *testing.T) {
 	s.dispatchFrame(h, NewModelCache(), frame("XX", "odd"))
 
 	m := decodePayload(t, nextEvent(t, c))
-	if m["user_content_type"] != nil || m["content"] != "odd" {
+	if m["content_type"] != nil || m["content"] != "odd" {
 		t.Errorf("unknown tag payload = %v", m)
 	}
 }
@@ -303,7 +366,7 @@ func TestDispatchFrameReportsOnlyTheTerminalFrame(t *testing.T) {
 		{"malformed json is not", "SM", `not-json`, false},
 		// The state travels in an SM envelope; the same words on another tag
 		// are content, not a lifecycle signal.
-		{"not on a non-SM tag", "UT", `{"type":"session","data":{"state":"closed"}}`, false},
+		{"not on a non-SM tag", "UX", `{"type":"session","data":{"state":"closed"}}`, false},
 	}
 	for _, tc := range cases {
 		s, h, _ := newTestSession()
@@ -336,7 +399,7 @@ func TestReaderAnnouncesTheEndAtTheTerminalFrame(t *testing.T) {
 		}
 	}
 	write("SM", `{"type":"session","data":{"state":"ready"}}`)
-	write("AT", "\x007\x00the last reply")
+	write("AX", contentBody("7", "text", "the last reply"))
 	write("SM", `{"type":"session","data":{"state":"closed"}}`)
 
 	var statuses []string
@@ -399,13 +462,13 @@ func TestDisconnectMessageKeepsThePlainTextWithoutAStderrTail(t *testing.T) {
 }
 
 func TestDisconnectMessageQuotesTheLastStderrLine(t *testing.T) {
-	// The real startup failure this exists for, verbatim from a v12 core
-	// handed a v11 session file.
+	// The real startup failure this exists for, verbatim from a v14 core
+	// handed a v12 session file.
 	tail := &core.StderrTail{}
 	tail.Push("Warning: something earlier")
-	tail.Push("Error: failed to load session: session file version mismatch: got 11, expected 12")
+	tail.Push("Error: failed to load session: session file version mismatch: got 12, expected 14")
 	msg := disconnectMessage("Connection closed", tail)
-	if !strings.Contains(msg, "session file version mismatch: got 11, expected 12") {
+	if !strings.Contains(msg, "session file version mismatch: got 12, expected 14") {
 		t.Errorf("the reason must reach the user: %q", msg)
 	}
 	if strings.Contains(msg, "something earlier") {

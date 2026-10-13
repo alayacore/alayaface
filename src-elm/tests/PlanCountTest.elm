@@ -36,10 +36,13 @@ newSim =
 {-| Replicate the App/Update DeltaEvent bump point exactly.
 -}
 stepDelta : String -> String -> String -> Sim -> Sim
-stepDelta tag hid content sim =
+stepDelta token hid content sim =
     let
+        ( tag, kind ) =
+            contentKind token
+
         prevContent =
-            Dict.get (tag ++ ":" ++ hid) sim.session.historyContents
+            Dict.get (P.historyKeyOf kind hid) sim.session.historyContents
                 |> Maybe.withDefault ""
 
         becamePlan =
@@ -47,7 +50,7 @@ stepDelta tag hid content sim =
 
         session2 =
             H.handleDeltaEvent sim.session
-                { sessionId = "s1", historyId = hid, content = content, tag = tag }
+                { sessionId = "s1", historyId = hid, content = content, tag = tag, contentType = kind }
     in
     { session = session2
     , counts = PU.bumpPlanCount sim.counts "s1" becamePlan
@@ -57,11 +60,14 @@ stepDelta tag hid content sim =
 {-| Replicate the App/Update FrameEvent bump point exactly.
 -}
 stepFrame : String -> Maybe String -> Maybe String -> Sim -> Sim
-stepFrame tag hid content sim =
+stepFrame token hid content sim =
     let
+        ( tag, kind ) =
+            contentKind token
+
         prevAccum =
             hid
-                |> Maybe.andThen (\h -> Dict.get (tag ++ ":" ++ h) sim.session.historyContents)
+                |> Maybe.andThen (\h -> Dict.get (P.historyKeyOf kind h) sim.session.historyContents)
                 |> Maybe.withDefault ""
 
         becamePlan =
@@ -75,12 +81,26 @@ stepFrame tag hid content sim =
                 , historyId = hid
                 , content = content
                 , json = Nothing
-                , userContentType = Nothing
+                , contentType = Just kind
                 }
     in
     { session = session2
     , counts = PU.bumpPlanCount sim.counts "s1" becamePlan
     }
+
+
+{-| Map a test's content token to the v14 (tag, kind) pair: UX/AX are text,
+the "AXR"/"AxR" markers are assistant reasoning.
+-}
+contentKind : String -> ( String, String )
+contentKind token =
+    case token of
+        "UX" -> ( "UX", "text" )
+        "AX" -> ( "AX", "text" )
+        "AXR" -> ( "AX", "reasoning" )
+        "Ax" -> ( "Ax", "text" )
+        "AxR" -> ( "Ax", "reasoning" )
+        _ -> ( token, "text" )
 
 
 assertMatchesScan : Sim -> Expect.Expectation
@@ -110,10 +130,10 @@ suite =
                         newSim
 
                     s1 =
-                        stepFrame "UT" (Just "h-u") (Just "hello there") s0
+                        stepFrame "UX" (Just "h-u") (Just "hello there") s0
 
                     s2 =
-                        stepFrame "AT" (Just "h1") (Just fencedPlan) s1
+                        stepFrame "AX" (Just "h1") (Just fencedPlan) s1
                 in
                 Expect.all
                     [ \sim -> assertMatchesScan sim
@@ -128,13 +148,13 @@ suite =
 
                     -- first delta creates the message with a partial prefix
                     s1 =
-                        stepDelta "At" "h1" "```json\n{\"ty" s0
+                        stepDelta "Ax" "h1" "```json\n{\"ty" s0
 
                     s3 =
-                        stepDelta "At" "h1" "pe\": \"alayaface-plan\", \"name\": \"x\", \"concurrency\": 1, \"tasks\": [{\"id\":\"t1\",\"title\":\"T1\",\"prompt\":\"p\"}]}\n```" s1
+                        stepDelta "Ax" "h1" "pe\": \"alayaface-plan\", \"name\": \"x\", \"concurrency\": 1, \"tasks\": [{\"id\":\"t1\",\"title\":\"T1\",\"prompt\":\"p\"}]}\n```" s1
 
                     s4 =
-                        stepFrame "AT" (Just "h1") (Just "") s3
+                        stepFrame "AX" (Just "h1") (Just "") s3
                 in
                 Expect.all
                     [ \sim -> assertMatchesScan sim
@@ -148,10 +168,10 @@ suite =
                             newSim
 
                         s1 =
-                            stepDelta "At" "h1" "```json\n{\"type\": \"alayaface-plan\"" s0
+                            stepDelta "Ax" "h1" "```json\n{\"type\": \"alayaface-plan\"" s0
 
                         s2 =
-                            stepFrame "AT" (Just "h1") (Just "") s1
+                            stepFrame "AX" (Just "h1") (Just "") s1
                     in
                     Expect.all
                         [ \sim -> assertMatchesScan sim
@@ -165,16 +185,16 @@ suite =
                         newSim
 
                     s1 =
-                        stepFrame "AT" (Just "h1") (Just fencedPlan) s0
+                        stepFrame "AX" (Just "h1") (Just fencedPlan) s0
 
                     s2 =
-                        stepFrame "AT" (Just "h2") (Just "plain answer") s1
+                        stepFrame "AX" (Just "h2") (Just "plain answer") s1
 
                     s3 =
-                        stepFrame "AT" (Just "h3") (Just fencedPlan) s2
+                        stepFrame "AX" (Just "h3") (Just fencedPlan) s2
 
                     s4 =
-                        stepFrame "AR" (Just "h4") (Just "reasoning") s3
+                        stepFrame "AXR" (Just "h4") (Just "reasoning") s3
                 in
                 Expect.all
                     [ \sim -> assertMatchesScan sim
@@ -188,10 +208,10 @@ suite =
                         newSim
 
                     s1 =
-                        stepFrame "AT" (Just "h1") (Just "```python\nprint(1)\n```") s0
+                        stepFrame "AX" (Just "h1") (Just "```python\nprint(1)\n```") s0
 
                     s2 =
-                        stepFrame "AT" (Just "h2") (Just "no plan here") s1
+                        stepFrame "AX" (Just "h2") (Just "no plan here") s1
                 in
                 Expect.all
                     [ \sim -> assertMatchesScan sim
@@ -202,11 +222,11 @@ suite =
             \_ ->
                 let
                     frames =
-                        [ stepDelta "At" "h1" "```json\n{\"ty"
-                        , stepDelta "At" "h1" "pe\": \"alayaface-plan\", \"name\": \"x\", \"concurrency\": 1, \"tasks\": [{\"id\":\"t1\",\"title\":\"T1\",\"prompt\":\"p\"}]}\n```"
-                        , stepFrame "AT" (Just "h1") (Just "")
-                        , stepFrame "AT" (Just "h2") (Just "plain")
-                        , stepFrame "AT" (Just "h3") (Just fencedPlan)
+                        [ stepDelta "Ax" "h1" "```json\n{\"ty"
+                        , stepDelta "Ax" "h1" "pe\": \"alayaface-plan\", \"name\": \"x\", \"concurrency\": 1, \"tasks\": [{\"id\":\"t1\",\"title\":\"T1\",\"prompt\":\"p\"}]}\n```"
+                        , stepFrame "AX" (Just "h1") (Just "")
+                        , stepFrame "AX" (Just "h2") (Just "plain")
+                        , stepFrame "AX" (Just "h3") (Just fencedPlan)
                         ]
 
                     run =

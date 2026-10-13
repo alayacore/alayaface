@@ -284,7 +284,7 @@ deltaEvent model raw =
                         -- planIndexForMessage scan).
                         let
                             prevContent =
-                                Dict.get (ev.tag ++ ":" ++ ev.historyId) session.historyContents
+                                Dict.get (P.historyKeyOf ev.contentType ev.historyId) session.historyContents
                                     |> Maybe.withDefault ""
 
                             becamePlan =
@@ -475,7 +475,7 @@ frameForSession model session sid ev raw =
         prevAccum =
             case ev.historyId of
                 Just hid ->
-                    Dict.get (ev.tag ++ ":" ++ hid) session.historyContents
+                    Dict.get (P.historyKeyOf (Maybe.withDefault "" ev.contentType) hid) session.historyContents
                         |> Maybe.withDefault ""
 
                 Nothing ->
@@ -493,8 +493,8 @@ frameForSession model session sid ev raw =
         newSession =
             H.handleFrameEvent session ev
 
-        -- A user echo (UT/UI/UV/UA/UD) is the user's OWN action — sent from
-        -- the always-visible input bar, possibly while scrolled up reading
+        -- A user echo (UX) is the user's OWN action — sent from the
+        -- always-visible input bar, possibly while scrolled up reading
         -- history. Always bring it into view: chat UX requires the new user
         -- message to be visible regardless of auto-follow state (atBottom).
         userEchoNow =
@@ -519,7 +519,7 @@ frameForSession model session sid ev raw =
         --
         -- Auto-follow re-pins on EVERY frame, not just message-count changes:
         -- frames that only grow an EXISTING message's content (Af tool-arg
-        -- deltas, UF tool results, Uf previews, complete AT/AR replacements,
+        -- deltas, UF tool results, Uf previews, complete AX replacements,
         -- media appended to a user echo) also push content below the fold.
         -- Gating on msgCountChanged left the viewport stuck until the next
         -- assistant-text delta created a new message. State-only frames (SM
@@ -631,7 +631,7 @@ on the final message content, not `ev.content`.
 -}
 planOfferFromFrame : Model -> String -> T.SessionState -> P.FrameEvent -> ( Model, List Action )
 planOfferFromFrame updatedModel sid newSession ev =
-    if ev.tag == "AT" then
+    if ev.tag == "AX" then
         case List.head (List.reverse newSession.messages) of
             Just m ->
                 let

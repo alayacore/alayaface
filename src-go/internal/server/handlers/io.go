@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -35,25 +36,41 @@ func SendPrompt(h *Handler, w http.ResponseWriter, r *http.Request) error {
 
 	// Build the whole message (media + text + UE) and write it under a
 	// single stdin lock so a concurrent CI command cannot interleave.
+	//
+	// v14: each user content item is a UX frame whose value is a JSON content
+	// item — {"type":"image","uri":...} etc. The concrete kind lives in
+	// "type", not in the tag.
 	frames := make([]tlv.Frame, 0, len(args.Media)+2)
 	for _, item := range args.Media {
-		var tag string
+		var kind string
 		switch item.MediaType {
 		case "image":
-			tag = tlv.TagUserImage
+			kind = "image"
 		case "audio":
-			tag = tlv.TagUserAudio
+			kind = "audio"
 		case "video":
-			tag = tlv.TagUserVideo
+			kind = "video"
 		case "document":
-			tag = tlv.TagUserDoc
+			kind = "document"
 		default:
 			return fmt.Errorf("Unknown media type: %s", item.MediaType)
 		}
-		frames = append(frames, tlv.Frame{Tag: tag, Value: item.URI})
+		body, err := json.Marshal(tlv.ContentData{
+			ContentItem: tlv.ContentItem{Type: kind, URI: item.URI},
+		})
+		if err != nil {
+			return err
+		}
+		frames = append(frames, tlv.Frame{Tag: tlv.TagUserX, Value: string(body)})
 	}
 	if args.Text != "" {
-		frames = append(frames, tlv.Frame{Tag: tlv.TagUserText, Value: args.Text})
+		body, err := json.Marshal(tlv.ContentData{
+			ContentItem: tlv.ContentItem{Type: "text", Text: args.Text},
+		})
+		if err != nil {
+			return err
+		}
+		frames = append(frames, tlv.Frame{Tag: tlv.TagUserX, Value: string(body)})
 	}
 	frames = append(frames, tlv.Frame{Tag: tlv.TagUserEnd, Value: ""})
 	if err := s.WriteFrames(frames); err != nil {

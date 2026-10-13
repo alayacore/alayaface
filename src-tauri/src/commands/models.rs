@@ -160,7 +160,7 @@ fn run_temp_probe(
     // Optionally send one command, then close stdin.
     if let Some((call_id, name, input)) = cmd {
         let payload = serde_json::json!({
-            "id": call_id,
+            "call_id": call_id,
             "name": name,
             "input": input,
         });
@@ -213,7 +213,7 @@ fn run_temp_probe(
                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(&frame.value) {
                         let is_ours = match cmd {
                             Some((call_id, _, _)) => {
-                                v.get("id").and_then(|x| x.as_str()) == Some(call_id)
+                                v.get("call_id").and_then(|x| x.as_str()) == Some(call_id)
                             }
                             None => true,
                         };

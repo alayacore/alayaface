@@ -830,7 +830,7 @@ reader quotes its last line:
 
 ```
 Connection closed: Error: failed to load session: session file version
-mismatch: got 11, expected 12
+mismatch: got 12, expected 14
 ```
 
 That message is the price of a version bump being user-visible: session files

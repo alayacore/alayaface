@@ -30,20 +30,30 @@ use crate::tlv;
 /// because a client that knows only the older format has no other way to
 /// learn that a newer one exists (adapter-guide, "Protocol Version").
 ///
+/// v14: every content frame's value is JSON. Text and media tags collapsed
+/// into a 2x2 — UX/AX (content) and AF/UF (function) — with the concrete kind
+/// carried as a content item's "type". The history id moved from a
+/// NUL-delimited prefix into the frame's top-level "id", and the tool-call id
+/// became "call_id" (freeing "id" to mean the history id everywhere).
+/// `ContentMeta` gained "time" (message time, persisted and replayed), and
+/// video fps/resolution became per-part.
+///
+/// v13: steering is reported by a dedicated "steering" SM (queued / delivered
+/// / dropped / refused). Additive for adapters that ignore unknown SM types.
+///
 /// v12: `CE` (input end) joined the tag alphabet, the `session` SM gained the
 /// terminal state `closed`, and `quit` (alias `q`) joined the command
-/// vocabulary. All additive: an adapter that knows none of them still speaks
-/// v11 — except in one place, see the note below.
+/// vocabulary.
 ///
 /// NOTE: the same number is written into every session file's frontmatter
 /// (`message_version: N`) and alayacore's loader demands an EXACT match, so a
-/// v11 file is refused by a v12 core before a single TLV frame is written —
+/// v12 file is refused by a v14 core before a single TLV frame is written —
 /// the failure is startup exit 1 with the reason on stderr only. Users'
 /// existing sessions are affected by every bump, not just this one, and the
 /// reason is invisible in a GUI build (the core's stderr is not the terminal)
 /// unless this backend reads it — see `close_child_gracefully`'s twin, the
 /// disconnect path in `reader.rs`, for what reaches the user.
-pub const SUPPORTED_MESSAGE_VERSION: i64 = 12;
+pub const SUPPORTED_MESSAGE_VERSION: i64 = 14;
 
 /// How far into a session file its frontmatter is searched.
 ///
@@ -666,7 +676,7 @@ pub(crate) fn close_child_gracefully_with_timeout(
         if let Ok(mut guard) = stdin.try_lock() {
             if let Some(writer) = guard.as_mut() {
                 let cancel_msg = crate::tlv::CmdMsg {
-                    id: "alayaface-close-cancel".to_string(),
+                    call_id: "alayaface-close-cancel".to_string(),
                     name: "cancel".to_string(),
                     input: String::new(),
                 };
@@ -674,7 +684,7 @@ pub(crate) fn close_child_gracefully_with_timeout(
                     let _ = crate::tlv::write_frame(writer, crate::tlv::TAG_CMD_INPUT, &json);
                 }
                 let save_msg = crate::tlv::CmdMsg {
-                    id: "alayaface-close-save".to_string(),
+                    call_id: "alayaface-close-save".to_string(),
                     name: "save".to_string(),
                     input: String::new(),
                 };
@@ -1647,7 +1657,7 @@ mod tests {
         // Anything that isn't SM as the first frame is unexpected —
         // the version announcement must come first on stdout.
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(&encode("UT", "echo"));
+        bytes.extend_from_slice(&encode("UX", r#"{"type":"text","text":"echo"}"#));
         let mut r = Cursor::new(bytes);
         let err = read_version_frame(&mut r).expect_err("non-SM first frame must error");
         assert!(

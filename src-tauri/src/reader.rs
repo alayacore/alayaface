@@ -17,8 +17,8 @@ use tauri::{AppHandle, Emitter};
 /// With nothing on stderr this returns the base text unchanged, so the common
 /// case (a session closed on purpose) reads exactly as it always did. With a
 /// tail, the LAST line is quoted: for a startup failure it is the whole reason
-/// (`Error: failed to load session: session file version mismatch: got 11,
-/// expected 12`), and `core-status.message` is a one-line UI field, so a stack
+/// (`Error: failed to load session: session file version mismatch: got 12,
+/// expected 14`), and `core-status.message` is a one-line UI field, so a stack
 /// trace does not belong in it. Everything the core wrote is still in the
 /// backend log (the pump forwards each line there), which is what the count
 /// suffix points at.
@@ -42,11 +42,6 @@ fn disconnect_message(base: &str, tail: &crate::alayacore::StderrTail) -> String
             lines.len() - 1
         )
     }
-}
-
-/// User-role content tags that appear on stdout (echoes).
-fn is_user_echo_tag(tag: &str) -> bool {
-    matches!(tag, "UT" | "UI" | "UV" | "UA" | "UD")
 }
 
 /// Spawn a background thread that reads TLV frames from alayacore's stdout
@@ -163,77 +158,165 @@ fn dispatch_frame(
     }
 
     match tag.as_str() {
-        // ─── Streaming deltas (At, Ar) ───────────────────────────
-        "At" | "Ar" => {
+        // ─── Assistant content delta (Ax) ─────────────────────────
+        tlv::TAG_ASSISTANT_X_DELTA => {
             handle_delta_frame(app, sid, tag, raw_value);
             false
         }
-        // ─── Complete/authoritative (AT, AR) ──────────────────────
-        // Delta mode: content is empty (terminator). Replay/--no-delta: full text.
-        "AT" | "AR" => {
-            emit_frame(app, sid, tag, raw_value, None, None, true);
+        // ─── Assistant content, complete/authoritative (AX) ───────
+        // Delta mode: content is empty (terminator). Replay/--no-delta:
+        // full text.
+        tlv::TAG_ASSISTANT_X => {
+            handle_content_frame(app, sid, tag, raw_value);
+            false
+        }
+        // ─── User content echo (UX) ───────────────────────────────
+        tlv::TAG_USER_X => {
+            handle_content_frame(app, sid, tag, raw_value);
             false
         }
         // ─── JSON frames (Af, AF, UF, Uf) ────────────────────────
-        // All share the same wire format: raw JSON or a NUL-delimited
-        // history ID prefix followed by JSON. The parsed JSON (when
-        // present) is forwarded so the frontend can decode it by tag.
-        "Af" | "AF" | "UF" | "Uf" => {
+        // All share the same wire format: a JSON object (history id in
+        // the top-level "id" when present, tool id in "call_id"). The
+        // parsed JSON is forwarded so the frontend can decode it by tag.
+        tlv::TAG_ASSISTANT_F_DELTA
+        | tlv::TAG_ASSISTANT_F
+        | tlv::TAG_USER_F
+        | tlv::TAG_USER_F_DELTA => {
             handle_json_frame(app, sid, tag, raw_value);
             false
         }
         // ─── Command output (CO) ─────────────────────────────────
-        "CO" => {
+        tlv::TAG_CMD_OUTPUT => {
             handle_cmd_output_frame(app, sid, raw_value, pending_commands);
             false
         }
         // ─── System message (SM) ─────────────────────────────────
-        "SM" => handle_sm_frame(app, sid, raw_value),
-        // ─── Everything else (user echoes, unknown) ─────────────
+        tlv::TAG_SYSTEM_MSG => handle_sm_frame(app, sid, raw_value),
+        // ─── Everything else (unknown) ───────────────────────────
         _ => {
-            let user_content_type = if is_user_echo_tag(tag) {
-                Some(tag.clone())
-            } else {
-                None
-            };
-            emit_frame(app, sid, tag, raw_value, None, user_content_type, false);
+            emit_frame(
+                app,
+                sid,
+                tag,
+                raw_value,
+                json_of(raw_value),
+                Some(raw_value.to_string()),
+                None,
+                None,
+            );
             false
         }
     }
 }
 
-/// Handle At/Ar streaming delta frames.
+/// Parse `raw` as a JSON value, or None when it is not valid JSON.
+fn json_of(raw: &str) -> Option<serde_json::Value> {
+    serde_json::from_str::<serde_json::Value>(raw).ok()
+}
+
+/// Handle Ax streaming delta frames: a JSON content item whose `type` says
+/// text or reasoning. Emitted as `tlv-delta` so the frontend accumulates by
+/// (type, history id).
 fn handle_delta_frame(app: &AppHandle, sid: &str, tag: &str, raw_value: &str) {
-    let parts = tlv::unwrap_delta(raw_value);
-    if parts.has_delta {
-        let _ = app.emit("tlv-delta", DeltaEvent {
-            session_id: sid.to_string(),
-            history_id: parts.history_id,
-            content: parts.content,
-            tag: tag.to_string(),
-        });
-        // Note: intentionally NOT emitting tlv-frame here.
-        // At/Ar are pure delta events consumed by handleDeltaEvent.
-        // Emitting tlv-frame would cause a second dispatch in the
-        // frontend reducer (no-op in handleFrameEvent, but still a
-        // new sessions array → unnecessary re-render).
-    } else {
-        // Malformed delta (no NUL prefix) — unlikely, but send raw
-        emit_frame(app, sid, tag, raw_value, None, None, false);
+    match serde_json::from_str::<tlv::ContentData>(raw_value) {
+        Ok(d) if !d.item.kind.is_empty() => {
+            let _ = app.emit(
+                "tlv-delta",
+                DeltaEvent {
+                    session_id: sid.to_string(),
+                    history_id: d.meta.id,
+                    content: d.item.text,
+                    tag: tag.to_string(),
+                    content_type: d.item.kind,
+                },
+            );
+            // Note: intentionally NOT emitting tlv-frame here.
+            // Ax is a pure delta event consumed by handleDeltaEvent.
+            // Emitting tlv-frame would cause a second dispatch in the
+            // frontend reducer (no-op in handleFrameEvent, but still a
+            // new sessions array -> unnecessary re-render).
+        }
+        _ => {
+            // Malformed delta -> forward the raw frame rather than dropping it.
+            emit_frame(
+                app,
+                sid,
+                tag,
+                raw_value,
+                json_of(raw_value),
+                Some(raw_value.to_string()),
+                None,
+                None,
+            );
+        }
+    }
+}
+
+/// Handle complete content frames (AX assistant, UX user echo). The content
+/// is the `text` field for text/reasoning items and the `uri` for media; the
+/// content type is the item's `type`.
+fn handle_content_frame(app: &AppHandle, sid: &str, tag: &str, raw_value: &str) {
+    match serde_json::from_str::<tlv::ContentData>(raw_value) {
+        Ok(d) if !d.item.kind.is_empty() => {
+            let content = if d.item.kind == "text" || d.item.kind == "reasoning" {
+                d.item.text.clone()
+            } else {
+                d.item.uri.clone()
+            };
+            let history_id = if d.meta.id.is_empty() {
+                None
+            } else {
+                Some(d.meta.id.clone())
+            };
+            emit_frame(
+                app,
+                sid,
+                tag,
+                raw_value,
+                json_of(raw_value),
+                Some(content),
+                history_id,
+                Some(d.item.kind.clone()),
+            );
+        }
+        _ => {
+            emit_frame(
+                app,
+                sid,
+                tag,
+                raw_value,
+                json_of(raw_value),
+                Some(raw_value.to_string()),
+                None,
+                None,
+            );
+        }
     }
 }
 
 /// Handle AF/UF/Uf/Af JSON frames. See dispatch_frame for the shared
-/// wire format; the parsed JSON (when present) is forwarded to the
-/// frontend, which decodes it by tag.
+/// wire format; the parsed JSON is forwarded to the frontend, which
+/// decodes it by tag.
 fn handle_json_frame(app: &AppHandle, sid: &str, tag: &str, raw_value: &str) {
-    let parts = tlv::unwrap_delta(raw_value);
-    let json = if parts.has_delta {
-        serde_json::from_str::<serde_json::Value>(&parts.content).ok()
-    } else {
-        serde_json::from_str::<serde_json::Value>(raw_value).ok()
-    };
-    emit_frame(app, sid, tag, raw_value, json, None, false);
+    let json = json_of(raw_value);
+    // The history id rides the top-level "id" on the authoritative frames.
+    let history_id = json
+        .as_ref()
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    emit_frame(
+        app,
+        sid,
+        tag,
+        raw_value,
+        json,
+        Some(raw_value.to_string()),
+        history_id,
+        None,
+    );
 }
 
 /// Handle CO command output frames.
@@ -251,12 +334,12 @@ fn handle_cmd_output_frame(
     let mut json_val = serde_json::from_str::<serde_json::Value>(raw_value)
         .unwrap_or(serde_json::Value::Null);
     if let Some(obj) = json_val.as_object_mut() {
-        let call_id = obj.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let call_id = obj.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
         if let Some(name) = pending_commands.blocking_remove(call_id) {
             obj.insert("name".to_string(), serde_json::Value::String(name));
         }
     }
-    emit_frame(app, sid, "CO", raw_value, Some(json_val), None, false);
+    emit_frame(app, sid, "CO", raw_value, Some(json_val), Some(raw_value.to_string()), None, None);
 }
 
 /// The `core-status` message for a session the core ended itself.
@@ -297,47 +380,38 @@ fn handle_sm_frame(app: &AppHandle, sid: &str, raw_value: &str) -> bool {
         "SM",
         raw_value,
         (!json_val.is_null()).then_some(json_val),
+        Some(raw_value.to_string()),
         None,
-        false,
+        None,
     );
     ended
 }
 
-/// Build and emit a `tlv-frame` event from a raw frame value.
-///
-/// Unwraps the optional NUL-delimited history-ID prefix; `json` and
-/// `user_content_type` are attached verbatim. `empty_to_none` maps an
-/// empty payload to `content: None` (used by AT/AR terminators, where an
-/// empty value means "deltas already carried the text").
+/// Build and emit a `tlv-frame` event. `json`, `content`, `history_id` and
+/// `content_type` are attached verbatim (each optional).
+#[allow(clippy::too_many_arguments)]
 fn emit_frame(
     app: &AppHandle,
     sid: &str,
     tag: &str,
     raw_value: &str,
     json: Option<serde_json::Value>,
-    user_content_type: Option<String>,
-    empty_to_none: bool,
+    content: Option<String>,
+    history_id: Option<String>,
+    content_type: Option<String>,
 ) {
-    let parts = tlv::unwrap_delta(raw_value);
-    let content = if parts.has_delta {
-        Some(parts.content)
-    } else {
-        Some(raw_value.to_string())
-    };
-    let content = if empty_to_none {
-        content.filter(|c| !c.is_empty())
-    } else {
-        content
-    };
-    let _ = app.emit("tlv-frame", FrameEvent {
-        session_id: sid.to_string(),
-        tag: tag.to_string(),
-        raw_value: raw_value.to_string(),
-        history_id: if parts.has_delta { Some(parts.history_id) } else { None },
-        content,
-        json,
-        user_content_type,
-    });
+    let _ = app.emit(
+        "tlv-frame",
+        FrameEvent {
+            session_id: sid.to_string(),
+            tag: tag.to_string(),
+            raw_value: raw_value.to_string(),
+            history_id,
+            content,
+            json,
+            content_type,
+        },
+    );
 }
 
 #[cfg(test)]
@@ -398,11 +472,11 @@ mod tests {
         // handed a v11 session file.
         let tail = tail_with(&[
             "Warning: something earlier",
-            "Error: failed to load session: session file version mismatch: got 11, expected 12",
+            "Error: failed to load session: session file version mismatch: got 12, expected 14",
         ]);
         let msg = disconnect_message("Connection closed", &tail);
         assert!(
-            msg.contains("session file version mismatch: got 11, expected 12"),
+            msg.contains("session file version mismatch: got 12, expected 14"),
             "the reason must reach the user: {msg}"
         );
         assert!(

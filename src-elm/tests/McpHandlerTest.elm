@@ -32,7 +32,7 @@ mcpFrame status data =
                   )
                 ]
             )
-    , userContentType = Nothing
+    , contentType = Nothing
     }
 
 

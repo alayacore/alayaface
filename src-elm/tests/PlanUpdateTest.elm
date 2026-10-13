@@ -273,7 +273,7 @@ suite =
                                         , ( "data", E.object [ ( "state", E.string "ready" ) ] )
                                         ]
                                     )
-                            , userContentType = Nothing
+                            , contentType = Nothing
                             }
 
                         taskFrame =

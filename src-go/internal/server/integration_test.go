@@ -222,50 +222,52 @@ func TestIntegrationConversationFlow(t *testing.T) {
 		"sessionId": sid, "text": "hello", "media": []any{},
 	})
 
-	// User echo: tlv-frame with user_content_type set to the echo tag.
+	// User echo: tlv-frame with content_type set to the content item's type.
 	echoPayload := e.waitEvent(t, "tlv-frame", func(p map[string]any) bool {
-		return p["tag"] == "UT" && p["user_content_type"] == "UT"
+		return p["tag"] == "UX" && p["content_type"] == "text"
 	})
 	if echoPayload["content"] != "hello" {
 		t.Errorf("echo content = %v, want hello", echoPayload["content"])
 	}
 	if echoPayload["history_id"] == nil {
-		t.Error("echo should carry the NUL-prefixed history_id")
+		t.Error("echo should carry the history id from the JSON \"id\"")
 	}
 
-	// Streaming deltas: collect everything until the AT terminator.
-	// Expected order (fakecore replies Ar first, then At deltas, then
-	// empty AT/AR terminators): Ar, At, At — as tlv-delta ONLY (never
-	// tlv-frame for At/Ar).
+	// Streaming deltas: collect everything until the AX terminator.
+	// Expected order (fakecore replies reasoning first, then text deltas,
+	// then empty AX terminators): reasoning, text, text — as tlv-delta
+	// ONLY (never tlv-frame for Ax).
 	var deltas []string
 	var badFrameTags []string
-	at := e.collectUntil(t, "tlv-frame", func(p map[string]any) bool { return p["tag"] == "AT" }, func(typ string, p map[string]any) {
+	at := e.collectUntil(t, "tlv-frame", func(p map[string]any) bool { return p["tag"] == "AX" }, func(typ string, p map[string]any) {
 		tag, _ := p["tag"].(string)
 		switch typ {
 		case "tlv-delta":
-			deltas = append(deltas, tag+":"+p["content"].(string))
+			deltas = append(deltas, p["content_type"].(string)+":"+p["content"].(string))
 		case "tlv-frame":
-			if tag == "At" || tag == "Ar" {
+			if tag == "Ax" {
 				badFrameTags = append(badFrameTags, tag)
 			}
 		}
 	})
 	if len(badFrameTags) > 0 {
-		t.Errorf("At/Ar must emit tlv-delta only, got tlv-frame for %v", badFrameTags)
+		t.Errorf("Ax must emit tlv-delta only, got tlv-frame for %v", badFrameTags)
 	}
-	want := []string{"Ar:Thinking about it...", "At:Hello", "At: world"}
+	want := []string{"reasoning:Thinking about it...", "text:Hello", "text: world"}
 	if strings.Join(deltas, "|") != strings.Join(want, "|") {
 		t.Errorf("deltas = %v, want %v", deltas, want)
 	}
-	// AT terminator: tlv-frame with content null (empty payload).
-	if at["content"] != nil {
-		t.Errorf("AT content = %v, want null (empty terminator)", at["content"])
+	// AX text terminator: tlv-frame with empty content (delta mode).
+	if at["content"] != "" || at["content_type"] != "text" {
+		t.Errorf("AX content = %v/%v, want empty text terminator", at["content"], at["content_type"])
 	}
 
-	// AR terminator arrives after AT.
-	ar := e.waitEvent(t, "tlv-frame", func(p map[string]any) bool { return p["tag"] == "AR" })
-	if ar["content"] != nil {
-		t.Errorf("AR content = %v, want null", ar["content"])
+	// AX reasoning terminator arrives after it.
+	ar := e.waitEvent(t, "tlv-frame", func(p map[string]any) bool {
+		return p["tag"] == "AX" && p["content_type"] == "reasoning"
+	})
+	if ar["content"] != "" {
+		t.Errorf("AX reasoning content = %v, want empty", ar["content"])
 	}
 
 	// Close: session killed, core-status disconnected, manager emptied.
@@ -309,7 +311,7 @@ func TestIntegrationCommandRoundtrips(t *testing.T) {
 		return p["tag"] == "CO" && js != nil && js["name"] == "tool_confirm"
 	})
 	out := co2["json"].(map[string]any)["output"].(map[string]any)
-	if out["id"] != "tool-1" || out["allowed"] != true {
+	if out["tool_id"] != "tool-1" || out["allowed"] != true {
 		t.Errorf("tool_confirm output = %v", out)
 	}
 

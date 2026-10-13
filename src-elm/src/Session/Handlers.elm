@@ -13,23 +13,22 @@ import Session.Protocol exposing (..)
 import Session.ModelConfig as MC
 
 
--- Delta Event Handler (At/Ar)
+-- Delta Event Handler (Ax)
 
 handleDeltaEvent : SessionState -> DeltaEvent -> SessionState
 handleDeltaEvent s ev =
     let
         role =
-            if ev.tag == "At" then
-                Assistant
-            else
+            if ev.contentType == "reasoning" then
                 Reasoning
+            else
+                Assistant
 
-        -- Accumulation is keyed by (tag, historyId): the wire protocol
-        -- gives every content block a unique history id, but a defensive
-        -- split by tag keeps At and Ar from sharing an accumulator slot
-        -- even if an adapter reuses an id across roles.
+        -- Accumulation is keyed by (content type, historyId): AX/Ax carry
+        -- assistant text and assistant reasoning under one tag, so the kind
+        -- — not the tag — is what keeps the two from sharing a slot.
         historyKey =
-            ev.tag ++ ":" ++ ev.historyId
+            historyKeyOf ev.contentType ev.historyId
     in
     case Dict.get historyKey s.historyContents of
         Just existing ->
@@ -87,10 +86,10 @@ handleDeltaEvent s ev =
 handleFrameEvent : SessionState -> FrameEvent -> SessionState
 handleFrameEvent s ev =
     if isUserEchoTag ev.tag then
-        handleUserEchoFrame s ev.tag ev.historyId ev.content
+        handleUserEchoFrame s ev.contentType ev.historyId ev.content
 
-    else if ev.tag == "AT" || ev.tag == "AR" then
-        handleCompleteFrame s ev.tag ev.historyId ev.content
+    else if ev.tag == "AX" then
+        handleCompleteFrame s ev.contentType ev.historyId ev.content
 
     else if ev.tag == "SM" then
         case ev.json of
@@ -136,35 +135,35 @@ handleFrameEvent s ev =
 
 -- User Echo Frame
 
-handleUserEchoFrame : SessionState -> String -> Maybe String -> Maybe String -> SessionState
-handleUserEchoFrame s tag historyId content =
+handleUserEchoFrame : SessionState -> Maybe String -> Maybe String -> Maybe String -> SessionState
+handleUserEchoFrame s contentType historyId content =
     let
         mediaType =
-            case tag of
-                "UI" -> Just Image
-                "UV" -> Just Video
-                "UA" -> Just Audio
-                "UD" -> Just Document
+            case contentType of
+                Just "image" -> Just Image
+                Just "audio" -> Just Audio
+                Just "video" -> Just Video
+                Just "document" -> Just Document
                 _ -> Nothing
 
         textContent =
-            if tag == "UT" then
+            if contentType == Just "text" then
                 Maybe.withDefault "" content
             else
                 ""
     in
-    -- The dedup key is tag + history id, NOT the history id alone: one user
-    -- message is echoed as SEVERAL frames that all share its id (UT for the
-    -- text plus UI/UV/UA/UD for each attachment; real alayacore and fakecore
-    -- both emit `hist-<n>` on every frame of the message). Keying on the id
-    -- by itself dropped every frame after the first — a voice message lost
-    -- its audio chip, an image + text message lost the image preview, and
-    -- nothing complained because the attachment still reached the model.
-    -- Same composite-key convention handleCompleteFrame already uses below.
+    -- The dedup key is content type + history id. v14 gives every echoed
+    -- content item its own history id, so the id alone would usually do; the
+    -- kind is folded in to match handleCompleteFrame/Events (AX/Ax carry text
+    -- and reasoning under one tag) and to keep an adapter that reuses one id
+    -- across a message's items from collapsing them — the shape that once
+    -- dropped a voice message's audio chip and an image+text message's image
+    -- preview, with nothing complaining because the attachment still reached
+    -- the model.
     case historyId of
         Just hid ->
             let
-                echoKey = tag ++ ":" ++ hid
+                echoKey = Maybe.withDefault "" contentType ++ ":" ++ hid
             in
             if Set.member echoKey s.processedEchoIds then
                 s
@@ -180,7 +179,7 @@ handleUserEchoFrame s tag historyId content =
                 case lastMsg of
                     Just msg ->
                         if msg.role == User then
-                            appendToLastUserMessage s tag textContent mediaType content historyId newEchoIds
+                            appendToLastUserMessage s contentType textContent mediaType content historyId newEchoIds
 
                         else
                             { s
@@ -220,13 +219,13 @@ userEchoMessage hid textContent mediaType content =
     }
 
 
-appendToLastUserMessage : SessionState -> String -> String -> Maybe MediaType -> Maybe String -> Maybe String -> Set.Set String -> SessionState
-appendToLastUserMessage s tag textContent mediaType content historyId newEchoIds =
+appendToLastUserMessage : SessionState -> Maybe String -> String -> Maybe MediaType -> Maybe String -> Maybe String -> Set.Set String -> SessionState
+appendToLastUserMessage s contentType textContent mediaType content historyId newEchoIds =
     let
         newMsgs =
             case List.reverse s.messages of
                 last :: rest ->
-                    if tag == "UT" then
+                    if contentType == Just "text" then
                         let
                             sep =
                                 if String.isEmpty last.content then "" else "\n\n"
@@ -258,13 +257,13 @@ appendToLastUserMessage s tag textContent mediaType content historyId newEchoIds
     }
 
 
--- Complete Frame (AT/AR)
+-- Complete Frame (AX)
 
-handleCompleteFrame : SessionState -> String -> Maybe String -> Maybe String -> SessionState
-handleCompleteFrame s tag historyId content =
+handleCompleteFrame : SessionState -> Maybe String -> Maybe String -> Maybe String -> SessionState
+handleCompleteFrame s contentType historyId content =
     let
         role =
-            if tag == "AT" then Assistant else Reasoning
+            if contentType == Just "reasoning" then Reasoning else Assistant
     in
     case content of
         Just c ->
@@ -276,7 +275,7 @@ handleCompleteFrame s tag historyId content =
                     Just hid ->
                         let
                             newHistoryContents =
-                                Dict.insert (tag ++ ":" ++ hid) c s.historyContents
+                                Dict.insert (historyKeyOf (Maybe.withDefault "" contentType) hid) c s.historyContents
 
                             idx =
                                 List.filter (\m -> m.historyId == Just hid && m.role == role) s.messages
@@ -566,7 +565,7 @@ handleSystemReasoning s data =
 
 handleSystemToolConfirm : SessionState -> D.Value -> SessionState
 handleSystemToolConfirm s data =
-    case D.decodeValue (D.field "id" D.string) data of
+    case D.decodeValue (D.field "call_id" D.string) data of
         Ok id ->
             let
                 tc =
@@ -833,9 +832,10 @@ appendEndNotice text s =
 -- Tool Call Frame (AF)
 --
 -- AlayaCore emits TWO AF frames per tool call (wire protocol):
---   * start frame:    {id, name}            — announces the tool name
---   * complete frame: {id, input}           — full arguments (name omitted)
--- Replayed history carries the full {id, name, input} in one frame.
+--   * start frame:    {id, call_id, name}            — announces the tool name
+--   * complete frame: {id, call_id, input}           — full arguments (name omitted)
+-- Replayed history carries the full {id, call_id, name, input} in one frame.
+-- (id is the history id; call_id pairs the call with its UF.)
 -- The start frame creates the ToolCall + message window; the complete
 -- frame only fills the input into the existing ToolCall (no second
 -- message). Without this split the complete frame used to be dropped
@@ -846,7 +846,7 @@ handleToolCallFrame : SessionState -> D.Value -> Maybe String -> SessionState
 handleToolCallFrame s json historyId =
     let
         toolId =
-            D.decodeValue (D.field "id" D.string) json |> Result.toMaybe |> Maybe.withDefault ""
+            D.decodeValue (D.field "call_id" D.string) json |> Result.toMaybe |> Maybe.withDefault ""
 
         toolName =
             D.decodeValue (D.field "name" D.string) json |> Result.toMaybe
@@ -948,7 +948,7 @@ handleToolResultFrame : SessionState -> D.Value -> Maybe String -> SessionState
 handleToolResultFrame s json historyId =
     let
         toolId =
-            D.decodeValue (D.field "id" D.string) json |> Result.toMaybe |> Maybe.withDefault ""
+            D.decodeValue (D.field "call_id" D.string) json |> Result.toMaybe |> Maybe.withDefault ""
 
         isError =
             D.decodeValue (D.field "is_error" D.bool) json |> Result.toMaybe |> Maybe.withDefault False
@@ -1075,7 +1075,7 @@ handleToolDeltaFrame : SessionState -> D.Value -> SessionState
 handleToolDeltaFrame s json =
     let
         toolId =
-            D.decodeValue (D.field "id" D.string) json |> Result.toMaybe |> Maybe.withDefault ""
+            D.decodeValue (D.field "call_id" D.string) json |> Result.toMaybe |> Maybe.withDefault ""
 
         delta =
             D.decodeValue (D.field "delta" D.string) json |> Result.toMaybe |> Maybe.withDefault ""
@@ -1125,7 +1125,7 @@ handleToolPreviewFrame : SessionState -> D.Value -> SessionState
 handleToolPreviewFrame s json =
     let
         toolId =
-            D.decodeValue (D.field "id" D.string) json |> Result.toMaybe |> Maybe.withDefault ""
+            D.decodeValue (D.field "call_id" D.string) json |> Result.toMaybe |> Maybe.withDefault ""
 
         text =
             D.decodeValue (D.field "text" D.string) json |> Result.toMaybe |> Maybe.withDefault ""

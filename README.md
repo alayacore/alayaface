@@ -371,27 +371,27 @@ AlayaFace communicates with AlayaCore via TLV (Tag-Length-Value) frames
 over stdin/stdout. See the [adapter guide](../alayacore/adapter-guide/README.md)
 for the full protocol specification.
 
-Key tags:
+Key tags (protocol v14 — every content/function frame's value is JSON, and
+the concrete kind travels inside it as a content item's `"type"`):
 
 | Tag | Direction | Description |
 |-----|-----------|-------------|
-| UT  | stdin     | User text input |
-| UI  | stdin     | User image (data URI or URL) |
+| UX  | both      | User content — JSON content item (`{"type":"text","text":...}`, `{"type":"image","uri":...}`, …); on stdout it is the echo of a user message |
 | UE  | stdin     | User message end (flush) |
-| CI  | stdin     | Command input (JSON: id, name, input) |
+| CI  | stdin     | Command input (JSON: call_id, name, input) |
 | CE  | stdin     | Input end — no more prompts, commands may still follow (protocol v12; AlayaFace has no use for it, see plan-mode.md §8.8) |
-| At  | stdout    | Assistant text streaming delta |
-| Ar  | stdout    | Assistant reasoning streaming delta |
+| Ax  | stdout    | Assistant content streaming delta (`"type"` is `text` or `reasoning`) |
+| AX  | stdout    | Assistant content complete/authoritative (empty when deltas preceded it) |
 | Af  | stdout    | Tool argument streaming delta |
 | Uf  | stdout    | Tool result preview snapshot (ephemeral, display-only; UF overwrites) |
-| AT  | stdout    | Assistant text complete |
-| AR  | stdout    | Assistant reasoning complete |
-| AF  | stdout    | Tool call lifecycle |
-| UF  | stdout    | Tool result |
-| SM  | stdout    | System message (JSON) |
+| AF  | stdout    | Tool call lifecycle (JSON: call_id, name, input) |
+| UF  | stdout    | Tool result (JSON: call_id, output, is_error) |
+| CO  | stdout    | Command output (JSON: call_id, output, is_error) |
+| SM  | stdout    | System message (JSON: `{"type":...,"data":...}`) |
 
-All stdout frames are prefixed with `\x00<history_id>\x00` for streaming
-correlation.
+Output content/function frames carry the history id as the JSON top-level
+`"id"` (an ordinary field — there is no NUL-delimited prefix any more), and
+the tool-call id is `"call_id"`.
 
 The session reports its lifecycle in `SM {"type":"session",...}`: `ready` when
 it can accept prompts, and — since protocol version 12 — `closed` as its last
@@ -406,8 +406,8 @@ AlayaCore broadcasts and the commands AlayaFace sends against AlayaCore itself
 TLV frame logs are printed to stderr with the `[tlv]` prefix:
 
 ```
-[tlv] << abc-123 AT 0b
-[tlv] >> abc-123 CI 40b {"id":"a1","name":"cancel","input":""}
+[tlv] << abc-123 AX 0b
+[tlv] >> abc-123 CI 40b {"call_id":"a1","name":"cancel","input":""}
 [tlv] << abc-123 SM 80b {"type":"task",...}
 ```
 

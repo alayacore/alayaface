@@ -205,34 +205,35 @@ func TestSpawnArgsAndCommunication(t *testing.T) {
 		t.Errorf("startup tag = %s, want SM", frame.Tag)
 	}
 
-	if err := tlv.WriteFrame(proc.Stdin, "UT", "hi"); err != nil {
+	prompt := `{"type":"text","text":"hi"}`
+	if err := tlv.WriteFrame(proc.Stdin, tlv.TagUserX, prompt); err != nil {
 		t.Fatal(err)
 	}
 	if err := tlv.WriteFrame(proc.Stdin, "UE", ""); err != nil {
 		t.Fatal(err)
 	}
 
-	// Expect: UT echo, Ar delta, At delta(s)… (boot SMs — model,
-	// reasoning, ready — plus the task-start SM precede the reply, so
-	// give the loop a generous window).
-	seenEcho, seenAt := false, false
+	// Expect: UX echo, Ax delta(s)… (boot SMs — model, reasoning, ready —
+	// plus the task-start SM precede the reply, so give the loop a generous
+	// window).
+	seenEcho, seenDelta := false, false
 	for i := 0; i < 10; i++ {
 		frame, err = tlv.ReadFrame(reader)
 		if err != nil || frame == nil {
 			t.Fatalf("read reply frame %d: %v", i, err)
 		}
-		if frame.Tag == "UT" {
+		if frame.Tag == tlv.TagUserX {
 			seenEcho = true
 		}
-		if frame.Tag == "At" {
-			seenAt = true
+		if frame.Tag == tlv.TagAssistantXDelta {
+			seenDelta = true
 		}
-		if seenEcho && seenAt {
+		if seenEcho && seenDelta {
 			break
 		}
 	}
-	if !seenEcho || !seenAt {
-		t.Errorf("reply missing frames (echo=%v at=%v)", seenEcho, seenAt)
+	if !seenEcho || !seenDelta {
+		t.Errorf("reply missing frames (echo=%v delta=%v)", seenEcho, seenDelta)
 	}
 }
 
@@ -651,7 +652,7 @@ func TestReadVersionFrameRejectsWrongFirstFrameType(t *testing.T) {
 func TestReadVersionFrameRejectsNonSMFirstFrame(t *testing.T) {
 	// Anything that isn't SM as the first frame is unexpected —
 	// the version announcement must come first on stdout.
-	buf := encodeFrame("UT", "echo")
+	buf := encodeFrame("UX", `{"type":"text","text":"echo"}`)
 	r := bufio.NewReader(bytes.NewReader(buf))
 	err := readVersionFrame(r)
 	if err == nil {

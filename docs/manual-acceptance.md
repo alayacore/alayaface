@@ -52,7 +52,7 @@
 ## 3. Node Click ↔ Session Binding (P8/P9)
 
 - [ ] Click a **live** node → its session window is focused
-- [ ] Close a node's session window → click the node → automatically `resume_session` from disk, content complete (full UT/AT/AF/UF/AR history rendered)
+- [ ] Close a node's session window → click the node → automatically `resume_session` from disk, content complete (full UX/AX/AF/UF history rendered)
 - [ ] **Cascade close (P34/P35)**: with a plan running, close the ORIGIN session (✕) → the plan window AND every node session window close, and the run does not respawn anything; closing the PLAN window (✕) → its node session windows close too (no respawn); closing a node session manually (its own window) still fails the node → retry (unchanged)
 - [ ] **Repeated open/close cycles** (close → click node → close → click node…) no longer report "Session directory not found"; after app restart clicking a node still recovers (P18: nodes are always bound to the on-disk dir id; live mapping goes through planResumedFrom)
 - [ ] Failed/canceled node → click node → old session recovered via `last_session_id` for review
@@ -126,7 +126,7 @@
       an older core (its `session.alaya` frontmatter says `message_version: 11`)
       and resuming it with a core that announces 12: the window must say
       `Connection closed: Error: failed to load session: session file version
-      mismatch: got 11, expected 12`, **not** a bare "Connection closed" — the core
+      mismatch: got 12, expected 14`, **not** a bare "Connection closed" — the core
       exits before it sends any frame, so stderr is the only thing that ever said
       why, and a packaged app has no terminal behind it
 - [ ] A session that cannot be loaded is still on disk and still listed: the

@@ -39,14 +39,26 @@ import (
 // because a client that knows only the older format has no other way to
 // learn that a newer one exists (adapter-guide, "Protocol Version").
 //
+// v14: every content frame's value is JSON. Text and media tags collapsed
+// into a 2x2 — UX/AX (content) and AF/UF (function) — with the concrete kind
+// carried as a content item's "type". The history id moved from a
+// NUL-delimited prefix into the frame's top-level "id" (so WrapID/UnwrapID
+// are gone), and the tool-call id became "call_id" (freeing "id" to mean the
+// history id everywhere). ContentMeta gained "time" (message time, persisted
+// and replayed), and video fps/resolution became per-part.
+//
+// v13: steering is reported by a dedicated "steering" SM (queued / delivered
+// / dropped / refused), replacing the "steering queued"/"steering dropped"
+// notify texts and the SM error a full queue used to raise. Additive for
+// adapters that ignore unknown SM types.
+//
 // v12: `CE` (input end) joined the tag alphabet, the `session` SM gained the
 // terminal state `closed`, and `quit` (alias `q`) joined the command
-// vocabulary. All additive: an adapter that knows none of them still speaks
-// v11 — except in one place, see the note below.
+// vocabulary.
 //
 // NOTE: the same number is written into every session file's frontmatter
 // (`message_version: N`) and alayacore's loader demands an EXACT match, so a
-// v11 file is refused by a v12 core before a single TLV frame is written —
+// v12 file is refused by a v14 core before a single TLV frame is written —
 // the failure is startup exit 1 with the reason on stderr only. Users'
 // existing sessions are affected by every bump, not just this one, and the
 // reason is invisible in a GUI build (the core's stderr is not the terminal)
@@ -55,7 +67,7 @@ import (
 //
 // Must stay in sync with src-tauri/src/alayacore.rs::SUPPORTED_MESSAGE_VERSION
 // (AGENTS.md: "two backends must stay symmetric").
-const SupportedMessageVersion = 12
+const SupportedMessageVersion = 14
 
 // SessionHeaderWindow is how far into a session file its frontmatter is
 // searched. The block is eight short scalar lines, so this is generous by

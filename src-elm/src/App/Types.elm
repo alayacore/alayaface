@@ -293,7 +293,7 @@ type alias Model =
     -- its session (message ids are deliberately not used).
     , pendingPlanOffers : Dict ( String, Int ) String
     -- Sessions currently replaying their history after a resume_session:
-    -- alayacore replays content frames (UT/AT/AR/AF/UF) BEFORE any SM
+    -- alayacore replays content frames (UX/AX/AF/UF) BEFORE any SM
     -- frame, so while a session is in this set, detected plan messages
     -- are history — they must NOT auto-create a plan window (the user
     -- opens them via the status bar or the "Open plan" button). The

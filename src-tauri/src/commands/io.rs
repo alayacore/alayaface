@@ -22,19 +22,40 @@ pub async fn alayacore_send_prompt(
     // write blocks, and holding the global map lock across it used to
     // freeze every other session's commands (Go's SendPrompt only ever
     // takes the per-session stdin lock).
+    // v14: each user content item is a UX frame whose value is a JSON content
+    // item — {"type":"image","uri":...} etc. The concrete kind lives in
+    // "type", not in the tag.
     let mut frames: Vec<(String, String)> = Vec::with_capacity(media.len() + 2);
     for item in &media {
-        let tag = match item.media_type.as_str() {
-            "image" => tlv::TAG_USER_IMAGE,
-            "audio" => tlv::TAG_USER_AUDIO,
-            "video" => tlv::TAG_USER_VIDEO,
-            "document" => tlv::TAG_USER_DOC,
+        let kind = match item.media_type.as_str() {
+            "image" => "image",
+            "audio" => "audio",
+            "video" => "video",
+            "document" => "document",
             _ => return Err(format!("Unknown media type: {}", item.media_type)),
         };
-        frames.push((tag.to_string(), item.uri.clone()));
+        let body = serde_json::to_string(&tlv::ContentData {
+            meta: tlv::ContentMeta::default(),
+            item: tlv::ContentItem {
+                kind: kind.to_string(),
+                uri: item.uri.clone(),
+                ..Default::default()
+            },
+        })
+        .map_err(|e| e.to_string())?;
+        frames.push((tlv::TAG_USER_X.to_string(), body));
     }
     if !text.is_empty() {
-        frames.push((tlv::TAG_USER_TEXT.to_string(), text));
+        let body = serde_json::to_string(&tlv::ContentData {
+            meta: tlv::ContentMeta::default(),
+            item: tlv::ContentItem {
+                kind: "text".to_string(),
+                text: text.clone(),
+                ..Default::default()
+            },
+        })
+        .map_err(|e| e.to_string())?;
+        frames.push((tlv::TAG_USER_X.to_string(), body));
     }
     frames.push((tlv::TAG_USER_END.to_string(), String::new()));
 

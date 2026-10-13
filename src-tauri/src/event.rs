@@ -5,13 +5,16 @@
 
 use serde::Serialize;
 
-/// Emitted when a streaming delta frame (At, Ar) arrives.
+/// Emitted when a streaming delta frame (Ax) arrives.
+/// `content_type` is the content item's kind ("text" or "reasoning"), which
+/// the delta's tag no longer names.
 #[derive(Debug, Clone, Serialize)]
 pub struct DeltaEvent {
     pub session_id: String,
     pub history_id: String,
     pub content: String,
     pub tag: String,
+    pub content_type: String,
 }
 
 /// Emitted when any complete TLV frame arrives from alayacore stdout.
@@ -23,9 +26,9 @@ pub struct FrameEvent {
     pub history_id: Option<String>,
     pub content: Option<String>,
     pub json: Option<serde_json::Value>,
-    /// Set for user-role echo frames (UT/UI/UV/UA/UD on stdout)
-    /// so the frontend can distinguish direction and content type.
-    pub user_content_type: Option<String>,
+    /// The content item's "type" for content frames (UX/AX):
+    /// "text"/"reasoning"/"image"/"audio"/"video"/"document".
+    pub content_type: Option<String>,
 }
 
 /// Emitted when the connection status of a session changes.
@@ -70,7 +73,7 @@ mod tests {
         content: Option<String>,
         /// Raw JSON text, or null.
         json: Option<String>,
-        user_content_type: Option<String>,
+        content_type: Option<String>,
     }
 
     #[derive(serde::Deserialize)]
@@ -86,6 +89,7 @@ mod tests {
         history_id: String,
         content: String,
         tag: String,
+        content_type: String,
     }
 
     #[derive(serde::Deserialize)]
@@ -125,7 +129,7 @@ mod tests {
                 history_id: c.input.history_id,
                 content: c.input.content,
                 json,
-                user_content_type: c.input.user_content_type,
+                content_type: c.input.content_type,
             };
             let got = serde_json::to_string(&ev).unwrap();
             assert_eq!(got, c.expected, "FrameEvent case {}", c.name);
@@ -141,6 +145,7 @@ mod tests {
                 history_id: c.input.history_id,
                 content: c.input.content,
                 tag: c.input.tag,
+                content_type: c.input.content_type,
             };
             let got = serde_json::to_string(&ev).unwrap();
             assert_eq!(got, c.expected, "DeltaEvent case {}", c.name);

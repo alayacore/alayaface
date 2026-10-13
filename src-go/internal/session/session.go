@@ -395,7 +395,7 @@ func (s *Session) SendCmd(name, input string) (string, error) {
 func (s *Session) sendCmdLocked(name, input string) (string, error) {
 	id := uuid.NewString()
 	s.PendingCmds.Store(id, name)
-	payload, err := json.Marshal(tlv.CmdMsg{ID: id, Name: name, Input: input})
+	payload, err := json.Marshal(tlv.CmdMsg{CallID: id, Name: name, Input: input})
 	if err != nil {
 		return "", err
 	}

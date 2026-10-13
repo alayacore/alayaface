@@ -73,7 +73,7 @@ func RunTempProbe(bin, configPath string, cmd *ProbeCmd, modelCache *session.Mod
 
 	// Optionally send one command, then close stdin.
 	if cmd != nil {
-		payload, _ := json.Marshal(tlv.CmdMsg{ID: cmd.CallID, Name: cmd.Name, Input: cmd.Input})
+		payload, _ := json.Marshal(tlv.CmdMsg{CallID: cmd.CallID, Name: cmd.Name, Input: cmd.Input})
 		preview := string(payload)
 		if len(preview) > 200 {
 			preview = preview[:200]
@@ -144,7 +144,7 @@ func RunTempProbe(bin, configPath string, cmd *ProbeCmd, modelCache *session.Mod
 			if err := json.Unmarshal([]byte(frame.Value), &v); err == nil {
 				isOurs := true
 				if cmd != nil {
-					isOurs = v["id"] == cmd.CallID
+					isOurs = v["call_id"] == cmd.CallID
 				}
 				if isOurs {
 					result.CmdOutput = json.RawMessage(frame.Value)

@@ -11,19 +11,14 @@ import (
 	"alayaface/src-go/internal/tlv"
 )
 
-// userEchoTags are user-role content tags that appear on stdout (echoes).
-var userEchoTags = map[string]bool{"UT": true, "UI": true, "UV": true, "UA": true, "UD": true}
-
-func isUserEchoTag(tag string) bool { return userEchoTags[tag] }
-
 // disconnectMessage composes the `core-status` message for a pipe that just
 // died.
 //
 // With nothing on stderr this returns the base text unchanged, so the common
 // case (a session closed on purpose) reads exactly as it always did. With a
 // tail, the LAST line is quoted: for a startup failure it is the whole reason
-// (`Error: failed to load session: session file version mismatch: got 11,
-// expected 12`), and `core-status.message` is a one-line UI field, so a stack
+// (`Error: failed to load session: session file version mismatch: got 12,
+// expected 14`), and `core-status.message` is a one-line UI field, so a stack
 // trace does not belong in it. Everything the core wrote is still in the
 // backend log (the pump forwards each line there), which is what the count
 // suffix points at.
@@ -150,6 +145,13 @@ func (s *Session) disconnect(h *hub.Hub, announced bool, message string) {
 // reader keeps going.
 //
 // Port of reader.rs::dispatch_frame.
+//
+// v14: content and function frames carry a JSON object whose concrete kind is
+// the "type" of a content item; the tag names only the plane. The history id
+// is the JSON top-level "id" (no NUL prefix), and the tool-call id is
+// "call_id". The reader parses the body here and forwards it as `json`, plus
+// the history id and content type on the event envelope so the frontend can
+// key and route without re-parsing.
 func (s *Session) dispatchFrame(h *hub.Hub, cache *ModelCache, frame *tlv.Frame) bool {
 	tag := frame.Tag
 	rawValue := frame.Value
@@ -161,73 +163,121 @@ func (s *Session) dispatchFrame(h *hub.Hub, cache *ModelCache, frame *tlv.Frame)
 	log.Printf("[tlv] << %s %s %db %s", s.ID, tag, len(rawValue), preview)
 
 	switch tag {
-	// ─── Streaming deltas (At, Ar) ───────────────────────────────
-	case "At", "Ar":
-		parts := tlv.UnwrapDelta(rawValue)
-		if parts.HasDelta {
-			h.Broadcast(hub.NewEvent("tlv-delta", DeltaEvent{
-				SessionID: s.ID,
-				HistoryID: parts.HistoryID,
-				Content:   parts.Content,
-				Tag:       tag,
-			}))
-			// Intentionally NOT emitting tlv-frame here: At/Ar are
-			// pure delta events; a tlv-frame would cause a second
-			// dispatch in the frontend reducer.
-		} else {
-			// Malformed delta (no NUL prefix) — send raw frame.
-			s.emitFrame(h, tag, rawValue, nil, nil, false)
-		}
-	// ─── Complete/authoritative (AT, AR) ─────────────────────────
+	// ─── Assistant content delta (Ax) ────────────────────────────
+	case tlv.TagAssistantXDelta:
+		s.handleAssistantDeltaFrame(h, rawValue)
+	// ─── Assistant content, complete/authoritative (AX) ──────────
 	// Delta mode: content is empty (terminator). Replay/--no-delta:
 	// full text.
-	case "AT", "AR":
-		s.emitFrame(h, tag, rawValue, nil, nil, true)
-	// ─── JSON frames (Af, AF, UF, Uf) ────────────────────────────
-	case "Af", "AF", "UF", "Uf":
-		s.handleJSONFrame(h, tag, rawValue)
+	case tlv.TagAssistantX:
+		s.handleContentFrame(h, tag, rawValue)
+	// ─── User content echo (UX) ──────────────────────────────────
+	case tlv.TagUserX:
+		s.handleContentFrame(h, tag, rawValue)
+	// ─── Function frames (Af, AF, UF, Uf) ────────────────────────
+	case tlv.TagAssistantFDelta, tlv.TagAssistantF, tlv.TagUserF, tlv.TagUserFDelta:
+		s.handleFunctionFrame(h, tag, rawValue)
 	// ─── Command output (CO) ─────────────────────────────────────
-	case "CO":
+	case tlv.TagCmdOutput:
 		s.handleCmdOutputFrame(h, rawValue)
 	// ─── System message (SM) ─────────────────────────────────────
-	case "SM":
+	case tlv.TagSystemMsg:
 		return s.handleSMFrame(h, cache, rawValue)
-	// ─── Everything else (user echoes, unknown) ──────────────────
+	// ─── Everything else (unknown) ───────────────────────────────
 	default:
-		var uct *string
-		if isUserEchoTag(tag) {
-			t := tag
-			uct = &t
-		}
-		s.emitFrame(h, tag, rawValue, nil, uct, false)
+		s.emitFrame(h, tag, rawValue, rawJSON(rawValue), &rawValue, nil, nil)
 	}
 	return false
 }
 
-// handleJSONFrame handles AF/UF/Uf/Af JSON frames: parse the payload
-// (after the NUL prefix) and forward it as `json`.
-func (s *Session) handleJSONFrame(h *hub.Hub, tag, rawValue string) {
-	parts := tlv.UnwrapDelta(rawValue)
-	var parsed json.RawMessage
-	if parts.HasDelta {
-		parsed = json.RawMessage(parts.Content)
+// rawJSON returns v as a JSON message when it is valid JSON, else nil.
+func rawJSON(v string) json.RawMessage {
+	if json.Valid([]byte(v)) {
+		return json.RawMessage(v)
+	}
+	return nil
+}
+
+// parseContentData parses a UX/AX/Ax body into its metadata + item.
+func parseContentData(rawValue string) (tlv.ContentData, bool) {
+	var d tlv.ContentData
+	if err := json.Unmarshal([]byte(rawValue), &d); err != nil || d.Type == "" {
+		return tlv.ContentData{}, false
+	}
+	return d, true
+}
+
+// handleAssistantDeltaFrame handles Ax streaming deltas: a JSON content item
+// whose "type" says text or reasoning. Emitted as tlv-delta so the frontend
+// accumulates by (type, history id).
+func (s *Session) handleAssistantDeltaFrame(h *hub.Hub, rawValue string) {
+	d, ok := parseContentData(rawValue)
+	if !ok {
+		// Malformed delta — forward the raw frame rather than dropping it.
+		s.emitFrame(h, tlv.TagAssistantXDelta, rawValue, rawJSON(rawValue), &rawValue, nil, nil)
+		return
+	}
+	h.Broadcast(hub.NewEvent("tlv-delta", DeltaEvent{
+		SessionID:   s.ID,
+		HistoryID:   d.ID,
+		Content:     d.Text,
+		Tag:         tlv.TagAssistantXDelta,
+		ContentType: d.Type,
+	}))
+	// Intentionally NOT emitting tlv-frame here: Ax is a pure delta event; a
+	// tlv-frame would cause a second dispatch in the frontend reducer.
+}
+
+// handleContentFrame handles complete content frames: AX (assistant text or
+// reasoning) and UX (user echo). The content is the "text" field for text /
+// reasoning items and the "uri" for media; the content type is the item's
+// "type".
+func (s *Session) handleContentFrame(h *hub.Hub, tag, rawValue string) {
+	d, ok := parseContentData(rawValue)
+	if !ok {
+		s.emitFrame(h, tag, rawValue, rawJSON(rawValue), &rawValue, nil, nil)
+		return
+	}
+	var content string
+	if d.Type == "text" || d.Type == "reasoning" {
+		content = d.Text
 	} else {
-		parsed = json.RawMessage(rawValue)
+		content = d.URI
 	}
-	if !json.Valid(parsed) {
-		parsed = nil
+	var historyID *string
+	if d.ID != "" {
+		id := d.ID
+		historyID = &id
 	}
-	s.emitFrame(h, tag, rawValue, parsed, nil, false)
+	ct := d.Type
+	s.emitFrame(h, tag, rawValue, rawJSON(rawValue), &content, historyID, &ct)
+}
+
+// handleFunctionFrame handles AF/Af/UF/Uf JSON frames: parse the payload and
+// forward it as `json`, extracting the history id from the top-level "id"
+// (present on the authoritative frames; absent on the deltas).
+func (s *Session) handleFunctionFrame(h *hub.Hub, tag, rawValue string) {
+	var historyID *string
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(rawValue), &obj); err == nil {
+		if idRaw, ok := obj["id"]; ok {
+			var id string
+			if json.Unmarshal(idRaw, &id) == nil && id != "" {
+				historyID = &id
+			}
+		}
+	}
+	s.emitFrame(h, tag, rawValue, rawJSON(rawValue), &rawValue, historyID, nil)
 }
 
 // handleCmdOutputFrame handles CO frames: inject the command name from
 // the pending-commands registry into the JSON payload so the frontend
 // can render the result without tracking call IDs itself.
 func (s *Session) handleCmdOutputFrame(h *hub.Hub, rawValue string) {
-	var jsonVal json.RawMessage
+	jsonVal := rawJSON(rawValue)
 	var obj map[string]any
 	if err := json.Unmarshal([]byte(rawValue), &obj); err == nil {
-		if id, ok := obj["id"].(string); ok {
+		if id, ok := obj["call_id"].(string); ok {
 			if name, ok2 := s.PendingCmds.LoadAndDelete(id); ok2 {
 				obj["name"] = name
 			}
@@ -236,7 +286,7 @@ func (s *Session) handleCmdOutputFrame(h *hub.Hub, rawValue string) {
 			jsonVal = b
 		}
 	}
-	s.emitFrame(h, "CO", rawValue, jsonVal, nil, false)
+	s.emitFrame(h, "CO", rawValue, jsonVal, &rawValue, nil, nil)
 }
 
 // handleSMFrame handles SM system message frames: caches model_list and
@@ -245,7 +295,7 @@ func (s *Session) handleCmdOutputFrame(h *hub.Hub, rawValue string) {
 func (s *Session) handleSMFrame(h *hub.Hub, cache *ModelCache, rawValue string) bool {
 	var env tlv.SystemMsgEnvelope
 	if err := json.Unmarshal([]byte(rawValue), &env); err != nil {
-		s.emitFrame(h, "SM", rawValue, nil, nil, false)
+		s.emitFrame(h, "SM", rawValue, nil, &rawValue, nil, nil)
 		return false
 	}
 
@@ -264,42 +314,20 @@ func (s *Session) handleSMFrame(h *hub.Hub, cache *ModelCache, rawValue string) 
 		"type": env.Type,
 		"data": env.Data,
 	})
-	s.emitFrame(h, "SM", rawValue, wrapped, nil, false)
+	s.emitFrame(h, "SM", rawValue, wrapped, &rawValue, nil, nil)
 	return ended
 }
 
-// emitFrame builds and broadcasts a tlv-frame event from a raw frame
-// value. Unwraps the optional NUL-delimited history-ID prefix; json and
-// userContentType are attached verbatim. emptyToNone maps an empty
-// payload to content: null (used by AT/AR terminators).
-func (s *Session) emitFrame(h *hub.Hub, tag, rawValue string, jsonVal json.RawMessage, userContentType *string, emptyToNone bool) {
-	parts := tlv.UnwrapDelta(rawValue)
-
-	var content *string
-	if parts.HasDelta {
-		c := parts.Content
-		content = &c
-	} else {
-		c := rawValue
-		content = &c
-	}
-	if emptyToNone && content != nil && *content == "" {
-		content = nil
-	}
-
-	var historyID *string
-	if parts.HasDelta {
-		id := parts.HistoryID
-		historyID = &id
-	}
-
+// emitFrame builds and broadcasts a tlv-frame event. jsonVal, content,
+// historyID and contentType are attached verbatim (each optional).
+func (s *Session) emitFrame(h *hub.Hub, tag, rawValue string, jsonVal json.RawMessage, content, historyID, contentType *string) {
 	h.Broadcast(hub.NewEvent("tlv-frame", FrameEvent{
-		SessionID:       s.ID,
-		Tag:             tag,
-		RawValue:        rawValue,
-		HistoryID:       historyID,
-		Content:         content,
-		JSON:            jsonVal,
-		UserContentType: userContentType,
+		SessionID:   s.ID,
+		Tag:         tag,
+		RawValue:    rawValue,
+		HistoryID:   historyID,
+		Content:     content,
+		JSON:        jsonVal,
+		ContentType: contentType,
 	}))
 }

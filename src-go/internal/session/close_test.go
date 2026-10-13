@@ -61,7 +61,7 @@ func TestCloseGracefullyClosesStdinAfterInFlightWrite(t *testing.T) {
 	writeDone := make(chan struct{})
 	go func() {
 		defer close(writeDone)
-		_ = s.WriteFrames([]tlv.Frame{{Tag: tlv.TagUserText, Value: "hello"}})
+		_ = s.WriteFrames([]tlv.Frame{{Tag: tlv.TagUserX, Value: "hello"}})
 	}()
 	<-pipe.writeStarted // the prompt write now holds stdinMu and blocks
 
@@ -128,7 +128,7 @@ func TestCloseGracefullyGivesUpOnStuckStdin(t *testing.T) {
 	// A prompt write that never completes: it takes stdinMu and stays in
 	// its first Write (releaseWrite is never closed).
 	go func() {
-		_ = s.WriteFrames([]tlv.Frame{{Tag: tlv.TagUserText, Value: "wedged"}})
+		_ = s.WriteFrames([]tlv.Frame{{Tag: tlv.TagUserX, Value: "wedged"}})
 	}()
 	<-pipe.writeStarted
 

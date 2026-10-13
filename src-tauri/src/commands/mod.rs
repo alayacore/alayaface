@@ -122,7 +122,7 @@ pub(crate) fn resolve_binary(binary_path: &str) -> String {
 
 /// Send a command to a session as a CI frame (the new command RPC protocol).
 ///
-/// Generates a call ID, serializes `{"id","name","input"}` into a CI frame,
+/// Generates a call ID, serializes `{"call_id","name","input"}` into a CI frame,
 /// and records the call ID → name mapping so the stdout reader can attach
 /// the command name to the matching CO frame (CO carries only the ID).
 /// Returns the generated call ID on success.
@@ -140,7 +140,7 @@ pub(crate) async fn send_cmd(
     // Register the mapping BEFORE writing the frame — the CO reply can
     // arrive as soon as the CI frame is flushed.
     refs.pending_commands.insert(id.clone(), name.to_string()).await;
-    let payload = serde_json::json!({ "id": id, "name": name, "input": input });
+    let payload = serde_json::json!({ "call_id": id, "name": name, "input": input });
     if let Err(e) = write_frame_to(&refs, session_id, tlv::TAG_CMD_INPUT, &payload.to_string()).await {
         refs.pending_commands.remove(&id).await;
         return Err(e);
