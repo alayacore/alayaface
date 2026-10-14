@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"alayaface/src-go/internal/tlv"
+	"alayaface/src-go/internal/wire"
 )
 
 // MediaItem mirrors the Rust MediaItem (serde keeps snake_case).
@@ -40,7 +40,7 @@ func SendPrompt(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	// v14: each user content item is a UX frame whose value is a JSON content
 	// item — {"type":"image","uri":...} etc. The concrete kind lives in
 	// "type", not in the tag.
-	frames := make([]tlv.Frame, 0, len(args.Media)+2)
+	frames := make([]wire.Frame, 0, len(args.Media)+2)
 	for _, item := range args.Media {
 		var kind string
 		switch item.MediaType {
@@ -55,24 +55,24 @@ func SendPrompt(h *Handler, w http.ResponseWriter, r *http.Request) error {
 		default:
 			return fmt.Errorf("Unknown media type: %s", item.MediaType)
 		}
-		body, err := json.Marshal(tlv.ContentData{
-			ContentItem: tlv.ContentItem{Type: kind, URI: item.URI},
+		body, err := json.Marshal(wire.ContentData{
+			ContentItem: wire.ContentItem{Type: kind, URI: item.URI},
 		})
 		if err != nil {
 			return err
 		}
-		frames = append(frames, tlv.Frame{Tag: tlv.TagUserX, Value: string(body)})
+		frames = append(frames, wire.Frame{Tag: wire.TagUserX, Value: string(body)})
 	}
 	if args.Text != "" {
-		body, err := json.Marshal(tlv.ContentData{
-			ContentItem: tlv.ContentItem{Type: "text", Text: args.Text},
+		body, err := json.Marshal(wire.ContentData{
+			ContentItem: wire.ContentItem{Type: "text", Text: args.Text},
 		})
 		if err != nil {
 			return err
 		}
-		frames = append(frames, tlv.Frame{Tag: tlv.TagUserX, Value: string(body)})
+		frames = append(frames, wire.Frame{Tag: wire.TagUserX, Value: string(body)})
 	}
-	frames = append(frames, tlv.Frame{Tag: tlv.TagUserEnd, Value: ""})
+	frames = append(frames, wire.Frame{Tag: wire.TagUserEnd, Value: ""})
 	if err := s.WriteFrames(frames); err != nil {
 		return err
 	}

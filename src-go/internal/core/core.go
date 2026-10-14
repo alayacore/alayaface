@@ -1,7 +1,7 @@
 // Package core manages the AlayaCore subprocess.
 //
 // Spawns `alayacore --rawio` as a child process and provides access to
-// its stdin/stdout for TLV communication. Port of src-tauri/src/alayacore.rs.
+// its stdin/stdout for wire communication. Port of src-tauri/src/alayacore.rs.
 package core
 
 import (
@@ -20,10 +20,10 @@ import (
 	"sync"
 	"time"
 
-	"alayaface/src-go/internal/tlv"
+	"alayaface/src-go/internal/wire"
 )
 
-// SupportedMessageVersion is the alayacore TLV protocol
+// SupportedMessageVersion is the alayacore wire protocol
 // `message_version` this adapter implements.
 //
 // alayacore announces its version as the first boot frame
@@ -38,6 +38,13 @@ import (
 // states those carry — and alayacore moves it for additive changes too,
 // because a client that knows only the older format has no other way to
 // learn that a newer one exists (adapter-guide, "Protocol Version").
+//
+// v15: the wire dropped its 4-byte length field. A frame is now one line — a
+// two-byte tag, a JSON value, an LF — so the boundary rests on the value being
+// one line (the encoder enforces it and the decoder checks it) instead of on a
+// length a peer could get wrong. Session file bodies lost their blank line
+// between frames with it: every line is one frame. The frame bound is 64MB,
+// down from 2GB.
 //
 // v14: every content frame's value is JSON. Text and media tags collapsed
 // into a 2x2 — UX/AX (content) and AF/UF (function) — with the concrete kind
@@ -58,7 +65,7 @@ import (
 //
 // NOTE: the same number is written into every session file's frontmatter
 // (`message_version: N`) and alayacore's loader demands an EXACT match, so a
-// v12 file is refused by a v14 core before a single TLV frame is written —
+// v14 file is refused by a v15 core before a single frame is written —
 // the failure is startup exit 1 with the reason on stderr only. Users'
 // existing sessions are affected by every bump, not just this one, and the
 // reason is invisible in a GUI build (the core's stderr is not the terminal)
@@ -67,12 +74,12 @@ import (
 //
 // Must stay in sync with src-tauri/src/alayacore.rs::SUPPORTED_MESSAGE_VERSION
 // (AGENTS.md: "two backends must stay symmetric").
-const SupportedMessageVersion = 14
+const SupportedMessageVersion = 15
 
 // SessionHeaderWindow is how far into a session file its frontmatter is
 // searched. The block is eight short scalar lines, so this is generous by
 // orders of magnitude; the window exists so a file with no header is reported
-// as "unknown" rather than costing a read of the whole TLV body.
+// as "unknown" rather than costing a read of the whole frame body.
 const SessionHeaderWindow = 4096
 
 // SessionFileMessageVersion returns the `message_version` recorded in a session
@@ -181,8 +188,8 @@ const StderrTailMaxChars = 400
 
 // StderrTail is the last few lines a spawned alayacore wrote to stderr.
 //
-// alayacore reports here everything it cannot report over TLV, because TLV
-// only exists once a session has started: a session file whose
+// alayacore reports here everything it cannot report over the wire, because
+// the wire only exists once a session has started: a session file whose
 // `message_version` it will not load, an unusable config, a tool it could not
 // exec. Those abort startup BEFORE the first frame is written, so all the
 // adapter used to observe was stdout EOF, and the whole story the user got
@@ -436,7 +443,7 @@ func bundledBinaryPath() (string, bool) {
 // just as unusable as a missing binary (the wire format has drifted),
 // so the same `ok=false` UX is surfaced.
 //
-// The probe spawns `alayacore --rawio`, reads TLV frames until
+// The probe spawns `alayacore --rawio`, reads frames until
 // `SM {"type":"version",...}` arrives or VersionProbeTimeout
 // elapses, then kills the child. Config path / session / tools are
 // irrelevant for the version announcement, so the probe uses the
@@ -469,7 +476,7 @@ func CheckMessageVersion(binaryPath string) error {
 	return nil
 }
 
-// readVersionFrame reads TLV frames from r until the boot
+// readVersionFrame reads frames from r until the boot
 // `SM {"type":"version",...}` arrives or VersionProbeTimeout elapses.
 // Returns nil if the version matches SupportedMessageVersion;
 // otherwise an error naming the observed version (or the failure
@@ -501,7 +508,7 @@ func readVersionFrame(r io.Reader) error {
 			_ = rd.SetReadDeadline(time.Now().Add(VersionProbeTimeout))
 		}
 
-		frame, err := tlv.ReadFrame(reader)
+		frame, err := wire.ReadFrame(reader)
 		if err != nil {
 			return fmt.Errorf("failed to read alayacore's boot frames: %w", err)
 		}

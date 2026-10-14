@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Four facts about AlayaCore's TLV protocol are duplicated inside AlayaFace, and
+# Four facts about AlayaCore's wire protocol are duplicated inside AlayaFace, and
 # every one of them goes stale silently when the core moves:
 #
 #   1. message_version   — the number this adapter pins and the core announces.
@@ -30,7 +30,7 @@
 #     left behind.
 #
 # When it goes red after an AlayaCore change, the fix is the four things the
-# list above names: bump both message_version constants, add the tag to both tlv
+# list above names: bump both message_version constants, add the tag to both wire
 # modules, decide where the new state is read (or record why not), and mirror
 # the command name.
 set -euo pipefail
@@ -39,15 +39,15 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CORE="${ALAYACORE_DIR:-$HOME/playground/alayacore}"
 FIXDIR="$REPO/testdata"
 FIX_VERSION="$FIXDIR/alayacore-message-version.txt"
-FIX_TAGS="$FIXDIR/alayacore-tlv-tags.txt"
+FIX_TAGS="$FIXDIR/alayacore-wire-tags.txt"
 FIX_STATES="$FIXDIR/alayacore-session-states.txt"
 FIX_COMMANDS="$FIXDIR/alayacore-commands.txt"
 
 R_CORE="$REPO/src-tauri/src/alayacore.rs"
 G_CORE="$REPO/src-go/internal/core/core.go"
-R_TLV="$REPO/src-tauri/src/tlv.rs"
-G_TLV="$REPO/src-go/internal/tlv/tlv.go"
-C_TLV="$CORE/internal/tlv/tlv.go"
+R_WIRE="$REPO/src-tauri/src/wire.rs"
+G_WIRE="$REPO/src-go/internal/wire/wire.go"
+C_WIRE="$CORE/internal/wire/wire.go"
 C_STATE="$CORE/internal/agent/session_types.go"
 C_SESSION="$CORE/internal/agent/session.go"
 C_COMMANDS="$CORE/internal/commands/commands.go"
@@ -78,8 +78,8 @@ core_version() {
 
 # Every two-letter tag the core declares, in either direction.
 core_tags() {
-  [[ -f "$C_TLV" ]] || return 1
-  grep -oE 'Tag[A-Za-z]+ += +"[A-Za-z]{2}"' "$C_TLV" |
+  [[ -f "$C_WIRE" ]] || return 1
+  grep -oE 'Tag[A-Za-z]+ += +"[A-Za-z]{2}"' "$C_WIRE" |
     sed -E 's/.*"([A-Za-z]{2})"/\1/' | sort -u
 }
 
@@ -127,8 +127,8 @@ core_commands() {
 # ─── Our side ───────────────────────────────────────────────────────
 
 face_version() { grep -vE '^[[:space:]]*//' "$1" | sed -nE "s/.*$2[^=]*=[[:space:]]*([0-9]+).*/\1/p" | head -1; }
-face_tags() { grep -oE 'TAG_[A-Z_]+: &str = "[A-Za-z]{2}"' "$R_TLV" | sed -E 's/.*"([A-Za-z]{2})"/\1/' | sort -u; }
-go_tags() { grep -oE 'Tag[A-Za-z]+ += +"[A-Za-z]{2}"' "$G_TLV" | sed -E 's/.*"([A-Za-z]{2})"/\1/' | sort -u; }
+face_tags() { grep -oE 'TAG_[A-Z_]+: &str = "[A-Za-z]{2}"' "$R_WIRE" | sed -E 's/.*"([A-Za-z]{2})"/\1/' | sort -u; }
+go_tags() { grep -oE 'Tag[A-Za-z]+ += +"[A-Za-z]{2}"' "$G_WIRE" | sed -E 's/.*"([A-Za-z]{2})"/\1/' | sort -u; }
 
 # Production source, with the test code removed. Rust's tests live in the same
 # file (below `#[cfg(test)]`), and they quote things production never does — a
@@ -219,7 +219,7 @@ if EXPECT_VERSION=$(core_version 2>/dev/null) && [[ -n "${EXPECT_VERSION:-}" ]];
   mapfile -t EXPECT_STATES < <(core_states)
   mapfile -t EXPECT_COMMANDS < <(core_commands)
 else
-  echo "AlayaCore not found ($C_TLV) — checking against the fixtures in $FIXDIR" >&2
+  echo "AlayaCore not found ($C_WIRE) — checking against the fixtures in $FIXDIR" >&2
   for f in "$FIX_VERSION" "$FIX_TAGS" "$FIX_STATES" "$FIX_COMMANDS"; do
     [[ -f "$f" ]] || { echo "✗ no fixture at $f — run this script with AlayaCore checked out" >&2; exit 1; }
   done
@@ -231,7 +231,7 @@ else
 fi
 
 [[ -n "$EXPECT_VERSION" ]] || { echo "✗ no message_version found in $C_STATE" >&2; exit 1; }
-require_min "TLV tag" "${#EXPECT_TAGS[@]}" 10 || exit 1
+require_min "wire tag" "${#EXPECT_TAGS[@]}" 10 || exit 1
 require_min "broadcast session state" "${#EXPECT_STATES[@]}" 2 || exit 1
 require_min "registered command" "${#EXPECT_COMMANDS[@]}" 10 || exit 1
 
@@ -256,16 +256,16 @@ done
 face_tags > "$tmp/tags_rust"
 go_tags > "$tmp/tags_go"
 printf '%s\n' "${EXPECT_TAGS[@]}" > "$tmp/tags_core"
-require_min "TLV tag (Rust)" "$(wc -l < "$tmp/tags_rust")" 10 || fail=1
-require_min "TLV tag (Go)" "$(wc -l < "$tmp/tags_go")" 10 || fail=1
+require_min "wire tag (Rust)" "$(wc -l < "$tmp/tags_rust")" 10 || fail=1
+require_min "wire tag (Go)" "$(wc -l < "$tmp/tags_go")" 10 || fail=1
 for pair in "Rust|$tmp/tags_rust" "Go|$tmp/tags_go"; do
   IFS='|' read -r label file <<< "$pair"
   if ! diff -q "$tmp/tags_core" "$file" >/dev/null; then
-    echo "✗ $label TLV tag alphabet differs from AlayaCore's"
+    echo "✗ $label wire tag alphabet differs from AlayaCore's"
     echo "  the core defines, $label does not: $(comm -23 "$tmp/tags_core" "$file" | tr '\n' ' ')"
     echo "  $label defines, the core does not: $(comm -13 "$tmp/tags_core" "$file" | tr '\n' ' ')"
     echo "  A tag nobody knows is a frame that gets forwarded to a client which"
-    echo "  parses it as nothing. Add it to $R_TLV and $G_TLV (or say why not)."
+    echo "  parses it as nothing. Add it to $R_WIRE and $G_WIRE (or say why not)."
     fail=1
   fi
 done
@@ -319,7 +319,7 @@ if (( REGEN )); then
     printf '%s\n' "$EXPECT_VERSION"
   } > "$FIX_VERSION"
   {
-    fixture_header "TLV tags AlayaCore defines, in either direction" "tlv/tlv.go"
+    fixture_header "wire tags AlayaCore defines, in either direction" "wire/wire.go"
     printf '%s\n' "${EXPECT_TAGS[@]}"
   } > "$FIX_TAGS"
   {

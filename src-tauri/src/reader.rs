@@ -1,12 +1,12 @@
 //! Background readers for alayacore subprocess pipes.
 //!
-//! `spawn_stdout_reader` reads TLV frames from stdout and emits them as
+//! `spawn_stdout_reader` reads frames from stdout and emits them as
 //! Tauri events. (alayacore's stderr is drained by a pump in
 //! `alayacore::spawn` into a `StderrTail`, which this reader quotes when the
 //! pipe dies — see `disconnect_message`.)
 
 use crate::event::{DeltaEvent, FrameEvent, StatusEvent};
-use crate::tlv;
+use crate::wire;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -17,8 +17,8 @@ use tauri::{AppHandle, Emitter};
 /// With nothing on stderr this returns the base text unchanged, so the common
 /// case (a session closed on purpose) reads exactly as it always did. With a
 /// tail, the LAST line is quoted: for a startup failure it is the whole reason
-/// (`Error: failed to load session: session file version mismatch: got 12,
-/// expected 14`), and `core-status.message` is a one-line UI field, so a stack
+/// (`Error: failed to load session: session file version mismatch: got 14,
+/// expected 15`), and `core-status.message` is a one-line UI field, so a stack
 /// trace does not belong in it. Everything the core wrote is still in the
 /// backend log (the pump forwards each line there), which is what the count
 /// suffix points at.
@@ -44,12 +44,12 @@ fn disconnect_message(base: &str, tail: &crate::alayacore::StderrTail) -> String
     }
 }
 
-/// Spawn a background thread that reads TLV frames from alayacore's stdout
+/// Spawn a background thread that reads frames from alayacore's stdout
 /// and emits them as Tauri events (`tlv-delta`, `tlv-frame`, `core-status`).
 pub fn spawn_stdout_reader(
     app: AppHandle,
     session_id: String,
-    mut stdout: std::process::ChildStdout,
+    stdout: std::process::ChildStdout,
     connected: Arc<AtomicBool>,
     model_cache: Arc<crate::ModelCacheInner>,
     child: Arc<std::sync::Mutex<Option<std::process::Child>>>,
@@ -58,6 +58,9 @@ pub fn spawn_stdout_reader(
 ) {
     std::thread::spawn(move || {
         let sid = session_id;
+        // A frame is a line, so the reader must buffer: reading one frame must
+        // not consume the next. One buffered reader for the whole stream.
+        let mut stdout = std::io::BufReader::new(stdout);
         // One `core-status: false` per session. The terminal frame and the EOF
         // that follows it describe the same fact, and the client's plan runner
         // fails its node on each one it receives.
@@ -72,7 +75,7 @@ pub fn spawn_stdout_reader(
         };
 
         loop {
-            match tlv::read_frame(&mut stdout) {
+            match wire::read_frame(&mut stdout) {
                 Ok(Some(frame)) => {
                     if dispatch_frame(&app, &sid, &frame, &model_cache, &pending_commands)
                         && !announced
@@ -127,7 +130,7 @@ pub fn spawn_stdout_reader(
     });
 }
 
-/// Dispatch a single TLV frame to the appropriate event channel(s).
+/// Dispatch a single frame to the appropriate event channel(s).
 ///
 /// Returns true when the frame ENDED the session (`ends_the_session`), which is
 /// the reader's cue to announce the end. Every other frame returns false, and
@@ -135,7 +138,7 @@ pub fn spawn_stdout_reader(
 fn dispatch_frame(
     app: &AppHandle,
     sid: &str,
-    frame: &tlv::Frame,
+    frame: &wire::Frame,
     model_cache: &Arc<crate::ModelCacheInner>,
     pending_commands: &Arc<crate::session::PendingCommands>,
 ) -> bool {
@@ -144,11 +147,11 @@ fn dispatch_frame(
 
     // Log every incoming frame for debugging
     let preview: String = raw_value.chars().take(200).collect();
-    log::info!("[tlv] << {} {} {}b {}", sid, tag, raw_value.len(), preview);
+    log::info!("[wire] << {} {} {}b {}", sid, tag, raw_value.len(), preview);
 
     // Cache model_list from SM frames (always, before any other processing)
     if tag == "SM" {
-        if let Ok(env) = serde_json::from_str::<tlv::SystemMsgEnvelope>(raw_value) {
+        if let Ok(env) = serde_json::from_str::<wire::SystemMsgEnvelope>(raw_value) {
             if env.msg_type == "model_list" {
                 if let Some(arr) = env.data.get("models").and_then(|v| v.as_array()) {
                     model_cache.set(arr.clone());
@@ -159,19 +162,19 @@ fn dispatch_frame(
 
     match tag.as_str() {
         // ─── Assistant content delta (Ax) ─────────────────────────
-        tlv::TAG_ASSISTANT_X_DELTA => {
+        wire::TAG_ASSISTANT_X_DELTA => {
             handle_delta_frame(app, sid, tag, raw_value);
             false
         }
         // ─── Assistant content, complete/authoritative (AX) ───────
         // Delta mode: content is empty (terminator). Replay/--no-delta:
         // full text.
-        tlv::TAG_ASSISTANT_X => {
+        wire::TAG_ASSISTANT_X => {
             handle_content_frame(app, sid, tag, raw_value);
             false
         }
         // ─── User content echo (UX) ───────────────────────────────
-        tlv::TAG_USER_X => {
+        wire::TAG_USER_X => {
             handle_content_frame(app, sid, tag, raw_value);
             false
         }
@@ -179,20 +182,20 @@ fn dispatch_frame(
         // All share the same wire format: a JSON object (history id in
         // the top-level "id" when present, tool id in "call_id"). The
         // parsed JSON is forwarded so the frontend can decode it by tag.
-        tlv::TAG_ASSISTANT_F_DELTA
-        | tlv::TAG_ASSISTANT_F
-        | tlv::TAG_USER_F
-        | tlv::TAG_USER_F_DELTA => {
+        wire::TAG_ASSISTANT_F_DELTA
+        | wire::TAG_ASSISTANT_F
+        | wire::TAG_USER_F
+        | wire::TAG_USER_F_DELTA => {
             handle_json_frame(app, sid, tag, raw_value);
             false
         }
         // ─── Command output (CO) ─────────────────────────────────
-        tlv::TAG_CMD_OUTPUT => {
+        wire::TAG_CMD_OUTPUT => {
             handle_cmd_output_frame(app, sid, raw_value, pending_commands);
             false
         }
         // ─── System message (SM) ─────────────────────────────────
-        tlv::TAG_SYSTEM_MSG => handle_sm_frame(app, sid, raw_value),
+        wire::TAG_SYSTEM_MSG => handle_sm_frame(app, sid, raw_value),
         // ─── Everything else (unknown) ───────────────────────────
         _ => {
             emit_frame(
@@ -219,7 +222,7 @@ fn json_of(raw: &str) -> Option<serde_json::Value> {
 /// text or reasoning. Emitted as `tlv-delta` so the frontend accumulates by
 /// (type, history id).
 fn handle_delta_frame(app: &AppHandle, sid: &str, tag: &str, raw_value: &str) {
-    match serde_json::from_str::<tlv::ContentData>(raw_value) {
+    match serde_json::from_str::<wire::ContentData>(raw_value) {
         Ok(d) if !d.item.kind.is_empty() => {
             let _ = app.emit(
                 "tlv-delta",
@@ -257,7 +260,7 @@ fn handle_delta_frame(app: &AppHandle, sid: &str, tag: &str, raw_value: &str) {
 /// is the `text` field for text/reasoning items and the `uri` for media; the
 /// content type is the item's `type`.
 fn handle_content_frame(app: &AppHandle, sid: &str, tag: &str, raw_value: &str) {
-    match serde_json::from_str::<tlv::ContentData>(raw_value) {
+    match serde_json::from_str::<wire::ContentData>(raw_value) {
         Ok(d) if !d.item.kind.is_empty() => {
             let content = if d.item.kind == "text" || d.item.kind == "reasoning" {
                 d.item.text.clone()
@@ -367,7 +370,7 @@ fn ends_the_session(msg_type: &str, data: &serde_json::Value) -> bool {
 /// Returns true for the terminal frame (see [`ends_the_session`]) so the reader
 /// can end the loop; every other SM returns false.
 fn handle_sm_frame(app: &AppHandle, sid: &str, raw_value: &str) -> bool {
-    let (json_val, ended) = match serde_json::from_str::<tlv::SystemMsgEnvelope>(raw_value) {
+    let (json_val, ended) = match serde_json::from_str::<wire::SystemMsgEnvelope>(raw_value) {
         Ok(env) => (
             serde_json::json!({ "type": env.msg_type, "data": env.data }),
             ends_the_session(&env.msg_type, &env.data),
@@ -472,11 +475,11 @@ mod tests {
         // handed a v11 session file.
         let tail = tail_with(&[
             "Warning: something earlier",
-            "Error: failed to load session: session file version mismatch: got 12, expected 14",
+            "Error: failed to load session: session file version mismatch: got 14, expected 15",
         ]);
         let msg = disconnect_message("Connection closed", &tail);
         assert!(
-            msg.contains("session file version mismatch: got 12, expected 14"),
+            msg.contains("session file version mismatch: got 14, expected 15"),
             "the reason must reach the user: {msg}"
         );
         assert!(

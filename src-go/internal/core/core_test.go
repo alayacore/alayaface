@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"alayaface/src-go/internal/tlv"
+	"alayaface/src-go/internal/wire"
 )
 
 // Builds the fakecore test binary once (same stand-in used by the
@@ -194,10 +194,10 @@ func TestSpawnArgsAndCommunication(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	// Bidirectional TLV: read the startup SM, then send a prompt and
+	// Bidirectional frames: read the startup SM, then send a prompt and
 	// read the assistant reply deltas.
 	reader := bufio.NewReader(proc.Stdout)
-	frame, err := tlv.ReadFrame(reader)
+	frame, err := wire.ReadFrame(reader)
 	if err != nil || frame == nil {
 		t.Fatalf("read startup frame: %v", err)
 	}
@@ -206,10 +206,10 @@ func TestSpawnArgsAndCommunication(t *testing.T) {
 	}
 
 	prompt := `{"type":"text","text":"hi"}`
-	if err := tlv.WriteFrame(proc.Stdin, tlv.TagUserX, prompt); err != nil {
+	if err := wire.WriteFrame(proc.Stdin, wire.TagUserX, prompt); err != nil {
 		t.Fatal(err)
 	}
-	if err := tlv.WriteFrame(proc.Stdin, "UE", ""); err != nil {
+	if err := wire.WriteFrame(proc.Stdin, "UE", ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -218,14 +218,14 @@ func TestSpawnArgsAndCommunication(t *testing.T) {
 	// window).
 	seenEcho, seenDelta := false, false
 	for i := 0; i < 10; i++ {
-		frame, err = tlv.ReadFrame(reader)
+		frame, err = wire.ReadFrame(reader)
 		if err != nil || frame == nil {
 			t.Fatalf("read reply frame %d: %v", i, err)
 		}
-		if frame.Tag == tlv.TagUserX {
+		if frame.Tag == wire.TagUserX {
 			seenEcho = true
 		}
-		if frame.Tag == tlv.TagAssistantXDelta {
+		if frame.Tag == wire.TagAssistantXDelta {
 			seenDelta = true
 		}
 		if seenEcho && seenDelta {
@@ -341,7 +341,7 @@ func writeSessionFile(t *testing.T, dir, name, head string) string {
 
 func TestSessionFileMessageVersionReadsAVersionedHeader(t *testing.T) {
 	dir := t.TempDir()
-	head := "---\ncreated_at: 2026-09-08T22:26:51+08:00\nmessage_version: 11\nreasoning_level: 2\n---\n\x00TLVbody"
+	head := "---\ncreated_at: 2026-09-08T22:26:51+08:00\nmessage_version: 11\nreasoning_level: 2\n---\n\x00wirebody"
 	got, ok := SessionFileMessageVersion(writeSessionFile(t, dir, "session.alaya", head))
 	if !ok || got != 11 {
 		t.Errorf("got (%d,%v), want (11,true)", got, ok)
@@ -362,7 +362,7 @@ func TestSessionFileMessageVersionUnknownIsNotARefusal(t *testing.T) {
 		"no key":      "---\ncreated_at: 2026-09-08\nactive_model: \"M\"\n---\n",
 		"unclosed":    "---\ncreated_at: x\n",
 		"not numeric": "---\nmessage_version: twelve\n---\n",
-		// The TLV body after `---` is opaque bytes that may contain the same
+		// The frame body after `---` is opaque bytes that may contain the same
 		// words (a user pasting a session header into a prompt).
 		"key in body": "---\ncreated_at: x\n---\n\x00user message\x00message_version: 3\n",
 	}
@@ -440,9 +440,9 @@ func TestSpawnWorkDir(t *testing.T) {
 	defer KillChild(proc.Cmd)
 
 	reader := bufio.NewReader(proc.Stdout)
-	var taskFrame *tlv.Frame
+	var taskFrame *wire.Frame
 	for i := 0; i < 16; i++ {
-		frame, err := tlv.ReadFrame(reader)
+		frame, err := wire.ReadFrame(reader)
 		if err != nil || frame == nil {
 			t.Fatalf("read startup frame %d: %v", i, err)
 		}
@@ -489,7 +489,7 @@ func TestSpawnReasoningLevelFlag(t *testing.T) {
 	var bootLevel any
 	var smLevel any
 	for i := 0; i < 8; i++ {
-		frame, err := tlv.ReadFrame(reader)
+		frame, err := wire.ReadFrame(reader)
 		if err != nil || frame == nil || frame.Tag != "SM" {
 			continue
 		}
@@ -543,22 +543,18 @@ func TestKillChildNilSafe(t *testing.T) {
 // ─── readVersionFrame ──────────────────────────────────────────────
 //
 // The probe in CheckMessageVersion spawns a real alayacore. Driving
-// it with a synthetic binary is fragile (TLV framing + spawn
+// it with a synthetic binary is fragile (frame framing + spawn
 // ordering + argv parsing), so these tests cover the PARSE path via
 // readVersionFrame directly — that is where every business rule
 // lives (match, mismatch, missing field, malformed JSON, wrong-type
 // first frame, EOF before frame). Spawn-failure coverage is left to
 // the integration test in server/handlers/cmd_test.go.
 
-// encodeFrame builds the bytes of a single TLV frame. Mirrors
-// tlv.WriteFrame; reproduced here so tests do not depend on
-// tlv.WriteFrame keeping the exact wire format.
+// encodeFrame builds the bytes of a single frame — one line: tag + value + LF.
+// Mirrors wire.WriteFrame; reproduced here so tests do not depend on
+// wire.WriteFrame keeping the exact wire format.
 func encodeFrame(tag, value string) []byte {
-	out := make([]byte, 0, 6+len(value))
-	out = append(out, []byte(tag)...)
-	out = append(out, byte(len(value)>>24), byte(len(value)>>16), byte(len(value)>>8), byte(len(value)))
-	out = append(out, []byte(value)...)
-	return out
+	return append([]byte(tag+value), '\n')
 }
 
 // versionFrame is the boot version frame a core speaking `version` announces.

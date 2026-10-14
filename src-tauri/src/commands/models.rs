@@ -5,7 +5,7 @@
 
 use crate::commands::{resolve_binary, send_cmd, SessionMap};
 use crate::dirs;
-use crate::tlv;
+use crate::wire;
 use crate::ModelCache;
 
 use std::io::Write;
@@ -69,7 +69,7 @@ pub async fn list_models(
 //
 // list_models' fallback, list_default_models, and sync_default_models all
 // used to duplicate the same dance: spawn a throwaway `alayacore --rawio`,
-// optionally send one CI command, then read TLV frames until the SM
+// optionally send one CI command, then read frames until the SM
 // model_list (and/or the matching CO) arrives or a timeout elapses. This
 // section captures that protocol once.
 
@@ -166,9 +166,9 @@ fn run_temp_probe(
         });
         let payload_str = payload.to_string();
         let preview: String = payload_str.chars().take(200).collect();
-        log::info!("[tlv] >> temp {} {}b {}", tlv::TAG_CMD_INPUT, payload_str.len(), preview);
+        log::info!("[wire] >> temp {} {}b {}", wire::TAG_CMD_INPUT, payload_str.len(), preview);
         if let Some(stdin) = core.stdin.as_mut() {
-            let _ = tlv::write_frame(stdin, tlv::TAG_CMD_INPUT, &payload_str);
+            let _ = wire::write_frame(stdin, wire::TAG_CMD_INPUT, &payload_str);
             let _ = stdin.flush();
         }
     }
@@ -187,12 +187,12 @@ fn run_temp_probe(
             result.end = ProbeEnd::Timeout;
             break;
         }
-        match tlv::read_frame(&mut core.stdout) {
+        match wire::read_frame(&mut core.stdout) {
             Ok(Some(frame)) => {
                 let preview: String = frame.value.chars().take(200).collect();
-                log::info!("[tlv] << temp {} {}b {}", frame.tag, frame.value.len(), preview);
+                log::info!("[wire] << temp {} {}b {}", frame.tag, frame.value.len(), preview);
                 if frame.tag == "SM" {
-                    if let Ok(env) = serde_json::from_str::<tlv::SystemMsgEnvelope>(&frame.value) {
+                    if let Ok(env) = serde_json::from_str::<wire::SystemMsgEnvelope>(&frame.value) {
                         if env.msg_type == "model_list" {
                             if let Some(arr) = env.data.get("models").and_then(|v| v.as_array()) {
                                 result.models = Some(arr.clone());

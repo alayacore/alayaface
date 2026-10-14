@@ -95,8 +95,8 @@ R_FS=src-tauri/src/commands/fs.rs
 G_FS=src-go/internal/server/handlers/fs.go
 R_CORE=src-tauri/src/alayacore.rs
 G_CORE=src-go/internal/core/core.go
-R_TLV=src-tauri/src/tlv.rs
-G_TLV=src-go/internal/tlv/tlv.go
+R_WIRE=src-tauri/src/wire.rs
+G_WIRE=src-go/internal/wire/wire.go
 R_SESS=src-tauri/src/session.rs
 G_SESS=src-go/internal/session/session.go
 R_DIRS=src-tauri/src/dirs.rs
@@ -167,12 +167,12 @@ for f in "$tmp/mime_rust.f" "$tmp/mime_go.f"; do
   fi
 done
 
-# 2b. TLV tag constants (the wire alphabet).
-grep -oE 'TAG_[A-Z_]+: &str = "[A-Za-z]{2}"' "$R_TLV" | sed -E 's/.*"([A-Za-z]{2})"/\1/' | sort -u > "$tmp/tags_rust"
-grep -oE 'Tag[A-Za-z]+ += +"[A-Za-z]{2}"' "$G_TLV" | sed -E 's/.*"([A-Za-z]{2})"/\1/' | sort -u > "$tmp/tags_go"
-expect_same "TLV tags" "$tmp/tags_rust" "$tmp/tags_go"
+# 2b. wire tag constants (the tag alphabet).
+grep -oE 'TAG_[A-Z_]+: &str = "[A-Za-z]{2}"' "$R_WIRE" | sed -E 's/.*"([A-Za-z]{2})"/\1/' | sort -u > "$tmp/tags_rust"
+grep -oE 'Tag[A-Za-z]+ += +"[A-Za-z]{2}"' "$G_WIRE" | sed -E 's/.*"([A-Za-z]{2})"/\1/' | sort -u > "$tmp/tags_go"
+expect_same "wire tags" "$tmp/tags_rust" "$tmp/tags_go"
 if [ "$(wc -l < "$tmp/tags_rust")" -lt 5 ] || [ "$(wc -l < "$tmp/tags_go")" -lt 5 ]; then
-  echo "✗ parity check broken: TLV tag extraction too small — fix the extractor"
+  echo "✗ parity check broken: wire tag extraction too small — fix the extractor"
   fail=1
 fi
 
@@ -209,9 +209,9 @@ check_scalar "supported message_version" \
   "$(plain_num 'SUPPORTED_MESSAGE_VERSION' "$R_CORE")" \
   "$(plain_num 'SupportedMessageVersion' "$G_CORE")"
 
-check_scalar "max TLV frame size" \
-  "$(shift_expr 'MAX_FRAME_SIZE' "$R_TLV")" \
-  "$(shift_expr 'MaxFrameSize' "$G_TLV")"
+check_scalar "max frame size" \
+  "$(shift_expr 'MAX_FRAME_SIZE' "$R_WIRE")" \
+  "$(shift_expr 'MaxFrameSize' "$G_WIRE")"
 
 check_scalar "max pending commands" \
   "$(plain_num 'MAX_PENDING_COMMANDS' "$R_SESS")" \
@@ -224,7 +224,7 @@ check_scalar "graceful close timeout (secs)" \
 # 2c-quater. The stderr tail — what a user is told when alayacore dies before
 #     the protocol starts. The core reports an unloadable session file, an
 #     unusable config and a failed tool exec ONLY on stderr, and every one of
-#     those aborts before the first TLV frame, so the tail is the only channel
+#     those aborts before the first frame, so the tail is the only channel
 #     that carries a reason. Both backends quote it in the same one-line
 #     `core-status.message`, which the client shows verbatim: the clip and the
 #     buffer size are the duplicated scalars, and the suffix is the duplicated
@@ -480,4 +480,4 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 
-echo "✓ backend parity OK — commands (Rust: $(echo "$rust_cmds" | wc -l), Go: $(echo "$go_cmds" | wc -l), bridge: $(echo "$bridge_cmds" | wc -l)) plus MIME, TLV tags, caps, seeds, ASR protocols/defaults/field names and error strings"
+echo "✓ backend parity OK — commands (Rust: $(echo "$rust_cmds" | wc -l), Go: $(echo "$go_cmds" | wc -l), bridge: $(echo "$bridge_cmds" | wc -l)) plus MIME, wire tags, caps, seeds, ASR protocols/defaults/field names and error strings"

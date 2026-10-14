@@ -17,7 +17,7 @@ type DeltaEvent struct {
 	ContentType string `json:"content_type"`
 }
 
-// FrameEvent is emitted when any complete TLV frame arrives from
+// FrameEvent is emitted when any complete frame arrives from
 // alayacore stdout.
 type FrameEvent struct {
 	SessionID string `json:"session_id"`

@@ -13,7 +13,7 @@ import (
 
 	"alayaface/src-go/internal/core"
 	"alayaface/src-go/internal/session"
-	"alayaface/src-go/internal/tlv"
+	"alayaface/src-go/internal/wire"
 )
 
 // ProbeEnd is why a probe stopped reading.
@@ -48,7 +48,7 @@ type ProbeResult struct {
 }
 
 // RunTempProbe spawns a temporary alayacore and optionally sends one CI
-// command, then reads TLV frames until the SM model_list (and/or the
+// command, then reads frames until the SM model_list (and/or the
 // matching CO) arrives or a 5s timeout elapses. modelCache, when given,
 // is refreshed from any SM model_list seen (mirrors live sessions).
 func RunTempProbe(bin, configPath string, cmd *ProbeCmd, modelCache *session.ModelCache) (*ProbeResult, error) {
@@ -73,13 +73,13 @@ func RunTempProbe(bin, configPath string, cmd *ProbeCmd, modelCache *session.Mod
 
 	// Optionally send one command, then close stdin.
 	if cmd != nil {
-		payload, _ := json.Marshal(tlv.CmdMsg{CallID: cmd.CallID, Name: cmd.Name, Input: cmd.Input})
+		payload, _ := json.Marshal(wire.CmdMsg{CallID: cmd.CallID, Name: cmd.Name, Input: cmd.Input})
 		preview := string(payload)
 		if len(preview) > 200 {
 			preview = preview[:200]
 		}
-		log.Printf("[tlv] >> temp %s %db %s", tlv.TagCmdInput, len(payload), preview)
-		_ = tlv.WriteFrame(stdin, tlv.TagCmdInput, string(payload))
+		log.Printf("[wire] >> temp %s %db %s", wire.TagCmdInput, len(payload), preview)
+		_ = wire.WriteFrame(stdin, wire.TagCmdInput, string(payload))
 	}
 	_ = stdin.Close()
 
@@ -104,7 +104,7 @@ func RunTempProbe(bin, configPath string, cmd *ProbeCmd, modelCache *session.Mod
 			result.End = EndTimeout
 			break
 		}
-		frame, err := tlv.ReadFrame(reader)
+		frame, err := wire.ReadFrame(reader)
 		if err != nil {
 			result.End = EndReadError
 			break
@@ -117,11 +117,11 @@ func RunTempProbe(bin, configPath string, cmd *ProbeCmd, modelCache *session.Mod
 		if len(preview) > 200 {
 			preview = preview[:200]
 		}
-		log.Printf("[tlv] << temp %s %db %s", frame.Tag, len(frame.Value), preview)
+		log.Printf("[wire] << temp %s %db %s", frame.Tag, len(frame.Value), preview)
 
 		switch frame.Tag {
 		case "SM":
-			var env tlv.SystemMsgEnvelope
+			var env wire.SystemMsgEnvelope
 			if err := json.Unmarshal([]byte(frame.Value), &env); err == nil && env.Type == "model_list" {
 				var data struct {
 					Models []json.RawMessage `json:"models"`

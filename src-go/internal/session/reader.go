@@ -8,7 +8,7 @@ import (
 
 	"alayaface/src-go/internal/core"
 	"alayaface/src-go/internal/hub"
-	"alayaface/src-go/internal/tlv"
+	"alayaface/src-go/internal/wire"
 )
 
 // disconnectMessage composes the `core-status` message for a pipe that just
@@ -17,8 +17,8 @@ import (
 // With nothing on stderr this returns the base text unchanged, so the common
 // case (a session closed on purpose) reads exactly as it always did. With a
 // tail, the LAST line is quoted: for a startup failure it is the whole reason
-// (`Error: failed to load session: session file version mismatch: got 12,
-// expected 14`), and `core-status.message` is a one-line UI field, so a stack
+// (`Error: failed to load session: session file version mismatch: got 14,
+// expected 15`), and `core-status.message` is a one-line UI field, so a stack
 // trace does not belong in it. Everything the core wrote is still in the
 // backend log (the pump forwards each line there), which is what the count
 // suffix points at.
@@ -60,7 +60,7 @@ const SessionClosedMessage = "Session closed by alayacore"
 // end from EOF. That inference is not free here: stdout stays open while
 // anything still holds the write end, so a core that has finished can leave the
 // reader parked on a read and the window showing a running session.
-func endsTheSession(env *tlv.SystemMsgEnvelope) bool {
+func endsTheSession(env *wire.SystemMsgEnvelope) bool {
 	if env == nil || env.Type != "session" {
 		return false
 	}
@@ -73,7 +73,7 @@ func endsTheSession(env *tlv.SystemMsgEnvelope) bool {
 	return data.State == "closed"
 }
 
-// startReader spawns the background goroutine that reads TLV frames from
+// startReader spawns the background goroutine that reads frames from
 // alayacore's stdout and broadcasts them to the hub (tlv-delta,
 // tlv-frame, core-status). Port of reader.rs spawn_stdout_reader.
 func (s *Session) startReader(h *hub.Hub, cache *ModelCache) {
@@ -86,7 +86,7 @@ func (s *Session) startReader(h *hub.Hub, cache *ModelCache) {
 		announced := false
 
 		for {
-			frame, err := tlv.ReadFrame(reader)
+			frame, err := wire.ReadFrame(reader)
 			if err != nil || frame == nil {
 				base := "Connection closed"
 				if err != nil {
@@ -138,7 +138,7 @@ func (s *Session) disconnect(h *hub.Hub, announced bool, message string) {
 	}
 }
 
-// dispatchFrame routes a single TLV frame to the appropriate event(s).
+// dispatchFrame routes a single frame to the appropriate event(s).
 //
 // Returns true when the frame ENDED the session (endsTheSession), which is the
 // reader's cue to announce the end. Every other frame returns false, and the
@@ -152,7 +152,7 @@ func (s *Session) disconnect(h *hub.Hub, announced bool, message string) {
 // "call_id". The reader parses the body here and forwards it as `json`, plus
 // the history id and content type on the event envelope so the frontend can
 // key and route without re-parsing.
-func (s *Session) dispatchFrame(h *hub.Hub, cache *ModelCache, frame *tlv.Frame) bool {
+func (s *Session) dispatchFrame(h *hub.Hub, cache *ModelCache, frame *wire.Frame) bool {
 	tag := frame.Tag
 	rawValue := frame.Value
 
@@ -160,28 +160,28 @@ func (s *Session) dispatchFrame(h *hub.Hub, cache *ModelCache, frame *tlv.Frame)
 	if len(preview) > 200 {
 		preview = preview[:200]
 	}
-	log.Printf("[tlv] << %s %s %db %s", s.ID, tag, len(rawValue), preview)
+	log.Printf("[wire] << %s %s %db %s", s.ID, tag, len(rawValue), preview)
 
 	switch tag {
 	// ─── Assistant content delta (Ax) ────────────────────────────
-	case tlv.TagAssistantXDelta:
+	case wire.TagAssistantXDelta:
 		s.handleAssistantDeltaFrame(h, rawValue)
 	// ─── Assistant content, complete/authoritative (AX) ──────────
 	// Delta mode: content is empty (terminator). Replay/--no-delta:
 	// full text.
-	case tlv.TagAssistantX:
+	case wire.TagAssistantX:
 		s.handleContentFrame(h, tag, rawValue)
 	// ─── User content echo (UX) ──────────────────────────────────
-	case tlv.TagUserX:
+	case wire.TagUserX:
 		s.handleContentFrame(h, tag, rawValue)
 	// ─── Function frames (Af, AF, UF, Uf) ────────────────────────
-	case tlv.TagAssistantFDelta, tlv.TagAssistantF, tlv.TagUserF, tlv.TagUserFDelta:
+	case wire.TagAssistantFDelta, wire.TagAssistantF, wire.TagUserF, wire.TagUserFDelta:
 		s.handleFunctionFrame(h, tag, rawValue)
 	// ─── Command output (CO) ─────────────────────────────────────
-	case tlv.TagCmdOutput:
+	case wire.TagCmdOutput:
 		s.handleCmdOutputFrame(h, rawValue)
 	// ─── System message (SM) ─────────────────────────────────────
-	case tlv.TagSystemMsg:
+	case wire.TagSystemMsg:
 		return s.handleSMFrame(h, cache, rawValue)
 	// ─── Everything else (unknown) ───────────────────────────────
 	default:
@@ -199,10 +199,10 @@ func rawJSON(v string) json.RawMessage {
 }
 
 // parseContentData parses a UX/AX/Ax body into its metadata + item.
-func parseContentData(rawValue string) (tlv.ContentData, bool) {
-	var d tlv.ContentData
+func parseContentData(rawValue string) (wire.ContentData, bool) {
+	var d wire.ContentData
 	if err := json.Unmarshal([]byte(rawValue), &d); err != nil || d.Type == "" {
-		return tlv.ContentData{}, false
+		return wire.ContentData{}, false
 	}
 	return d, true
 }
@@ -214,14 +214,14 @@ func (s *Session) handleAssistantDeltaFrame(h *hub.Hub, rawValue string) {
 	d, ok := parseContentData(rawValue)
 	if !ok {
 		// Malformed delta — forward the raw frame rather than dropping it.
-		s.emitFrame(h, tlv.TagAssistantXDelta, rawValue, rawJSON(rawValue), &rawValue, nil, nil)
+		s.emitFrame(h, wire.TagAssistantXDelta, rawValue, rawJSON(rawValue), &rawValue, nil, nil)
 		return
 	}
 	h.Broadcast(hub.NewEvent("tlv-delta", DeltaEvent{
 		SessionID:   s.ID,
 		HistoryID:   d.ID,
 		Content:     d.Text,
-		Tag:         tlv.TagAssistantXDelta,
+		Tag:         wire.TagAssistantXDelta,
 		ContentType: d.Type,
 	}))
 	// Intentionally NOT emitting tlv-frame here: Ax is a pure delta event; a
@@ -293,7 +293,7 @@ func (s *Session) handleCmdOutputFrame(h *hub.Hub, rawValue string) {
 // forwards the envelope as {type, data}. Returns true for the core's terminal
 // frame (see endsTheSession).
 func (s *Session) handleSMFrame(h *hub.Hub, cache *ModelCache, rawValue string) bool {
-	var env tlv.SystemMsgEnvelope
+	var env wire.SystemMsgEnvelope
 	if err := json.Unmarshal([]byte(rawValue), &env); err != nil {
 		s.emitFrame(h, "SM", rawValue, nil, &rawValue, nil, nil)
 		return false

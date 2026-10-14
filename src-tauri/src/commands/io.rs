@@ -4,7 +4,7 @@
 
 use crate::commands::{write_frames_to, MediaItem};
 use crate::session::{self, SessionMap};
-use crate::tlv;
+use crate::wire;
 
 use tauri::State;
 
@@ -34,30 +34,30 @@ pub async fn alayacore_send_prompt(
             "document" => "document",
             _ => return Err(format!("Unknown media type: {}", item.media_type)),
         };
-        let body = serde_json::to_string(&tlv::ContentData {
-            meta: tlv::ContentMeta::default(),
-            item: tlv::ContentItem {
+        let body = serde_json::to_string(&wire::ContentData {
+            meta: wire::ContentMeta::default(),
+            item: wire::ContentItem {
                 kind: kind.to_string(),
                 uri: item.uri.clone(),
                 ..Default::default()
             },
         })
         .map_err(|e| e.to_string())?;
-        frames.push((tlv::TAG_USER_X.to_string(), body));
+        frames.push((wire::TAG_USER_X.to_string(), body));
     }
     if !text.is_empty() {
-        let body = serde_json::to_string(&tlv::ContentData {
-            meta: tlv::ContentMeta::default(),
-            item: tlv::ContentItem {
+        let body = serde_json::to_string(&wire::ContentData {
+            meta: wire::ContentMeta::default(),
+            item: wire::ContentItem {
                 kind: "text".to_string(),
                 text: text.clone(),
                 ..Default::default()
             },
         })
         .map_err(|e| e.to_string())?;
-        frames.push((tlv::TAG_USER_X.to_string(), body));
+        frames.push((wire::TAG_USER_X.to_string(), body));
     }
-    frames.push((tlv::TAG_USER_END.to_string(), String::new()));
+    frames.push((wire::TAG_USER_END.to_string(), String::new()));
 
     let refs = session::refs(sessions.inner(), &session_id).await?;
     write_frames_to(&refs, &session_id, &frames).await

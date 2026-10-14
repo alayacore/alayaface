@@ -29,7 +29,7 @@ send_cmd!(alayacore_cancel, "cancel");
 /// candidate paths would all fail — the user gets a clear error
 /// pointing at the exact path that was tried.
 ///
-/// When the binary IS reachable, we also verify its TLV protocol
+/// When the binary IS reachable, we also verify its wire protocol
 /// `message_version` matches `SUPPORTED_MESSAGE_VERSION` by spawning
 /// it briefly and reading its first boot SM frame
 /// (`{"type":"version","data":{"message_version":N,...}}`). A wrong
@@ -203,14 +203,13 @@ mod tests {
     fn write_fake_alayacore(dir: &std::path::Path, message_version: i64) -> std::path::PathBuf {
         use std::os::unix::fs::PermissionsExt;
 
-        // The probe spawns alayacore, reads TLV frames until the
-        // version SM arrives, then kills the child. We only need to
-        // emit ONE valid TLV frame (the version SM); alayacore's
-        // expected wire format is `[2-byte tag][4-byte big-endian
-        // length][value bytes]`. Use Python — dash's printf does NOT
-        // interpret `\xNN` escapes, so a shell-based emitter would
-        // emit the literal `\x` text and the probe would refuse the
-        // bogus length prefix. The shebang is ABSOLUTE
+        // The probe spawns alayacore, reads frames until the version SM
+        // arrives, then kills the child. We only need to emit ONE valid
+        // frame (the version SM); alayacore's expected wire format is one
+        // frame per line: `[2-byte tag][JSON value]\n`. Use Python —
+        // dash's printf does NOT interpret `\xNN` escapes, so a
+        // shell-based emitter would emit the literal `\x` text and the
+        // probe would refuse the bogus frame. The shebang is ABSOLUTE
         // (`/usr/bin/python3`, not `/usr/bin/env python3`): the
         // tests strip PATH to an empty dir so `which` cannot find a
         // python binary, and `env` would refuse to launch the
@@ -220,11 +219,9 @@ mod tests {
         );
         let script = format!(
             r#"#!/usr/bin/python3
-import struct, sys, time
+import sys, time
 payload = {payload:?}.encode()
-sys.stdout.buffer.write(b"SM")
-sys.stdout.buffer.write(struct.pack(">I", len(payload)))
-sys.stdout.buffer.write(payload)
+sys.stdout.buffer.write(b"SM" + payload + b"\n")
 sys.stdout.flush()
 # Block forever so the probe sees the frame and then kills us
 # on timeout. EOF would surface as a different error mode in the

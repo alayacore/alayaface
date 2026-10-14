@@ -35,7 +35,7 @@ Add **Plan Mode** to AlayaFace: let the model decompose a large task into a
 
 ## 3. Current State & Design Basis (verified facts)
 
-- **Session model**: each session = one `alayacore --rawio` child process; TLV frame streaming; session windows can be dragged/resized/activated by click.
+- **Session model**: each session = one `alayacore --rawio` child process; frame streaming; session windows can be dragged/resized/activated by click.
 - **Task status**: SM message `{"type":"task","data":{in_progress, current_step, max_steps, task_error, context_tokens}}` already drives `taskRunning` / step counts (`Session/Handlers.elm handleSystemTask`).
 - **Failure signals**: SM `task_error=true`, SM `type=error`, `core-status` disconnect (`connected=false`).
 - **Tool sources**:
@@ -819,7 +819,7 @@ difference: "Session closed by alayacore" (the core finished) versus
 "Connection closed" (the pipe went away, and the reason may be on stderr).
 
 **The stderr tail.** alayacore puts every failure it cannot send as a frame on
-stderr, because TLV only exists once a session has started — a session file whose
+stderr, because the wire only exists once a session has started — a session file whose
 `message_version` it will not load, an unusable config, a tool it could not exec.
 Those abort startup before the first frame, so the reader used to observe stdout
 EOF and report "Connection closed" as the whole story; with a packaged desktop
@@ -830,7 +830,7 @@ reader quotes its last line:
 
 ```
 Connection closed: Error: failed to load session: session file version
-mismatch: got 12, expected 14
+mismatch: got 14, expected 15
 ```
 
 That message is the price of a version bump being user-visible: session files
@@ -884,7 +884,7 @@ closes stdin outright when it wants the process gone.
 ### 8.9 Keeping the wire facts current
 
 `make check-protocol` (`scripts/check-alayacore-protocol.sh`) compares the four
-things AlayaFace duplicates from AlayaCore — `message_version`, the TLV tag
+things AlayaFace duplicates from AlayaCore — `message_version`, the frame tag
 alphabet, the session states the core broadcasts, and the command names we send —
 against the core when it is checked out next door (and refreshes
 `testdata/alayacore-*.txt`), against those fixtures otherwise. It is the twin of

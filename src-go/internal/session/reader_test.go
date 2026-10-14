@@ -9,7 +9,7 @@ import (
 
 	"alayaface/src-go/internal/core"
 	"alayaface/src-go/internal/hub"
-	"alayaface/src-go/internal/tlv"
+	"alayaface/src-go/internal/wire"
 )
 
 // Unit tests for the stdout reader's dispatch logic (reader.go).
@@ -62,9 +62,9 @@ func decodePayload(t *testing.T, ev hub.Event) map[string]any {
 // contentBody builds a v14 content-frame body: a JSON content item plus the
 // optional history id.
 func contentBody(id, kind, text string) string {
-	b, _ := json.Marshal(tlv.ContentData{
-		ContentMeta: tlv.ContentMeta{ID: id},
-		ContentItem: tlv.ContentItem{Type: kind, Text: text},
+	b, _ := json.Marshal(wire.ContentData{
+		ContentMeta: wire.ContentMeta{ID: id},
+		ContentItem: wire.ContentItem{Type: kind, Text: text},
 	})
 	return string(b)
 }
@@ -281,9 +281,9 @@ func TestDispatchUserEcho(t *testing.T) {
 
 func TestDispatchUserMediaEchoUsesURI(t *testing.T) {
 	s, h, c := newTestSession()
-	body, _ := json.Marshal(tlv.ContentData{
-		ContentMeta: tlv.ContentMeta{ID: "h2"},
-		ContentItem: tlv.ContentItem{Type: "image", URI: "data:image/png;base64,AA"},
+	body, _ := json.Marshal(wire.ContentData{
+		ContentMeta: wire.ContentMeta{ID: "h2"},
+		ContentItem: wire.ContentItem{Type: "image", URI: "data:image/png;base64,AA"},
 	})
 	s.dispatchFrame(h, NewModelCache(), frame("UX", string(body)))
 
@@ -345,8 +345,8 @@ func TestDisconnectStaysQuietWhenTheTerminalFrameAlreadyAnnounced(t *testing.T) 
 	}
 }
 
-func frame(tag, value string) *tlv.Frame {
-	return &tlv.Frame{Tag: tag, Value: value}
+func frame(tag, value string) *wire.Frame {
+	return &wire.Frame{Tag: tag, Value: value}
 }
 
 // ─── The core's terminal frame (protocol v12: session state "closed") ──
@@ -394,7 +394,11 @@ func TestReaderAnnouncesTheEndAtTheTerminalFrame(t *testing.T) {
 
 	write := func(tag, value string) {
 		t.Helper()
-		if _, err := pw.Write(tlv.Encode(tag, value)); err != nil {
+		b, err := wire.Encode(tag, value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pw.Write(b); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -466,9 +470,9 @@ func TestDisconnectMessageQuotesTheLastStderrLine(t *testing.T) {
 	// handed a v12 session file.
 	tail := &core.StderrTail{}
 	tail.Push("Warning: something earlier")
-	tail.Push("Error: failed to load session: session file version mismatch: got 12, expected 14")
+	tail.Push("Error: failed to load session: session file version mismatch: got 14, expected 15")
 	msg := disconnectMessage("Connection closed", tail)
-	if !strings.Contains(msg, "session file version mismatch: got 12, expected 14") {
+	if !strings.Contains(msg, "session file version mismatch: got 14, expected 15") {
 		t.Errorf("the reason must reach the user: %q", msg)
 	}
 	if strings.Contains(msg, "something earlier") {

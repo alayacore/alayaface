@@ -115,7 +115,7 @@ const startServer = () => {
     env: { ...process.env, HOME: home },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  s.stderr.on('data', d => { const t = String(d); if (!t.includes('[tlv]') && !t.includes('[rpc]')) process.stdout.write('[srv!] ' + t); });
+  s.stderr.on('data', d => { const t = String(d); if (!t.includes('[wire]') && !t.includes('[rpc]')) process.stdout.write('[srv!] ' + t); });
   server = s;
   return s;
 };

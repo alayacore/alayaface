@@ -1,9 +1,9 @@
 //! AlayaCore subprocess manager.
 //!
 //! Spawns `alayacore --rawio` as a child process and provides
-//! access to its stdin/stdout for TLV communication. stderr is piped
+//! access to its stdin/stdout for wire communication. stderr is piped
 //! and drained into a `StderrTail`, because the failures that matter
-//! most (an unloadable session file) happen before the first TLV frame
+//! most (an unloadable session file) happen before the first frame
 //! exists and have nowhere else to go.
 
 use std::io;
@@ -13,9 +13,9 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::tlv;
+use crate::wire;
 
-/// The alayacore TLV protocol `message_version` this adapter implements.
+/// The alayacore wire protocol `message_version` this adapter implements.
 ///
 /// alayacore announces its version as the first boot frame
 /// (`SM {"type":"version","data":{"message_version":N,...}}`, see
@@ -29,6 +29,13 @@ use crate::tlv;
 /// states those carry — and alayacore moves it for additive changes too,
 /// because a client that knows only the older format has no other way to
 /// learn that a newer one exists (adapter-guide, "Protocol Version").
+///
+/// v15: the wire dropped its 4-byte length field. A frame is now one line — a
+/// two-byte tag, a JSON value, an LF — so the boundary rests on the value being
+/// one line (the encoder enforces it and the decoder checks it) instead of on a
+/// length a peer could get wrong. Session file bodies lost their blank line
+/// between frames with it: every line is one frame. The frame bound is 64MB,
+/// down from 2GB.
 ///
 /// v14: every content frame's value is JSON. Text and media tags collapsed
 /// into a 2x2 — UX/AX (content) and AF/UF (function) — with the concrete kind
@@ -47,13 +54,13 @@ use crate::tlv;
 ///
 /// NOTE: the same number is written into every session file's frontmatter
 /// (`message_version: N`) and alayacore's loader demands an EXACT match, so a
-/// v12 file is refused by a v14 core before a single TLV frame is written —
+/// v14 file is refused by a v15 core before a single frame is written —
 /// the failure is startup exit 1 with the reason on stderr only. Users'
 /// existing sessions are affected by every bump, not just this one, and the
 /// reason is invisible in a GUI build (the core's stderr is not the terminal)
 /// unless this backend reads it — see `close_child_gracefully`'s twin, the
 /// disconnect path in `reader.rs`, for what reaches the user.
-pub const SUPPORTED_MESSAGE_VERSION: i64 = 14;
+pub const SUPPORTED_MESSAGE_VERSION: i64 = 15;
 
 /// How far into a session file its frontmatter is searched.
 ///
@@ -61,7 +68,7 @@ pub const SUPPORTED_MESSAGE_VERSION: i64 = 14;
 /// active_model, message_version, reasoning_level, context_tokens,
 /// video_fps, video_res), so this is generous by orders of magnitude; the
 /// window exists so a file whose header is missing or absurd is reported as
-/// "unknown" rather than costing a read of the whole TLV body.
+/// "unknown" rather than costing a read of the whole frame body.
 const SESSION_HEADER_WINDOW: u64 = 4096;
 
 /// The `message_version` recorded in a session file's frontmatter, `None` when
@@ -163,8 +170,8 @@ pub const STDERR_TAIL_MAX_CHARS: usize = 400;
 
 /// The last few lines a spawned alayacore wrote to stderr.
 ///
-/// alayacore reports here everything it cannot report over TLV, because TLV
-/// only exists once a session has started: a session file whose
+/// alayacore reports here everything it cannot report over the wire, because
+/// the wire only exists once a session has started: a session file whose
 /// `message_version` it will not load, an unusable config, a tool it could not
 /// exec. Those abort startup BEFORE the first frame is written, so all the
 /// adapter used to observe was stdout EOF, and the whole story the user got
@@ -490,7 +497,7 @@ pub fn prepend_rg_to_path(cmd: &mut Command, binary_path: &str) {
 /// missing binary (the wire format has drifted), so the same
 /// `ok=false` UX is surfaced.
 ///
-/// The probe spawns `alayacore --rawio`, reads TLV frames until
+/// The probe spawns `alayacore --rawio`, reads frames until
 /// `SM {"type":"version",...}` arrives or `VERSION_PROBE_TIMEOUT`
 /// elapses, then kills the child. Config path / session / tools are
 /// irrelevant for the version announcement, so the probe uses the
@@ -553,7 +560,7 @@ pub fn check_message_version(binary_path: &str) -> Result<(), String> {
     result
 }
 
-/// Read the FIRST TLV frame and validate it as the boot
+/// Read the FIRST frame and validate it as the boot
 /// `SM {"type":"version",...}` announcement. Returns Ok(()) when the version
 /// matches `SUPPORTED_MESSAGE_VERSION`, otherwise an Err naming the observed
 /// version (or the failure mode).
@@ -566,7 +573,10 @@ pub fn check_message_version(binary_path: &str) -> Result<(), String> {
 /// real deadline is the caller's recv_timeout. Pulled out so unit tests can
 /// drive it with a synthetic `Read` (a real alayacore is awkward to mock).
 fn read_version_frame<R: Read>(reader: &mut R) -> Result<(), String> {
-    let frame = match tlv::read_frame(reader) {
+    // A frame is a line, so the read must be buffered — one buffered reader,
+    // since only the first frame is read here.
+    let mut reader = std::io::BufReader::new(reader);
+    let frame = match wire::read_frame(&mut reader) {
         Ok(Some(frame)) => frame,
         // EOF before any version frame — alayacore exited without
         // announcing itself.
@@ -586,7 +596,7 @@ fn read_version_frame<R: Read>(reader: &mut R) -> Result<(), String> {
             frame.value.chars().take(120).collect::<String>()
         ));
     }
-    let env: tlv::SystemMsgEnvelope = serde_json::from_str(&frame.value)
+    let env: wire::SystemMsgEnvelope = serde_json::from_str(&frame.value)
         .map_err(|e| format!("alayacore sent a malformed version frame: {e}"))?;
     if env.msg_type != "version" {
         return Err(format!(
@@ -675,21 +685,21 @@ pub(crate) fn close_child_gracefully_with_timeout(
     for _ in 0..10 {
         if let Ok(mut guard) = stdin.try_lock() {
             if let Some(writer) = guard.as_mut() {
-                let cancel_msg = crate::tlv::CmdMsg {
+                let cancel_msg = crate::wire::CmdMsg {
                     call_id: "alayaface-close-cancel".to_string(),
                     name: "cancel".to_string(),
                     input: String::new(),
                 };
                 if let Ok(json) = serde_json::to_string(&cancel_msg) {
-                    let _ = crate::tlv::write_frame(writer, crate::tlv::TAG_CMD_INPUT, &json);
+                    let _ = crate::wire::write_frame(writer, crate::wire::TAG_CMD_INPUT, &json);
                 }
-                let save_msg = crate::tlv::CmdMsg {
+                let save_msg = crate::wire::CmdMsg {
                     call_id: "alayaface-close-save".to_string(),
                     name: "save".to_string(),
                     input: String::new(),
                 };
                 if let Ok(json) = serde_json::to_string(&save_msg) {
-                    let _ = crate::tlv::write_frame(writer, crate::tlv::TAG_CMD_INPUT, &json);
+                    let _ = crate::wire::write_frame(writer, crate::wire::TAG_CMD_INPUT, &json);
                     let _ = writer.flush();
                 }
             }
@@ -1336,7 +1346,7 @@ mod tests {
         let dir = temp_path("sfv-v11");
         let p = write_session(
             &dir,
-            "---\ncreated_at: 2026-09-08T22:26:51+08:00\nmessage_version: 11\nreasoning_level: 2\n---\n\x00TLVbody",
+            "---\ncreated_at: 2026-09-08T22:26:51+08:00\nmessage_version: 11\nreasoning_level: 2\n---\n\x00wirebody",
         );
         assert_eq!(session_file_message_version(&p), Some(11));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1389,7 +1399,7 @@ mod tests {
 
     #[test]
     fn only_a_key_before_the_closing_marker_is_picked_up() {
-        // The TLV body after `---` is opaque bytes that may contain the same
+        // The frame body after `---` is opaque bytes that may contain the same
         // words (a user pasting a session header into a prompt).
         let dir = temp_path("sfv-body");
         let p = write_session(
@@ -1535,7 +1545,7 @@ mod tests {
     // ─── check_message_version ────────────────────────────────
     //
     // The probe spawns a real alayacore. Driving it with a synthetic
-    // binary is fragile (TLV framing + spawn ordering + argv parsing),
+    // binary is fragile (frame framing + spawn ordering + argv parsing),
     // so these tests cover the PARSE path via `read_version_frame`
     // directly — that is where every business rule lives (match,
     // mismatch, missing field, malformed JSON, wrong-type first frame,
@@ -1545,9 +1555,10 @@ mod tests {
 
     use std::io::Cursor;
 
-    /// Build the bytes of a single TLV frame.
+    /// Build the bytes of a single frame. Panics on an invalid frame, which is
+    /// what every test here passes.
     fn encode(tag: &str, value: &str) -> Vec<u8> {
-        tlv::encode(tag, value)
+        wire::encode(tag, value).expect("test frame must encode")
     }
 
     /// The boot version frame a core speaking `version` announces. Built from
@@ -1697,7 +1708,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let bin = dir.join("alayacore");
-        // Emit 3 bytes of a TLV header, keep stdout open, then sit there.
+        // Emit 3 bytes of a partial frame, keep stdout open, then sit there.
         std::fs::write(&bin, "#!/bin/sh\nprintf '\\001\\002\\003'\nsleep 60\n").unwrap();
         #[cfg(unix)]
         {
@@ -1726,34 +1737,36 @@ mod tests {
     }
 
     #[test]
-    fn read_version_frame_skips_unknown_frames_after_version() {
+    fn read_version_frame_stops_after_the_first_frame() {
         // Once the version frame passes, the helper returns Ok(()) and
         // stops reading — subsequent frames are the boot task /
         // model_list / etc. that the live session reader will consume.
-        // Drive that with a NOOP: the helper must NOT block on
-        // unread data after Ok.
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&encode(
-            "SM",
-            &version_frame(SUPPORTED_MESSAGE_VERSION),
-        ));
-        // Pad with a bunch of unread frames — the helper must return
-        // before reading them.
-        for i in 0..32 {
-            bytes.extend_from_slice(&encode(
-                "SM",
-                &format!(r#"{{"type":"task","data":{{"n":{i}}}}}"#),
-            ));
+        //
+        // A frame is now a line, so a reader must read ahead to find the
+        // terminator: "consumed no later bytes" is NOT a property the line
+        // format can have, and asserting it would pin the old length-prefixed
+        // format. What still matters is that the helper reads no FURTHER than
+        // the first frame — so this reader hands over the version line once
+        // and panics on any second read.
+        let version = encode("SM", &version_frame(SUPPORTED_MESSAGE_VERSION));
+
+        struct OneFrameThenPanic {
+            line: Vec<u8>,
+            served: bool,
         }
-        let total = bytes.len();
-        let mut r = Cursor::new(bytes);
+        impl std::io::Read for OneFrameThenPanic {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.served {
+                    panic!("read_version_frame read past the first frame");
+                }
+                self.served = true;
+                let n = self.line.len().min(buf.len());
+                buf[..n].copy_from_slice(&self.line[..n]);
+                Ok(n)
+            }
+        }
+
+        let mut r = OneFrameThenPanic { line: version, served: false };
         read_version_frame(&mut r).expect("matching version must pass");
-        // Cursor::position() lets us assert the helper stopped reading
-        // after the version frame (the first frame's length).
-        let consumed = r.position() as usize;
-        assert!(
-            consumed < total,
-            "helper must not drain later frames (consumed {consumed} of {total} bytes)",
-        );
     }
 }

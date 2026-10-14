@@ -12,7 +12,7 @@ import (
 
 // sendBuffer is the per-client outbound queue size. It must absorb the
 // largest burst alayacore can flush at once (a task completing dumps
-// thousands of TLV frames — reasoning deltas, tool results, the final
+// thousands of frames — reasoning deltas, tool results, the final
 // answer — in a few hundred milliseconds). If it is too small the hub
 // drops the client, the WebSocket closes, and the frontend reconnects
 // WITHOUT a replay: the frames emitted while disconnected are lost and

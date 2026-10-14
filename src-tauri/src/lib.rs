@@ -2,7 +2,7 @@
 //!
 //! Architecture:
 //!   lib.rs        — App entry point, Tauri builder, shared state types
-//!   tlv.rs        — TLV wire protocol encoding/decoding
+//!   wire.rs       — frame protocol encoding/decoding
 //!   alayacore.rs  — Subprocess spawn & binary discovery
 //!   session.rs    — Session lifecycle (create, close, fork)
 //!   reader.rs     — Background stdout/stderr readers, frame dispatch
@@ -16,7 +16,7 @@ pub mod dirs;
 pub mod event;
 pub mod reader;
 pub mod session;
-pub mod tlv;
+pub mod wire;
 
 use std::collections::HashMap;
 use std::sync::Arc;

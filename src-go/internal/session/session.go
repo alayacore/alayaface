@@ -19,7 +19,7 @@ import (
 
 	"alayaface/src-go/internal/core"
 	"alayaface/src-go/internal/hub"
-	"alayaface/src-go/internal/tlv"
+	"alayaface/src-go/internal/wire"
 )
 
 // ErrNotFound is returned when a session id is not in the manager.
@@ -35,7 +35,7 @@ type Session struct {
 	SessionDir string
 	// StderrTail holds the child's trailing stderr (the pump in core.Spawn
 	// fills it). The reader quotes it when the pipe dies, so a core that dies
-	// at startup — before any TLV frame exists — reports WHY rather than
+	// at startup — before any frame exists — reports WHY rather than
 	// leaving "Connection closed" as the whole story.
 	StderrTail *core.StderrTail
 	// Owner is the client identity that created/resumed this session
@@ -306,7 +306,7 @@ func (s *Session) closeGracefully() {
 	// The whole cancel → save → EOF sequence runs under the stdin lock
 	// so a concurrent SendPrompt/WriteFrames can neither interleave
 	// between the CI frames nor be mid-write when the pipe closes
-	// (which would leave a partial TLV frame on the wire).
+	// (which would leave a partial frame on the wire).
 	//
 	// The wait for that lock is BOUNDED, mirroring Rust's
 	// close_child_gracefully_with_timeout (10 × try_lock with 50 ms
@@ -354,30 +354,30 @@ func (s *Session) closeGracefully() {
 	}
 }
 
-// WriteFrame sends a raw TLV frame to the session's stdin.
+// WriteFrame sends a raw frame to the session's stdin.
 func (s *Session) WriteFrame(tag, value string) error {
-	return s.WriteFrames([]tlv.Frame{{Tag: tag, Value: value}})
+	return s.WriteFrames([]wire.Frame{{Tag: tag, Value: value}})
 }
 
-// WriteFrames sends a batch of TLV frames under a single stdin lock.
+// WriteFrames sends a batch of frames under a single stdin lock.
 // Used for multi-frame messages (e.g. media + text + UE flush) so a
 // concurrent CI command cannot interleave between frames — mirrors the
 // Rust send_prompt which holds the stdin lock for the whole sequence.
-func (s *Session) WriteFrames(frames []tlv.Frame) error {
+func (s *Session) WriteFrames(frames []wire.Frame) error {
 	if !s.Connected() {
 		return errors.New("Session is disconnected")
 	}
 	s.stdinMu.Lock()
 	defer s.stdinMu.Unlock()
 	for _, f := range frames {
-		if err := tlv.WriteFrame(s.Stdin, f.Tag, f.Value); err != nil {
+		if err := wire.WriteFrame(s.Stdin, f.Tag, f.Value); err != nil {
 			return fmt.Errorf("write error: %w", err)
 		}
 		preview := f.Value
 		if len(preview) > 200 {
 			preview = preview[:200]
 		}
-		log.Printf("[tlv] >> %s %s %db %s", s.ID, f.Tag, len(f.Value), preview)
+		log.Printf("[wire] >> %s %s %db %s", s.ID, f.Tag, len(f.Value), preview)
 	}
 	return nil
 }
@@ -395,11 +395,11 @@ func (s *Session) SendCmd(name, input string) (string, error) {
 func (s *Session) sendCmdLocked(name, input string) (string, error) {
 	id := uuid.NewString()
 	s.PendingCmds.Store(id, name)
-	payload, err := json.Marshal(tlv.CmdMsg{CallID: id, Name: name, Input: input})
+	payload, err := json.Marshal(wire.CmdMsg{CallID: id, Name: name, Input: input})
 	if err != nil {
 		return "", err
 	}
-	if err := tlv.WriteFrame(s.Stdin, tlv.TagCmdInput, string(payload)); err != nil {
+	if err := wire.WriteFrame(s.Stdin, wire.TagCmdInput, string(payload)); err != nil {
 		s.PendingCmds.Delete(id)
 		return "", err
 	}
@@ -407,6 +407,6 @@ func (s *Session) sendCmdLocked(name, input string) (string, error) {
 	if len(preview) > 200 {
 		preview = preview[:200]
 	}
-	log.Printf("[tlv] >> %s %s %db %s", s.ID, tlv.TagCmdInput, len(payload), preview)
+	log.Printf("[wire] >> %s %s %db %s", s.ID, wire.TagCmdInput, len(payload), preview)
 	return id, nil
 }

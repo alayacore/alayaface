@@ -24,7 +24,7 @@ import (
 
 // ─── Fake alayacore binary ──────────────────────────────────────────
 //
-// internal/fakecore is a scriptable alayacore stand-in (TLV rawio).
+// internal/fakecore is a scriptable alayacore stand-in (rawio).
 // It is built once in TestMain; every test points ALAYACORE_BIN at it,
 // so create/resume/fork/commands/probes all run against a real
 // subprocess without needing a reachable model server.
@@ -1115,7 +1115,7 @@ func TestIntegrationTokenAuth(t *testing.T) {
 // TestIntegrationResumeRefusesAnotherProtocolVersion covers the refusal that
 // keeps an unloadable session file from opening a window that dies.
 //
-// The core aborts on such a file BEFORE it writes any TLV frame, so without the
+// The core aborts on such a file BEFORE it writes any frame, so without the
 // pre-flight the user gets: a window, "Connection closed", and — worse — a
 // registered session whose directory then answers every retry with "Session is
 // already active". Refusing up front turns that into one readable error,

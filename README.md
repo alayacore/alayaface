@@ -13,22 +13,22 @@ The codebase is three parallel source trees: **src-elm/** — a pure Elm
 frontend (no npm, no bundler), with domain modules (App, Plan, Session,
 Overlay) and a thin JS bridge (`transport.js`) that abstracts the backend
 transport (Tauri IPC or HTTP/WebSocket); **src-tauri/** — the Rust Tauri
-backend (IPC commands, session lifecycle, TLV protocol); and **src-go/** —
+backend (IPC commands, session lifecycle, frame protocol); and **src-go/** —
 a Go backend (HTTP + WebSocket) that serves the same Elm client and is a
 port of the Rust backend, so either backend can run the app. Both backends
-speak the TLV wire protocol to an AlayaCore subprocess over stdin/stdout;
+speak AlayaCore's frame protocol to an AlayaCore subprocess over stdin/stdout;
 the Elm core has no Tauri dependencies and is platform-agnostic.
 
 ### Data Flow
 
 ```
 AlayaCore (subprocess)
-    │  stdout: TLV frames
+    │  stdout: frames
     ▼
 backend reader (reader.rs / internal/session/reader.go)
-    │  app.emit("tlv-frame") 或 hub.Broadcast("tlv-frame")
+    │  app.emit("tlv-frame") or hub.Broadcast("tlv-frame")
     ▼
-transport.js → listen("tlv-frame")   ← Tauri event 或 WS /ws 推送
+transport.js → listen("tlv-frame")   ← Tauri event or WS /ws push
     │
     ▼  Elm port
 Main.elm → subscriptions → Ports.onFrame → FrameEvent raw
@@ -365,13 +365,15 @@ full **E2E** job (Go backend + fakecore + headless Chrome, running both
 `plan-e2e.mjs` and `restart-e2e.mjs`). Status badge at the top of this
 file.
 
-## TLV Protocol
+## Wire Protocol
 
-AlayaFace communicates with AlayaCore via TLV (Tag-Length-Value) frames
-over stdin/stdout. See the [adapter guide](../alayacore/adapter-guide/README.md)
-for the full protocol specification.
+AlayaFace communicates with AlayaCore via frames over stdin/stdout. A frame is
+**one line**: a two-byte tag followed by a JSON value (`[tag][value]\n`); the
+control frames `UE` and `CE` carry no value. See the
+[adapter guide](../alayacore/adapter-guide/README.md) for the full protocol
+specification.
 
-Key tags (protocol v14 — every content/function frame's value is JSON, and
+Key tags (protocol v15 — every content/function frame's value is JSON, and
 the concrete kind travels inside it as a content item's `"type"`):
 
 | Tag | Direction | Description |
@@ -403,12 +405,12 @@ AlayaCore broadcasts and the commands AlayaFace sends against AlayaCore itself
 
 ## Debugging
 
-TLV frame logs are printed to stderr with the `[tlv]` prefix:
+Frame logs are printed to stderr with the `[wire]` prefix:
 
 ```
-[tlv] << abc-123 AX 0b
-[tlv] >> abc-123 CI 40b {"call_id":"a1","name":"cancel","input":""}
-[tlv] << abc-123 SM 80b {"type":"task",...}
+[wire] << abc-123 AX 0b
+[wire] >> abc-123 CI 40b {"call_id":"a1","name":"cancel","input":""}
+[wire] << abc-123 SM 80b {"type":"task",...}
 ```
 
 These appear in the terminal when running `cargo run`.

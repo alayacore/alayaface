@@ -21,11 +21,9 @@ func writeFakeAlayacore(t *testing.T, dir string, messageVersion int) string {
 	payload := `{"type":"version","data":{"message_version":` +
 		itoa(messageVersion) + `,"core_version":"fake"}}`
 	script := `#!/usr/bin/python3
-import struct, sys, time
+import sys, time
 payload = ` + jsonString(payload) + `.encode()
-sys.stdout.buffer.write(b"SM")
-sys.stdout.buffer.write(struct.pack(">I", len(payload)))
-sys.stdout.buffer.write(payload)
+sys.stdout.buffer.write(b"SM" + payload + b"\n")
 sys.stdout.flush()
 while True:
     time.sleep(1)

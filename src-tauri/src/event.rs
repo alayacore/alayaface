@@ -17,7 +17,7 @@ pub struct DeltaEvent {
     pub content_type: String,
 }
 
-/// Emitted when any complete TLV frame arrives from alayacore stdout.
+/// Emitted when any complete frame arrives from alayacore stdout.
 #[derive(Debug, Clone, Serialize)]
 pub struct FrameEvent {
     pub session_id: String,

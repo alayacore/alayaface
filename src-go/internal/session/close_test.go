@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"alayaface/src-go/internal/tlv"
+	"alayaface/src-go/internal/wire"
 )
 
 // gatedPipe is a stdin stand-in whose FIRST write blocks until released
@@ -51,7 +51,7 @@ func (g *gatedPipe) Close() error {
 // TestCloseGracefullyClosesStdinAfterInFlightWrite: the cancel → save →
 // EOF sequence must hold the stdin lock, so Stdin.Close() can never run
 // while a concurrent prompt write is in flight (which would leave a
-// partial TLV frame on the wire). Deterministic: the first write blocks
+// partial frame on the wire). Deterministic: the first write blocks
 // while holding the lock; closeGracefully must wait for it.
 func TestCloseGracefullyClosesStdinAfterInFlightWrite(t *testing.T) {
 	pipe := newGatedPipe()
@@ -61,7 +61,7 @@ func TestCloseGracefullyClosesStdinAfterInFlightWrite(t *testing.T) {
 	writeDone := make(chan struct{})
 	go func() {
 		defer close(writeDone)
-		_ = s.WriteFrames([]tlv.Frame{{Tag: tlv.TagUserX, Value: "hello"}})
+		_ = s.WriteFrames([]wire.Frame{{Tag: wire.TagUserX, Value: `{"type":"text","text":"hello"}`}})
 	}()
 	<-pipe.writeStarted // the prompt write now holds stdinMu and blocks
 
@@ -128,7 +128,7 @@ func TestCloseGracefullyGivesUpOnStuckStdin(t *testing.T) {
 	// A prompt write that never completes: it takes stdinMu and stays in
 	// its first Write (releaseWrite is never closed).
 	go func() {
-		_ = s.WriteFrames([]tlv.Frame{{Tag: tlv.TagUserX, Value: "wedged"}})
+		_ = s.WriteFrames([]wire.Frame{{Tag: wire.TagUserX, Value: `{"type":"text","text":"wedged"}`}})
 	}()
 	<-pipe.writeStarted
 
@@ -146,7 +146,7 @@ func TestCloseGracefullyGivesUpOnStuckStdin(t *testing.T) {
 	}
 
 	// It must have given up rather than cut the pipe out from under the
-	// in-flight write (a partial TLV frame on the wire).
+	// in-flight write (a partial frame on the wire).
 	pipe.mu.Lock()
 	closed := !pipe.closedAt.IsZero()
 	pipe.mu.Unlock()

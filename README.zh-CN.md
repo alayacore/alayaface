@@ -9,13 +9,13 @@
 
 ## 架构
 
-代码库由三棵并行的源码树组成：**src-elm/** —— 纯 Elm 前端（无 npm、无打包器），按领域组织模块（App、Plan、Session、Overlay），通过一个轻量 JS 桥（`transport.js`）抽象后端传输方式（Tauri IPC 或 HTTP/WebSocket）；**src-tauri/** —— Rust Tauri 后端（IPC 命令、会话生命周期、TLV 协议）；**src-go/** —— Go 后端（HTTP + WebSocket），托管同一套 Elm 客户端，是 Rust 后端的移植版，因此两个后端都可以运行本应用。两个后端都通过 stdin/stdout 上的 TLV 线协议与 AlayaCore 子进程通信；Elm 核心不依赖 Tauri，与平台无关。
+代码库由三棵并行的源码树组成：**src-elm/** —— 纯 Elm 前端（无 npm、无打包器），按领域组织模块（App、Plan、Session、Overlay），通过一个轻量 JS 桥（`transport.js`）抽象后端传输方式（Tauri IPC 或 HTTP/WebSocket）；**src-tauri/** —— Rust Tauri 后端（IPC 命令、会话生命周期、帧协议）；**src-go/** —— Go 后端（HTTP + WebSocket），托管同一套 Elm 客户端，是 Rust 后端的移植版，因此两个后端都可以运行本应用。两个后端都通过 stdin/stdout 上的帧协议与 AlayaCore 子进程通信；Elm 核心不依赖 Tauri，与平台无关。
 
 ### 数据流
 
 ```
 AlayaCore (subprocess)
-    │  stdout: TLV frames
+    │  stdout: frames
     ▼
 backend reader (reader.rs / internal/session/reader.go)
     │  app.emit("tlv-frame") 或 hub.Broadcast("tlv-frame")
@@ -205,11 +205,11 @@ Solo 本身不保存任何东西：它返回的布局就是离开时的布局，
 
 `.github/workflows/ci.yml` 在推送到 `main` 和 pull request 时运行：**Go**（`go vet` + `go test -race`）、**Elm**（`elm make` + `elm-test`）、**Tauri/Rust**（`cargo test` + `cargo build`——完整应用编译），以及完整的 **E2E** 任务（Go 后端 + fakecore + 无头 Chrome，同时运行 `plan-e2e.mjs` 和 `restart-e2e.mjs`）。状态徽章在本文件顶部。
 
-## TLV 协议
+## 帧协议
 
-AlayaFace 通过 stdin/stdout 上的 TLV（Tag-Length-Value，标签-长度-值）帧与 AlayaCore 通信。完整协议规范见[适配器指南](../alayacore/adapter-guide/README.md)。
+AlayaFace 通过 stdin/stdout 上的帧与 AlayaCore 通信。一帧就是**一行**：两个字节的 tag 后跟一个 JSON 值（`[tag][value]\n`）；控制帧 `UE` 与 `CE` 不带值。完整协议规范见[适配器指南](../alayacore/adapter-guide/README.md)。
 
-关键标签（协议 v14——每个内容/函数帧的值都是 JSON，具体类型作为 content item 的 `"type"` 位于其中）：
+关键标签（协议 v15——每个内容/函数帧的值都是 JSON，具体类型作为 content item 的 `"type"` 位于其中）：
 
 | Tag | 方向 | 说明 |
 |-----|------|------|
@@ -230,12 +230,12 @@ AlayaFace 通过 stdin/stdout 上的 TLV（Tag-Length-Value，标签-长度-值�
 
 ## 调试
 
-TLV 帧日志会以 `[tlv]` 前缀打印到 stderr：
+帧日志会以 `[wire]` 前缀打印到 stderr：
 
 ```
-[tlv] << abc-123 AX 0b
-[tlv] >> abc-123 CI 40b {"call_id":"a1","name":"cancel","input":""}
-[tlv] << abc-123 SM 80b {"type":"task",...}
+[wire] << abc-123 AX 0b
+[wire] >> abc-123 CI 40b {"call_id":"a1","name":"cancel","input":""}
+[wire] << abc-123 SM 80b {"type":"task",...}
 ```
 
 运行 `cargo run` 时这些日志会出现在终端中。

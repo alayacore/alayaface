@@ -225,7 +225,7 @@ pub async fn resume_session(
     }
 
     // Refuse a session file the bundled alayacore will not load BEFORE
-    // spawning it. The core aborts on such a file before writing a single TLV
+    // spawning it. The core aborts on such a file before writing a single
     // frame, so the alternative is a window that opens, dies, and reports
     // "Connection closed" — and an entry in the session map that then answers
     // every later retry with "Session is already active". AlayaFace bundles a

@@ -1,7 +1,7 @@
 // Command fakecore is a scriptable stand-in for alayacore used by the
 // Go backend integration tests (internal/server/integration_test.go).
 //
-// It speaks the same TLV rawio protocol as the real thing:
+// It speaks the same rawio protocol as the real thing:
 //
 //   - stdin: UX (user content, a JSON content item) and CI (command input)
 //     frames
@@ -50,7 +50,7 @@ import (
 	"time"
 
 	"alayaface/src-go/internal/core"
-	"alayaface/src-go/internal/tlv"
+	"alayaface/src-go/internal/wire"
 )
 
 // sessionFile is the --session flag value; `save` writes to it (empty
@@ -213,7 +213,7 @@ type cmdMsg struct {
 }
 
 func writeFrame(tag, value string) {
-	_ = tlv.WriteFrame(os.Stdout, tag, value)
+	_ = wire.WriteFrame(os.Stdout, tag, value)
 }
 
 // writeSessionState emits one SM lifecycle frame. Real alayacore sends
@@ -229,9 +229,9 @@ func writeSessionState(state string) {
 // contentFrame writes a JSON content frame (a UX echo or an AX block) with a
 // history id and a content kind ("text"/"reasoning"). Mirrors alayacore v14.
 func contentFrame(tag, id, kind, text string) {
-	body, _ := json.Marshal(tlv.ContentData{
-		ContentMeta: tlv.ContentMeta{ID: id},
-		ContentItem: tlv.ContentItem{Type: kind, Text: text},
+	body, _ := json.Marshal(wire.ContentData{
+		ContentMeta: wire.ContentMeta{ID: id},
+		ContentItem: wire.ContentItem{Type: kind, Text: text},
 	})
 	writeFrame(tag, string(body))
 }
@@ -246,14 +246,14 @@ func contentComplete(id, kind, text string) { contentFrame("AX", id, kind, text)
 
 // echoUser echoes a staged user content item back on stdout with a fresh
 // history id (one per item, like the real core in v14) and returns that id.
-func echoUser(cd tlv.ContentData) string {
+func echoUser(cd wire.ContentData) string {
 	echoSeq++
 	id := fmt.Sprintf("hist-%d", echoSeq)
-	body, _ := json.Marshal(tlv.ContentData{
-		ContentMeta: tlv.ContentMeta{ID: id},
+	body, _ := json.Marshal(wire.ContentData{
+		ContentMeta: wire.ContentMeta{ID: id},
 		ContentItem: cd.ContentItem,
 	})
-	writeFrame(tlv.TagUserX, string(body))
+	writeFrame(wire.TagUserX, string(body))
 	return id
 }
 
@@ -788,7 +788,7 @@ func main() {
 	reader := bufio.NewReader(os.Stdin)
 	staged := 0
 	for {
-		frame, err := tlv.ReadFrame(reader)
+		frame, err := wire.ReadFrame(reader)
 		if err != nil || frame == nil {
 			break
 		}
@@ -798,15 +798,15 @@ func main() {
 			// the stream stays open, so commands may still follow. Mirrors
 			// real alayacore, where CE and EOF mean the same thing to run()
 			// and the difference is only that the command path survives.
-			// Nothing in AlayaFace sends one today (see tlv.go's TagInputEnd);
+			// Nothing in AlayaFace sends one today (see wire.go's TagInputEnd);
 			// the fake understands it so a client that does gets a core that
 			// behaves like the real one.
 			inputEnded = true
-		case tlv.TagUserX:
+		case wire.TagUserX:
 			if inputEnded {
 				continue
 			}
-			var cd tlv.ContentData
+			var cd wire.ContentData
 			if json.Unmarshal([]byte(frame.Value), &cd) != nil {
 				continue
 			}

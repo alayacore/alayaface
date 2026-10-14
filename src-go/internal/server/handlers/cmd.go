@@ -20,7 +20,7 @@ type AlayacoreCheck struct {
 }
 
 // CheckAlayacore resolves the alayacore binary path, confirms it
-// exists on disk, and verifies its TLV protocol `message_version`
+// exists on disk, and verifies its wire protocol `message_version`
 // matches the one this adapter implements. find_binary() already
 // filters most candidates by os.Stat; the only branch that returns a
 // non-existent path is the fallback ("alayacore" on PATH, which is

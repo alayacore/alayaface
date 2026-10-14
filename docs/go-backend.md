@@ -4,7 +4,7 @@
 
 The project currently has a single Tauri (Rust) + Elm backend. The goal is to add a
 **Go backend** that provides an HTTP service implementing the equivalent functionality
-of the Rust backend (starting/managing AlayaCore subprocesses, TLV forwarding,
+of the Rust backend (starting/managing AlayaCore subprocesses, frame forwarding,
 preset/model/MCP/settings/filesystem commands), while **sharing the same Elm client**
 with the Rust backend.
 
@@ -204,8 +204,8 @@ src-go/
 │   └── alayaface-server/
 │       └── main.go            # entry: parse flags, assemble server, graceful shutdown
 ├── internal/
-│   ├── tlv/                   # ← port of tlv.rs
-│   │   └── tlv.go             #   encode / readFrame / writeFrame / unwrapDelta
+│   ├── wire/                  # ← port of wire.rs
+│   │   └── wire.go            #   encode / readFrame / writeFrame + JSON payloads
 │   ├── core/                  # ← port of alayacore.rs
 │   │   └── core.go            #   findBinary / spawn(--rawio) / killChild
 │   ├── dirs/                  # ← port of dirs.rs
@@ -245,14 +245,18 @@ Prefer the standard library; only one third-party dependency is required:
 
 ## 6. Per-Module Porting Notes
 
-### 6.1 tlv (internal/tlv)
-- Frame format `[2B tag][4B BE len][len bytes value]` ported as-is.
-- **Partial reads**: Go's `io.ReadFull` (Rust's `read_exact`) must be used for both the
-  header and the value — never a bare `Read`.
-- EOF detection: header under-read means EOF → return `(nil, nil)`; value under-read is
-  a protocol error.
-- Port `unwrapDelta` NUL-prefix parsing, including edge cases (no prefix, empty id,
-  embedded NULs in content), mirroring tlv.rs test cases one by one.
+### 6.1 wire (internal/wire)
+- Frame format: one frame per line — `[2B tag][JSON value]\n`; the control frames
+  `UE`/`CE` carry no value. Ported from AlayaCore's `internal/wire`.
+- **Line reads**: `bufio.Reader.ReadSlice('\n')` in a loop, accumulating the chunks
+  of one line and bounding the total by `MaxFrameSize` (64 MiB). The reader must be
+  buffered and held across the stream, so reading one frame does not consume the
+  next.
+- EOF detection: a clean EOF at a frame boundary → `(nil, nil)`; a stream that ends
+  with bytes and no terminator is an unterminated-frame error. A malformed frame
+  (blank line, bad tag, non-object value) is terminal.
+- A trailing CR is stripped (a CRLF writer); a raw LF or CR in a value is rejected by
+  `Encode`.
 
 ### 6.2 core (internal/core)
 - `findBinary`: `ALAYACORE_BIN` → `which/where alayacore` → common paths → fallback
@@ -283,7 +287,7 @@ type Session struct {
 }
 type SessionManager struct { mu sync.Mutex; sessions map[string]*Session }
 ```
-- One **stdout reader goroutine** per session: `bufio.Reader` loop `tlv.ReadFrame` →
+- One **stdout reader goroutine** per session: `bufio.Reader` loop `wire.ReadFrame` →
   `dispatchFrame` → `hub.Broadcast(...)`.
 - Exit cleanup: EOF/error → `connected=false`, `killChild`, broadcast `core-status`,
   remove from manager (Rust relies on Drop; Go must do this explicitly in `close()`).
@@ -405,8 +409,8 @@ runtimes auto-switch on the presence of `window.__TAURI__`, avoiding two bridge 
 
 | Suite | Content | Reference |
 |-------|---------|-----------|
-| Go unit tests | tlv encode/decode/partial-read/EOF/NUL edges; dirs creation/exclusion of settings.conf; preset lifecycle; settings normalize; mcp.conf parse roundtrip; reader dispatch (delta-only, empty→null, JSON frames, CO name injection, SM wrap/cache, echoes, disconnect, the terminal frame and its one-announcement rule, the stderr tail in the message); core spawn/kill/find; hub broadcast/unregister/slow-client drop | port the same-named Rust tests one by one |
-| Go integration | `internal/fakecore` (scriptable TLV rawio stand-in) + `internal/server/integration_test.go`: full end-to-end over HTTP+WS against a real subprocess — conversation flow, every CI command roundtrip with CO name injection, fork, model probes (live + fallback), sync error paths, resume/delete, token auth | implemented 2026-08-05 (commit 7838e93); run with `go test ./... -race` |
+| Go unit tests | wire encode/decode/line/EOF edges; dirs creation/exclusion of settings.conf; preset lifecycle; settings normalize; mcp.conf parse roundtrip; reader dispatch (delta-only, empty→null, JSON frames, CO name injection, SM wrap/cache, echoes, disconnect, the terminal frame and its one-announcement rule, the stderr tail in the message); core spawn/kill/find; hub broadcast/unregister/slow-client drop | port the same-named Rust tests one by one |
+| Go integration | `internal/fakecore` (scriptable rawio stand-in) + `internal/server/integration_test.go`: full end-to-end over HTTP+WS against a real subprocess — conversation flow, every CI command roundtrip with CO name injection, fork, model probes (live + fallback), sync error paths, resume/delete, token auth | implemented 2026-08-05 (commit 7838e93); run with `go test ./... -race` |
 | Elm tests | unchanged — verify the shared client is not broken | `make test` |
 | Dual-backend smoke | run the same Elm frontend against both Tauri and Go, diff the event streams | manual (GUI env) |
 | CI | `.github/workflows/ci.yml`: Go (`go vet` + `go test -race`), Elm (0.19.2 toolchain: `elm make` + `elm-test`), Rust (Tauri system deps + `cargo test`), plus the schema, layout-invariant, CSS and AlayaCore-protocol guards (fixture mode — AlayaCore is absent there) | — |
@@ -415,7 +419,7 @@ runtimes auto-switch on the presence of `window.__TAURI__`, avoiding two bridge 
 
 ## 10. Phased Implementation Plan
 
-1. **P0 skeleton**: `go.mod`, `main.go`, `internal/tlv` (with tests), static hosting + `/ws` empty hub.
+1. **P0 skeleton**: `go.mod`, `main.go`, `internal/wire` (with tests), static hosting + `/ws` empty hub.
 2. **P1 session core**: `core` + `session` + `reader` + `hub` + `rpc.go`; implement
    create/resume/close/send_prompt/cancel plus tlv-delta/frame/status push.
    → conversation main flow works (minimal viable).

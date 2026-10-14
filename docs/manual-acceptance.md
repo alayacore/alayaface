@@ -126,7 +126,7 @@
       an older core (its `session.alaya` frontmatter says `message_version: 11`)
       and resuming it with a core that announces 12: the window must say
       `Connection closed: Error: failed to load session: session file version
-      mismatch: got 12, expected 14`, **not** a bare "Connection closed" — the core
+      mismatch: got 14, expected 15`, **not** a bare "Connection closed" — the core
       exits before it sends any frame, so stderr is the only thing that ever said
       why, and a packaged app has no terminal behind it
 - [ ] A session that cannot be loaded is still on disk and still listed: the

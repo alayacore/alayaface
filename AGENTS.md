@@ -26,7 +26,7 @@
 
 Three parts share ONE Elm client:
 
-- `src-tauri/` — Rust/Tauri backend. Commands in `commands/*.rs`; TLV frame
+- `src-tauri/` — Rust/Tauri backend. Commands in `commands/*.rs`; frame
   dispatch in `reader.rs`; session lifecycle in `session.rs`. Tests: `cargo test`.
 - `src-go/` — Go backend (browser/HTTP+WS), a symmetric port of the Rust one.
   Commands in `internal/server/handlers/`; reader/dispatch in
@@ -72,12 +72,12 @@ spawn arguments (`--tool-confirm`, `--builtin-tools`, `--system`, work dir)
 and the config files (`model.conf`, `mcp.conf`, `settings.conf`, `global.conf`).
 
 **The protocol is a second thing AlayaCore owns, and this repo duplicates four
-facts about it**: the `message_version` pin (both backends), the TLV tag
-alphabet (both `tlv` modules), the session states AlayaCore broadcasts (read by
+facts about it**: the `message_version` pin (both backends), the frame tag
+alphabet (both `wire` modules), the session states AlayaCore broadcasts (read by
 `reader.rs`/`reader.go`, not by the client — see below), and the command names
 we send. `make check-protocol`
 (`scripts/check-alayacore-protocol.sh`) is the guard: against the core when it
-is checked out next door, refreshing `testdata/alayacore-{message-version,tlv-tags,
+is checked out next door, refreshing `testdata/alayacore-{message-version,wire-tags,
 session-states,commands}.txt`; against those fixtures in CI, where the core does
 not exist. It exists because v12 (`CE`, the `closed` state, the `quit` command,
 prompts-held-before-ready) landed with the pin at 11 and nothing noticed — the

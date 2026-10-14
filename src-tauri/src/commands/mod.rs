@@ -32,7 +32,7 @@ pub use ui_config::*;
 pub use label::*;
 
 use crate::alayacore;
-use crate::tlv;
+use crate::wire;
 
 use serde::Serialize;
 use std::io::Write;
@@ -58,7 +58,7 @@ pub struct MediaItem {
 
 // ─── Shared Helpers ──────────────────────────────────────────────────
 
-/// Write one TLV frame to a session's stdin (single stdin lock hold).
+/// Write one frame to a session's stdin (single stdin lock hold).
 ///
 /// The caller supplies `refs` (from `session::refs`), so the SessionMap
 /// lock is NOT held across this blocking pipe write. `session_id` is
@@ -76,17 +76,17 @@ pub(crate) async fn write_frame_to(
     let stdin = guard
         .as_mut()
         .ok_or_else(|| "Session is disconnected".to_string())?;
-    tlv::write_frame(stdin, tag, value).map_err(|e| format!("Write error: {e}"))?;
+    wire::write_frame(stdin, tag, value).map_err(|e| format!("Write error: {e}"))?;
     stdin.flush().map_err(|e| format!("Flush error: {e}"))?;
 
     // Log outgoing frame for debugging
     let preview: String = value.chars().take(200).collect();
-    log::info!("[tlv] >> {} {} {}b {}", session_id, tag, value.len(), preview);
+    log::info!("[wire] >> {} {} {}b {}", session_id, tag, value.len(), preview);
 
     Ok(())
 }
 
-/// Write a batch of TLV frames under ONE stdin lock so a concurrent
+/// Write a batch of frames under ONE stdin lock so a concurrent
 /// command cannot interleave between them (mirrors Go's
 /// `Session.WriteFrames` / `alayacore_send_prompt`). Flushes once at the
 /// end, so a multi-frame message reaches alayacore as one write burst.
@@ -104,8 +104,8 @@ pub(crate) async fn write_frames_to(
         .ok_or_else(|| "Session is disconnected".to_string())?;
     for (tag, value) in frames {
         let preview: String = value.chars().take(200).collect();
-        log::info!("[tlv] >> {} {} {}b {}", session_id, tag, value.len(), preview);
-        tlv::write_frame(stdin, tag, value).map_err(|e| format!("Write error: {e}"))?;
+        log::info!("[wire] >> {} {} {}b {}", session_id, tag, value.len(), preview);
+        wire::write_frame(stdin, tag, value).map_err(|e| format!("Write error: {e}"))?;
     }
     stdin.flush().map_err(|e| format!("Flush error: {e}"))?;
     Ok(())
@@ -141,7 +141,7 @@ pub(crate) async fn send_cmd(
     // arrive as soon as the CI frame is flushed.
     refs.pending_commands.insert(id.clone(), name.to_string()).await;
     let payload = serde_json::json!({ "call_id": id, "name": name, "input": input });
-    if let Err(e) = write_frame_to(&refs, session_id, tlv::TAG_CMD_INPUT, &payload.to_string()).await {
+    if let Err(e) = write_frame_to(&refs, session_id, wire::TAG_CMD_INPUT, &payload.to_string()).await {
         refs.pending_commands.remove(&id).await;
         return Err(e);
     }
