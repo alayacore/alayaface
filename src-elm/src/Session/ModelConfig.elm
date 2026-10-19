@@ -86,7 +86,7 @@ type alias Field =
       -- `syncFromContent` drops the entries that fail validation and then
       -- `writeConfigFile` persists what is left — so saving a model missing one
       -- of these DELETES it from the user's `model.conf`, and the
-      -- MODEL_VALIDATION error arrives only after the write.
+      -- CONFIG_MODEL_INVALID error arrives only after the write.
       --
       -- Mirrored from `model_manager.go:validateModel` (the three are
       -- `protocol_type`, `base_url`, `model_name`). `name` is NOT required
@@ -361,7 +361,7 @@ Two rules, and the second is the one that saves data:
   * **a required field must not be empty** (`Field.required`). Saving one is
     how a model gets deleted: `syncFromContent` skips entries that fail
     `validateModel` and `writeConfigFile` then persists the survivors, so the
-    entry is gone from `model.conf` before the MODEL_VALIDATION reply arrives to
+    entry is gone from `model.conf` before the CONFIG_MODEL_INVALID reply arrives to
     explain why. The refusal says that in the user's terms, because "required"
     alone does not explain why a field they might want to leave blank is
     blocking a button.

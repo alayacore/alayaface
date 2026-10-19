@@ -231,7 +231,7 @@ async function main() {
   // ── 2b. a required field blocks Save, because saving it deletes the model ──
   // AlayaCore's syncFromContent skips entries failing validateModel and then
   // writeConfigFile persists the SURVIVORS: an entry with no base_url is gone
-  // from model.conf before the MODEL_VALIDATION reply arrives to say so. So the
+  // from model.conf before the CONFIG_MODEL_INVALID reply arrives to say so. So the
   // refusal has to happen here, at Save, and the message has to say why —
   // "required" alone does not explain a blocked button.
   await setField("base_url", "");

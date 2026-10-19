@@ -341,7 +341,7 @@ handleSystemMsg s env =
         "notify" -> handleSystemNotify s env.data
         "model_list" -> handleSystemModelList s env.data
         "model" -> handleSystemModel s env.data
-        "reasoning" -> handleSystemReasoning s env.data
+        "reasoning_level" -> handleSystemReasoning s env.data
         "tool_confirm" -> handleSystemToolConfirm s env.data
         "mcp" -> handleSystemMcp s env.data
         "session" -> handleSystemSession s env.data
@@ -393,24 +393,25 @@ handleSystemTask s data =
             D.decodeValue (D.field "max_steps" D.int) data
                 |> Result.toMaybe
 
-        -- The canonical wire field is `context` (adapter-guide); the
-        -- legacy `context_tokens` is still emitted by older cores / the
-        -- test stand-in, so keep it as a fallback.
-        context =
-            D.decodeValue (D.field "context" D.int) data
-                |> Result.toMaybe
-
-        legacyTokens =
+        -- The canonical wire field is `context_tokens` (adapter-guide; it
+        -- matches the session file's frontmatter key). `context` is what
+        -- older cores emitted, so keep it as a fallback rather than
+        -- dropping the reading entirely.
+        contextTokensField =
             D.decodeValue (D.field "context_tokens" D.int) data
                 |> Result.toMaybe
 
+        legacyContext =
+            D.decodeValue (D.field "context" D.int) data
+                |> Result.toMaybe
+
         contextTokens =
-            case context of
+            case contextTokensField of
                 Just c ->
                     c
 
                 Nothing ->
-                    Maybe.withDefault s.contextTokens legacyTokens
+                    Maybe.withDefault s.contextTokens legacyContext
 
         -- Latest completed step's end-to-end throughput (tokens/sec)
         -- and TTFT (ms). Absent until a step with output tokens
@@ -533,7 +534,7 @@ handleSystemModel s data =
             s
 
 
-{-| SM {"type":"reasoning",...} — the core's boot frame reporting the
+{-| SM {"type":"reasoning_level",...} — the core's boot frame reporting the
 active reasoning level (0|1|2). Field name is not contractual across
 cores, so accept the common spellings and ignore anything else (the
 level stays at its default / last user selection).
@@ -686,12 +687,13 @@ handleSystemMcp s data =
 
 -- Command Result Frame (CO)
 
--- CO carries only the call ID; the reader injects the command `name`
+-- CO carries only the command ID; the reader injects the command `name`
 -- (resolved from the CI we sent) into the JSON so we can render results
--- without tracking call IDs on the frontend. Success results with useful
+-- without tracking command IDs on the frontend. Success results with useful
 -- info (save/fork/mcp) become Notify-style messages; errors become
--- Error-style messages. Silent commands (cancel, reason, model_set, ...)
--- render nothing — the state change itself is the confirmation.
+-- Error-style messages. Silent commands (cancel, reasoning_level_set,
+-- model_set, mcp_skip, ...) render nothing — the state change itself is
+-- the confirmation.
 handleCommandResultFrame : SessionState -> D.Value -> SessionState
 handleCommandResultFrame s json =
     let
@@ -700,8 +702,9 @@ handleCommandResultFrame s json =
                 |> Result.toMaybe
                 |> Maybe.withDefault False
 
-        output =
-            D.decodeValue (D.field "output" D.value) json |> Result.toMaybe
+        result =
+            D.decodeValue (D.field "result" D.value) json
+                |> Result.toMaybe
 
         name =
             D.decodeValue (D.field "name" D.string) json
@@ -711,12 +714,12 @@ handleCommandResultFrame s json =
     if isError then
         let
             code =
-                output
+                result
                     |> Maybe.andThen (\o -> D.decodeValue (D.field "code" D.string) o |> Result.toMaybe)
                     |> Maybe.withDefault ""
 
             message =
-                output
+                result
                     |> Maybe.andThen (\o -> D.decodeValue (D.field "message" D.string) o |> Result.toMaybe)
                     |> Maybe.withDefault "Command failed"
 
@@ -729,7 +732,7 @@ handleCommandResultFrame s json =
         appendSystemMessage s Error text
 
     else
-        case renderCommandResult name output of
+        case renderCommandResult name result of
             Just text ->
                 appendSystemMessage s Notify text
 
@@ -738,15 +741,15 @@ handleCommandResultFrame s json =
 
 
 renderCommandResult : String -> Maybe D.Value -> Maybe String
-renderCommandResult name output =
+renderCommandResult name result =
     let
         str key =
-            output
+            result
                 |> Maybe.andThen (\o -> D.decodeValue (D.field key D.string) o |> Result.toMaybe)
                 |> Maybe.withDefault ""
 
         int key =
-            output
+            result
                 |> Maybe.andThen (\o -> D.decodeValue (D.field key D.int) o |> Result.toMaybe)
                 |> Maybe.withDefault 0
     in

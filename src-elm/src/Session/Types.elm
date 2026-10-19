@@ -277,9 +277,9 @@ type alias SessionState =
     , models : List ModelInfo
     , activeModelId : Maybe Int
     , activeModelName : String
-      -- Reasoning level (0|1|2), set via the `:reason` command / the
-      -- input-bar selector; the core reports the active level in its
-      -- boot SM {"type":"reasoning",...}.
+      -- Reasoning level (0|1|2), set via the `:reasoning_level_set` command /
+      -- the input-bar selector; the core reports the active level in its
+      -- boot SM {"type":"reasoning_level",...}.
     , reasoningLevel : Int
     , taskRunning : Bool
     , taskCurrentStep : Int

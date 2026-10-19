@@ -194,7 +194,7 @@ func TestJSONPayloadsRoundtrip(t *testing.T) {
 		t.Errorf("output[0].text = %v, want ok", arr[0]["text"])
 	}
 
-	cmd := CmdMsg{CallID: "c1", Name: "save", Input: "/tmp/x"}
+	cmd := CmdMsg{CommandID: "c1", Name: "save", Args: "/tmp/x"}
 	s, err = json.Marshal(cmd)
 	if err != nil {
 		t.Fatal(err)
@@ -206,10 +206,10 @@ func TestJSONPayloadsRoundtrip(t *testing.T) {
 	if backCmd.Name != "save" {
 		t.Errorf("name = %q, want save", backCmd.Name)
 	}
-	if backCmd.Input != "/tmp/x" {
-		t.Errorf("input = %q, want /tmp/x", backCmd.Input)
+	if backCmd.Args != "/tmp/x" {
+		t.Errorf("args = %q, want /tmp/x", backCmd.Args)
 	}
-	if backCmd.CallID != "c1" {
-		t.Errorf("call_id = %q, want c1", backCmd.CallID)
+	if backCmd.CommandID != "c1" {
+		t.Errorf("command_id = %q, want c1", backCmd.CommandID)
 	}
 }

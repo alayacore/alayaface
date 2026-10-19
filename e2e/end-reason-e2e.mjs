@@ -29,7 +29,7 @@ import net from 'node:net';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const CHROME = '/usr/bin/google-chrome';
-const REASON = 'Error: failed to load session: session file version mismatch: got 14, expected 15';
+const REASON = 'Error: failed to load session: session file version mismatch: got 14, expected 17';
 
 function assert(cond, msg) {
   if (!cond) throw new Error('ASSERT FAILED: ' + msg);
@@ -140,7 +140,7 @@ try {
   await sleep(2500);
   let lines = await endLines();
   console.log('  transcript:', JSON.stringify(lines));
-  assert(lines.some((t) => t.includes('session file version mismatch: got 14, expected 15')),
+  assert(lines.some((t) => t.includes('session file version mismatch: got 14, expected 17')),
     'A: the core\'s stderr reason must reach the transcript — "Connection closed" alone is the bug this fixes');
   assert(lines.some((t) => t.startsWith('Connection closed:')),
     `A: the line must name the pipe fact the reason came attached to: ${JSON.stringify(lines)}`);

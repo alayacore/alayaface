@@ -330,7 +330,7 @@ suite =
                     -- a model disappears. `syncFromContent` skips entries that
                     -- fail `validateModel`, then `writeConfigFile` persists the
                     -- survivors — so the entry is gone from the user's model.conf
-                    -- BEFORE the MODEL_VALIDATION reply explains why. The refusal
+                    -- BEFORE the CONFIG_MODEL_INVALID reply explains why. The refusal
                     -- has to come from the client, at Save time.
                     Expect.equal [ "base_url", "model_name" ]
                         (MC.draftProblems MC.emptyDraft |> List.map Tuple.first)

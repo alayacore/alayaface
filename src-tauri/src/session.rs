@@ -21,9 +21,9 @@ pub struct SessionHandle {
     /// Arcs exist (in-flight prompt sends lock the same mutex).
     pub stdin: Arc<Mutex<Option<std::process::ChildStdin>>>,
     pub connected: Arc<AtomicBool>,
-    /// Pending command call IDs → command names (CI sent, CO not yet received).
+    /// Pending command IDs → command names (CI sent, CO not yet received).
     /// Used by the stdout reader to attach the command name to CO frames
-    /// (CO carries only the call ID; the name comes from the CI we sent).
+    /// (CO carries only the command ID; the name comes from the CI we sent).
     /// Bounded — see PendingCommands (M5/D6).
     pub pending_commands: Arc<PendingCommands>,
     /// The child process — kept for explicit cleanup on close.
@@ -61,7 +61,7 @@ pub struct SessionRefs {
     pub pending_commands: Arc<PendingCommands>,
 }
 
-/// Bounded pending-command registry: call ID → command name (CI sent,
+/// Bounded pending-command registry: command ID → command name (CI sent,
 /// CO not yet received). If a CO reply never arrives (protocol anomaly
 /// / killed core), an entry must not grow the map forever — insert
 /// evicts the OLDEST entries beyond the cap (FIFO), so the newest

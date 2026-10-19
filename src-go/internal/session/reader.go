@@ -272,12 +272,12 @@ func (s *Session) handleFunctionFrame(h *hub.Hub, tag, rawValue string) {
 
 // handleCmdOutputFrame handles CO frames: inject the command name from
 // the pending-commands registry into the JSON payload so the frontend
-// can render the result without tracking call IDs itself.
+// can render the result without tracking command IDs itself.
 func (s *Session) handleCmdOutputFrame(h *hub.Hub, rawValue string) {
 	jsonVal := rawJSON(rawValue)
 	var obj map[string]any
 	if err := json.Unmarshal([]byte(rawValue), &obj); err == nil {
-		if id, ok := obj["call_id"].(string); ok {
+		if id, ok := obj["command_id"].(string); ok {
 			if name, ok2 := s.PendingCmds.LoadAndDelete(id); ok2 {
 				obj["name"] = name
 			}

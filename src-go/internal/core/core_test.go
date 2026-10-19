@@ -476,7 +476,7 @@ func TestSpawnWorkDir(t *testing.T) {
 
 func TestSpawnReasoningLevelFlag(t *testing.T) {
 	// fakecore echoes the --reasoning-level flag in its boot frame and
-	// emits an SM reasoning frame with the level — level 0 ("Off") must
+	// emits an SM reasoning_level frame with the level — level 0 ("Off") must
 	// survive the round trip (it is a valid explicit value).
 	dir := t.TempDir()
 	proc, err := Spawn(fakeCorePath, filepath.Join(dir, "config"), filepath.Join(dir, "s.alaya"), "", nil, "", 0, "")
@@ -502,7 +502,7 @@ func TestSpawnReasoningLevelFlag(t *testing.T) {
 				bootLevel = data["reasoning_level"]
 			}
 		}
-		if env["type"] == "reasoning" {
+		if env["type"] == "reasoning_level" {
 			if data, ok := env["data"].(map[string]any); ok {
 				smLevel = data["level"]
 			}

@@ -141,7 +141,7 @@ against the fields marked `requiredField`/`requiredChoice`, both directions, and
 refreshes `testdata/alayacore-model-required.txt`. The consequence of an empty
 required field is not a failed save: `syncFromContent` skips entries that fail
 validation and `writeConfigFile` persists the SURVIVORS, so the entry is deleted
-from `model.conf` and the MODEL_VALIDATION reply only arrives afterwards to
+from `model.conf` and the CONFIG_MODEL_INVALID reply only arrives afterwards to
 explain what already happened. Refusing at Save is the only place that can
 prevent it. The check is symmetric on purpose — marking a key required that the
 core does not require blocks saves the core would accept and can strand an entry

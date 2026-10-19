@@ -2,7 +2,7 @@
 // goes to Preset Manager → Edit → Settings, verifies the Reasoning level
 // select (Off/Balanced/Deep), sets it to Deep (2), saves, creates a
 // session, and asserts the session's reasoning select shows "Deep" (the
-// fakecore boot frame carries --reasoning-level=2 → SM reasoning).
+// fakecore boot frame carries --reasoning-level=2 → SM reasoning_level).
 import puppeteer from "puppeteer-core";
 import { spawn } from "child_process";
 import { mkdtempSync, rmSync } from "fs";

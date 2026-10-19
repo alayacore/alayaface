@@ -98,7 +98,7 @@ func ModelSet(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	return writeResult(w, nil)
 }
 
-// Reason sends the "reason" command (reasoning level 0|1|2 as argument).
+// Reason sends the "reasoning_level_set" command (level 0|1|2 as argument).
 func Reason(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	var args struct {
 		SessionID string `json:"sessionId"`
@@ -111,7 +111,7 @@ func Reason(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	if _, err := s.SendCmd("reason", fmt.Sprintf("%d", args.Level)); err != nil {
+	if _, err := s.SendCmd("reasoning_level_set", fmt.Sprintf("%d", args.Level)); err != nil {
 		return err
 	}
 	return writeResult(w, nil)
@@ -179,7 +179,7 @@ func McpDecline(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	return writeResult(w, nil)
 }
 
-// McpCancel sends the "mcp_cancel" command.
+// McpCancel sends the "mcp_skip" command (cancels MCP initialization).
 func McpCancel(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	var args struct {
 		SessionID string `json:"sessionId"`
@@ -191,7 +191,7 @@ func McpCancel(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	if _, err := s.SendCmd("mcp_cancel", ""); err != nil {
+	if _, err := s.SendCmd("mcp_skip", ""); err != nil {
 		return err
 	}
 	return writeResult(w, nil)

@@ -293,8 +293,8 @@ func TestIntegrationCommandRoundtrips(t *testing.T) {
 		return p["tag"] == "CO" && js != nil && js["name"] == "model_set"
 	})
 	js := co["json"].(map[string]any)
-	if js["output"].(map[string]any)["modelId"] != "7" {
-		t.Errorf("model_set output = %v, want modelId 7", js["output"])
+	if js["result"].(map[string]any)["modelId"] != "7" {
+		t.Errorf("model_set result = %v, want modelId 7", js["result"])
 	}
 
 	// model_sync.
@@ -310,9 +310,9 @@ func TestIntegrationCommandRoundtrips(t *testing.T) {
 		js, _ := p["json"].(map[string]any)
 		return p["tag"] == "CO" && js != nil && js["name"] == "tool_confirm"
 	})
-	out := co2["json"].(map[string]any)["output"].(map[string]any)
-	if out["tool_id"] != "tool-1" || out["allowed"] != true {
-		t.Errorf("tool_confirm output = %v", out)
+	out := co2["json"].(map[string]any)["result"].(map[string]any)
+	if out["call_id"] != "tool-1" || out["allowed"] != true {
+		t.Errorf("tool_confirm result = %v", out)
 	}
 
 	// tool_decline (allowed=false → command name tool_decline).
@@ -322,7 +322,7 @@ func TestIntegrationCommandRoundtrips(t *testing.T) {
 		return p["tag"] == "CO" && js != nil && js["name"] == "tool_decline"
 	})
 
-	// mcp_decline + mcp_cancel.
+	// mcp_decline + mcp_skip.
 	e.rpcOK(t, "alayacore_mcp_decline", map[string]any{"sessionId": sid, "server": "srv-a"})
 	e.waitEvent(t, "tlv-frame", func(p map[string]any) bool {
 		js, _ := p["json"].(map[string]any)
@@ -331,7 +331,7 @@ func TestIntegrationCommandRoundtrips(t *testing.T) {
 	e.rpcOK(t, "alayacore_mcp_cancel", map[string]any{"sessionId": sid})
 	e.waitEvent(t, "tlv-frame", func(p map[string]any) bool {
 		js, _ := p["json"].(map[string]any)
-		return p["tag"] == "CO" && js != nil && js["name"] == "mcp_cancel"
+		return p["tag"] == "CO" && js != nil && js["name"] == "mcp_skip"
 	})
 
 	// cancel.

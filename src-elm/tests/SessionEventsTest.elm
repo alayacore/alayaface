@@ -159,7 +159,7 @@ syncCo isError message =
                 [ ( "type", E.string "command_output" )
                 , ( "name", E.string "model_sync" )
                 , ( "is_error", E.bool isError )
-                , ( "output", E.object [ ( "message", E.string message ) ] )
+                , ( "result", E.object [ ( "message", E.string message ) ] )
                 ]
             )
         )
@@ -1007,7 +1007,7 @@ tests =
                     -- v12's `closed` arrives on the same `session` type as
                     -- `ready`. Reading it as readiness would flush a held node
                     -- prompt into a session that has stopped taking work (the
-                    -- core answers it with SHUTTING_DOWN at best, and at worst
+                    -- core answers it with STATE_SHUTTING_DOWN at best, and at worst
                     -- never sees it), and would lift replay suppression.
                     let
                         held =

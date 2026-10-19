@@ -39,6 +39,32 @@ import (
 // because a client that knows only the older format has no other way to
 // learn that a newer one exists (adapter-guide, "Protocol Version").
 //
+// v17: the command plane's vocabulary, and what a command accepts. CI is
+// `{command_id, name, args}` and CO is `{command_id, result, is_error}` —
+// "call_id"/"input"/"output" belong to the tool plane (AF/UF), where the id
+// is the provider's tool_call_id and the payloads are typed content. Every
+// CO error code is renamed into one vocabulary whose first segment says what
+// a caller can do about it (REQUEST_, CONFIG_, STATE_, IO_, INTERNAL_), so
+// `MODEL_NOT_FOUND` is `REQUEST_MODEL_UNKNOWN` and the fallback `ERROR` is
+// `INTERNAL_UNCLASSIFIED`. A CI the agent cannot read — no command_id, or
+// JSON it cannot parse — is answered with an SM error instead of a CO,
+// because a CO answers exactly one request and an unreadable one has no id
+// to echo; a well-formed CI without a command_id is refused rather than run.
+// A command also takes exactly the arguments its usage line declares (a
+// stray token is `REQUEST_INVALID_ARGS`), a canceled MCP initialization no
+// longer reports per-server `failed` frames, and a stream that ends without
+// a terminal event says "aborted unexpectedly" rather than "canceled".
+//
+// v16: the vocabulary only, with no framing change. `:mcp_cancel` is
+// `:mcp_skip` ("cancel" already stops the running task); `:reason` is
+// `:reasoning_level_set`; the SM that reports a reasoning-level change is
+// `reasoning_level`, so no wire string means two things; the task SM's token
+// count is `context_tokens`, the name the session file and this client
+// already used; a tool call's id is `call_id` in the CO result too, and the
+// arguments that carry an id say which one (`:fork <history_id>
+// <filename>`). A short form (`q`, `r`) is an adapter's word, resolved
+// before the frame is written, not a wire name.
+//
 // v15: the wire dropped its 4-byte length field. A frame is now one line — a
 // two-byte tag, a JSON value, an LF — so the boundary rests on the value being
 // one line (the encoder enforces it and the decoder checks it) instead of on a
@@ -65,7 +91,7 @@ import (
 //
 // NOTE: the same number is written into every session file's frontmatter
 // (`message_version: N`) and alayacore's loader demands an EXACT match, so a
-// v14 file is refused by a v15 core before a single frame is written —
+// v16 file is refused by a v17 core before a single frame is written —
 // the failure is startup exit 1 with the reason on stderr only. Users'
 // existing sessions are affected by every bump, not just this one, and the
 // reason is invisible in a GUI build (the core's stderr is not the terminal)
@@ -74,7 +100,7 @@ import (
 //
 // Must stay in sync with src-tauri/src/alayacore.rs::SUPPORTED_MESSAGE_VERSION
 // (AGENTS.md: "two backends must stay symmetric").
-const SupportedMessageVersion = 15
+const SupportedMessageVersion = 17
 
 // SessionHeaderWindow is how far into a session file its frontmatter is
 // searched. The block is eight short scalar lines, so this is generous by

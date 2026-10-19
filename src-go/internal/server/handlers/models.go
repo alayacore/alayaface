@@ -186,11 +186,11 @@ func SetDefaultModel(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	}
 	bin := ResolveBinary("")
 
-	callID := uuid.NewString()
+	commandID := uuid.NewString()
 	res, err := probe.RunTempProbe(bin, configDir, &probe.ProbeCmd{
-		CallID: callID,
-		Name:   "model_set",
-		Input:  fmt.Sprintf("%d", args.ModelID),
+		CommandID: commandID,
+		Name:      "model_set",
+		Args:      fmt.Sprintf("%d", args.ModelID),
 	}, nil)
 	if err != nil {
 		return err
@@ -202,13 +202,13 @@ func SetDefaultModel(h *Handler, w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 		if isErr, _ := v["is_error"].(bool); isErr {
-			msg, _ := v["output"].(map[string]any)["message"].(string)
+			msg, _ := v["result"].(map[string]any)["message"].(string)
 			if msg == "" {
 				msg = "model_set failed"
 			}
 			return fmt.Errorf("%s", msg)
 		}
-		out, _ := json.Marshal(v["output"])
+		out, _ := json.Marshal(v["result"])
 		return writeJSON(w, json.RawMessage(out))
 	}
 
@@ -245,11 +245,11 @@ func SyncDefaultModels(h *Handler, w http.ResponseWriter, r *http.Request) error
 	}
 	bin := ResolveBinary(args.BinaryPath)
 
-	callID := uuid.NewString()
+	commandID := uuid.NewString()
 	res, err := probe.RunTempProbe(bin, configDir, &probe.ProbeCmd{
-		CallID: callID,
-		Name:   "model_sync",
-		Input:  args.Config,
+		CommandID: commandID,
+		Name:      "model_sync",
+		Args:      args.Config,
 	}, h.Cache)
 	if err != nil {
 		return err
@@ -261,13 +261,13 @@ func SyncDefaultModels(h *Handler, w http.ResponseWriter, r *http.Request) error
 			return err
 		}
 		if isErr, _ := v["is_error"].(bool); isErr {
-			msg, _ := v["output"].(map[string]any)["message"].(string)
+			msg, _ := v["result"].(map[string]any)["message"].(string)
 			if msg == "" {
 				msg = "model_sync failed"
 			}
 			return fmt.Errorf("%s", msg)
 		}
-		out, _ := json.Marshal(v["output"])
+		out, _ := json.Marshal(v["result"])
 		return writeJSON(w, json.RawMessage(out))
 	}
 

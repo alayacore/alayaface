@@ -120,17 +120,17 @@ pub(crate) fn resolve_binary(binary_path: &str) -> String {
     }
 }
 
-/// Send a command to a session as a CI frame (the new command RPC protocol).
+/// Send a command to a session as a CI frame (the command RPC protocol).
 ///
-/// Generates a call ID, serializes `{"call_id","name","input"}` into a CI frame,
-/// and records the call ID → name mapping so the stdout reader can attach
-/// the command name to the matching CO frame (CO carries only the ID).
-/// Returns the generated call ID on success.
+/// Generates a command ID, serializes `{"command_id","name","args"}` into a CI
+/// frame, and records the command ID → name mapping so the stdout reader can
+/// attach the command name to the matching CO frame (CO carries only the ID).
+/// Returns the generated command ID on success.
 pub(crate) async fn send_cmd(
     sessions: &SessionMap,
     session_id: &str,
     name: &str,
-    input: &str,
+    args: &str,
 ) -> Result<String, String> {
     let id = uuid::Uuid::new_v4().to_string();
     // Looked up once; the map lock is already released here, so the
@@ -140,7 +140,7 @@ pub(crate) async fn send_cmd(
     // Register the mapping BEFORE writing the frame — the CO reply can
     // arrive as soon as the CI frame is flushed.
     refs.pending_commands.insert(id.clone(), name.to_string()).await;
-    let payload = serde_json::json!({ "call_id": id, "name": name, "input": input });
+    let payload = serde_json::json!({ "command_id": id, "name": name, "args": args });
     if let Err(e) = write_frame_to(&refs, session_id, wire::TAG_CMD_INPUT, &payload.to_string()).await {
         refs.pending_commands.remove(&id).await;
         return Err(e);

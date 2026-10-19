@@ -50,9 +50,9 @@ type Session struct {
 	// killOnce guarantees the child is killed/reaped exactly once even
 	// when Close and the reader goroutine's EOF path race.
 	killOnce sync.Once
-	// PendingCmds maps call ID → command name (CI sent, CO not yet
+	// PendingCmds maps command ID → command name (CI sent, CO not yet
 	// received). The reader attaches the command name to CO frames,
-	// since CO carries only the call ID. Bounded (FIFO eviction beyond
+	// since CO carries only the command ID. Bounded (FIFO eviction beyond
 	// maxPendingCmds) so an unanswered CO cannot leak forever.
 	PendingCmds *pendingCmds
 }
@@ -382,20 +382,20 @@ func (s *Session) WriteFrames(frames []wire.Frame) error {
 	return nil
 }
 
-// SendCmd sends a CI (command input) frame and returns the generated call ID.
-func (s *Session) SendCmd(name, input string) (string, error) {
+// SendCmd sends a CI (command input) frame and returns the generated command ID.
+func (s *Session) SendCmd(name, args string) (string, error) {
 	s.stdinMu.Lock()
 	defer s.stdinMu.Unlock()
-	return s.sendCmdLocked(name, input)
+	return s.sendCmdLocked(name, args)
 }
 
-// sendCmdLocked sends a CI frame while stdinMu is held. The call ID →
+// sendCmdLocked sends a CI frame while stdinMu is held. The command ID →
 // name mapping is registered BEFORE the frame is written — the CO reply
 // can arrive as soon as the CI frame is flushed.
-func (s *Session) sendCmdLocked(name, input string) (string, error) {
+func (s *Session) sendCmdLocked(name, args string) (string, error) {
 	id := uuid.NewString()
 	s.PendingCmds.Store(id, name)
-	payload, err := json.Marshal(wire.CmdMsg{CallID: id, Name: name, Input: input})
+	payload, err := json.Marshal(wire.CmdMsg{CommandID: id, Name: name, Args: args})
 	if err != nil {
 		return "", err
 	}

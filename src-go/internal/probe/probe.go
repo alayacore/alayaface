@@ -32,16 +32,16 @@ const (
 
 // ProbeCmd optionally sends one CI command first.
 type ProbeCmd struct {
-	CallID string
-	Name   string
-	Input  string
+	CommandID string
+	Name      string
+	Args      string
 }
 
 // ProbeResult is what a probe collected.
 type ProbeResult struct {
 	// Models is the first SM model_list payload, if seen.
 	Models []json.RawMessage
-	// CmdOutput is the full CO frame JSON matching the probe's call ID.
+	// CmdOutput is the full CO frame JSON matching the probe's command ID.
 	CmdOutput json.RawMessage
 	// End is why the read loop stopped.
 	End ProbeEnd
@@ -73,7 +73,7 @@ func RunTempProbe(bin, configPath string, cmd *ProbeCmd, modelCache *session.Mod
 
 	// Optionally send one command, then close stdin.
 	if cmd != nil {
-		payload, _ := json.Marshal(wire.CmdMsg{CallID: cmd.CallID, Name: cmd.Name, Input: cmd.Input})
+		payload, _ := json.Marshal(wire.CmdMsg{CommandID: cmd.CommandID, Name: cmd.Name, Args: cmd.Args})
 		preview := string(payload)
 		if len(preview) > 200 {
 			preview = preview[:200]
@@ -144,7 +144,7 @@ func RunTempProbe(bin, configPath string, cmd *ProbeCmd, modelCache *session.Mod
 			if err := json.Unmarshal([]byte(frame.Value), &v); err == nil {
 				isOurs := true
 				if cmd != nil {
-					isOurs = v["call_id"] == cmd.CallID
+					isOurs = v["command_id"] == cmd.CommandID
 				}
 				if isOurs {
 					result.CmdOutput = json.RawMessage(frame.Value)

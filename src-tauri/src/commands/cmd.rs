@@ -1,9 +1,9 @@
 //! Simple command Tauri commands.
 //!
 //! Commands are sent to the session as CI (Command Input) frames:
-//! `{"call_id":"<call-id>","name":"<command>","input":"<args-string>"}`.
+//! `{"command_id":"<command-id>","name":"<command>","args":"<args-string>"}`.
 //! Results arrive asynchronously as CO (Command Output) frames with the
-//! same `id`, which the frontend renders (see reader.rs / Handlers.elm).
+//! same `command_id`, which the frontend renders (see reader.rs / Handlers.elm).
 //! Uses the `send_cmd!` macro for fixed, argument-less commands.
 
 use crate::alayacore;
@@ -83,7 +83,7 @@ pub async fn alayacore_reason(
     level: u32,
     sessions: State<'_, SessionMap>,
 ) -> Result<(), String> {
-    send_cmd(sessions.inner(), &session_id, "reason", &level.to_string())
+    send_cmd(sessions.inner(), &session_id, "reasoning_level_set", &level.to_string())
         .await
         .map(|_| ())
 }
@@ -135,7 +135,7 @@ pub async fn alayacore_mcp_cancel(
     session_id: String,
     sessions: State<'_, SessionMap>,
 ) -> Result<(), String> {
-    send_cmd(sessions.inner(), &session_id, "mcp_cancel", "").await.map(|_| ())
+    send_cmd(sessions.inner(), &session_id, "mcp_skip", "").await.map(|_| ())
 }
 
 #[cfg(test)]

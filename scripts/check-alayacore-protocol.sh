@@ -17,7 +17,7 @@
 #                          inferring the end from EOF on stdout).
 #   4. the command
 #                       vocabulary — a command we send that the core renamed
-#                       comes back as an UNKNOWN_COMMAND CO at best.
+#                       comes back as a REQUEST_UNKNOWN_COMMAND CO at best.
 #
 # This is the protocol-side twin of check-model-schema.sh, with the same two
 # modes:
@@ -49,6 +49,7 @@ R_WIRE="$REPO/src-tauri/src/wire.rs"
 G_WIRE="$REPO/src-go/internal/wire/wire.go"
 C_WIRE="$CORE/internal/wire/wire.go"
 C_STATE="$CORE/internal/agent/session_types.go"
+C_PROTO="$CORE/internal/protocol/protocol.go"
 C_SESSION="$CORE/internal/agent/session.go"
 C_COMMANDS="$CORE/internal/commands/commands.go"
 
@@ -83,6 +84,34 @@ core_tags() {
     sed -E 's/.*"([A-Za-z]{2})"/\1/' | sort -u
 }
 
+# Map one agent-side lifecycle constant to the wire string it broadcasts.
+#
+# SessionState.String() returns a literal ("ready") in older cores and a
+# protocol constant (protocol.SessionStateReady) since v17, so the reader
+# follows one hop when it has to: the constant's definition is the only place
+# the wire value lives. An unresolved name prints nothing, which the
+# require_min above reports as a broken extractor rather than as agreement.
+resolve_state() {
+  local name=$1 const file value
+  case "$name" in
+    protocol.*)
+      const=${name#protocol.}
+      for file in "$C_PROTO" "$C_STATE"; do
+        [[ -f "$file" ]] || continue
+        value=$(sed -nE "s/^[[:space:]]*$const[[:space:]]*=[[:space:]]*\"([a-z_]+)\".*/\1/p" "$file" | head -1)
+        if [[ -n "$value" ]]; then
+          printf '%s\n' "$value"
+          return 0
+        fi
+      done
+      return 0
+      ;;
+    *)
+      printf '%s\n' "$name"
+      ;;
+  esac
+}
+
 # Only the lifecycle states the core BROADCASTS, which is not the whole
 # SessionState vocabulary: `setState` is the single writer of a `session` SM
 # frame and its guard names the phases that reach an adapter. `starting` and
@@ -106,20 +135,22 @@ core_states() {
         $1 == "case" { sub(/:$/, "", $2); hit = ($2 == want) }
         hit && $1 == "return" { gsub(/"/, "", $2); print $2; exit }
       ')
-    [[ -n "$name" ]] && printf '%s\n' "$name"
+    [[ -n "$name" ]] && resolve_state "$name"
   done <<< "$phases" | sort -u
 }
 
-# The names the registry answers: the canonical constants plus the aliases, since
-# the core resolves aliases before dispatch (a client may send either word).
+# The names the registry answers: the canonical constants plus the short
+# forms, since the core resolves those before dispatch (a client may send
+# either word; the built-in adapters resolve them at the input boundary, but
+# the dispatcher applies commands.Canonical too).
 core_commands() {
   [[ -f "$C_COMMANDS" ]] || return 1
   {
     grep -oE 'CommandName[A-Za-z]+ += +"[a-z_]+"' "$C_COMMANDS" |
       sed -E 's/.*"([a-z_]+)"/\1/'
-    # The alias table's KEYS are the words a client may send ("q"), so they
-    # belong in the accepted set: the core resolves aliases before dispatch.
-    sed -n '/^var commandAliases/,/^}/p' "$C_COMMANDS" |
+    # The short-form table's KEYS are the words a client may send ("q"), so
+    # they belong in the accepted set: the core resolves them before dispatch.
+    sed -n '/^var shortForms/,/^}/p' "$C_COMMANDS" |
       sed -nE 's/^[[:space:]]*"([a-z_]+)":.*/\1/p'
   } | grep -v '^$' | sort -u
 }
@@ -196,6 +227,10 @@ face_states() {
   # an edit to this script: that is the difference between a check and a
   # snapshot of what we knew when it was written.
   re='"('"$(printf '%s|' "$@" | sed 's/|$//')"')"'
+  # An extractor that finds nothing must reach the per-state loop as an empty
+  # list (which reports each missing state), not abort the whole script under
+  # `set -e -o pipefail` — that failure mode reads as "the check passed
+  # quietly" when it did not run at all.
   {
     for f in "${LIFECYCLE_FILES[@]}"; do
       case "$f" in
@@ -207,7 +242,7 @@ face_states() {
     done
   } | grep -v -E '^[[:space:]]*(//|\*|--|/\*)' |
       grep -oE "$re" |
-      tr -d '"' | sort -u
+      tr -d '"' | sort -u || true
 }
 
 # ─── Resolve what is expected: the core if present, else the fixtures ──
@@ -292,7 +327,7 @@ printf '%s\n' "${EXPECT_COMMANDS[@]}" > "$tmp/commands_core"
 unknown=$(comm -23 "$tmp/commands_face" "$tmp/commands_core")
 if [[ -n "$unknown" ]]; then
   echo "✗ AlayaFace sends command(s) AlayaCore does not register: $(echo "$unknown" | tr '\n' ' ')"
-  echo "  That is an UNKNOWN_COMMAND CO for a user action, or silence. Either the"
+  echo "  That is a REQUEST_UNKNOWN_COMMAND CO for a user action, or silence. Either the"
   echo "  core renamed or dropped it, or this repo invented it."
   fail=1
 fi
@@ -328,8 +363,8 @@ if (( REGEN )); then
     printf '%s\n' "${EXPECT_STATES[@]}"
   } > "$FIX_STATES"
   {
-    fixture_header "command names AlayaCore's registry answers — canonical names and aliases. AlayaFace sends a subset; anything it sends that is NOT listed here comes back as UNKNOWN_COMMAND" \
-      "commands/commands.go (CommandName* constants, commandAliases)"
+    fixture_header "command names AlayaCore's registry answers — canonical names and short forms. AlayaFace sends a subset; anything it sends that is NOT listed here comes back as REQUEST_UNKNOWN_COMMAND" \
+      "commands/commands.go (CommandName* constants, shortForms)"
     printf '%s\n' "${EXPECT_COMMANDS[@]}"
   } > "$FIX_COMMANDS"
 fi

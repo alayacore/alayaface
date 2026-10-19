@@ -97,8 +97,8 @@ One-way push (server → client), message format:
 | `list_models` | `POST /rpc/list_models` | `binaryPath`, `configPath` | `[model]` |
 
 | `list_default_models` | `POST /rpc/list_default_models` | `binaryPath`, `preset` | `{models, active_id}` |
-| `sync_default_models` | `POST /rpc/sync_default_models` | `binaryPath`, `config`, `preset` | CO `output` |
-| `set_default_model` | `POST /rpc/set_default_model` | `preset`, `modelId` | CO `output` (probe `model_set` → persists `active_model` into the preset's runtime.conf) |
+| `sync_default_models` | `POST /rpc/sync_default_models` | `binaryPath`, `config`, `preset` | CO `result` |
+| `set_default_model` | `POST /rpc/set_default_model` | `preset`, `modelId` | CO `result` (probe `model_set` → persists `active_model` into the preset's runtime.conf) |
 | `list_default_mcp` | `POST /rpc/list_default_mcp` | `preset` | `[server]` |
 | `sync_default_mcp` | `POST /rpc/sync_default_mcp` | `config`, `preset` | — |
 | `get_global_settings` | `POST /rpc/get_global_settings` | `preset` | `{tool_confirm, builtin_tools, reasoning_level, system_prompt}` |
@@ -176,7 +176,7 @@ Rust `Option` fields serialize as `null` (no `skip_serializing_if`); Go must use
   reasoning) or `uri` (media), and `content_type` carries the item's `type`.
 - `Af/AF/UF/Uf`: attach `json` (null if parsing fails); the history id rides the
   top-level `"id"`, the tool-call id is `"call_id"`.
-- `CO`: **command-name injection** — look up `pending_commands[callId]` and inject the
+- `CO`: **command-name injection** — look up `pending_commands[commandId]` and inject the
   command name into the JSON `name` field before emitting.
 - `SM`: transform to `{type, data}` before emitting (same as Rust `handle_sm_frame`).
 - Any `SM model_list` updates the model cache first (global, shared across sessions).
@@ -280,7 +280,7 @@ type Session struct {
     stdin       io.WriteCloser
     stdinMu     sync.Mutex        // concurrent-write guard (Rust's tokio Mutex)
     connected   atomic.Bool
-    pendingCmds sync.Map          // callID → commandName (CO injection)
+    pendingCmds sync.Map          // commandID → commandName (CO injection)
     child       *exec.Cmd
     sessionDir  string
     cancel      context.CancelFunc

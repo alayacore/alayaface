@@ -2145,7 +2145,7 @@ applyEffectIn dispatch planId e ( m, cmds ) =
                 --
                 -- This used to be about avoiding a refusal — before protocol
                 -- v12, alayacore answered a pre-ready prompt with
-                -- MCP_NOT_READY, which failed a node on a race (Load run
+                -- STATE_MCP_NOT_READY, which failed a node on a race (Load run
                 -- reviving a node is a common hit). v12 made the core HOLD
                 -- such a prompt instead, so the refusal is gone. The gate
                 -- stays, for three reasons the hold does not cover:

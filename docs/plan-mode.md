@@ -580,7 +580,7 @@ how long we wait** (alayacore's exit paths were verified read-only).
 
 **Verified alayacore facts** (re-verified against v0.83.0 / message_version 12):
 - `save` CI command with empty args = save to the `--session` file (`session.alaya`);
-- `cancel` CI command = cancel the current task (`activeTask.cancel()` via the per-task context) → the task goes through `taskResultCh` → `handleTaskDone` **auto-saves** up to the cancel point; with no task it returns `NOTHING_TO_CANCEL`;
+- `cancel` CI command = cancel the current task (`activeTask.cancel()` via the per-task context) → the task goes through `taskResultCh` → `handleTaskDone` **auto-saves** up to the cancel point; with no task it returns `STATE_NOTHING_TO_CANCEL`;
 - stdin EOF ends the session: `drainUntilTaskDone()` **no longer exists** (removed in alayacore's prompt-deferral work), so EOF now means "no more prompts" and `run()` returns once nothing is in flight — it does not run a task to completion;
 - rawio has no SIGINT handling (only plainio/terseio do);
 - **EOF is no longer the only graceful exit signal**: the `quit` CI command (alias `q`) ends the session from inside it, and the session's last act on stdout is `SM {"type":"session","data":{"state":"closed"}}`, after which nothing follows. AlayaFace does not send `quit` — its close is cancel-first and `quit`'s "let the task finish" semantics are the opposite — but the terminal frame is what both readers now end a session on (§8.8).

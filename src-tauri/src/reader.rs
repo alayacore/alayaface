@@ -324,10 +324,10 @@ fn handle_json_frame(app: &AppHandle, sid: &str, tag: &str, raw_value: &str) {
 
 /// Handle CO command output frames.
 ///
-/// CO carries only the call ID — the command name is resolved from the
+/// CO carries only the command ID — the command name is resolved from the
 /// pending-commands registry (populated when the CI was sent) and injected
 /// into the JSON payload so the frontend can render the result without
-/// tracking call IDs itself.
+/// tracking command IDs itself.
 fn handle_cmd_output_frame(
     app: &AppHandle,
     sid: &str,
@@ -337,8 +337,8 @@ fn handle_cmd_output_frame(
     let mut json_val = serde_json::from_str::<serde_json::Value>(raw_value)
         .unwrap_or(serde_json::Value::Null);
     if let Some(obj) = json_val.as_object_mut() {
-        let call_id = obj.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
-        if let Some(name) = pending_commands.blocking_remove(call_id) {
+        let command_id = obj.get("command_id").and_then(|v| v.as_str()).unwrap_or("");
+        if let Some(name) = pending_commands.blocking_remove(command_id) {
             obj.insert("name".to_string(), serde_json::Value::String(name));
         }
     }

@@ -209,13 +209,13 @@ Solo 本身不保存任何东西：它返回的布局就是离开时的布局，
 
 AlayaFace 通过 stdin/stdout 上的帧与 AlayaCore 通信。一帧就是**一行**：两个字节的 tag 后跟一个 JSON 值（`[tag][value]\n`）；控制帧 `UE` 与 `CE` 不带值。完整协议规范见[适配器指南](../alayacore/adapter-guide/README.md)。
 
-关键标签（协议 v15——每个内容/函数帧的值都是 JSON，具体类型作为 content item 的 `"type"` 位于其中）：
+关键标签（协议 v17——每个内容/函数帧的值都是 JSON，具体类型作为 content item 的 `"type"` 位于其中）：
 
 | Tag | 方向 | 说明 |
 |-----|------|------|
 | UX  | 双向 | 用户内容——JSON content item（`{"type":"text","text":...}`、`{"type":"image","uri":...}` 等）；在 stdout 上是用户消息的回显 |
 | UE  | stdin  | 用户消息结束（flush） |
-| CI  | stdin  | 命令输入（JSON：call_id、name、input） |
+| CI  | stdin  | 命令输入（JSON：command_id、name、args） |
 | CE  | stdin  | 输入结束——不再有新 prompt，但命令仍可继续（协议 v12；AlayaFace 用不到，见 plan-mode.md §8.8） |
 | Ax  | stdout | 助手内容流式增量（`"type"` 为 `text` 或 `reasoning`） |
 | AX  | stdout | 助手内容完成/权威（增量先行时为空） |
@@ -223,10 +223,10 @@ AlayaFace 通过 stdin/stdout 上的帧与 AlayaCore 通信。一帧就是**一�
 | Uf  | stdout | 工具结果预览快照（临时、仅显示；UF 会覆盖） |
 | AF  | stdout | 工具调用生命周期（JSON：call_id、name、input） |
 | UF  | stdout | 工具结果（JSON：call_id、output、is_error） |
-| CO  | stdout | 命令输出（JSON：call_id、output、is_error） |
+| CO  | stdout | 命令输出（JSON：command_id、result、is_error；失败时 `result` 为 `{code,message}`） |
 | SM  | stdout | 系统消息（JSON：`{"type":...,"data":...}`） |
 
-输出的内容/函数帧把历史 id 放在 JSON 顶层的 `"id"`（一个普通字段——不再有 NUL 分隔前缀），工具调用 id 是 `"call_id"`。
+输出的内容/函数帧把历史 id 放在 JSON 顶层的 `"id"`（一个普通字段——不再有 NUL 分隔前缀），工具调用 id 是 `"call_id"`；命令面板的 id 是 `"command_id"`——两者是不同面板中的不同值，永不比较。
 
 ## 调试
 
@@ -234,7 +234,7 @@ AlayaFace 通过 stdin/stdout 上的帧与 AlayaCore 通信。一帧就是**一�
 
 ```
 [wire] << abc-123 AX 0b
-[wire] >> abc-123 CI 40b {"call_id":"a1","name":"cancel","input":""}
+[wire] >> abc-123 CI 44b {"command_id":"a1","name":"cancel","args":""}
 [wire] << abc-123 SM 80b {"type":"task",...}
 ```
 

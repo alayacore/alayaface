@@ -36,7 +36,7 @@ pub async fn list_models(
             .map(|(id, _)| id.clone())
     };
     if let Some(sid) = target {
-        // send_cmd registers the call ID → name mapping so the matching CO
+        // send_cmd registers the command ID → name mapping so the matching CO
         // frame is rendered with the command name.
         if send_cmd(sessions.inner(), &sid, "model_load", "").await.is_ok() {
             // WAIT for the SM model_list to populate the cache: the
@@ -137,7 +137,7 @@ enum ProbeEnd {
 struct ProbeResult {
     /// First SM model_list payload, if seen.
     models: Option<Vec<serde_json::Value>>,
-    /// CO frame JSON matching the probe's call ID, if any.
+    /// CO frame JSON matching the probe's command ID, if any.
     cmd_output: Option<serde_json::Value>,
     /// Why the read loop stopped.
     end: ProbeEnd,
@@ -145,7 +145,7 @@ struct ProbeResult {
 
 /// Run a temporary alayacore probe.
 ///
-/// `cmd` optionally sends one CI command first (`(call_id, name, input)`);
+/// `cmd` optionally sends one CI command first (`(command_id, name, args)`);
 /// the matching CO is captured in `ProbeResult::cmd_output`. `model_cache`,
 /// when given, is refreshed from any SM model_list seen (mirrors how live
 /// sessions populate it).
@@ -158,11 +158,11 @@ fn run_temp_probe(
     let mut core = TempCore::spawn(bin, config_path)?;
 
     // Optionally send one command, then close stdin.
-    if let Some((call_id, name, input)) = cmd {
+    if let Some((command_id, name, args)) = cmd {
         let payload = serde_json::json!({
-            "call_id": call_id,
+            "command_id": command_id,
             "name": name,
-            "input": input,
+            "args": args,
         });
         let payload_str = payload.to_string();
         let preview: String = payload_str.chars().take(200).collect();
@@ -212,8 +212,8 @@ fn run_temp_probe(
                 } else if frame.tag == "CO" {
                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(&frame.value) {
                         let is_ours = match cmd {
-                            Some((call_id, _, _)) => {
-                                v.get("call_id").and_then(|x| x.as_str()) == Some(call_id)
+                            Some((command_id, _, _)) => {
+                                v.get("command_id").and_then(|x| x.as_str()) == Some(command_id)
                             }
                             None => true,
                         };
@@ -325,21 +325,21 @@ pub async fn set_default_model(preset: String, model_id: u32) -> Result<serde_js
     let config_path = config_dir.to_string_lossy().to_string();
     let bin = resolve_binary("");
 
-    let call_id = uuid::Uuid::new_v4().to_string();
-    let input = model_id.to_string();
-    let probe = run_temp_probe(&bin, &config_path, Some((&call_id, "model_set", &input)), None)?;
+    let command_id = uuid::Uuid::new_v4().to_string();
+    let args = model_id.to_string();
+    let probe = run_temp_probe(&bin, &config_path, Some((&command_id, "model_set", &args)), None)?;
 
     match probe.cmd_output {
         Some(v) => {
             let is_err = v.get("is_error").and_then(|x| x.as_bool()).unwrap_or(false);
             if is_err {
                 let msg = v
-                    .pointer("/output/message")
+                    .pointer("/result/message")
                     .and_then(|x| x.as_str())
                     .unwrap_or("model_set failed");
                 Err(msg.to_string())
             } else {
-                Ok(v.get("output").cloned().unwrap_or(serde_json::Value::Null))
+                Ok(v.get("result").cloned().unwrap_or(serde_json::Value::Null))
             }
         }
         None => match probe.end {
@@ -428,20 +428,20 @@ pub async fn sync_default_models(
     let config_path = config_dir.to_string_lossy().to_string();
     let bin = resolve_binary(&binary_path);
 
-    let call_id = uuid::Uuid::new_v4().to_string();
-    let probe = run_temp_probe(&bin, &config_path, Some((&call_id, "model_sync", &config)), Some(&model_cache))?;
+    let command_id = uuid::Uuid::new_v4().to_string();
+    let probe = run_temp_probe(&bin, &config_path, Some((&command_id, "model_sync", &config)), Some(&model_cache))?;
 
     match probe.cmd_output {
         Some(v) => {
             let is_err = v.get("is_error").and_then(|x| x.as_bool()).unwrap_or(false);
             if is_err {
                 let msg = v
-                    .pointer("/output/message")
+                    .pointer("/result/message")
                     .and_then(|x| x.as_str())
                     .unwrap_or("model_sync failed");
                 Err(msg.to_string())
             } else {
-                Ok(v.get("output").cloned().unwrap_or(serde_json::Value::Null))
+                Ok(v.get("result").cloned().unwrap_or(serde_json::Value::Null))
             }
         }
         None => match probe.end {

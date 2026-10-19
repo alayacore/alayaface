@@ -2,7 +2,7 @@ package session
 
 import "sync"
 
-// pendingCmds maps call ID → command name (CI sent, CO not yet
+// pendingCmds maps command ID → command name (CI sent, CO not yet
 // received). Bounded: if a CO reply never arrives (protocol anomaly /
 // killed core), an entry must not grow the map forever — Store evicts
 // the OLDEST entries beyond the cap (FIFO). Mirrors the Rust

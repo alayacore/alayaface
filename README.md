@@ -373,14 +373,14 @@ control frames `UE` and `CE` carry no value. See the
 [adapter guide](../alayacore/adapter-guide/README.md) for the full protocol
 specification.
 
-Key tags (protocol v15 — every content/function frame's value is JSON, and
+Key tags (protocol v17 — every content/function frame's value is JSON, and
 the concrete kind travels inside it as a content item's `"type"`):
 
 | Tag | Direction | Description |
 |-----|-----------|-------------|
 | UX  | both      | User content — JSON content item (`{"type":"text","text":...}`, `{"type":"image","uri":...}`, …); on stdout it is the echo of a user message |
 | UE  | stdin     | User message end (flush) |
-| CI  | stdin     | Command input (JSON: call_id, name, input) |
+| CI  | stdin     | Command input (JSON: command_id, name, args) |
 | CE  | stdin     | Input end — no more prompts, commands may still follow (protocol v12; AlayaFace has no use for it, see plan-mode.md §8.8) |
 | Ax  | stdout    | Assistant content streaming delta (`"type"` is `text` or `reasoning`) |
 | AX  | stdout    | Assistant content complete/authoritative (empty when deltas preceded it) |
@@ -388,12 +388,13 @@ the concrete kind travels inside it as a content item's `"type"`):
 | Uf  | stdout    | Tool result preview snapshot (ephemeral, display-only; UF overwrites) |
 | AF  | stdout    | Tool call lifecycle (JSON: call_id, name, input) |
 | UF  | stdout    | Tool result (JSON: call_id, output, is_error) |
-| CO  | stdout    | Command output (JSON: call_id, output, is_error) |
+| CO  | stdout    | Command output (JSON: command_id, result, is_error; a failed `result` is `{code,message}`) |
 | SM  | stdout    | System message (JSON: `{"type":...,"data":...}`) |
 
 Output content/function frames carry the history id as the JSON top-level
 `"id"` (an ordinary field — there is no NUL-delimited prefix any more), and
-the tool-call id is `"call_id"`.
+the tool-call id is `"call_id"`. The command plane's id is `"command_id"` —
+the two are different values in different planes and are never compared.
 
 The session reports its lifecycle in `SM {"type":"session",...}`: `ready` when
 it can accept prompts, and — since protocol version 12 — `closed` as its last
@@ -409,7 +410,7 @@ Frame logs are printed to stderr with the `[wire]` prefix:
 
 ```
 [wire] << abc-123 AX 0b
-[wire] >> abc-123 CI 40b {"call_id":"a1","name":"cancel","input":""}
+[wire] >> abc-123 CI 44b {"command_id":"a1","name":"cancel","args":""}
 [wire] << abc-123 SM 80b {"type":"task",...}
 ```
 

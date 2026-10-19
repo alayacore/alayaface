@@ -195,8 +195,8 @@ func TestDispatchUFInvalidJSON(t *testing.T) {
 
 func TestDispatchCOInjection(t *testing.T) {
 	s, h, c := newTestSession()
-	s.PendingCmds.Store("call-1", "model_set")
-	s.dispatchFrame(h, NewModelCache(), frame("CO", `{"call_id":"call-1","output":{"ok":true},"is_error":false}`))
+	s.PendingCmds.Store("cmd-1", "model_set")
+	s.dispatchFrame(h, NewModelCache(), frame("CO", `{"command_id":"cmd-1","result":{"ok":true},"is_error":false}`))
 
 	m := decodePayload(t, nextEvent(t, c))
 	js := m["json"].(map[string]any)
@@ -204,14 +204,14 @@ func TestDispatchCOInjection(t *testing.T) {
 		t.Errorf("CO json.name = %v, want model_set (injected)", js["name"])
 	}
 	// The pending entry must be consumed.
-	if _, ok := s.PendingCmds.Load("call-1"); ok {
+	if _, ok := s.PendingCmds.Load("cmd-1"); ok {
 		t.Error("pending cmd not deleted after CO")
 	}
 }
 
 func TestDispatchCOUnknownID(t *testing.T) {
 	s, h, c := newTestSession()
-	s.dispatchFrame(h, NewModelCache(), frame("CO", `{"call_id":"nobody","output":{},"is_error":false}`))
+	s.dispatchFrame(h, NewModelCache(), frame("CO", `{"command_id":"nobody","result":{},"is_error":false}`))
 
 	m := decodePayload(t, nextEvent(t, c))
 	js := m["json"].(map[string]any)

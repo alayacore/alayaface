@@ -108,7 +108,7 @@
 - [ ] Closing an in-progress node session window → the task is **canceled** (not waited to finish) → process exits quickly (<3s, cancel → save → EOF sequence)
 - [ ] After closing, `~/.alayaface/sessions/<id>/session.alaya` exists and **contains the conversation up to the cancel point** (after cancel, alayacore auto-saves via handleTaskDone; the `save` frame is a fallback)
 - [ ] **Stop**: a Running node's task is canceled → node Canceled, process exits, window closes (no more "node keeps executing after Stop")
-- [ ] Closing an idle session (no task) → session.alaya is saved too (`save` applies; cancel returns NOTHING_TO_CANCEL which is ignored, no side effects)
+- [ ] Closing an idle session (no task) → session.alaya is saved too (`save` applies; cancel returns STATE_NOTHING_TO_CANCEL which is ignored, no side effects)
 - [ ] Rapidly closing several sessions in a row → no leftover alayacore processes (`pgrep -f alayacore`)
 - [ ] **Why it ended, in words**: closing a session whose core finished cleanly
       reports "Session closed by alayacore"; a pipe that died reports

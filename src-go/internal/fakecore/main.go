@@ -7,16 +7,18 @@
 //     frames
 //   - stdout: SM task on startup, UX echoes, Ax deltas + AX terminators for
 //     a canned assistant reply, SM model_list on EOF, and CO replies to CI
-//     commands (with the caller's call ID echoed so the backend's
+//     commands (with the caller's command_id echoed so the backend's
 //     pending-command name injection can be verified)
 //
-// v14: every content frame's value is JSON and the concrete kind is the
-// content item's "type"; the history id is the top-level "id" and the
-// tool-call id is "call_id".
+// v17: CI is {command_id, name, args} and CO is {command_id, result,
+// is_error}; every CO error carries a code from the protocol vocabulary.
+// v16 names are implemented too (`reasoning_level_set`, `mcp_skip`), because
+// a stand-in that answers an older vocabulary hides exactly the drift this
+// test double exists to catch.
 //
 // Scripted CI commands (matching what the backend sends):
 //
-//	fork          input "<historyId> <targetFile>" — writes the session
+//	fork          args "<historyId> <targetFile>" — writes the session
 //	              file (like real alayacore) and replies CO ok
 //	save          writes the session file (mirrors real alayacore's
 //	              `:save` with an empty filename → --session file) and
@@ -24,11 +26,12 @@
 //	model_set     replies CO ok with the model id echoed
 //	model_load    emits SM model_list then replies CO ok
 //	model_sync    replies CO ok and records the payload in
-//	              <config-path>/model_sync.last.json; if input contains
+//	              <config-path>/model_sync.last.json; if args contain
 //	              `"invalid"` replies CO with is_error=true
-//	tool_confirm / tool_decline — replies CO ok with the tool id
+//	reasoning_level_set — replies CO ok with the level echoed
+//	tool_confirm / tool_decline — replies CO ok with the call id
 //	cancel        replies CO ok
-//	mcp_decline / mcp_cancel — replies CO ok
+//	mcp_decline / mcp_skip — replies CO ok
 //	(anything else) replies CO with is_error=true
 //
 // A `--session <path>` flag makes it write a session file on startup
@@ -168,7 +171,7 @@ var contextTokens int
 func taskDoneFrame() string {
 	contextTokens += 4096
 	return fmt.Sprintf(
-		`{"type":"task","data":{"in_progress":false,"context":%d,"step_tps":%.1f,"ttft_ms":%d}}`,
+		`{"type":"task","data":{"in_progress":false,"context_tokens":%d,"step_tps":%.1f,"ttft_ms":%d}}`,
 		contextTokens, lastStepTps, lastTtftMs,
 	)
 }
@@ -182,7 +185,7 @@ func taskDoneFrame() string {
 func taskDoneBareFrame() string {
 	contextTokens += 4096
 	return fmt.Sprintf(
-		`{"type":"task","data":{"in_progress":false,"context":%d}}`,
+		`{"type":"task","data":{"in_progress":false,"context_tokens":%d}}`,
 		contextTokens,
 	)
 }
@@ -207,9 +210,9 @@ var (
 )
 
 type cmdMsg struct {
-	CallID string `json:"call_id"`
-	Name   string `json:"name"`
-	Input  string `json:"input"`
+	CommandID string `json:"command_id"`
+	Name      string `json:"name"`
+	Args      string `json:"args"`
 }
 
 func writeFrame(tag, value string) {
@@ -288,7 +291,7 @@ func streamReply() {
 	// until the task ends and never shows live speed while streaming.
 	contextTokens += 1024
 	writeFrame("SM", fmt.Sprintf(
-		`{"type":"task","data":{"in_progress":true,"current_step":2,"context":%d,"step_tps":%.1f,"ttft_ms":%d}}`,
+		`{"type":"task","data":{"in_progress":true,"current_step":2,"context_tokens":%d,"step_tps":%.1f,"ttft_ms":%d}}`,
 		contextTokens, lastStepTps, lastTtftMs,
 	))
 	contentDelta(aid2, "text", "Received prompt: "+stagedText+versionSuffix())
@@ -420,40 +423,54 @@ func realLLMReply() {
 	contentComplete(aid, "text", "")
 	contextTokens += tokenCount * 4 // rough context bump
 	writeFrame("SM", fmt.Sprintf(
-		`{"type":"task","data":{"in_progress":false,"context":%d,"step_tps":%.1f,"ttft_ms":%d}}`,
+		`{"type":"task","data":{"in_progress":false,"context_tokens":%d,"step_tps":%.1f,"ttft_ms":%d}}`,
 		contextTokens, lastStepTps, lastTtftMs,
 	))
 	history = append(history, histMsg{"assistant", fullText.String(), aid})
 }
 
-func coOk(id string, output map[string]any) {
+func coOk(commandID string, result map[string]any) {
 	payload, _ := json.Marshal(map[string]any{
-		"call_id":  id,
-		"output":   output,
-		"is_error": false,
+		"command_id": commandID,
+		"result":     result,
+		"is_error":   false,
 	})
 	writeFrame("CO", string(payload))
 }
 
-func coErr(id, message string) {
+// coErr answers a refusal with the uniform error object the real core sends:
+// `result` is {code, message}, where code comes from the protocol's closed
+// vocabulary (v17).
+func coErr(commandID, code, message string) {
 	payload, _ := json.Marshal(map[string]any{
-		"call_id":  id,
-		"output":   map[string]any{"message": message},
-		"is_error": true,
+		"command_id": commandID,
+		"result":     map[string]any{"code": code, "message": message},
+		"is_error":   true,
 	})
 	writeFrame("CO", string(payload))
 }
 
 // coNull answers a fire-and-forget command: the adapter-guide documents
-// `output` as `null` for those (`cancel`, and v12's `quit`), so the fake must
+// `result` as `null` for those (`cancel`, and v12's `quit`), so the fake must
 // not invent an object where the real core sends none.
-func coNull(id string) {
+func coNull(commandID string) {
 	payload, _ := json.Marshal(map[string]any{
-		"call_id":  id,
-		"output":   nil,
-		"is_error": false,
+		"command_id": commandID,
+		"result":     nil,
+		"is_error":   false,
 	})
 	writeFrame("CO", string(payload))
+}
+
+// smError reports a frame-level failure (a CI the agent cannot read, or one
+// with no command_id). v17: a CO answers exactly one CI, so a request with no
+// id to echo is an SM error instead of a CO nobody can correlate.
+func smError(text string) {
+	payload, _ := json.Marshal(map[string]any{
+		"type": "error",
+		"data": map[string]any{"text": text},
+	})
+	writeFrame("SM", string(payload))
 }
 
 func smModelList() {
@@ -515,21 +532,32 @@ func smModelList() {
 func handleCmd(raw string) {
 	var msg cmdMsg
 	if err := json.Unmarshal([]byte(raw), &msg); err != nil {
-		coErr("", "bad CI payload")
+		// A CI the agent cannot read has no id to echo: v17 answers it with
+		// an SM error, never a CO.
+		smError("malformed command frame: " + err.Error())
+		return
+	}
+	if msg.CommandID == "" {
+		// Readable but uncorrelatable: refused at the input boundary with no
+		// execution and no CO, exactly like the real core.
+		smError("command input frame has no command_id")
 		return
 	}
 	switch msg.Name {
+	case "reasoning_level_set":
+		// Mirror real alayacore: accepts a level (0|1|2) and echoes it.
+		coOk(msg.CommandID, map[string]any{"level": msg.Args})
 	case "fork":
 		// input = "<historyId> <targetFile>"
-		fields := strings.Fields(msg.Input)
+		fields := strings.Fields(msg.Args)
 		if len(fields) < 2 {
-			coErr(msg.CallID, "fork needs <historyId> <targetFile>")
+			coErr(msg.CommandID, "REQUEST_INVALID_ARGS", "fork needs <historyId> <targetFile>")
 			return
 		}
 		historyID := fields[0]
 		target := fields[len(fields)-1]
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			coErr(msg.CallID, "cannot create fork dir")
+			coErr(msg.CommandID, "IO_WRITE_FAILED", "cannot create fork dir")
 			return
 		}
 		// The fork's session.alaya carries exactly the truncated history
@@ -541,10 +569,10 @@ func handleCmd(raw string) {
 			"history": truncateHistory(historyID),
 		})
 		if err := os.WriteFile(target, payload, 0o644); err != nil {
-			coErr(msg.CallID, "cannot write session file")
+			coErr(msg.CommandID, "IO_WRITE_FAILED", "cannot write session file")
 			return
 		}
-		coOk(msg.CallID, map[string]any{"message": "forked"})
+		coOk(msg.CommandID, map[string]any{"message": "forked"})
 	case "save":
 		// Empty input = save to the --session file (real alayacore
 		// semantics). Write the session's COMPLETE history (the replayed
@@ -563,32 +591,29 @@ func handleCmd(raw string) {
 				payload = []byte(`{"version":1,"saved":true}`)
 			}
 			if err := os.WriteFile(sessionFile, payload, 0o644); err != nil {
-				coErr(msg.CallID, "cannot write session file")
+				coErr(msg.CommandID, "IO_WRITE_FAILED", "cannot write session file")
 				return
 			}
 		}
-		coOk(msg.CallID, map[string]any{"path": sessionFile})
+		coOk(msg.CommandID, map[string]any{"path": sessionFile})
 	case "model_set":
 		// Mirror real alayacore: model_set persists the active model to
 		// the config dir's runtime.conf (`active_model: <name>`), so the
 		// preset-level set-default-model flow is testable end to end.
 		if configDir != "" {
-			name := fmt.Sprintf("fake-model-%s", msg.Input)
+			name := fmt.Sprintf("fake-model-%s", msg.Args)
 			if err := writeRuntimeConf(configDir, name); err != nil {
-				coErr(msg.CallID, "cannot write runtime.conf")
+				coErr(msg.CommandID, "IO_WRITE_FAILED", "cannot write runtime.conf")
 				return
 			}
 		}
-		coOk(msg.CallID, map[string]any{"modelId": msg.Input})
+		coOk(msg.CommandID, map[string]any{"modelId": msg.Args})
 	case "model_load":
 		smModelList()
-		coOk(msg.CallID, map[string]any{"ok": true})
-	case "reason":
-		// Mirror real alayacore: accepts a level (0|1|2) and echoes it.
-		coOk(msg.CallID, map[string]any{"level": msg.Input})
+		coOk(msg.CommandID, map[string]any{"ok": true})
 	case "model_sync":
-		if strings.Contains(msg.Input, `"invalid"`) {
-			coErr(msg.CallID, "invalid config")
+		if strings.Contains(msg.Args, `"invalid"`) {
+			coErr(msg.CommandID, "CONFIG_MODEL_INVALID", "invalid config")
 			return
 		}
 		// Real alayacore REWRITES model.conf from this payload, which is why
@@ -597,38 +622,38 @@ func handleCmd(raw string) {
 		// modelSyncRecord is fakecore-only and no production code reads it.
 		if configDir != "" {
 			if err := os.MkdirAll(configDir, 0o755); err != nil {
-				coErr(msg.CallID, "cannot write config dir")
+				coErr(msg.CommandID, "IO_WRITE_FAILED", "cannot write config dir")
 				return
 			}
-			if err := os.WriteFile(filepath.Join(configDir, modelSyncRecord), []byte(msg.Input), 0o644); err != nil {
-				coErr(msg.CallID, "cannot write "+modelSyncRecord)
+			if err := os.WriteFile(filepath.Join(configDir, modelSyncRecord), []byte(msg.Args), 0o644); err != nil {
+				coErr(msg.CommandID, "IO_WRITE_FAILED", "cannot write "+modelSyncRecord)
 				return
 			}
 		}
-		coOk(msg.CallID, map[string]any{"message": "synced"})
+		coOk(msg.CommandID, map[string]any{"message": "synced"})
 	case "tool_confirm", "tool_decline":
-		coOk(msg.CallID, map[string]any{"tool_id": msg.Input, "allowed": msg.Name == "tool_confirm"})
+		coOk(msg.CommandID, map[string]any{"call_id": msg.Args, "allowed": msg.Name == "tool_confirm"})
 	case "cancel":
-		coOk(msg.CallID, map[string]any{"cancelled": true})
+		coOk(msg.CommandID, map[string]any{"cancelled": true})
 	case "quit", "q":
 		// `quit` became a session command in protocol v12 (with the `q`
 		// alias, which the real core resolves through commands.Canonical
 		// before dispatch, so a client may send either word). It answers
-		// with a null CO, stops accepting new work with SHUTTING_DOWN, and
+		// with a null CO, stops accepting new work with STATE_SHUTTING_DOWN, and
 		// lets a task already in flight finish before ending. The fake has no
 		// task to drain, so what it must get right is the ORDER: CO first,
 		// then the terminal `closed` frame, then exit — which main() writes
 		// when it sees quitting.
-		if strings.TrimSpace(msg.Input) != "" {
-			coErr(msg.CallID, "usage: :quit (no arguments)")
+		if strings.TrimSpace(msg.Args) != "" {
+			coErr(msg.CommandID, "REQUEST_INVALID_ARGS", "usage: :quit (no arguments)")
 			return
 		}
-		coNull(msg.CallID)
+		coNull(msg.CommandID)
 		quitting = true
-	case "mcp_decline", "mcp_cancel":
-		coOk(msg.CallID, map[string]any{"server": msg.Input})
+	case "mcp_decline", "mcp_skip":
+		coOk(msg.CommandID, map[string]any{"server": msg.Args})
 	default:
-		coErr(msg.CallID, "unknown command: "+msg.Name)
+		coErr(msg.CommandID, "REQUEST_UNKNOWN_COMMAND", "unknown command: "+msg.Name)
 	}
 }
 
@@ -639,7 +664,7 @@ func main() {
 	toolConfirmFlag := flag.String("tool-confirm", "", "pre-approved tool list (accepted; echoed in the boot frame)")
 	systemFlag := flag.String("system", "", "system prompt (accepted; non-empty switches to plan mode)")
 	builtinToolsFlag := flag.String("builtin-tools", "", "builtin tools (accepted; echoed in the boot frame)")
-	reasoningLevelFlag := flag.Int("reasoning-level", 1, "initial reasoning level 0|1|2 (accepted; echoed in the boot frame and an SM reasoning frame)")
+	reasoningLevelFlag := flag.Int("reasoning-level", 1, "initial reasoning level 0|1|2 (accepted; echoed in the boot frame and an SM reasoning_level frame)")
 	// --llm-url <openai-base> + --llm-model <name> make fakecore act as a
 	// pure protocol shim: it forwards the user prompt to a real OpenAI-
 	// compatible /v1/chat/completions endpoint, streams the reply back as
@@ -732,14 +757,14 @@ func main() {
 	writeFrame("SM", string(boot))
 
 	// Reasoning-level notification (mirrors real alayacore's SM
-	// {"type":"reasoning","data":{"level":N}} boot frame): the frontend
+	// {"type":"reasoning_level","data":{"level":N}} boot frame): the frontend
 	// reads the level (0|1|2) from it for the session bar's reasoning
 	// select.
 	rl := *reasoningLevelFlag
 	if rl < 0 || rl > 2 {
 		rl = 1
 	}
-	reasoning, _ := json.Marshal(map[string]any{"type": "reasoning", "data": map[string]any{"level": rl}})
+	reasoning, _ := json.Marshal(map[string]any{"type": "reasoning_level", "data": map[string]any{"level": rl}})
 	writeFrame("SM", string(reasoning))
 
 	// Active-model notification (mirrors real alayacore's SM "model"
@@ -773,7 +798,7 @@ func main() {
 	// reads its input only after the delay, that is also how the v12
 	// deferral is reproduced: a prompt written during the wait stays in the
 	// pipe and is processed once the session is ready. Real alayacore used to
-	// ANSWER such a prompt with an MCP_NOT_READY error (v11); from v12 a
+	// ANSWER such a prompt with a STATE_MCP_NOT_READY error (v11); from v12 a
 	// stage the session is passing through is a reason to postpone a prompt,
 	// not to refuse it. The fake has no MCP init to gate on, so the delayed
 	// read IS the hold — do not add an error frame back here: it would test
@@ -832,7 +857,7 @@ func main() {
 				// `ready` it is HELD (see the ready comment above: this fake
 				// reads only after the delay, so the pipe is the holding
 				// slot), which is v12's behavior; v11 answered it with an
-				// MCP_NOT_READY error frame and that emulation is gone.
+				// STATE_MCP_NOT_READY error frame and that emulation is gone.
 				if inputEnded {
 					staged = 0
 					stagedText = ""
@@ -841,7 +866,7 @@ func main() {
 				// SM-task-start per adapter-guide: in_progress:true with
 				// current_step + context; step_tps / ttft_ms are absent
 				// until a step with output tokens completes.
-				writeFrame("SM", `{"type":"task","data":{"in_progress":true,"current_step":1,"context":0}}`)
+				writeFrame("SM", `{"type":"task","data":{"in_progress":true,"current_step":1,"context_tokens":0}}`)
 				if hanging {
 					// Hung task: swallow the prompt (no reply) — the
 					// runner's timeout would fail the node (removed in

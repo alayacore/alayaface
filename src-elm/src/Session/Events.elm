@@ -703,7 +703,7 @@ decodeSyncOutcome raw =
                                     |> Maybe.withDefault False
 
                             message =
-                                D.decodeValue (D.field "output" (D.field "message" D.string)) json
+                                D.decodeValue (D.field "result" (D.field "message" D.string)) json
                                     |> Result.toMaybe
                                     |> Maybe.withDefault ""
                         in
