@@ -135,6 +135,21 @@ refreshes `testdata/alayacore-model-fields.txt`), add the field to
 know survive via `ModelInfo.extras`, so an unupdated AlayaFace degrades to
 "cannot edit" instead of "deletes it".
 
+**`input_modalities` is the one key whose emptiness is a VALUE, so it is the
+one that must never be encoded with `omitempty` logic.** Three shapes, and two
+of them look like "nothing": no line at all is AlayaCore's nil — "not
+declared, the protocol decides"; `[]` is a declaration that reads as "no
+media"; `["text","image"]` is a declaration of what it takes. The core goes out
+of its way to keep the first two apart on the wire (`null` vs `[]`, no
+`omitempty` on `protocol.ModelInfo`) precisely because a client that collapses
+them turns a text-only model into one that accepts every medium the protocol
+can carry — silently, and on an edit that never mentioned the field. So the
+field is modelled as JSON-array TEXT in `ModelInfo`/`ModelDraft` (`""` =
+undeclared, `"[]"` = no media), `canonicalModalities` canonicalizes it on the
+way out, and `modalitiesProblem` refuses what `validateModel` refuses (a
+non-array, a non-string element, a value outside `modalityVocabulary`) while
+allowing an empty list and duplicates, which the core allows.
+
 The file format belongs to that module too: `encodeModels` emits
 `config.FormatKeyValue` blocks (`key: "value"`, `---` separators, the four
 escapes AlayaCore's parser knows). The backends only write the bytes — atomically

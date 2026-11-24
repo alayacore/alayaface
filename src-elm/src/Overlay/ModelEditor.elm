@@ -85,6 +85,22 @@ viewField problemOf config field =
         onInput =
             Ev.onInput (config.onField field.key)
 
+        -- The two JSON-shaped controls: `reasoning_N`'s provider blocks and
+        -- `input_modalities`' array. Both are edited as raw text because that
+        -- is what model.conf holds, and the textarea is what keeps a long
+        -- value readable while it is being fixed.
+        jsonArea =
+            Html.textarea
+                [ Attr.class "input me-field-textarea"
+                , Attr.id id
+                , Attr.rows 2
+                , Attr.spellcheck False
+                , Attr.placeholder field.placeholder
+                , Attr.value value
+                , onInput
+                ]
+                []
+
         control =
             case field.kind of
                 MC.Choice options ->
@@ -96,16 +112,10 @@ viewField problemOf config field =
                         (List.map (viewOption value) options)
 
                 MC.Json ->
-                    Html.textarea
-                        [ Attr.class "input me-field-textarea"
-                        , Attr.id id
-                        , Attr.rows 2
-                        , Attr.spellcheck False
-                        , Attr.placeholder field.placeholder
-                        , Attr.value value
-                        , onInput
-                        ]
-                        []
+                    jsonArea
+
+                MC.Modalities ->
+                    jsonArea
 
                 _ ->
                     Html.input

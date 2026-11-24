@@ -398,6 +398,12 @@ type alias ModelInfo =
     , reasoning1 : String
     , reasoning2 : String
     , serialToolCalls : Bool
+      -- The declaration as JSON array text (`["text","image"]`), because that
+      -- is what model.conf holds and what the editor edits. "" is AlayaCore's
+      -- "not declared" (the wire sends null, the file holds no line); "[]" is
+      -- a declaration that reads as "no media". The two must stay apart: an
+      -- empty list is not an absent one.
+    , inputModalities : String
     , extras : Dict String String
     }
 
@@ -421,6 +427,7 @@ type alias ModelDraft =
     , reasoning1 : String
     , reasoning2 : String
     , serialToolCalls : String
+    , inputModalities : String
     , extras : Dict String String
     }
 

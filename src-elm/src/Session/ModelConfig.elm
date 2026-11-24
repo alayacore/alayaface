@@ -68,6 +68,11 @@ type FieldKind
     | Number
       -- Raw provider JSON (the `reasoning_N` request-body blocks).
     | Json
+      -- A JSON array of names from a closed vocabulary — `input_modalities`.
+      -- Distinct from `Json` because its emptiness MEANS something (no value
+      -- = not declared, `[]` = declared empty) and its contents are values
+      -- AlayaCore will refuse the entry over, so "it parses" is not enough.
+    | Modalities
       -- (value, label): `value` is what the draft stores and what
       -- model.conf gets; `label` is what the row shows.
     | Choice (List ( String, String ))
@@ -97,6 +102,23 @@ type alias Field =
     , get : ModelDraft -> String
     , set : String -> ModelDraft -> ModelDraft
     }
+
+
+{-| The values `input_modalities` accepts, exactly spelled and case-sensitive.
+
+A copy of AlayaCore's `protocol.PlaneKinds(protocol.PlaneUser)`
+(`internal/protocol/kinds.go`): the five content kinds a user message may
+carry, which is also the set `validateModel` checks against, so a value outside
+it makes the core SKIP the entry. There is no sixth: `reasoning` is an
+assistant-side output kind and not an input at all.
+
+This list is the one thing here the schema check cannot see — it diffs key
+NAMES, not value vocabularies — so it exists once, with its source named, and
+`modalitiesProblem` is the only reader.
+-}
+modalityVocabulary : List String
+modalityVocabulary =
+    [ "text", "image", "video", "audio", "document" ]
 
 
 {-| The model.conf keys AlayaFace models and edits, in display order.
@@ -162,6 +184,13 @@ fields =
         ]
         .serialToolCalls
         (\v d -> { d | serialToolCalls = v })
+    , modalities "input_modalities" "Input Modalities" "[\"text\",\"image\"]"
+        ("Media this model accepts, as a JSON array from "
+            ++ String.join ", " modalityVocabulary
+            ++ ". Empty = not declared, so the protocol decides; [] = no media, which reads the same as [\"text\"]."
+        )
+        .inputModalities
+        (\v d -> { d | inputModalities = v })
     ]
 
 
@@ -197,6 +226,19 @@ requiredField key kind label placeholderText hint get set =
 choice : String -> String -> String -> List ( String, String ) -> (ModelDraft -> String) -> (String -> ModelDraft -> ModelDraft) -> Field
 choice key label hint options get set =
     field key (Choice options) label "" hint get set
+
+
+{-| The `input_modalities` control. Not a `choice`: the value is a SET, it may
+be empty in two different ways (undeclared and `[]`), and the file spells it as
+a JSON array, so it is edited as that text.
+
+The name deliberately does not begin with `required`: `validateModel` does not
+require the key, and a name the schema check reads as "the core requires this"
+would refuse saves the core accepts.
+-}
+modalities : String -> String -> String -> String -> (ModelDraft -> String) -> (String -> ModelDraft -> ModelDraft) -> Field
+modalities key label placeholderText hint get set =
+    field key Modalities label placeholderText hint get set
 
 
 {-| A `choice` whose key AlayaCore requires. Separate from `choice` because the
@@ -253,6 +295,7 @@ emptyDraft =
     , reasoning1 = ""
     , reasoning2 = ""
     , serialToolCalls = "false"
+    , inputModalities = ""
     , extras = Dict.empty
     }
 
@@ -275,6 +318,7 @@ draftFromModel m =
     , reasoning1 = m.reasoning1
     , reasoning2 = m.reasoning2
     , serialToolCalls = boolText m.serialToolCalls
+    , inputModalities = m.inputModalities
     , extras = m.extras
     }
 
@@ -294,6 +338,7 @@ modelFromDraft d =
     , reasoning1 = canonicalJson d.reasoning1
     , reasoning2 = canonicalJson d.reasoning2
     , serialToolCalls = textBool d.serialToolCalls
+    , inputModalities = canonicalModalities d.inputModalities
     , extras = d.extras
     }
 
@@ -351,6 +396,42 @@ canonicalJson text =
             trimmed
 
 
+{-| Canonicalize an `input_modalities` declaration.
+
+Three shapes, and the difference between the first two is the whole point:
+
+  * `""` — not declared. AlayaCore reads a missing line as nil, which means
+    "the protocol decides", and that is what every model.conf written before
+    this option means;
+  * `"[]"` — declared, and empty: no media. Written back as `[]`, because
+    leaving the line out would change the model from "takes no media" to "not
+    declared" — a restriction widened, silently, by an unrelated edit;
+  * `["text","image"]` — declared. Re-emitted compactly so the file matches
+    what AlayaCore's own `json.Marshal` writes (`["text","image"]`, no
+    spaces).
+
+`null` collapses to `""` for the same reason `canonicalJson` collapses a null
+block: the core reads `null` as nil, so it is the same "not declared", spelled
+the same way afterwards. Unparsable text is kept as typed — `draftProblems`
+blocks the save, and echoing it back is what lets the user see and fix it.
+-}
+canonicalModalities : String -> String
+canonicalModalities text =
+    let
+        trimmed =
+            String.trim text
+    in
+    case D.decodeString (D.nullable (D.list D.string)) trimmed of
+        Ok Nothing ->
+            ""
+
+        Ok (Just kinds) ->
+            E.encode 0 (E.list E.string kinds)
+
+        Err _ ->
+            trimmed
+
+
 -- VALIDATION
 
 
@@ -394,6 +475,9 @@ draftProblems draft =
                     Json ->
                         jsonProblem f value
 
+                    Modalities ->
+                        modalitiesProblem f value
+
                     Number ->
                         numberProblem f value
 
@@ -426,6 +510,66 @@ jsonProblem f text =
 
             Err err ->
                 Just ( f.key, f.label ++ " is not valid JSON (" ++ jsonReason err ++ ")" )
+
+
+{-| Why a `input_modalities` declaration would not survive AlayaCore's own
+check, reported before Save instead of after the entry is gone.
+
+Mirrors `validateModel`, and deliberately does not outdo it:
+
+  * the value must be a JSON array of STRINGS — the core unmarshals it into
+    `[]string`, and a value it cannot read is one of the FATAL parse keys, so
+    the entry is skipped rather than loaded with a default;
+  * every string must be in `modalityVocabulary` — the core skips the entry on
+    an unknown one ("unknown input_modalities value \"vision\" ...");
+  * an empty array is legal and means "no media"; `\"\"` (no declaration at
+    all) is legal too, and means the protocol decides;
+  * duplicates are NOT refused: `FitInputModalities` builds a set from the
+    list, so `[\"text\",\"text\"]` is accepted by the core and refusing it here
+    would block a save the core takes.
+
+The message quotes the offending values and the accepted set, because the
+usual misses are synonyms — `vision` for `image`, `pdf`/`file` for
+`document` — and "invalid" alone leaves the user guessing which word is wrong.
+-}
+modalitiesProblem : Field -> String -> Maybe ( String, String )
+modalitiesProblem f text =
+    let
+        trimmed =
+            String.trim text
+    in
+    if trimmed == "" || trimmed == "null" then
+        Nothing
+
+    else
+        case D.decodeString (D.list D.string) trimmed of
+            Err _ ->
+                Just
+                    ( f.key
+                    , f.label
+                        ++ " must be a JSON array of names, e.g. [\"text\",\"image\"] — "
+                        ++ String.join ", " modalityVocabulary
+                        ++ "."
+                    )
+
+            Ok kinds ->
+                let
+                    unknown =
+                        List.filter (\kind -> not (List.member kind modalityVocabulary)) kinds
+                in
+                if List.isEmpty unknown then
+                    Nothing
+
+                else
+                    Just
+                        ( f.key
+                        , f.label
+                            ++ " does not accept "
+                            ++ String.join ", " (List.map (\k -> "\"" ++ k ++ "\"") unknown)
+                            ++ " — expected some of "
+                            ++ String.join ", " modalityVocabulary
+                            ++ ". The entry is skipped entirely when AlayaCore rejects it."
+                        )
 
 
 {-| The one line of an elm/json decode failure worth showing. The full
@@ -487,7 +631,8 @@ displayOf m =
 {-| One-line digest of what an entry is configured to do, for the model
 list rows. Every field the row shows is one the editor can set, so a user
 can see at a glance which entries use a non-default reasoning key or run
-their tool calls serially, without opening twelve forms to find out.
+their tool calls serially, or declare no media at all, without opening
+a form for every entry to find out.
 
 Deliberately excludes `api_key` (a summary rendered in a list is not a
 place for secrets) and the raw blocks' contents (too long) — it counts
@@ -522,6 +667,7 @@ summaryOf m =
 
       else
         Nothing
+    , modalitiesDigest m.inputModalities
     , if Dict.isEmpty m.extras then
         Nothing
 
@@ -530,6 +676,24 @@ summaryOf m =
     ]
         |> List.filterMap identity
         |> String.join " · "
+
+
+{-| The media declaration for the list row, and the one place `[]` earns its
+own words: "media: none" and "media: text,image" are what the user needs to
+tell apart, and an undeclared entry says nothing at all (the protocol decides,
+which is not a setting this row can get wrong).
+-}
+modalitiesDigest : String -> Maybe String
+modalitiesDigest text =
+    case D.decodeString (D.list D.string) text of
+        Ok [] ->
+            Just "media: none"
+
+        Ok kinds ->
+            Just ("media: " ++ String.join "," kinds)
+
+        Err _ ->
+            Nothing
 
 
 -- CODEC: model_list JSON -> ITEM
@@ -558,6 +722,7 @@ modelInfoDecoder =
         |> andMap (jsonBlock "reasoning_1")
         |> andMap (jsonBlock "reasoning_2")
         |> andMap (optional D.bool False "serial_tool_calls")
+        |> andMap modalitiesDecoder
         |> andMap extrasDecoder
 
 
@@ -569,6 +734,37 @@ andMap =
 optional : D.Decoder a -> a -> String -> D.Decoder a
 optional decoder default key =
     D.maybe (D.field key decoder) |> D.map (Maybe.withDefault default)
+
+
+{-| `input_modalities`, the one optional key whose EMPTY value is a
+declaration rather than an absence.
+
+AlayaCore sends `null` for "not declared" and `[]` for "declared, no media",
+with no `omitempty` precisely so the two cannot be confused on the wire
+(`TestInputModalitiesAbsentAndEmptyStayApart` pins that on its side). Both are
+kept apart here, as JSON array text in the draft, because the file this module
+writes is what decides which of them the core reads back: collapsing `[]` to
+"" would widen a text-only model to one that accepts every medium the protocol
+can carry — silently, on an edit that never mentioned the field.
+
+The `maybe` is inherited from `optional` above: a missing key decodes as "not
+declared" instead of failing the whole model list.
+-}
+modalitiesDecoder : D.Decoder String
+modalitiesDecoder =
+    D.maybe (D.field "input_modalities" (D.nullable (D.list D.string)))
+        |> D.map
+            (\declared ->
+                case declared of
+                    Just (Just kinds) ->
+                        E.encode 0 (E.list E.string kinds)
+
+                    Just Nothing ->
+                        ""
+
+                    Nothing ->
+                        ""
+            )
 
 
 {-| A `reasoning_N` block is raw provider JSON on the wire (AlayaCore types
@@ -641,7 +837,10 @@ omits (`omitempty`), so an unchanged entry round-trips byte for byte:
   * `context_limit` / `max_tokens` when 0 (0 is the documented default);
   * an empty `reasoning_N`, which is also how the user clears one;
   * `reasoning_field` when empty (the provider default);
-  * `serial_tool_calls` when false.
+  * `serial_tool_calls` when false;
+  * `input_modalities` when UNDECLARED — but an empty declaration (`[]`) IS
+    written, because `omitempty` upstream cannot express it and dropping the
+    line would turn "takes no media" into "not declared".
 
 `id` is never written — AlayaCore assigns it at runtime (`config:"-"`).
 -}
@@ -674,9 +873,16 @@ encodeModel m =
                 else
                     []
                )
-            -- Keys this build does not model (input_modalities today) are
-            -- carried verbatim in `extras`; a key NEITHER side knows cannot be
-            -- preserved, because AlayaCore drops it when it parses the file.
+            -- `input_modalities` is written only when DECLARED, and `[]` is a
+            -- declaration: AlayaCore reads a missing line as "not declared, the
+            -- protocol decides" and `[]` as "no media". Writing one for the
+            -- other silently widens a text-only model, which is why this goes
+            -- through `rawLine`'s array branch rather than `omitempty`.
+            ++ List.filterMap (\( key, text ) -> Conf.rawLine key text)
+                [ ( "input_modalities", m.inputModalities ) ]
+            -- Keys this build does not model are carried verbatim in `extras`;
+            -- a key NEITHER side knows cannot be preserved, because AlayaCore
+            -- drops it when it parses the file.
             ++ List.filterMap (\( key, text ) -> Conf.rawLine key text) (Dict.toList m.extras)
         )
 

@@ -561,21 +561,22 @@ func smModelList() {
 	// Full ModelInfo shape, mirroring real alayacore's protocol.ModelInfo
 	// field for field: id, name, protocol_type, base_url, api_key,
 	// model_name, context_limit, max_tokens, reasoning_field,
-	// reasoning_0/1/2, serial_tool_calls.
+	// reasoning_0/1/2, serial_tool_calls, input_modalities.
 	//
 	// Two details of the real payload are reproduced on purpose, because
 	// AlayaFace rewrites model.conf from what it reads here:
-	//   - serial_tool_calls has no omitempty upstream, so it is ALWAYS
-	//     present, and fakecore always sends it too;
+	//   - serial_tool_calls and input_modalities have no omitempty upstream,
+	//     so they are ALWAYS present, and fakecore always sends them too;
+	//     `input_modalities` is null for "not declared" and [] for "declared,
+	//     no media", two settings that must not collapse into one;
 	//   - the other optional fields appear only when set, so the client's
 	//     "absent means the provider default" path stays covered.
 	//
-	// fake-model-2 also carries `input_modalities`, a key this client build
-	// does not model, to prove AlayaFace carries a core-known key back out
-	// when it rewrites model.conf instead of dropping it. (A key NEITHER side
-	// knows cannot be preserved — AlayaCore rejects it as an unknown config
-	// key on load — and `extras` only ever holds keys the core sent, so the
-	// fixture uses a real one.)
+	// fake-model-1 declares [] and fake-model-2 declares ["text"], so the
+	// round trip covers both a non-empty declaration and an empty one. An
+	// empty list is the one that hurts if it is dropped: no line in
+	// model.conf reads back as "not declared", which widens a text-only model
+	// to everything the protocol can carry.
 	//
 	// In --llm-url mode the canned fake-model-* entries (which point at
 	// a non-running localhost:11434) are replaced with a single entry
@@ -601,13 +602,14 @@ func smModelList() {
 	payload := `{"type":"model_list","data":{"models":[` +
 		// A plain entry: no optional field set, so the editor must show
 		// AlayaCore's defaults (reasoning_content, concurrent tool calls).
-		`{"id":1,"name":"fake-model-1","protocol_type":"openai","base_url":"http://localhost:11434/v1","api_key":"fake","model_name":"model-1","context_limit":8192,"max_tokens":2048,"serial_tool_calls":false},` +
+		`{"id":1,"name":"fake-model-1","protocol_type":"openai","base_url":"http://localhost:11434/v1","api_key":"fake","model_name":"model-1","context_limit":8192,"max_tokens":2048,"input_modalities":[],"serial_tool_calls":false},` +
 		// An entry configured the way a vLLM endpoint is: reasoning under
 		// the other key, per-level provider JSON, tool calls that must run
 		// one at a time.
 		`{"id":2,"name":"fake-model-2","protocol_type":"openai","base_url":"http://localhost:11434/v1","api_key":"fake","model_name":"model-2","context_limit":16384,"max_tokens":4096,"reasoning_field":"reasoning","reasoning_1":{"thinking":{"type":"enabled"}},"reasoning_2":{"thinking":{"type":"enabled"},"effort":"max"},"serial_tool_calls":true,` +
-		// A core-known key this client build does not model, which must come
-		// back out on the other side of an edit+save.
+		// A media declaration, which must come back out unchanged on the
+		// other side of an edit+save — and [] on fake-model-1 must not turn
+		// into an absent line.
 		`"input_modalities":["text"]}]}}`
 	writeFrame("SM", payload)
 }

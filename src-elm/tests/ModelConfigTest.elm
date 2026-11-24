@@ -47,6 +47,7 @@ fullEntry =
     , "reasoning_0": { "thinking": { "type": "disabled" } }
     , "reasoning_2": { "thinking": { "type": "enabled" }, "effort": "max" }
     , "serial_tool_calls": true
+    , "input_modalities": ["text", "image"]
     , "quantization": "awq"
     }"""
 
@@ -70,6 +71,28 @@ decodeEntry text =
 entry : T.ModelInfo
 entry =
     decodeEntry fullEntry
+
+
+{-| A model that declares it takes NO media: `[]`, on the wire and in the
+file. Not the same entry as `plainEntry`, which declares nothing at all and
+therefore lets the protocol decide — the difference is the thing
+`input_modalities` exists to express. -}
+noMediaEntry : T.ModelInfo
+noMediaEntry =
+    decodeEntry
+        """{ "id": 4, "name": "text-only", "protocol_type": "openai", "base_url": "http://x/v1",
+            "api_key": "k", "model_name": "m", "input_modalities": [],
+            "serial_tool_calls": false }"""
+
+
+{-| The wire spells "not declared" as `null` (the core's json tag has no
+`omitempty` for exactly this reason), so the client has to read it. -}
+nullModalitiesEntry : T.ModelInfo
+nullModalitiesEntry =
+    decodeEntry
+        """{ "id": 5, "name": "undeclared", "protocol_type": "openai", "base_url": "http://x/v1",
+            "api_key": "k", "model_name": "m", "input_modalities": null,
+            "serial_tool_calls": false }"""
 
 
 {-| An entry as an older core / a hand-written model.conf leaves it: only
@@ -175,7 +198,9 @@ suite =
                         , \m -> Expect.equal 8192 m.maxTokens
                         ]
                         entry
-            , test "a key AlayaFace does not model is carried, not dropped" <|
+            , test "input_modalities is decoded as the JSON array it travels as" <|
+                \_ -> Expect.equal "[\"text\",\"image\"]" entry.inputModalities
+            , test "…and it is no longer carried as an unknown key" <|
                 \_ -> Expect.equal [ "quantization" ] (Dict.keys entry.extras)
             ]
         , describe "an entry from before the fields existed (older core, hand-written model.conf)"
@@ -190,6 +215,12 @@ suite =
                         |> Dict.filter (\key _ -> List.member key reasoningBlocks)
                         |> Dict.keys
                         |> Expect.equal []
+            , test "no input_modalities means not declared, not \"no media\"" <|
+                \_ -> Expect.equal "" minimal.inputModalities
+            , test "the wire's null means the same thing, and does not become []" <|
+                \_ -> Expect.equal "" nullModalitiesEntry.inputModalities
+            , test "an empty declaration survives the wire as an empty declaration" <|
+                \_ -> Expect.equal "[]" noMediaEntry.inputModalities
             ]
         , describe "item -> model.conf"
             [ test "every modelled key that is written is stated, never left to a default" <|
@@ -259,17 +290,17 @@ suite =
                         , Dict.member "max_tokens" (confObject { entry | maxTokens = 0 })
                         , Dict.member "context_limit" (confObject entry)
                         )
-            , test "an undeclared optional key (JSON null) writes no line" <|
+            , test "an undeclared input_modalities writes no line, which the core reads as nil" <|
+                \_ -> Expect.equal Nothing (stated "input_modalities" plainEntry)
+            , test "…but an empty declaration (`[]`) IS written, because absent and empty differ" <|
                 \_ ->
-                    { entry | extras = Dict.fromList [ ( "input_modalities", "null" ) ] }
-                        |> confObject
-                        |> Dict.member "input_modalities"
-                        |> Expect.equal False
-            , test "an empty declaration (`[]`) is written, because absent and empty differ" <|
-                \_ ->
-                    { entry | extras = Dict.fromList [ ( "input_modalities", "[]" ) ] }
-                        |> stated "input_modalities"
-                        |> Expect.equal (Just "[]")
+                    -- The whole point of the field. Dropping the line would
+                    -- tell AlayaCore "not declared, the protocol decides" and
+                    -- turn a text-only model into one that takes every medium
+                    -- the wire can carry — on an edit that never mentioned it.
+                    Expect.equal (Just "[]") (stated "input_modalities" noMediaEntry)
+            , test "the declaration is written the way AlayaCore's own writer spells it" <|
+                \_ -> Expect.equal (Just "[\"text\",\"image\"]") (stated "input_modalities" entry)
             ]
         , describe "the bug this change fixed: edit one field, lose the others"
             [ test "renaming a model keeps reasoning_field" <|
@@ -303,6 +334,33 @@ suite =
                         -- (`config:"serial_tool_calls,omitempty"`): reading it
                         -- back as absent is reading it back as false.
                         |> Expect.equal Nothing
+            , test "editing any other field keeps the media declaration" <|
+                \_ ->
+                    Expect.equal (Just "[\"text\",\"image\"]")
+                        (entry |> rename |> MC.modelFromDraft |> stated "input_modalities")
+            , test "…including an empty one, which must not be widened to \"not declared\"" <|
+                \_ ->
+                    -- The destructive case this field exists for: one Edit+Save
+                    -- on an unrelated field, and a text-only model starts
+                    -- accepting images because the line disappeared.
+                    Expect.equal (Just "[]")
+                        (noMediaEntry |> MC.draftFromModel |> MC.updateDraftField "name" "renamed" |> MC.modelFromDraft |> stated "input_modalities")
+            , test "declaring modalities is what reaches the file" <|
+                \_ ->
+                    entry
+                        |> MC.draftFromModel
+                        |> MC.updateDraftField "input_modalities" "[\"text\",\"audio\"]"
+                        |> MC.modelFromDraft
+                        |> stated "input_modalities"
+                        |> Expect.equal (Just "[\"text\",\"audio\"]")
+            , test "clearing the declaration is how \"not declared\" comes back" <|
+                \_ ->
+                    entry
+                        |> MC.draftFromModel
+                        |> MC.updateDraftField "input_modalities" ""
+                        |> MC.modelFromDraft
+                        |> stated "input_modalities"
+                        |> Expect.equal Nothing
             , test "typing a reasoning key is what reaches the wire" <|
                 \_ ->
                     entry
@@ -316,10 +374,15 @@ suite =
             [ test "it names every field that is set, including the carried key" <|
                 \_ ->
                     Expect.equal
-                        "openai · ctx 163840 · out 8192 · reasoning:reasoning · json 2 · serial tools · +1 more"
+                        "openai · ctx 163840 · out 8192 · reasoning:reasoning · json 2 · serial tools · media: text,image · +1 more"
                         (MC.summaryOf { entry | contextLimit = 163840, maxTokens = 8192, serialToolCalls = True })
             , test "a plain entry says only its protocol" <|
                 \_ -> Expect.equal "openai · ctx 8192 · out 2048" (MC.summaryOf plainEntry)
+            , test "a declared-empty model reads \"no media\", not the same as undeclared" <|
+                \_ ->
+                    Expect.equal
+                        ( "openai · media: none", "openai" )
+                        ( MC.summaryOf noMediaEntry, MC.summaryOf plainEntry |> String.split " · " |> List.head |> Maybe.withDefault "" )
             , test "the API key never reaches a list row" <|
                 \_ ->
                     Expect.equal False (String.contains "supersecret" (MC.summaryOf { entry | apiKey = "supersecret" }))
@@ -335,6 +398,7 @@ suite =
                                 , reasoning1 = ""
                                 , reasoning2 = ""
                                 , serialToolCalls = False
+                                , inputModalities = ""
                             }
                         )
             ]
@@ -484,6 +548,59 @@ suite =
                         )
             , test "provider JSON is not restricted to objects" <|
                 \_ -> Expect.equal [] (MC.draftProblems { clean | reasoning2 = "[1,2]" })
+            , test "a modality AlayaCore does not know is refused, naming the value and the vocabulary" <|
+                \_ ->
+                    -- The usual misses are synonyms (`vision` for `image`,
+                    -- `pdf` for `document`), so the message has to show which
+                    -- word is wrong — and that an unknown one skips the entry.
+                    case MC.draftProblems { clean | inputModalities = "[\"text\",\"vision\"]" } of
+                        [ ( key, message ) ] ->
+                            Expect.all
+                                [ \() -> Expect.equal "input_modalities" key
+                                , \() -> Expect.equal True (String.contains "\"vision\"" message)
+                                , \() -> Expect.equal True (String.contains "image" message)
+                                ]
+                                ()
+
+                        other ->
+                            Expect.fail ("expected exactly one problem, got " ++ String.fromInt (List.length other))
+            , test "modalities that are not JSON at all are refused (the core cannot even parse them)" <|
+                \_ ->
+                    Expect.equal [ "input_modalities" ]
+                        (MC.draftProblems { clean | inputModalities = "[text, image]" }
+                            |> List.map Tuple.first
+                        )
+            , test "a non-string element is refused, because the core unmarshals into []string" <|
+                \_ ->
+                    Expect.equal [ "input_modalities" ]
+                        (MC.draftProblems { clean | inputModalities = "[1,2]" }
+                            |> List.map Tuple.first
+                        )
+            , test "an empty declaration is legal — it means \"no media\", not \"unfinished\"" <|
+                \_ -> Expect.equal [] (MC.draftProblems { clean | inputModalities = "[]" })
+            , test "duplicates are not refused, because validateModel does not refuse them" <|
+                \_ ->
+                    -- Mirror the core, do not outdo it: FitInputModalities builds
+                    -- a set from the list, so this saves a model the core
+                    -- accepts. Refusing it would strand an entry over a
+                    -- spelling difference with no behavioral effect.
+                    Expect.equal [] (MC.draftProblems { clean | inputModalities = "[\"text\",\"text\"]" })
+            , test "the declaration is canonicalized the way the core writes it" <|
+                \_ ->
+                    Expect.equal "[\"text\",\"image\"]"
+                        (MC.emptyDraft
+                            |> MC.updateDraftField "input_modalities" "[ \"text\" , \"image\" ]"
+                            |> MC.modelFromDraft
+                            |> .inputModalities
+                        )
+            , test "a bare null declaration collapses to undeclared (the core reads it as nil)" <|
+                \_ ->
+                    Expect.equal ""
+                        (MC.emptyDraft
+                            |> MC.updateDraftField "input_modalities" "null"
+                            |> MC.modelFromDraft
+                            |> .inputModalities
+                        )
             , test "the tool-call mode accepts only what its control offers" <|
                 \_ ->
                     Expect.equal [ "serial_tool_calls" ]

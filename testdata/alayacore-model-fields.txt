@@ -7,6 +7,7 @@ api_key
 base_url
 context_limit
 id
+input_modalities
 max_tokens
 model_name
 name

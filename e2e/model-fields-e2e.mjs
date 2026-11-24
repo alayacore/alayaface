@@ -14,7 +14,8 @@
 //      Save instead of being dropped on save;
 //   3. after Save, the model.conf AlayaFace wrote still carries every field
 //      of BOTH entries — the one that was edited and the one that was not —
-//      including `input_modalities`, a core-known key this build does not model.
+//      including `input_modalities`, whose EMPTY declaration (`[]`, on the
+//      untouched entry) must stay a line and not decay into "not declared".
 //
 // Since AlayaCore v19 there is no model_sync payload to inspect: the preset's
 // model.conf IS the thing the backend wrote and the core reads, so step 3
@@ -226,6 +227,7 @@ async function main() {
     reasoning_1: '{"thinking":{"type":"enabled"}}',
     reasoning_2: '{"thinking":{"type":"enabled"},"effort":"max"}',
     serial_tool_calls: "true",
+    input_modalities: '["text"]',
   };
   for (const [key, want] of Object.entries(expected)) {
     const got = await waitFor(() => valueOf(key).then((v) => (v === want ? v : null)), 8000, "field " + key + " = " + JSON.stringify(want))
@@ -239,7 +241,7 @@ async function main() {
     throw new Error(`editor shows ${labels.length} fields, want ${Object.keys(expected).length}`);
   }
 
-  // Twelve fields need to scroll, and Save must stay reachable while doing so.
+  // Thirteen fields need to scroll, and Save must stay reachable while doing so.
   const layout = await page.evaluate(() => {
     const f = document.querySelector(".me-fields");
     const a = document.querySelector(".me-actions");
@@ -263,6 +265,20 @@ async function main() {
   if (!errs.some((e) => e.includes("reasoning_1") || e.includes("Reasoning"))) throw new Error("no reasoning_1 problem reported");
   await setField("reasoning_1", '{"thinking":{"type":"disabled"}}');
   if (await saveDisabled()) throw new Error("Save still disabled after fixing reasoning_1");
+
+  // ── 2a. a modality AlayaCore would reject blocks Save ──
+  // `vision` is the usual miss for `image`, and an unknown value is one the
+  // core SKIPS the whole entry over — the model would be gone from model.conf
+  // with the reason only in the CONFIG_MODEL_INVALID reply, after the fact.
+  await setField("input_modalities", '["text","vision"]');
+  if (!(await saveDisabled())) throw new Error("Save enabled with an unknown input_modalities value");
+  const modalityErrs = await errorLines();
+  console.log("modality errors:", JSON.stringify(modalityErrs));
+  if (!modalityErrs.some((e) => e.includes("vision") && e.includes("image"))) {
+    throw new Error("the input_modalities refusal does not name the bad value and the vocabulary: " + JSON.stringify(modalityErrs));
+  }
+  await setField("input_modalities", '["text"]');
+  if (await saveDisabled()) throw new Error("Save still disabled after fixing input_modalities");
 
   // ── 2b. a required field blocks Save, because saving it deletes the model ──
   // AlayaCore's syncFromContent skips entries failing validateModel and then
@@ -341,8 +357,19 @@ async function main() {
   check(edited.reasoning_1 && edited.reasoning_1.thinking.type === "disabled", "fixed reasoning_1 lost");
   check(edited.reasoning_2 && edited.reasoning_2.effort === "max", "untouched reasoning_2 lost");
   check(edited.context_limit === 16384 && edited.max_tokens === 4096, "untouched numeric limits lost");
-  check(edited.input_modalities && edited.input_modalities[0] === "text", "the un-modelled key input_modalities was deleted by the edit");
+  check(
+    Array.isArray(edited.input_modalities) && edited.input_modalities.join() === "text",
+    "the modelled key input_modalities was deleted by the edit: " + JSON.stringify(edited.input_modalities),
+  );
   check(untouched.serial_tool_calls === undefined, "serial_tool_calls not omitted for the untouched entry");
+  // The distinction the field exists for: [] is a DECLARATION. Dropping the
+  // line would read back as "not declared", i.e. every medium allowed — a
+  // silent widening caused by an edit to a different entry.
+  check(
+    Array.isArray(untouched.input_modalities) && untouched.input_modalities.length === 0,
+    "an empty input_modalities declaration was dropped (the model is now declared as accepting media): " +
+      JSON.stringify(untouched.input_modalities),
+  );
   check(untouched.reasoning_field === undefined, "an empty reasoning_field was written for the untouched entry");
   console.log("ALL PASS");
 
