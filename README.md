@@ -42,7 +42,7 @@ Main.elm → view → HTML
 
 ## Requirements
 
-- [Elm](https://elm-lang.org/) 0.19.2 (`elm` in PATH)
+- [Elm](https://elm-lang.org/) 0.19.3 (`elm` in PATH)
 - [elm-test](https://elm-test.readthedocs.io/) for running the Elm test suite
 - [Rust](https://www.rust-lang.org/) with Cargo
 - [AlayaCore](https://github.com/alayacore/alayacore) binary (`alayacore` in PATH or `ALAYACORE_BIN` env var)

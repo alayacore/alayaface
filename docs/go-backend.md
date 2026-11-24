@@ -417,7 +417,7 @@ runtimes auto-switch on the presence of `window.__TAURI__`, avoiding two bridge 
 | Go integration | `internal/fakecore` (scriptable rawio stand-in) + `internal/server/integration_test.go`: full end-to-end over HTTP+WS against a real subprocess — conversation flow, every CI command roundtrip with CO name injection, fork, model probes (live + fallback), sync error paths, resume/delete, token auth | implemented 2026-08-05 (commit 7838e93); run with `go test ./... -race` |
 | Elm tests | unchanged — verify the shared client is not broken | `make test` |
 | Dual-backend smoke | run the same Elm frontend against both Tauri and Go, diff the event streams | manual (GUI env) |
-| CI | `.github/workflows/ci.yml`: Go (`go vet` + `go test -race`), Elm (0.19.2 toolchain: `elm make` + `elm-test`), Rust (Tauri system deps + `cargo test`), plus the schema, layout-invariant, CSS and AlayaCore-protocol guards (fixture mode — AlayaCore is absent there) | — |
+| CI | `.github/workflows/ci.yml`: Go (`go vet` + `go test -race`), Elm (0.19.3 toolchain: `elm make` + `elm-test`), Rust (Tauri system deps + `cargo test`), plus the schema, layout-invariant, CSS and AlayaCore-protocol guards (fixture mode — AlayaCore is absent there) | — |
 
 ---
 

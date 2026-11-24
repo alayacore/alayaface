@@ -17,10 +17,10 @@ jobs:
       - name: Build Frontend
         run: |
           cd src-elm
-          wget https://github.com/elm/compiler/releases/download/0.19.2/elm-0.19.2-linux-x64.gz
-          gunzip elm-0.19.2-linux-x64.gz
-          chmod +x elm-0.19.2-linux-x64
-          mv elm-0.19.2-linux-x64 elm
+          wget https://github.com/elm/compiler/releases/download/0.19.3/elm-0.19.3-linux-x64.gz
+          gunzip elm-0.19.3-linux-x64.gz
+          chmod +x elm-0.19.3-linux-x64
+          mv elm-0.19.3-linux-x64 elm
           ./elm make src/Main.elm --output=elm.js
       - name: Upload Frontend Artifact
         uses: actions/upload-artifact@v4

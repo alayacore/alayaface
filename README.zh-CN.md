@@ -34,7 +34,7 @@ Main.elm → view → HTML
 
 ## 环境要求
 
-- [Elm](https://elm-lang.org/) 0.19.2（`elm` 需在 PATH 中）
+- [Elm](https://elm-lang.org/) 0.19.3（`elm` 需在 PATH 中）
 - 运行 Elm 测试套件需要 [elm-test](https://elm-test.readthedocs.io/)
 - [Rust](https://www.rust-lang.org/)（含 Cargo）
 - [AlayaCore](https://github.com/alayacore/alayacore) 二进制（`alayacore` 在 PATH 中，或通过 `ALAYACORE_BIN` 环境变量指定）

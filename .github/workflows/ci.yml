@@ -31,8 +31,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Install Elm 0.19.2 toolchain
-        run: npm install -g elm@0.19.2-0 elm-test@0.19.2-0
+      - name: Install Elm 0.19.3 toolchain
+        run: npm install -g elm@0.19.3-0 elm-test@0.19.3-0
       - name: Compile
         run: elm make src/Main.elm --output=elm.js
         working-directory: src-elm
@@ -108,7 +108,7 @@ jobs:
         with:
           node-version: 20
       - name: Install Elm
-        run: npm install -g elm@0.19.2-0
+        run: npm install -g elm@0.19.3-0
       - name: Build elm.js
         run: elm make src/Main.elm --output=elm.js
         working-directory: src-elm
