@@ -143,11 +143,15 @@
 - [ ] Simple/Complex show a "built-in" tag with NO Rename and NO Delete button; copies (e.g. Simple-copy) have both
 - [ ] `rename_preset` / `delete_preset` on Simple or Complex are rejected by the backend even without the UI
 - [ ] Each seed preset's Settings editor shows a System prompt (the plan contract) which reaches the session as `--system`
-- [ ] Preset Models editor → Edit shows a control for **every** `model.conf` field (incl. `reasoning_field`, `reasoning_0/1/2`, `serial_tool_calls`); saving one edit leaves the others intact — `model_sync` rewrites the whole file, so a dropped field is a deleted line
+- [ ] Preset Models editor → Edit shows a control for **every** `model.conf` field (incl. `reasoning_field`, `reasoning_0/1/2`, `serial_tool_calls`); saving one edit leaves the others intact — the editor writes the whole file, so a dropped field is a deleted line
 - [ ] Preset Models editor: typing broken JSON into a `reasoning_N` block names the field and disables Save (it must not be dropped silently)
 - [ ] Preset Models editor: clearing **Base URL** or **Model Name** disables Save, and the message says the entry would be dropped from `model.conf` — this is not tidiness: AlayaCore skips an entry that fails validation and then rewrites the file from the survivors, so the model is gone before any error reaches you. Restore the value → Save works again
 - [ ] …but clearing **Name** does NOT block Save (AlayaCore does not require it). Save a nameless model and its row shows its `model_name` instead of going blank — the list must never render two indistinguishable empty rows
 - [ ] Preset Models editor: click "Set Default" on a model → it becomes the preset's default (● marker + header `preset · model`), runtime.conf gains `active_model: <name>`, and a NEW session under that preset starts on that model
+- [ ] Preset MCP editor → Edit shows **Auth Scopes (JSON array)** for `authorization_code` auth; saving one server leaves its `auth-scopes` and any key this build does not model intact (the editor writes the whole `mcp.conf`, so a dropped key is a deleted line)
+- [ ] A server URL/token containing `&`, `<` or `>` survives a save unchanged (the value is quoted with AlayaCore's four escapes, not JSON escaping)
+- [ ] Typing broken JSON into `args`, `env` or `auth-scopes` names the field and refuses Save
+- [ ] `mcp.conf` is written with mode 0600 (it can hold OAuth client secrets)
 - [ ] Global menu → New Session hover submenu lists the presets and creates the session under the chosen preset (spawn log shows `preset=...`)
 - [ ] Plan node sessions under the Complex preset get Complex's system_prompt (spawn log `--system` + `preset=Complex`)
 - [ ] No `active-preset` file exists under `~/.alayaface/`; editing a preset's settings never affects another preset

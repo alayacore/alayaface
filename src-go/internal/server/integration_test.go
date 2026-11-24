@@ -280,7 +280,7 @@ func TestIntegrationConversationFlow(t *testing.T) {
 	}
 }
 
-// ─── Command roundtrips: model_set / model_sync / confirm / mcp / cancel ─
+// ─── Command roundtrips: model_set / write_session_models / confirm / mcp / cancel ─
 
 func TestIntegrationCommandRoundtrips(t *testing.T) {
 	e := newTestEnv(t, "")
@@ -297,12 +297,18 @@ func TestIntegrationCommandRoundtrips(t *testing.T) {
 		t.Errorf("model_set result = %v, want modelId 7", js["result"])
 	}
 
-	// model_sync.
-	e.rpcOK(t, "alayacore_model_sync", map[string]any{"sessionId": sid, "config": `{"name":"x"}`})
+	// write_session_models: the adapter writes the session's model.conf and
+	// then waits for model_load's CO (fakecore answers it like the real core).
+	const modelConf = "name: \"x\"\nprotocol_type: \"openai\"\nbase_url: \"http://x/v1\"\nmodel_name: \"m\"\n"
+	e.rpcOK(t, "alayacore_write_session_models", map[string]any{"sessionId": sid, "config": modelConf})
 	e.waitEvent(t, "tlv-frame", func(p map[string]any) bool {
 		js, _ := p["json"].(map[string]any)
-		return p["tag"] == "CO" && js != nil && js["name"] == "model_sync"
+		return p["tag"] == "CO" && js != nil && js["name"] == "model_load"
 	})
+	confPath := filepath.Join(dirs.AlayafaceDir(), "sessions", sid, "config", "model.conf")
+	if got, err := os.ReadFile(confPath); err != nil || string(got) != modelConf {
+		t.Errorf("model.conf = %q, %v; want %q", got, err, modelConf)
+	}
 
 	// tool_confirm (allowed=true → command name tool_confirm).
 	e.rpcOK(t, "alayacore_confirm", map[string]any{"sessionId": sid, "id": "tool-1", "allowed": true})
@@ -494,24 +500,39 @@ func TestIntegrationSetDefaultModel(t *testing.T) {
 
 func TestIntegrationSyncDefaultModels(t *testing.T) {
 	e := newTestEnv(t, "")
+	const modelConf = "name: \"new-model\"\nprotocol_type: \"openai\"\nbase_url: \"http://x/v1\"\nmodel_name: \"m\"\n"
 
-	// Success: CO is_error=false → handler returns CO output.
+	// Success: the candidate is validated in a throwaway config dir, then
+	// written to the preset. The response is the list that was loaded.
 	body := e.rpcOK(t, "sync_default_models", map[string]any{
-		"binaryPath": "", "preset": "Simple", "config": `{"name":"new-model"}`,
+		"binaryPath": "", "preset": "Simple", "config": modelConf,
 	})
-	var out map[string]any
+	var out struct {
+		Models []map[string]any `json:"models"`
+	}
 	if err := json.Unmarshal(body, &out); err != nil {
 		t.Fatalf("sync_default_models success: %s", body)
 	}
-	if out["message"] != "synced" {
+	if len(out.Models) != 1 || out.Models[0]["name"] != "new-model" {
 		t.Errorf("sync_default_models output = %s", body)
 	}
+	confPath := filepath.Join(dirs.PresetDir("Simple"), "model.conf")
+	if got, err := os.ReadFile(confPath); err != nil || string(got) != modelConf {
+		t.Errorf("preset model.conf = %q, %v; want %q", got, err, modelConf)
+	}
 
-	// Error: CO is_error=true → handler surfaces {"error": message}.
+	// A candidate the core refuses leaves the user's file untouched: the
+	// validation happens in a scratch dir, so nothing is written before the
+	// answer. (This is the guarantee :model_sync's validate-then-persist had.)
+	before, _ := os.ReadFile(confPath)
 	if msg := e.rpcErr(t, "sync_default_models", map[string]any{
-		"binaryPath": "", "preset": "Simple", "config": `{"invalid":true}`,
+		"binaryPath": "", "preset": "Simple", "config": "invalid: true\n",
 	}); msg != "invalid config" {
 		t.Errorf("sync_default_models error = %q, want 'invalid config'", msg)
+	}
+	after, _ := os.ReadFile(confPath)
+	if string(after) != string(before) {
+		t.Errorf("a refused candidate changed model.conf: %q → %q", before, after)
 	}
 }
 

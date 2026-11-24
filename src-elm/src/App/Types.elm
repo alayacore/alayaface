@@ -487,6 +487,11 @@ type Msg
     | ModelSelectorConfirmSync
     | ModelSelectorDiscardClose
     | ModelSelectorCancelSyncPrompt
+      -- The backend's answer to `writeSessionModels`: {sessionId, ok, error}.
+      -- Routed to that session's selector (the active window may have changed
+      -- while the write was in flight).
+    | SessionModelsWriteResult E.Value
+      -- The per-session selector's verdict on that answer.
     | ModelSelectorSyncResult Bool String
       -- Default (global) model list editor (targets a specific preset)
     | EditPresetModels String

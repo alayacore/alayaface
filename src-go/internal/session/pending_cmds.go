@@ -1,6 +1,9 @@
 package session
 
-import "sync"
+import (
+	"encoding/json"
+	"sync"
+)
 
 // pendingCmds maps command ID → command name (CI sent, CO not yet
 // received). Bounded: if a CO reply never arrives (protocol anomaly /
@@ -13,10 +16,56 @@ type pendingCmds struct {
 	mu    sync.Mutex
 	m     map[string]string
 	order []string // insertion order (FIFO eviction)
+
+	// waiters are command IDs whose SENDER is blocked on the answer. Used by
+	// SendCmdWait (the model write RPC waits on `model_load`'s CO); kept apart
+	// from the id→name map because only a few commands ask for it. The
+	// reader resolves (and removes) an entry as the CO arrives.
+	waiters map[string]chan json.RawMessage
 }
 
 func newPendingCmds() *pendingCmds {
-	return &pendingCmds{m: make(map[string]string)}
+	return &pendingCmds{
+		m:       make(map[string]string),
+		waiters: make(map[string]chan json.RawMessage),
+	}
+}
+
+// Waiter registers a buffered channel that Resolve will receive the CO on.
+// Call it BEFORE writing the CI frame: the answer can arrive as soon as the
+// frame is flushed.
+func (p *pendingCmds) Waiter(id string) chan json.RawMessage {
+	ch := make(chan json.RawMessage, 1)
+	p.mu.Lock()
+	p.waiters[id] = ch
+	p.mu.Unlock()
+	return ch
+}
+
+// DropWaiter removes a waiter that will never be resolved (write failed,
+// timeout).
+func (p *pendingCmds) DropWaiter(id string) {
+	p.mu.Lock()
+	delete(p.waiters, id)
+	p.mu.Unlock()
+}
+
+// Resolve hands the CO body to a waiting sender, if any, and forgets the
+// waiter. Non-blocking: the channel is buffered (1), and a sender that already
+// timed out has removed its entry.
+func (p *pendingCmds) Resolve(id string, raw json.RawMessage) {
+	p.mu.Lock()
+	ch, ok := p.waiters[id]
+	if ok {
+		delete(p.waiters, id)
+	}
+	p.mu.Unlock()
+	if ok {
+		select {
+		case ch <- raw:
+		default:
+		}
+	}
 }
 
 // Store records id → name, evicting the oldest entries beyond the cap.

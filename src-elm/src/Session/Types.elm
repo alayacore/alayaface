@@ -379,10 +379,10 @@ emptyFilePicker =
 
 The field set mirrors AlayaCore's `protocol.ModelInfo` (the `:model_list`
 payload) EXACTLY, and every field is editable in Overlay.ModelEditor.
-That is not cosmetic: `:model_sync` replaces the whole list and AlayaCore
-rewrites `model.conf` from it, so a field missing here is a field deleted
-from the user's config file. `extras` (see ModelConfig) catches keys newer
-than this record for the same reason.
+That is not cosmetic: AlayaFace writes the whole `model.conf` and AlayaCore
+reads it back, so a field missing here is a field deleted from the user's
+config file. `extras` (see ModelConfig) catches keys newer than this record
+for the same reason.
 -}
 type alias ModelInfo =
     { id : Int
@@ -427,6 +427,8 @@ type alias ModelDraft =
 
 -- MCP server (mirrors mcp.conf key-value blocks; args/env kept as raw JSON text)
 -- `type` is a UI concept (http/stdio) inferred from url presence; not persisted.
+-- `authScopes` is the raw `auth-scopes` JSON array (OAuth). `extras` carries
+-- keys this build does not model (raw conf values) so a save cannot delete them.
 
 type alias McpInfo =
     { id : Int
@@ -437,10 +439,12 @@ type alias McpInfo =
     , args : String
     , env : String
     , authType : String
+    , authScopes : String
     , authToken : String
     , authClientId : String
     , authClientSecret : String
     , protoVersion : String
+    , extras : Dict String String
     }
 
 
@@ -453,10 +457,12 @@ type alias McpDraft =
     , args : String
     , env : String
     , authType : String
+    , authScopes : String
     , authToken : String
     , authClientId : String
     , authClientSecret : String
     , protoVersion : String
+    , extras : Dict String String
     }
 
 
@@ -470,10 +476,12 @@ emptyMcpDraft =
     , args = ""
     , env = ""
     , authType = ""
+    , authScopes = ""
     , authToken = ""
     , authClientId = ""
     , authClientSecret = ""
     , protoVersion = latestMcpProtoVersion
+    , extras = Dict.empty
     }
 
 

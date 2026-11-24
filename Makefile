@@ -66,14 +66,16 @@ check-parity:
 check-invariants:
 	./scripts/check-layout-invariants.sh
 
-# Model-config schema check: AlayaFace must model every model.conf field —
-# :model_sync replaces the list, so an unmodelled key is deleted from the
-# user's model.conf. Compares src-elm/src/Session/ModelConfig.elm against
-# AlayaCore's protocol.ModelInfo (or the checked-in fixture when AlayaCore,
-# a separate repo, is not checked out).
+# Config schema checks: AlayaFace writes model.conf and mcp.conf whole, so it
+# must model every field AlayaCore reads — an unmodelled key is uneditable in
+# the client (carried through extras), and a key the client invents is a line
+# the core cannot parse. Compares src-elm/src/Session/ModelConfig.elm and
+# src-elm/src/App/McpConfig.elm against AlayaCore (or the checked-in fixtures
+# when AlayaCore, a separate repo, is not checked out).
 .PHONY: check-schema
 check-schema:
 	./scripts/check-model-schema.sh
+	./scripts/check-mcp-schema.sh
 
 # Protocol drift check: the four facts about AlayaCore's wire format that this
 # repo duplicates — message_version, the TLV tag alphabet, the session states it

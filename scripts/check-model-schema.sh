@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# AlayaFace has to know every model.conf field, because :model_sync REPLACES
-# the whole list and AlayaCore rewrites model.conf from what comes back: a
-# field AlayaFace does not carry is a field it silently DELETES from the
-# user's config file. `reasoning_field`, `serial_tool_calls` and
-# `reasoning_0/1/2` were each lost that way.
+# AlayaFace has to know every model.conf field, because it WRITES the whole
+# file and AlayaCore reads it back: a field AlayaFace does not carry is a
+# field it silently DELETES from the user's config file. `reasoning_field`,
+# `serial_tool_calls` and `reasoning_0/1/2` were each lost that way.
 #
 # The schema lives in exactly one place — src-elm/src/Session/ModelConfig.elm,
-# which drives the decoder, the :model_sync payload and the editor form. This
+# which drives the decoder, the model.conf writer and the editor form. This
 # script checks that one place against the authority: AlayaCore's
 # protocol.ModelInfo, the :model_list payload.
 #
@@ -125,7 +124,9 @@ done
 if (( ${#missing[@]} )); then
   echo "AlayaFace does not model: ${missing[*]}" >&2
   echo "  Add each to fields in $MODELCFG — a control, a decode, an encode." >&2
-  echo "  Anything unmodelled is dropped from the user's model.conf on save." >&2
+  echo "  A key the core sends but the client does not model is carried through" >&2
+  echo "  ModelInfo.extras (the value survives), but it has no control, so the" >&2
+  echo "  user cannot edit it." >&2
 fi
 if (( ${#extra[@]} )); then
   echo "AlayaFace models keys AlayaCore does not send: ${extra[*]}" >&2

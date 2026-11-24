@@ -72,6 +72,14 @@ pub struct SessionRefs {
 /// field; its internals stay private.
 pub struct PendingCommands {
     inner: tokio::sync::Mutex<PendingCommandsInner>,
+    /// Command id → a one-shot the SENDER is awaiting. Used by commands whose
+    /// answer must be known before the RPC returns (`model_load` after a model
+    /// write): the reader resolves it when the CO arrives. Kept apart from the
+    /// id→name map because only a few commands ask for it, and an entry must
+    /// disappear on timeout just like a name entry does.
+    waiters: std::sync::Mutex<
+        std::collections::HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>,
+    >,
 }
 
 struct PendingCommandsInner {
@@ -89,7 +97,41 @@ impl PendingCommands {
                 map: std::collections::HashMap::new(),
                 order: std::collections::VecDeque::new(),
             }),
+            waiters: std::sync::Mutex::new(std::collections::HashMap::new()),
         })
+    }
+
+    /// Register a one-shot for id and return the receiving end.
+    ///
+    /// Call this BEFORE writing the CI frame: the CO can arrive as soon as the
+    /// frame is flushed.
+    pub(crate) fn waiter(&self, id: &str) -> tokio::sync::oneshot::Receiver<serde_json::Value> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.waiters
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id.to_string(), tx);
+        rx
+    }
+
+    /// Drop a waiter that will never be resolved (write failed / timed out).
+    pub(crate) fn drop_waiter(&self, id: &str) {
+        self.waiters
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(id);
+    }
+
+    /// Resolve the waiter for id, if any, from the stdout reader thread.
+    pub(crate) fn blocking_resolve(&self, id: &str, value: serde_json::Value) {
+        let tx = self
+            .waiters
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(id);
+        if let Some(tx) = tx {
+            let _ = tx.send(value);
+        }
     }
 
     /// Record id → name, evicting the oldest entries beyond the cap.

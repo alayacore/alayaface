@@ -3083,6 +3083,7 @@ viewMcpEditorOverlay model =
                                 , isNew = draft.id == 0
                                 , onSave = McpEditSave
                                 , onField = McpEditField
+                                , error = ed.state.syncError
                                 }
 
                         Nothing ->

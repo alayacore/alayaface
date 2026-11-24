@@ -64,6 +64,15 @@ type alias Kit item draft =
     -- Overlay.ModelEditor shows these and disables Save; `editSave`
     -- refuses on them too so the view cannot be bypassed.
     , problems : draft -> List ( String, String )
+    -- Problems that need the WHOLE list (duplicate names). Checked by
+    -- `editSave`, which is the only place the list and the draft are both in
+    -- hand; an empty list means the draft can be added/updated.
+    , listProblems : List item -> draft -> List ( String, String )
+    -- Problems with the whole list that must block a SYNC, not just an edit
+    -- (MCP: an invalid server already in the list, or a duplicate name).
+    -- Empty for the model kits: every entry was validated when it was saved,
+    -- and the backend verifies the file before committing it.
+    , syncProblems : List item -> List ( String, String )
     , inputId : Model -> String
     , editorId : Model -> String
     , scrollItemId : Model -> Int -> String
@@ -180,7 +189,8 @@ editSave kit model =
             kit.get model
 
         blocked =
-            Maybe.map kit.problems st.draft |> Maybe.withDefault []
+            Maybe.map (\draft -> kit.problems draft ++ kit.listProblems st.working draft) st.draft
+                |> Maybe.withDefault []
     in
     -- A draft carrying a value the codec cannot express (unparsable
     -- provider JSON, a non-numeric token limit) must not enter `working`:
@@ -228,9 +238,21 @@ cancelDelete kit model =
 
 confirmSync : Kit item draft -> Model -> ( Model, Cmd Msg )
 confirmSync kit model =
-    ( kit.set (Sel.startSync (kit.get model)) model
-    , kit.syncCmd model
-    )
+    let
+        st =
+            kit.get model
+    in
+    -- Refusing here (before the write) is what the MCP backends used to do:
+    -- one invalid server must cost the whole save rather than reaching the
+    -- file and being skipped by AlayaCore at the next session start.
+    case kit.syncProblems st.working of
+        ( _, message ) :: _ ->
+            ( kit.set (Sel.syncFailed message st) model, Cmd.none )
+
+        [] ->
+            ( kit.set (Sel.startSync st) model
+            , kit.syncCmd model
+            )
 
 
 discardClose : Kit item draft -> Model -> ( Model, Cmd Msg )

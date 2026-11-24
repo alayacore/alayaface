@@ -90,7 +90,7 @@ One-way push (server → client), message format:
 | `alayacore_send_prompt` | `POST /rpc/alayacore_send_prompt` | `sessionId`, `text`, `media:[{media_type,uri}]` | — |
 | `alayacore_cancel` | `POST /rpc/alayacore_cancel` | `sessionId` | — |
 | `alayacore_model_set` | `POST /rpc/alayacore_model_set` | `sessionId`, `modelId`(int) | — |
-| `alayacore_model_sync` | `POST /rpc/alayacore_model_sync` | `sessionId`, `config` | — |
+| `alayacore_write_session_models` | `POST /rpc/alayacore_write_session_models` | `sessionId`, `config` (whole `model.conf` text) | — |
 | `alayacore_confirm` | `POST /rpc/alayacore_confirm` | `sessionId`, `id`, `allowed` | — |
 | `alayacore_mcp_decline` | `POST /rpc/alayacore_mcp_decline` | `sessionId`, `server` | — |
 | `alayacore_mcp_cancel` | `POST /rpc/alayacore_mcp_cancel` | `sessionId` | — |
@@ -99,8 +99,8 @@ One-way push (server → client), message format:
 | `list_default_models` | `POST /rpc/list_default_models` | `binaryPath`, `preset` | `{models, active_id}` |
 | `sync_default_models` | `POST /rpc/sync_default_models` | `binaryPath`, `config`, `preset` | CO `result` |
 | `set_default_model` | `POST /rpc/set_default_model` | `preset`, `modelId` | CO `result` (probe `model_set` → persists `active_model` into the preset's runtime.conf) |
-| `list_default_mcp` | `POST /rpc/list_default_mcp` | `preset` | `[server]` |
-| `sync_default_mcp` | `POST /rpc/sync_default_mcp` | `config`, `preset` | — |
+| `list_default_mcp` | `POST /rpc/list_default_mcp` | `preset` | `{ "text": <mcp.conf verbatim> }` |
+| `sync_default_mcp` | `POST /rpc/sync_default_mcp` | `config` (whole `mcp.conf` text), `preset` | — |
 | `get_global_settings` | `POST /rpc/get_global_settings` | `preset` | `{tool_confirm, builtin_tools, reasoning_level, system_prompt}` |
 | `sync_global_settings` | `POST /rpc/sync_global_settings` | `config`, `preset` | — (merge semantics: absent fields keep current values) |
 | `get_global_config` | `POST /rpc/get_global_config` | — | `{recursion_limit}` |
@@ -121,13 +121,17 @@ One-way push (server → client), message format:
 | `start_mcp_auth_flow` | `POST /rpc/start_mcp_auth_flow` | `sessionId`, `serverName`, `authUrl` | string filled URL |
 | `fill_mcp_auth_url` | `POST /rpc/fill_mcp_auth_url` | `sessionId`, `serverName`, `authUrl` | string filled URL |
 
-> **`model` is opaque to both backends.** They carry `model_list` /
-> `model_sync` payloads as raw JSON (`[]json.RawMessage` in Go,
-> `Vec<serde_json::Value>` in Rust) and never interpret a field — the
-> AlayaCore `model.conf` schema lives in exactly one place, the client's
-> `src-elm/src/Session/ModelConfig.elm` (see `AGENTS.md`; guarded by
-> `make check-schema`). Adding a model field to AlayaCore therefore needs
-> no backend change and DOES need a ModelConfig one, or the field is
+> **`model.conf` and `mcp.conf` are opaque to both backends.** They cache
+> `model_list` entries as raw JSON (`[]json.RawMessage` in Go,
+> `Vec<serde_json::Value>` in Rust) and never interpret a field. Since AlayaCore
+> v19 the model editor's save carries the whole `model.conf` as TEXT (produced
+> by the client's `ModelConfig.encodeModels`) and the backends only write those
+> bytes — atomically and 0600, because the file can hold the only copy of an API
+> key — then apply them with `model_load`. `mcp.conf` follows the same shape
+> (`App/McpConfig.encode`), read back verbatim for the editor. The `AlayaCore` `model.conf` schema still lives in exactly one
+> place, the client's `src-elm/src/Session/ModelConfig.elm` (see `AGENTS.md`;
+> guarded by `make check-schema`). Adding a model field to AlayaCore therefore
+> needs no backend change and DOES need a ModelConfig one, or the field is
 > deleted from `model.conf` on the next save. That check has two axes now:
 > the key set, and which keys `validateModel` requires — an empty required
 > value deletes the whole entry, and neither axis can be verified from a
@@ -214,7 +218,7 @@ src-go/
 │   │   ├── session.go         #   SessionHandle / SessionMap / create / close / get
 │   │   └── reader.go          # ← port of reader.rs: stdout goroutine + dispatchFrame
 │   ├── probe/                 # ← port of models.rs TempCore/run_temp_probe
-│   │   └── probe.go           #   throwaway alayacore probes (model_list / model_sync)
+│   │   └── probe.go           #   throwaway alayacore probes (model_list / model_load)
 │   ├── mcp/                   # ← port of mcp.rs OAuth part
 │   │   └── oauth.go           #   127.0.0.1:0 callback server + URL fill + open browser + 5min timeout
 │   ├── hub/                   #   WebSocket event bus (new)
@@ -228,7 +232,6 @@ src-go/
 │           ├── io.go
 │           ├── cmd.go
 │           ├── models.go
-│           ├── mcp_conf.go    #   mcp.conf parse/serialize (second half of mcp.rs)
 │           ├── presets.go
 │           ├── settings.go
 │           ├── global_config.go #   cross-preset global config overlay (~/.alayaface/global.conf)
@@ -301,11 +304,12 @@ matching `CO` → kill process. Note Rust passes `--config-path` only when non-e
 (same as the real spawn); `list_default_models` must use a temp probe, not the session
 cache (different semantics).
 
-### 6.5 mcp.conf parsing (internal/handlers/mcp_conf.go)
-`---`-separated key-value blocks: split_kv_line (skip blank lines / `#`), unquote,
-dash→underscore key mapping (`auth-type`→`auth_type`, etc.), `args`/`env` normalized
-to compact JSON text, filter by `server` key, infer `type` (url present → http,
-else stdio); write back in fixed `MCP_CONF_ORDER`.
+### 6.5 mcp.conf (bytes only — the codec is in App/McpConfig.elm)
+`list_default_mcp` returns the file verbatim and `sync_default_mcp` writes the text it
+is given (atomic, 0600 — OAuth secrets live there). There is deliberately no parser
+here: the schema, the key order and the escaping belong to `App/McpConfig.elm`, which
+is what removed the Rust/Go drift (Go's `json.Marshal` escaped `&`, `<` and `>` in a
+way AlayaCore's parser does not understand) and the silent loss of `auth-scopes`.
 
 ### 6.6 MCP OAuth (internal/mcp)
 Rust uses a non-blocking `TcpListener 127.0.0.1:0` poll loop; Go uses
@@ -409,7 +413,7 @@ runtimes auto-switch on the presence of `window.__TAURI__`, avoiding two bridge 
 
 | Suite | Content | Reference |
 |-------|---------|-----------|
-| Go unit tests | wire encode/decode/line/EOF edges; dirs creation/exclusion of settings.conf; preset lifecycle; settings normalize; mcp.conf parse roundtrip; reader dispatch (delta-only, empty→null, JSON frames, CO name injection, SM wrap/cache, echoes, disconnect, the terminal frame and its one-announcement rule, the stderr tail in the message); core spawn/kill/find; hub broadcast/unregister/slow-client drop | port the same-named Rust tests one by one |
+| Go unit tests | wire encode/decode/line/EOF edges; dirs creation/exclusion of settings.conf; preset lifecycle; settings normalize; mcp.conf text roundtrip (verbatim + 0600); reader dispatch (delta-only, empty→null, JSON frames, CO name injection, SM wrap/cache, echoes, disconnect, the terminal frame and its one-announcement rule, the stderr tail in the message); core spawn/kill/find; hub broadcast/unregister/slow-client drop | port the same-named Rust tests one by one |
 | Go integration | `internal/fakecore` (scriptable rawio stand-in) + `internal/server/integration_test.go`: full end-to-end over HTTP+WS against a real subprocess — conversation flow, every CI command roundtrip with CO name injection, fork, model probes (live + fallback), sync error paths, resume/delete, token auth | implemented 2026-08-05 (commit 7838e93); run with `go test ./... -race` |
 | Elm tests | unchanged — verify the shared client is not broken | `make test` |
 | Dual-backend smoke | run the same Elm frontend against both Tauri and Go, diff the event streams | manual (GUI env) |
@@ -423,7 +427,7 @@ runtimes auto-switch on the presence of `window.__TAURI__`, avoiding two bridge 
 2. **P1 session core**: `core` + `session` + `reader` + `hub` + `rpc.go`; implement
    create/resume/close/send_prompt/cancel plus tlv-delta/frame/status push.
    → conversation main flow works (minimal viable).
-3. **P2 remaining commands**: cmd (model_set/model_sync/confirm/mcp_*) + fork + session-dir management.
+3. **P2 remaining commands**: cmd (model_set/write_session_models/confirm/mcp_*) + fork + session-dir management.
 4. **P3 config domain**: presets, settings, models (incl. probes), mcp.conf, MCP OAuth.
 5. **P4 frontend wrap-up**: transport.js transport abstraction, window-event degradation, reconnection.
 6. **P5 wrap-up**: Makefile (`make run-go` / `make test-go`), README update, integration tests.

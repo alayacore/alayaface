@@ -244,9 +244,10 @@ fn run_temp_probe(
 //
 // The active preset's config (~/.alayaface/presets/<name>/model.conf) is the
 // template new sessions are created from (each session gets its own copy).
-// These commands read/replace that file directly through a temporary
-// alayacore process, so validation and persistence behave exactly like
-// session model_sync, but without touching any running session.
+// These commands read the file through a temporary alayacore process, and
+// write it only after that process accepted the candidate — so a save is
+// validated exactly like the session editor's, without touching any running
+// session.
 
 /// List the model list from a preset's model.conf (preset REQUIRED)
 /// plus the preset's DEFAULT model id. Always reads the config directly
@@ -407,11 +408,17 @@ mod tests {
     }
 }
 
-/// Replace the model list in a preset's model.conf (`preset` empty = active).
-/// Spawns a temporary alayacore with that config dir and sends
-/// model_sync, waiting for the CO result. Validation, key-value
-/// serialization and persistence are all performed by alayacore. The
-/// refreshed model list is cached for later list_models calls.
+/// Replace a preset's `model.conf` with `config` (the whole file, see
+/// `Session.ModelConfig.encodeModels`).
+///
+/// Since AlayaCore v19 the wire has no model-list write path, so the adapter
+/// writes the file — but it must not write a file the core would reject. The
+/// candidate is therefore committed in a THROWAWAY config dir first and read
+/// back with `model_load`; only a clean load is written to the preset. A
+/// rejected candidate leaves the user's file untouched, which is what
+/// `:model_sync`'s validate-then-persist used to guarantee.
+///
+/// The refreshed list from that probe is cached for later `list_models` calls.
 #[tauri::command]
 pub async fn sync_default_models(
     binary_path: String,
@@ -425,29 +432,77 @@ pub async fn sync_default_models(
     // "Preset not found: Simple" while the Go backend seeded and listed.
     dirs::ensure()?;
     let config_dir = dirs::resolve_config_dir(&preset)?;
-    let config_path = config_dir.to_string_lossy().to_string();
+    let target = config_dir.join("model.conf");
     let bin = resolve_binary(&binary_path);
 
-    let command_id = uuid::Uuid::new_v4().to_string();
-    let probe = run_temp_probe(&bin, &config_path, Some((&command_id, "model_sync", &config)), Some(&model_cache))?;
-
-    match probe.cmd_output {
-        Some(v) => {
-            let is_err = v.get("is_error").and_then(|x| x.as_bool()).unwrap_or(false);
-            if is_err {
-                let msg = v
-                    .pointer("/result/message")
-                    .and_then(|x| x.as_str())
-                    .unwrap_or("model_sync failed");
-                Err(msg.to_string())
-            } else {
-                Ok(v.get("result").cloned().unwrap_or(serde_json::Value::Null))
-            }
-        }
-        None => match probe.end {
-            ProbeEnd::Timeout => Err("model_sync timed out".to_string()),
-            ProbeEnd::Eof => Err("alayacore exited before model_sync completed".to_string()),
-            _ => Err("Failed to read from alayacore".to_string()),
-        },
+    // An empty list writes an empty file. There is nothing to validate (the
+    // core treats an empty model.conf as "no config" and would create its
+    // defaults in the probe, which is not this file's meaning), and the cache
+    // must say "no models" rather than keep the previous list.
+    if config.trim().is_empty() {
+        dirs::write_file_atomic_mode(&target, "", 0o600)?;
+        model_cache.set(Vec::new());
+        return Ok(serde_json::Value::Null);
     }
+
+    let scratch = std::env::temp_dir().join(format!(
+        "alayaface-model-probe-{}-{}",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&scratch)
+        .map_err(|e| format!("Cannot create model probe dir: {e}"))?;
+    let result = (|| -> Result<serde_json::Value, String> {
+        // Copy runtime.conf so the probe resolves the SAME active model the
+        // preset would: `model_load` reinitializes it, and a keyless local
+        // model that is not active must not fail the candidate (the core
+        // refuses to switch to a model with no API key).
+        let runtime = config_dir.join("runtime.conf");
+        if runtime.exists() {
+            std::fs::copy(&runtime, scratch.join("runtime.conf"))
+                .map_err(|e| format!("Cannot copy runtime.conf for the model probe: {e}"))?;
+        }
+        let scratch_conf = scratch.join("model.conf");
+        std::fs::write(&scratch_conf, &config)
+            .map_err(|e| format!("Cannot write model probe file: {e}"))?;
+
+        let command_id = uuid::Uuid::new_v4().to_string();
+        let probe = run_temp_probe(
+            &bin,
+            &scratch.to_string_lossy(),
+            Some((&command_id, "model_load", "")),
+            // Do NOT let the scratch probe fill the real cache: its SM
+            // `model_list` can be the pre-load (default) list. The committed
+            // list is set below, from the CO that answers `model_load`.
+            None,
+        )?;
+
+        let co = probe.cmd_output.ok_or_else(|| match probe.end {
+            ProbeEnd::Timeout => "model_load timed out".to_string(),
+            ProbeEnd::Eof => "alayacore exited before model_load completed".to_string(),
+            _ => "Failed to read from alayacore".to_string(),
+        })?;
+        if co.get("is_error").and_then(|x| x.as_bool()).unwrap_or(false) {
+            return Err(co
+                .pointer("/result/message")
+                .and_then(|x| x.as_str())
+                .unwrap_or("model_load failed")
+                .to_string());
+        }
+
+        // Commit only after the core accepted the exact bytes.
+        dirs::write_file_atomic_mode(&target, &config, 0o600)?;
+
+        let models = co
+            .pointer("/result/models")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.to_vec())
+            .or(probe.models)
+            .unwrap_or_default();
+        model_cache.set(models.clone());
+        Ok(serde_json::json!({ "models": models }))
+    })();
+
+    let _ = std::fs::remove_dir_all(&scratch);
+    result
 }

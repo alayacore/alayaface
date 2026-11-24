@@ -24,10 +24,10 @@
 //	              `:save` with an empty filename → --session file) and
 //	              replies CO ok with the path
 //	model_set     replies CO ok with the model id echoed
-//	model_load    emits SM model_list then replies CO ok
-//	model_sync    replies CO ok and records the payload in
-//	              <config-path>/model_sync.last.json; if args contain
-//	              `"invalid"` replies CO with is_error=true
+//	model_load    re-reads <config-path>/model.conf, emits SM model_list from
+//	              it (the canned list when the file is absent/empty), then
+//	              replies CO ok — this is how the adapter applies a model edit
+//	              since v19 removed model_sync
 //	reasoning_level_set — replies CO ok with the level echoed
 //	tool_confirm / tool_decline — replies CO ok with the call id
 //	cancel        replies CO ok
@@ -49,6 +49,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -65,10 +66,6 @@ import (
 var sessionFile string
 var configDir string
 var inputEnded bool
-
-// modelSyncRecord is the file inside --config-path that holds the payload of
-// the last model_sync, for tests that assert what the client actually sent.
-const modelSyncRecord = "model_sync.last.json"
 
 // quitting is set when a `quit` CI has been answered, so main can end the
 // session in the real core's order: CO, then the terminal `closed` frame.
@@ -473,7 +470,94 @@ func smError(text string) {
 	writeFrame("SM", string(payload))
 }
 
+// modelListFromConf reads <config-path>/model.conf and turns it into the
+// model_list JSON shape. A missing or empty file is "no list here" (false),
+// which is what makes the canned fixtures below the fallback.
+//
+// This is deliberately a small generic parser, not a copy of AlayaCore's: the
+// fake needs the file's CONTENT to come back out, so the adapter's written
+// bytes are what the UI and the validation probe see.
+func modelListFromConf() ([]map[string]any, bool) {
+	if configDir == "" {
+		return nil, false
+	}
+	data, err := os.ReadFile(filepath.Join(configDir, "model.conf"))
+	if err != nil || strings.TrimSpace(string(data)) == "" {
+		return nil, false
+	}
+	text := strings.ReplaceAll(string(data), "\r\n", "\n")
+	var models []map[string]any
+	for _, block := range strings.Split(text, "\n---\n") {
+		m := map[string]any{}
+		for _, line := range strings.Split(block, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			k, v, ok := strings.Cut(line, ":")
+			if !ok {
+				continue
+			}
+			m[strings.TrimSpace(k)] = confValue(strings.TrimSpace(v))
+		}
+		if len(m) > 0 {
+			// AlayaCore assigns ids at load; the file never carries one.
+			m["id"] = len(models) + 1
+			models = append(models, m)
+		}
+	}
+	return models, len(models) > 0
+}
+
+// confValue maps a model.conf value to the JSON value model_list carries:
+// quoted → string, true/false → bool, a JSON array/object → raw JSON, an
+// integer → number, anything else → the raw text.
+func confValue(v string) any {
+	if len(v) >= 2 && strings.HasPrefix(v, "\"") && strings.HasSuffix(v, "\"") {
+		return unquoteConf(v)
+	}
+	switch v {
+	case "true":
+		return true
+	case "false":
+		return false
+	}
+	if strings.HasPrefix(v, "[") || strings.HasPrefix(v, "{") {
+		if json.Valid([]byte(v)) {
+			return json.RawMessage(v)
+		}
+	}
+	if n, err := strconv.Atoi(v); err == nil {
+		return n
+	}
+	return v
+}
+
+func unquoteConf(v string) string {
+	t := strings.TrimSuffix(strings.TrimPrefix(v, "\""), "\"")
+	// The four escapes AlayaCore writes; order mirrors its EscapeQuoted.
+	t = strings.ReplaceAll(t, `\\`, "\\")
+	t = strings.ReplaceAll(t, `\"`, "\"")
+	t = strings.ReplaceAll(t, `\n`, "\n")
+	t = strings.ReplaceAll(t, `\r`, "\r")
+	return t
+}
+
 func smModelList() {
+	// A config file on disk is the authority: model_load must reflect what the
+	// adapter just wrote, or the model editor's Save would appear to do nothing
+	// (and a validation probe would accept anything). Falls back to the canned
+	// list below when there is no file (a fresh session dir) — real alayacore
+	// creates its default config in that case.
+	if models, ok := modelListFromConf(); ok {
+		payload, _ := json.Marshal(map[string]any{
+			"type": "model_list",
+			"data": map[string]any{"models": models},
+		})
+		writeFrame("SM", string(payload))
+		return
+	}
+
 	// Full ModelInfo shape, mirroring real alayacore's protocol.ModelInfo
 	// field for field: id, name, protocol_type, base_url, api_key,
 	// model_name, context_limit, max_tokens, reasoning_field,
@@ -486,13 +570,12 @@ func smModelList() {
 	//   - the other optional fields appear only when set, so the client's
 	//     "absent means the provider default" path stays covered.
 	//
-	// fake-model-2 also carries `quantization`, a key AlayaFace does not
-	// model, to prove AlayaFace carries an unknown key back out in the
-	// :model_sync payload instead of dropping it. (What real alayacore then
-	// does with a key IT does not model is its own business: it parses into
-	// its struct and writes from that, so such a key never becomes a
-	// model.conf line either way — extras protects a key the core knows and
-	// this client build does not yet.)
+	// fake-model-2 also carries `input_modalities`, a key this client build
+	// does not model, to prove AlayaFace carries a core-known key back out
+	// when it rewrites model.conf instead of dropping it. (A key NEITHER side
+	// knows cannot be preserved — AlayaCore rejects it as an unknown config
+	// key on load — and `extras` only ever holds keys the core sent, so the
+	// fixture uses a real one.)
 	//
 	// In --llm-url mode the canned fake-model-* entries (which point at
 	// a non-running localhost:11434) are replaced with a single entry
@@ -523,9 +606,9 @@ func smModelList() {
 		// the other key, per-level provider JSON, tool calls that must run
 		// one at a time.
 		`{"id":2,"name":"fake-model-2","protocol_type":"openai","base_url":"http://localhost:11434/v1","api_key":"fake","model_name":"model-2","context_limit":16384,"max_tokens":4096,"reasoning_field":"reasoning","reasoning_1":{"thinking":{"type":"enabled"}},"reasoning_2":{"thinking":{"type":"enabled"},"effort":"max"},"serial_tool_calls":true,` +
-		// A key AlayaFace has never heard of, which must come back out on
-		// the other side of an edit+sync.
-		`"quantization":"awq"}]}}`
+		// A core-known key this client build does not model, which must come
+		// back out on the other side of an edit+save.
+		`"input_modalities":["text"]}]}}`
 	writeFrame("SM", payload)
 }
 
@@ -610,27 +693,19 @@ func handleCmd(raw string) {
 		coOk(msg.CommandID, map[string]any{"modelId": msg.Args})
 	case "model_load":
 		smModelList()
-		coOk(msg.CommandID, map[string]any{"ok": true})
-	case "model_sync":
-		if strings.Contains(msg.Args, `"invalid"`) {
-			coErr(msg.CommandID, "CONFIG_MODEL_INVALID", "invalid config")
-			return
-		}
-		// Real alayacore REWRITES model.conf from this payload, which is why
-		// a field the client drops is a field the user loses. Recording the
-		// payload verbatim gives the E2E suite something to assert on;
-		// modelSyncRecord is fakecore-only and no production code reads it.
+		// Test-double affordance: a candidate containing `invalid: true` is
+		// refused the way the real core refuses a block that fails
+		// validateModel — the model list is still broadcast first (survivors),
+		// then the CO carries the error. This is what lets the backend's
+		// validate-before-commit and rollback paths be exercised.
 		if configDir != "" {
-			if err := os.MkdirAll(configDir, 0o755); err != nil {
-				coErr(msg.CommandID, "IO_WRITE_FAILED", "cannot write config dir")
-				return
-			}
-			if err := os.WriteFile(filepath.Join(configDir, modelSyncRecord), []byte(msg.Args), 0o644); err != nil {
-				coErr(msg.CommandID, "IO_WRITE_FAILED", "cannot write "+modelSyncRecord)
+			if data, err := os.ReadFile(filepath.Join(configDir, "model.conf")); err == nil &&
+				strings.Contains(string(data), "invalid: true") {
+				coErr(msg.CommandID, "CONFIG_MODEL_INVALID", "invalid config")
 				return
 			}
 		}
-		coOk(msg.CommandID, map[string]any{"message": "synced"})
+		coOk(msg.CommandID, map[string]any{"ok": true})
 	case "tool_confirm", "tool_decline":
 		coOk(msg.CommandID, map[string]any{"call_id": msg.Args, "allowed": msg.Name == "tool_confirm"})
 	case "cancel":

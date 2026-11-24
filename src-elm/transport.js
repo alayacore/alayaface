@@ -283,10 +283,21 @@
       }).catch(function (err) { rpcError("reason", data.sessionId, err); });
     });
 
-    on("modelSync", function (data) {
-      transport.invoke("alayacore_model_sync", {
-        sessionId: data.sessionId, config: data.config,
-      }).catch(function (err) { rpcError("model_sync", data.sessionId, err); });
+    on("writeSessionModels", function (data) {
+      var sessionId = (data && data.sessionId) || "";
+      transport.invoke("alayacore_write_session_models", {
+        sessionId: sessionId, config: data.config,
+      })
+        .then(function () {
+          app.ports.onSessionModelsWriteResult.send({
+            sessionId: sessionId, ok: true, error: "",
+          });
+        })
+        .catch(function (err) {
+          app.ports.onSessionModelsWriteResult.send({
+            sessionId: sessionId, ok: false, error: String((err && err.message) || err),
+          });
+        });
     });
 
     on("listDefaultModels", function (data) {
@@ -339,12 +350,16 @@
 
     on("listDefaultMcp", function (data) {
       transport.invoke("list_default_mcp", { preset: (data && data.preset) || "" })
-        .then(function (servers) {
-          app.ports.onDefaultMcpList.send({ ok: true, servers: servers, error: "" });
+        .then(function (res) {
+          // The backend returns the file verbatim; Elm parses it (the schema
+          // lives in App/McpConfig.elm, not in either backend).
+          app.ports.onDefaultMcpList.send({
+            ok: true, text: (res && res.text) || "", error: "",
+          });
         })
         .catch(function (err) {
           app.ports.onDefaultMcpList.send({
-            ok: false, servers: [], error: String((err && err.message) || err),
+            ok: false, text: "", error: String((err && err.message) || err),
           });
         });
     });

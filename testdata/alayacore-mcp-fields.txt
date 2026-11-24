@@ -1,0 +1,16 @@
+# mcp.conf keys AlayaCore reads, from internal/mcp/types.go
+# (type ServerConfigFile), as of the run of
+# scripts/check-mcp-schema.sh that last touched this file.
+# AlayaCore is a separate repo and is absent in CI, so this is what
+# the schema check compares against there.
+args
+auth-client-id
+auth-client-secret
+auth-scopes
+auth-token
+auth-type
+command
+env
+proto-version
+server
+url

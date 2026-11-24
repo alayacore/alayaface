@@ -12,7 +12,8 @@ port module Ports exposing
     , cancelTask
     , setModel
     , setReasoningLevel
-    , modelSync
+    , writeSessionModels
+    , onSessionModelsWriteResult
     , checkAlayacore
       -- Default (global) model list editor
     , listDefaultModels
@@ -164,7 +165,22 @@ port sendPrompt : { sessionId : String, text : String, media : List E.Value } ->
 port cancelTask : { sessionId : String } -> Cmd msg
 port setModel : { sessionId : String, modelId : Int } -> Cmd msg
 port setReasoningLevel : { sessionId : String, level : Int } -> Cmd msg
-port modelSync : { sessionId : String, config : String } -> Cmd msg
+
+
+{-| Replace one session's `model.conf` with this text, then make the running
+session reload it (`:model_load`).
+
+`config` is the whole file (see `Session.ModelConfig.encodeModels`), not JSON:
+since AlayaCore v19 the wire has no model-list write path, so the adapter owns
+the file and the command that applies it. The backend verifies the candidate
+before committing it and rolls the file back if the core refuses the reload, so
+the result is authoritative — `onSessionModelsWriteResult` carries
+`{ sessionId, ok, error }`.
+-}
+port writeSessionModels : { sessionId : String, config : String } -> Cmd msg
+
+
+port onSessionModelsWriteResult : (E.Value -> msg) -> Sub msg
 port listDefaultModels : { preset : String } -> Cmd msg
 port syncDefaultModels : { preset : String, config : String } -> Cmd msg
 port setDefaultModel : { preset : String, modelId : Int } -> Cmd msg

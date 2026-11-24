@@ -152,6 +152,49 @@ func TestCreateSessionDirFromRequiresPreset(t *testing.T) {
 	})
 }
 
+// The session copy must not widen a secret-bearing config: model.conf holds
+// an API key and mcp.conf OAuth credentials, both 0600 in the preset. Rust's
+// fs::copy preserves the bits, so a hard-coded 0644 here was also drift.
+func TestSessionDirCopyPreservesConfigModes(t *testing.T) {
+	isolatedHome(t, func() {
+		sessions, err := Ensure()
+		if err != nil {
+			t.Fatal(err)
+		}
+		config := PresetDir("Simple")
+		for name, mode := range map[string]os.FileMode{
+			"model.conf": 0o600,
+			"mcp.conf":   0o600,
+			"mcp-public": 0o644,
+		} {
+			if err := os.WriteFile(filepath.Join(config, name), []byte("x: 1\n"), mode); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(filepath.Join(config, name), mode); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		sessionDir, err := CreateSessionDirFrom(sessions, "modes", "Simple")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, want := range map[string]os.FileMode{
+			"model.conf": 0o600,
+			"mcp.conf":   0o600,
+			"mcp-public": 0o644,
+		} {
+			fi, err := os.Stat(filepath.Join(sessionDir, "config", name))
+			if err != nil {
+				t.Fatalf("%s not copied: %v", name, err)
+			}
+			if fi.Mode().Perm() != want {
+				t.Errorf("%s mode = %v, want %v", name, fi.Mode().Perm(), want)
+			}
+		}
+	})
+}
+
 func TestSessionDirCopyExcludesSettingsConf(t *testing.T) {
 	isolatedHome(t, func() {
 		sessions, err := Ensure()
@@ -503,5 +546,23 @@ func TestWriteFileAtomic(t *testing.T) {
 	leftovers, _ := filepath.Glob(filepath.Join(dir, "*.tmp*"))
 	if len(leftovers) != 0 {
 		t.Errorf("%d temp files leaked: %v", len(leftovers), leftovers)
+	}
+}
+
+// A core-owned config file keeps the core's mode: model.conf can be the only
+// copy of an API key, and AlayaCore writes it 0600. AlayaFace's own files keep
+// the 0644 default (covered by TestWriteFileAtomic).
+func TestWriteFileAtomicMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "model.conf")
+	if err := WriteFileAtomicMode(path, []byte("name: \"x\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFileAtomicMode: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != "name: \"x\"\n" {
+		t.Fatalf("content = %q, %v", got, err)
+	}
+	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %v, want 0600", fi.Mode())
 	}
 }

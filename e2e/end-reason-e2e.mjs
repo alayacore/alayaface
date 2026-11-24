@@ -132,13 +132,34 @@ async function endLines() {
     [...document.querySelectorAll('.message.message-error .message-content')].map((el) => el.textContent));
 }
 
+// Step A asserts a reason the backend attaches from the core's stderr. That
+// tail is filled by a separate pump than the one that sees EOF, so a fixed
+// sleep makes the suite flaky on a loaded machine (observed once in a full
+// `make e2e` run, then 3/3 passes standalone). Wait for the fact, then assert
+// the exact wording — the property is "the reason reaches the transcript",
+// not "it arrives within 2.5s".
+async function waitForEndLines(pred, timeout, what) {
+  const start = Date.now();
+  let last = [];
+  for (;;) {
+    last = await endLines();
+    if (pred(last)) return last;
+    if (Date.now() - start > timeout) {
+      throw new Error(`timeout waiting for ${what}; transcript: ${JSON.stringify(last)}`);
+    }
+    await sleep(250);
+  }
+}
+
 try {
   // ── A. died at startup, and said why on stderr ───────────────────
   console.log('== A. a core that dies before the protocol starts');
   writeFileSync(flag, '1');
   await createSession('A');
-  await sleep(2500);
-  let lines = await endLines();
+  let lines = await waitForEndLines(
+    (ls) => ls.some((t) => t.includes('session file version mismatch: got 14, expected 17')),
+    15000,
+    "the core's stderr reason to reach the transcript");
   console.log('  transcript:', JSON.stringify(lines));
   assert(lines.some((t) => t.includes('session file version mismatch: got 14, expected 17')),
     'A: the core\'s stderr reason must reach the transcript — "Connection closed" alone is the bug this fixes');

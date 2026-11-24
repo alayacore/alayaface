@@ -1,19 +1,20 @@
 package handlers
 
 import (
-	"encoding/json"
-	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"alayaface/src-go/internal/dirs"
 )
 
-// ListDefaultMcp lists the MCP server list from a preset's mcp.conf
-// (preset REQUIRED). A missing mcp.conf is treated as an empty server
-// list (first run), not an error.
+// ListDefaultMcp returns a preset's mcp.conf verbatim (preset REQUIRED).
+// A missing file is an empty document, not an error (first run).
+//
+// Text, not a parsed server list: mcp.conf's schema lives in
+// App/McpConfig.elm, so this backend never interprets a field. Parsing it
+// here would be a second implementation of the same keys — the drift that
+// produced the `&`/`<`/`>` corruption this move fixed.
 func ListDefaultMcp(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	var args struct {
 		Preset string `json:"preset"`
@@ -29,22 +30,24 @@ func ListDefaultMcp(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(configDir, "mcp.conf")
-	text, err := os.ReadFile(path)
+	text, err := os.ReadFile(filepath.Join(configDir, "mcp.conf"))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return writeJSON(w, []map[string]any{})
+			return writeJSON(w, map[string]string{"text": ""})
 		}
 		return err
 	}
-	servers := parseMcpConf(string(text))
-	return writeJSON(w, servers)
+	return writeJSON(w, map[string]string{"text": string(text)})
 }
 
-// SyncDefaultMcp replaces the MCP server list in a preset's mcp.conf
-// (preset REQUIRED). Validates per server kind: names must be
-// unique; http servers need a url and auth fields per auth-type; stdio
-// servers need a command and args/env as JSON. Writes atomically.
+// SyncDefaultMcp replaces a preset's mcp.conf with `config`, the whole file
+// produced by App.McpConfig.encode.
+//
+// Atomic, and 0600: the file can hold OAuth client secrets and tokens, and
+// model.conf already keeps that permission. Nothing is validated here on
+// purpose — the client owns the schema (its draftProblems refuses at Save),
+// and a bad block that reaches the file is reported by AlayaCore at session
+// start with its block number.
 func SyncDefaultMcp(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	var args struct {
 		Config string `json:"config"`
@@ -53,62 +56,6 @@ func SyncDefaultMcp(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	if err := decodeArgs(r, &args); err != nil {
 		return err
 	}
-	var servers []map[string]any
-	if err := json.Unmarshal([]byte(args.Config), &servers); err != nil {
-		return fmt.Errorf("Invalid config JSON: %w", err)
-	}
-
-	names := map[string]bool{}
-	for _, s := range servers {
-		name, _ := s["server"].(string)
-		name = strings.TrimSpace(name)
-		if name == "" {
-			return fmt.Errorf("Every server needs a non-empty `server` name")
-		}
-		if names[name] {
-			return fmt.Errorf("Duplicate server name: %s", name)
-		}
-		names[name] = true
-
-		// Server kind is inferred the same way as parseMcpConf: URL →
-		// http, otherwise stdio. Different kinds validate different fields.
-		url, _ := s["url"].(string)
-		url = strings.TrimSpace(url)
-		if url != "" {
-			authType, _ := s["auth_type"].(string)
-			authType = strings.TrimSpace(authType)
-			switch authType {
-			case "authorization_code":
-				cid, _ := s["auth_client_id"].(string)
-				secret, _ := s["auth_client_secret"].(string)
-				if strings.TrimSpace(cid) == "" {
-					return fmt.Errorf("Server %s: auth-client-id is required for authorization_code auth", name)
-				}
-				if strings.TrimSpace(secret) == "" {
-					return fmt.Errorf("Server %s: auth-client-secret is required for authorization_code auth", name)
-				}
-			case "static":
-				token, _ := s["auth_token"].(string)
-				if strings.TrimSpace(token) == "" {
-					return fmt.Errorf("Server %s: auth-token is required for static auth", name)
-				}
-			}
-		} else {
-			command, _ := s["command"].(string)
-			if strings.TrimSpace(command) == "" {
-				return fmt.Errorf("Server %s: command is required for stdio servers", name)
-			}
-			if err := validateJSONField(s, name, "args", true); err != nil {
-				return err
-			}
-			if err := validateJSONField(s, name, "env", false); err != nil {
-				return err
-			}
-		}
-	}
-
-	text := writeMcpConf(servers)
-	// Ensure first so the seed presets exist on first run.
 	if _, err := dirs.Ensure(); err != nil {
 		return err
 	}
@@ -116,52 +63,12 @@ func SyncDefaultMcp(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	if err := dirs.WriteFileAtomic(filepath.Join(configDir, "mcp.conf"), []byte(text)); err != nil {
+	if err := dirs.WriteFileAtomicMode(
+		filepath.Join(configDir, "mcp.conf"),
+		[]byte(args.Config),
+		0o600,
+	); err != nil {
 		return err
 	}
 	return writeResult(w, nil)
-}
-
-// validateJSONField validates that a field holding raw JSON text parses
-// as a JSON array (wantArray) or object. An absent or empty/whitespace
-// value is treated as "not set" and skipped.
-func validateJSONField(obj map[string]any, name, key string, wantArray bool) error {
-	v, ok := obj[key]
-	if !ok {
-		return nil
-	}
-	kind := "object"
-	if wantArray {
-		kind = "array"
-	}
-	switch val := v.(type) {
-	case string:
-		if strings.TrimSpace(val) == "" {
-			return nil
-		}
-		var parsed any
-		if err := json.Unmarshal([]byte(val), &parsed); err != nil {
-			return fmt.Errorf("Server %s: %s is not valid JSON: %w", name, key, err)
-		}
-		if wantArray {
-			if _, isArr := parsed.([]any); !isArr {
-				return fmt.Errorf("Server %s: %s must be a JSON %s", name, key, kind)
-			}
-		} else {
-			if _, isObj := parsed.(map[string]any); !isObj {
-				return fmt.Errorf("Server %s: %s must be a JSON %s", name, key, kind)
-			}
-		}
-	default:
-		if wantArray {
-			if _, isArr := val.([]any); !isArr {
-				return fmt.Errorf("Server %s: %s must be a JSON %s", name, key, kind)
-			}
-		} else {
-			if _, isObj := val.(map[string]any); !isObj {
-				return fmt.Errorf("Server %s: %s must be a JSON %s", name, key, kind)
-			}
-		}
-	}
-	return nil
 }

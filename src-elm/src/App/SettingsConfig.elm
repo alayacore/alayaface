@@ -15,8 +15,8 @@ module App.SettingsConfig exposing
 the keys present in it, leaving the rest of the file as it was (Go
 `handlers/settings.go` says so in as many words — "a partial sync must not wipe
 e.g. system_prompt"). That is the opposite of `sync_asr_config`, `sync_ui_config`
-and `model_sync`, which *replace* the file, so a key this client does not model is
-a key deleted from the user's config.
+and the model editor, which *replace* the file, so a key this client does not
+model is a key deleted from the user's config.
 
 Two consequences, both easy to get wrong from the outside:
 

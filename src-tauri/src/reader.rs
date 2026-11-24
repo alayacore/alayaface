@@ -102,6 +102,12 @@ pub fn spawn_stdout_reader(
                 Ok(None) => {
                     connected.store(false, Ordering::SeqCst);
                     reap_child();
+                    // stdout EOF and stderr EOF are independent: give the
+                    // stderr pump a bounded moment to drain the child's last
+                    // line before quoting the tail. Without this the startup
+                    // reason races the EOF and the user sees a bare
+                    // "Connection closed".
+                    stderr_tail.wait_finished(std::time::Duration::from_millis(500));
                     if !announced {
                         let message = disconnect_message("Connection closed", &stderr_tail);
                         let _ = app.emit("core-status", StatusEvent {
@@ -115,6 +121,7 @@ pub fn spawn_stdout_reader(
                 Err(e) => {
                     connected.store(false, Ordering::SeqCst);
                     reap_child();
+                    stderr_tail.wait_finished(std::time::Duration::from_millis(500));
                     if !announced {
                         let message = disconnect_message(&format!("Read error: {e}"), &stderr_tail);
                         let _ = app.emit("core-status", StatusEvent {
@@ -341,6 +348,12 @@ fn handle_cmd_output_frame(
         if let Some(name) = pending_commands.blocking_remove(command_id) {
             obj.insert("name".to_string(), serde_json::Value::String(name));
         }
+    }
+    // Wake a command handler that is waiting for this answer (the model write
+    // RPC waits for `model_load`'s CO). Resolved with the PARSED value, so the
+    // caller reads `is_error`/`result` without re-parsing the frame.
+    if let Some(id) = json_val.get("command_id").and_then(|v| v.as_str()) {
+        pending_commands.blocking_resolve(id, json_val.clone());
     }
     emit_frame(app, sid, "CO", raw_value, Some(json_val), Some(raw_value.to_string()), None, None);
 }

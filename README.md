@@ -177,15 +177,15 @@ for you:
 - The **model editor** shows every `model.conf` field AlayaCore knows —
   `name`, `protocol_type`, `base_url`, `api_key`, `model_name`,
   `context_limit`, `max_tokens`, `reasoning_field`, the per-level
-  `reasoning_0/1/2` provider JSON, and `serial_tool_calls` — because
-  `model_sync` *replaces* the list: a field the editor did not carry would
-  be deleted from your `model.conf` on the next save. Keys newer than this
+  `reasoning_0/1/2` provider JSON, and `serial_tool_calls` — because the
+  editor writes the whole file: a field it did not carry would be deleted
+  from your `model.conf` on the next save. Keys newer than this
   build are carried through untouched rather than dropped
   (`src-elm/src/Session/ModelConfig.elm`, checked by `make check-schema`).
   The three fields AlayaCore *requires* (`protocol_type`, `base_url`,
   `model_name`) cannot be saved empty for the same reason: a model missing one
-  is skipped by the sync and then deleted from your file, and the error only
-  arrives after the write. `name` is not required, so a nameless model stays
+  is skipped at load and then reads as absent, and the error only arrives after
+  the file was written. `name` is not required, so a nameless model stays
   editable and simply shows its `model_name` in the list instead of a blank row.
 - `~/.alayaface/preset_order.conf` records the **display order** of the
   preset list (a JSON array of names) — reorder presets by dragging the

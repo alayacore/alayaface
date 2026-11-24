@@ -11,7 +11,6 @@ mcp_decline
 mcp_skip
 model_load
 model_set
-model_sync
 q
 quit
 r

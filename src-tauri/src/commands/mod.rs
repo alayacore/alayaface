@@ -148,6 +148,46 @@ pub(crate) async fn send_cmd(
     Ok(id)
 }
 
+/// Send a command and WAIT for its CO, returning the parsed answer.
+///
+/// Only for commands whose result the caller must act on before replying to
+/// the client — the model write RPC uses it to learn whether `model_load`
+/// accepted the file it just committed (and to roll back if not). Everything
+/// else stays fire-and-forget: the CO is broadcast to the UI, and blocking the
+/// caller on it would serialize work the core does asynchronously.
+///
+/// `timeout` bounds the wait; on expiry the caller gets an error and the
+/// waiter is dropped, so a core that never answers cannot leak an entry.
+pub(crate) async fn send_cmd_wait(
+    sessions: &SessionMap,
+    session_id: &str,
+    name: &str,
+    args: &str,
+    timeout: std::time::Duration,
+) -> Result<serde_json::Value, String> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let refs = crate::session::refs(sessions, session_id).await?;
+    refs.pending_commands.insert(id.clone(), name.to_string()).await;
+    let rx = refs.pending_commands.waiter(&id);
+    let payload = serde_json::json!({ "command_id": id, "name": name, "args": args });
+    if let Err(e) = write_frame_to(&refs, session_id, wire::TAG_CMD_INPUT, &payload.to_string()).await {
+        refs.pending_commands.remove(&id).await;
+        refs.pending_commands.drop_waiter(&id);
+        return Err(e);
+    }
+    match tokio::time::timeout(timeout, rx).await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(_)) => {
+            refs.pending_commands.drop_waiter(&id);
+            Err(format!("Session closed while waiting for {name}"))
+        }
+        Err(_) => {
+            refs.pending_commands.drop_waiter(&id);
+            Err(format!("{name} timed out"))
+        }
+    }
+}
+
 /// Wait for a file to stabilize (size unchanged for ~300ms), with a
 /// 10-second deadline. Requiring several consecutive unchanged polls
 /// (instead of one 50ms tick) prevents returning on a file that is

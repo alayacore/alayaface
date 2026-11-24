@@ -99,13 +99,110 @@ pub async fn alayacore_model_set(
         .map(|_| ())
 }
 
+/// Replace one session's `model.conf` with `config` (the whole file, see
+/// `Session.ModelConfig.encodeModels`), then make the running session reload it.
+///
+/// This replaced `alayacore_model_sync` when AlayaCore v19 removed the
+/// wire-side write path: the adapter now owns the file. The command is still
+/// transactional from the caller's point of view —
+///
+///   * the previous text is kept, so a refusal can put it back;
+///   * the file is written atomically and 0600 (it can hold the only copy of an
+///     API key, and AlayaCore writes it 0600);
+///   * `model_load` is sent with a WAIT on its CO, and an error result (a busy
+///     session is the common one — `model_load` is idle-only) restores the
+///     previous file before the error reaches the UI.
+///
+/// The model list the core broadcasts on success refreshes the session's rows
+/// through the normal SM path; the RPC's answer only closes the editor.
 #[tauri::command]
-pub async fn alayacore_model_sync(
+pub async fn alayacore_write_session_models(
     session_id: String,
     config: String,
     sessions: State<'_, SessionMap>,
 ) -> Result<(), String> {
-    send_cmd(sessions.inner(), &session_id, "model_sync", &config).await.map(|_| ())
+    let session_dir = {
+        let map = sessions.0.lock().await;
+        crate::session::get(&map, &session_id)?.session_dir.clone()
+    };
+    let path = session_dir.join("config").join("model.conf");
+    // Refuse to touch a file we cannot read: restoring it is the whole safety
+    // property, and a permission error is not "there was no file".
+    let previous = match std::fs::read_to_string(&path) {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(format!("Cannot read {}: {e}", path.display())),
+    };
+
+    crate::dirs::write_file_atomic_mode(&path, &config, 0o600)?;
+
+    let answer = crate::commands::send_cmd_wait(
+        sessions.inner(),
+        &session_id,
+        "model_load",
+        "",
+        std::time::Duration::from_secs(5),
+    )
+    .await;
+
+    match answer {
+        Ok(co) => {
+            let is_error = co
+                .get("is_error")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if !is_error {
+                return Ok(());
+            }
+            restore_model_conf(&path, previous.as_deref());
+            // A CONFIG_* refusal happened INSIDE the handler, and `model_load`
+            // replaces the in-memory list BEFORE it reports validation errors
+            // (`loadFromFile` runs first). Restoring the file alone would leave
+            // the running session on the candidate, so reload the restored file
+            // to make memory and disk agree again. A STATE_* refusal (the usual
+            // one: `model_load` is idle-only) never entered the handler and
+            // changed nothing.
+            let code = co
+                .pointer("/result/code")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if code.starts_with("CONFIG_") {
+                let _ = send_cmd(sessions.inner(), &session_id, "model_load", "").await;
+            }
+            Err(co
+                .pointer("/result/message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("model_load failed")
+                .to_string())
+        }
+        Err(e) => {
+            // No answer means the load did not happen (or the session died).
+            // Put the previous file back so what is on disk is what the
+            // session is running.
+            restore_model_conf(&path, previous.as_deref());
+            Err(e)
+        }
+    }
+}
+
+/// Undo a model.conf replacement. `None` means the file did not exist, so
+/// restoring it means deleting ours (AlayaCore recreates the default config on
+/// the next load).
+fn restore_model_conf(path: &std::path::Path, previous: Option<&str>) {
+    match previous {
+        Some(text) => {
+            if let Err(e) = crate::dirs::write_file_atomic_mode(path, text, 0o600) {
+                log::error!("[model] failed to restore {}: {e}", path.display());
+            }
+        }
+        None => {
+            if let Err(e) = std::fs::remove_file(path) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    log::error!("[model] failed to remove {}: {e}", path.display());
+                }
+            }
+        }
+    }
 }
 
 #[tauri::command]

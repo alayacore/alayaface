@@ -389,24 +389,63 @@ func (s *Session) SendCmd(name, args string) (string, error) {
 	return s.sendCmdLocked(name, args)
 }
 
+// SendCmdWait sends a CI command and blocks until its CO arrives (or timeout),
+// returning the raw CO body.
+//
+// Only for commands whose result the caller must act on before replying to its
+// client — the model write RPC uses it to learn whether `model_load` accepted
+// the file it just committed (and to roll back if not). Everything else stays
+// fire-and-forget: the CO is broadcast to the UI, and blocking the caller on it
+// would serialize work the core does asynchronously.
+func (s *Session) SendCmdWait(name, args string, timeout time.Duration) (json.RawMessage, error) {
+	id := uuid.NewString()
+	// Register the waiter BEFORE the name+mapping and the write: the CO can
+	// arrive as soon as the frame is flushed.
+	ch := s.PendingCmds.Waiter(id)
+	s.stdinMu.Lock()
+	err := s.sendCmdIDLocked(name, args, id)
+	s.stdinMu.Unlock()
+	if err != nil {
+		s.PendingCmds.Delete(id)
+		s.PendingCmds.DropWaiter(id)
+		return nil, err
+	}
+	select {
+	case raw := <-ch:
+		return raw, nil
+	case <-time.After(timeout):
+		s.PendingCmds.DropWaiter(id)
+		return nil, fmt.Errorf("%s timed out", name)
+	}
+}
+
 // sendCmdLocked sends a CI frame while stdinMu is held. The command ID →
 // name mapping is registered BEFORE the frame is written — the CO reply
 // can arrive as soon as the CI frame is flushed.
 func (s *Session) sendCmdLocked(name, args string) (string, error) {
 	id := uuid.NewString()
+	if err := s.sendCmdIDLocked(name, args, id); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// sendCmdIDLocked is sendCmdLocked with a caller-chosen id (SendCmdWait needs
+// it to register its waiter first). stdinMu must be held.
+func (s *Session) sendCmdIDLocked(name, args, id string) error {
 	s.PendingCmds.Store(id, name)
 	payload, err := json.Marshal(wire.CmdMsg{CommandID: id, Name: name, Args: args})
 	if err != nil {
-		return "", err
+		return err
 	}
 	if err := wire.WriteFrame(s.Stdin, wire.TagCmdInput, string(payload)); err != nil {
 		s.PendingCmds.Delete(id)
-		return "", err
+		return err
 	}
 	preview := payload
 	if len(preview) > 200 {
 		preview = preview[:200]
 	}
 	log.Printf("[wire] >> %s %s %db %s", s.ID, wire.TagCmdInput, len(payload), preview)
-	return id, nil
+	return nil
 }

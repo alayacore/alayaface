@@ -51,6 +51,11 @@ jobs:
       # repo, absent from CI).
       - name: Model schema check
         run: ./scripts/check-model-schema.sh
+      # mcp.conf schema guard: the editor writes the whole file, so a key it
+      # does not model is uneditable (carried in extras) and a key it invents
+      # is one the core cannot parse. Same fixture strategy as model.conf.
+      - name: MCP schema check
+        run: ./scripts/check-mcp-schema.sh
       # Protocol drift guard: message_version, the TLV tag alphabet, the session
       # states AlayaCore broadcasts, the command names we send. Uses the
       # testdata/alayacore-*.txt fixtures here (AlayaCore is a separate repo,

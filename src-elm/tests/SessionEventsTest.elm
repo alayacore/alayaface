@@ -23,7 +23,6 @@ import Json.Decode as D
 import Json.Encode as E
 import Set
 import App.Types as AT
-import App.Update
 import Set
 import Plan.Runner as R
 import Plan.Types as PT
@@ -149,17 +148,16 @@ errorJson text =
         ]
 
 
-{-| A `CO` command-output frame for `model_sync`: the one frame whose handling
-re-enters the dispatcher. -}
-syncCo : Bool -> String -> E.Value
-syncCo isError message =
+{-| A `CO` frame for an arbitrary command, used to pin that the model editor's
+verdict no longer rides one. -}
+coFrame : String -> Bool -> E.Value
+coFrame name isError =
     frameJson "s1" "CO" Nothing ""
         (Just
             (E.object
                 [ ( "type", E.string "command_output" )
-                , ( "name", E.string "model_sync" )
+                , ( "name", E.string name )
                 , ( "is_error", E.bool isError )
-                , ( "result", E.object [ ( "message", E.string message ) ] )
                 ]
             )
         )
@@ -183,8 +181,8 @@ withAtBottom flag =
     { initModelWithSession | sessions = Dict.insert "s1" { session | atBottom = flag } Dict.empty }
 
 
-{-| A sync in flight: the overlay is waiting for a `model_sync` CO that a
-disconnect will now never deliver.
+{-| A save in flight: the overlay is waiting for the write RPC's answer, and a
+disconnect means it will never arrive.
 -}
 syncing : AT.Model
 syncing =
@@ -469,9 +467,6 @@ actionsOf actions =
 
                     SE.PlanOffer _ _ ->
                         "planOffer"
-
-                    SE.Defer _ ->
-                        "defer"
             )
 
 
@@ -1081,64 +1076,28 @@ tests =
                     Expect.equal [] (runnerOf actions)
             ]
 
-        -- The one re-entry. Two things are pinned: that the CO defers, and that
-        -- deferring DROPS the frame's own effects (the dispatcher did, so this
-        -- must too — see the module comment).
-        , describe "frameEvent: a model_sync CO"
-            [ test "while the overlay is syncing it defers, alone" <|
-                \_ ->
-                    let
-                        ( _, actions ) =
-                            SE.frameEvent syncing (syncCo False "synced")
-                    in
-                    Expect.equal
-                        [ SE.Defer (AT.ForSession "s1" (AT.ModelSelectorSyncResult False "synced")) ]
-                        actions
-            , test "an error CO carries the failure through the deferral" <|
-                \_ ->
-                    let
-                        ( _, actions ) =
-                            SE.frameEvent syncing (syncCo True "rejected by core")
-                    in
-                    Expect.equal
-                        [ SE.Defer (AT.ForSession "s1" (AT.ModelSelectorSyncResult True "rejected by core")) ]
-                        actions
-            , test "once the overlay moved on, the same CO does not defer" <|
+        -- The model editor's save is an RPC result now, not a frame, so a CO
+        -- must not move the overlay. This pins that boundary: the frame path
+        -- reports the frame's ordinary effects and leaves the selector alone,
+        -- even with a sync in flight and even for the `model_load` CO the
+        -- backend itself sent.
+        , describe "frameEvent: a model_load CO is just a frame"
+            [ test "a CO while the overlay is syncing does not close or fail it" <|
                 \_ ->
                     let
                         ( m, actions ) =
-                            SE.frameEvent initModelWithSession (syncCo False "synced")
+                            SE.frameEvent syncing (coFrame "model_load" False)
                     in
                     Expect.all
-                        [ \_ -> Expect.equal False (List.member "defer" (actionsOf actions))
-                        , \_ -> Expect.equal (sessionsOf initModelWithSession) (sessionsOf m)
+                        [ \_ ->
+                            Expect.equal "syncing"
+                                (Dict.get "s1" m.sessions
+                                    |> Maybe.map (\s -> pageName s.modelSelector.page)
+                                    |> Maybe.withDefault "?"
+                                )
+                        , \_ -> Expect.equal [ "scroll" ] (actionsOf actions)
                         ]
                         ()
-            , test "a different command's CO never defers" <|
-                \_ ->
-                    let
-                        unrelated =
-                            frameJson "s1" "CO" Nothing ""
-                                (Just (E.object [ ( "name", E.string "model_add" ), ( "is_error", E.bool False ) ]))
-
-                        ( _, actions ) =
-                            SE.frameEvent syncing unrelated
-                    in
-                    Expect.equal [ "scroll" ] (actionsOf actions)
-            , test "the deferred message really is handled: the sync overlay closes" <|
-                \_ ->
-                    -- End to end through the dispatcher, because the fold that
-                    -- makes `Defer` mean anything lives in App.Update.
-                    let
-                        ( m, _ ) =
-                            App.Update.update (AT.FrameEvent (syncCo False "synced")) syncing
-
-                        pageAfter =
-                            Dict.get "s1" m.sessions
-                                |> Maybe.map (\s -> pageName s.modelSelector.page)
-                                |> Maybe.withDefault "?"
-                    in
-                    Expect.equal "list" pageAfter
             ]
 
         , describe "frameEvent: the paths every arm shares"

@@ -258,6 +258,25 @@ func TestStderrTailKeepsTheLastLinesInOrder(t *testing.T) {
 	}
 }
 
+// stdout EOF and stderr EOF are independent. The reader waits on the tail
+// before quoting it; this pins the primitive that wait is built on: after
+// Wait returns, the pump's LAST line is visible.
+func TestStderrTailWaitSeesThePumpFinish(t *testing.T) {
+	tail := &StderrTail{}
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		tail.Push("late reason")
+		tail.Close()
+	}()
+	tail.Wait(2 * time.Second)
+	lines := tail.Lines()
+	if len(lines) != 1 || lines[0] != "late reason" {
+		t.Fatalf("Wait returned before the pump's last line: %#v", lines)
+	}
+	// Close is idempotent: the pump and a reaping path may both reach it.
+	tail.Close()
+}
+
 func TestStderrTailSkipsBlankLinesAndTrimsTheEnding(t *testing.T) {
 	// A blank line carries no reason, and storing them would push real lines
 	// out of the window. "\r" survives from a CRLF core on Windows.

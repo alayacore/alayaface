@@ -281,27 +281,33 @@ decision rather than a transcription.
 **Count the re-entries before choosing a mechanism.** The plan said this arm
 needed the dispatcher injected as `Dispatch`, because it "mutates Model
 mid-flight and re-enters update". Measured: of ~400 lines across the three arms
-there is **exactly one** re-entry, and it exists only because a `model_sync` CO
-result arrives embedded in a stream frame. So the module got `Defer Msg` — one
+there is **exactly one** re-entry, and it existed only because a `model_sync` CO
+result arrived embedded in a stream frame. So the module got `Defer Msg` — one
 action the mapper folds through `update` — instead of a `Dispatch` parameter
 threaded through a module whose other 600 lines are data. `Plan/Update.elm` still
 injects `Dispatch`, and correctly: it recurses repeatedly. The rule is
 "re-enters more than once ⇒ inject", not "touches the dispatcher ⇒ inject".
 
-Consequence worth knowing before you add an action: `applyEventActions` is now the
-**only** effect mapper in `App/Update.elm` that takes and returns a `Model`. Every
-other `apply*Actions` is `List Action -> Cmd Msg`. That asymmetry is the `Defer`
-case, and it is the reason the frame arm's tests include one that goes through
-`App.Update.update` — the fold lives in the mapper, and no test of the module can
-see whether it works.
+That re-entry is gone as of AlayaCore v19: `model_sync` was removed, the model
+editor's verdict now arrives on its own port (`onSessionModelsWriteResult`), and
+`Defer` went with it. The measurement above still stands as the way to make the
+decision — and the deletion is the same rule applied once more: zero re-entries
+buys an even smaller mechanism than one.
+
+Consequence worth knowing: with `Defer` gone, `applyEventActions` is
+`List Action -> Cmd Msg` like every other `apply*Actions` in `App/Update.elm`.
+If an inbound event ever needs to re-enter the dispatcher again, re-introduce the
+asymmetry deliberately (`Defer` + a `Model -> ( Model, Cmd Msg )` mapper) rather
+than threading `Dispatch` through a data module.
 
 **A branch that drops its sibling commands is behaviour, not sloppiness.** The
-sync-CO branch used to `update (ForSession …) updatedModel3` and never batch the
-frame's `cmds`/`runnerFrameCmd`/`autoOfferCmd`. So a `model_sync` CO frame does
-not re-pin the viewport. The faithful move emits `[ Defer … ]` ALONE. It looks
-like an oversight and invites a "fix" — do it in its own commit if it is wrong,
-because the test that pins it (`while the overlay is syncing it defers, alone`)
-is otherwise indistinguishable from one that asserts the bug is intended.
+old sync-CO branch used to `update (ForSession …) updatedModel3` and never batch
+the frame's `cmds`/`runnerFrameCmd`/`autoOfferCmd`, so a `model_sync` CO frame did
+not re-pin the viewport. The faithful move emitted `[ Defer … ]` ALONE, and the
+test that pinned it (`while the overlay is syncing it defers, alone`) was
+otherwise indistinguishable from one asserting the bug was intended. The branch
+is gone now; the lesson is not — a frame-handling special case that replaces the
+frame's ordinary effects is a behaviour change, not a cleanup.
 
 **Some mutations cannot be observed, and saying so is better than a green sweep.**
 `ready = newSession.ready || readyNow` is redundant: `Session.Handlers.handleSystemSession`
@@ -354,10 +360,11 @@ occurrences in the region — anything appearing exactly once is its own definit
    `RawAudio*`, `CursorPosResult`, ~280 lines over ~10 arms) are already thin
    wrappers over `Session/Voice.elm` — the machine exists, so the work there is
    consolidating effect mapping, not extracting state.
-   What still needs a mechanism, and which one: **`FrameEvent`** (250 lines) has
+   What still needs a mechanism, and which one: **`FrameEvent`** (250 lines) had
    exactly **one** re-entry into `update` — a `model_sync` CO riding inside a
-   stream frame — so the smallest thing that works is a `Defer Msg` action folded
-   by the effect mapper, not a `Dispatch` parameter threaded through a module.
+   stream frame — and that one is gone with v19, so the arm is now pure data with
+   no `Defer` and no `Dispatch`. If a future inbound frame needs to re-enter,
+   start from the measured count again rather than from this note.
    **`KeyDown`** (166) and the 26 **Plan** orchestration arms (819) do re-enter
    repeatedly and want the injected `Dispatch` `Plan/Update.elm` already uses.
    `StatusEvent` and `DeltaEvent` were on this list as needing `Dispatch` too;

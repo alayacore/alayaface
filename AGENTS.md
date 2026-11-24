@@ -120,35 +120,44 @@ backend (`session_file_rejection` / `core.SessionFileRejection`) so the DECISION
 is what a test covers.
 
 **`model.conf`: the schema lives in ONE module.** `src-elm/src/Session/ModelConfig.elm`
-owns the field list, the `model_list` decoder, the `model_sync` encoder and the
+owns the field list, the `model_list` decoder, the `model.conf` writer and the
 editor form (`Overlay.ModelEditor` renders `ModelConfig.fields` and names no
-field itself). This is not tidiness — `:model_sync` *replaces* the list and
-AlayaCore rewrites `model.conf` from what comes back, so any field AlayaFace
-does not carry is silently DELETED from the user's file on the next save. The
-symptom is two hops away ("the REASONING window never appears", "tool calls
-overlapped again") and nothing logs it; `reasoning_field`, `serial_tool_calls`
-and `reasoning_0/1/2` were each lost this way. When AlayaCore adds a model
-field: run `make check-schema` (it diffs `protocol.ModelInfo` against this
-repo and refreshes `testdata/alayacore-model-fields.txt`), add the field to
+field itself). This is not tidiness — AlayaFace writes the WHOLE file and
+AlayaCore reads it back, so any field AlayaFace does not carry is silently
+DELETED from the user's file on the next save. The symptom is two hops away
+("the REASONING window never appears", "tool calls overlapped again") and
+nothing logs it; `reasoning_field`, `serial_tool_calls` and `reasoning_0/1/2`
+were each lost this way. When AlayaCore adds a model field: run
+`make check-schema` (it diffs `protocol.ModelInfo` against this repo and
+refreshes `testdata/alayacore-model-fields.txt`), add the field to
 `ModelConfig.fields` with its decode + encode, and `elm-test`
 (`tests/ModelConfigTest.elm` pins the round trip). Keys this build does not
 know survive via `ModelInfo.extras`, so an unupdated AlayaFace degrades to
 "cannot edit" instead of "deletes it".
 
+The file format belongs to that module too: `encodeModels` emits
+`config.FormatKeyValue` blocks (`key: "value"`, `---` separators, the four
+escapes AlayaCore's parser knows). The backends only write the bytes — atomically
+and 0600, because `model.conf` can hold the only copy of an API key — and then
+apply them. **Since AlayaCore v19 there is no wire-side write path**:
+`:model_sync` is gone, the preset editor validates a candidate in a throwaway
+config dir before committing it (`model_load` there), and the session editor
+commits the file then waits for the live `model_load` CO, restoring the previous
+text if the core refuses.
+
 **A second axis of the same check, because there is a second way to lose a
 model.** `make check-schema` also compares `validateModel`'s required keys
 against the fields marked `requiredField`/`requiredChoice`, both directions, and
 refreshes `testdata/alayacore-model-required.txt`. The consequence of an empty
-required field is not a failed save: `syncFromContent` skips entries that fail
-validation and `writeConfigFile` persists the SURVIVORS, so the entry is deleted
-from `model.conf` and the CONFIG_MODEL_INVALID reply only arrives afterwards to
-explain what already happened. Refusing at Save is the only place that can
-prevent it. The check is symmetric on purpose — marking a key required that the
-core does not require blocks saves the core would accept and can strand an entry
-(`name` is the live example: not required, so `displayOf` keeps a nameless model
-visible instead of the form refusing to save it). A helper whose name begins
-with `required` is what the grep reads, so renaming one is caught by the check
-rather than silently dropping a key from it.
+required field is not a failed save: `parseModelConfig` skips entries that fail
+validation, so the entry loads as absent and the CONFIG_MODEL_INVALID reply only
+arrives afterwards to explain what already happened. Refusing at Save is the
+only place that can prevent it. The check is symmetric on purpose — marking a
+key required that the core does not require blocks saves the core would accept
+and can strand an entry (`name` is the live example: not required, so
+`displayOf` keeps a nameless model visible instead of the form refusing to save
+it). A helper whose name begins with `required` is what the grep reads, so
+renaming one is caught by the check rather than silently dropping a key from it.
 
 **`ui.conf` is the same rule in a second file.** `src-elm/src/App/UiConfig.elm`
 owns the whole layout-document schema (fields, `decode`, `encode`, `evict`,
@@ -186,6 +195,26 @@ a key the client's encoder omits is a value the user had and the next save
 overwrites with the struct's zero. Extracted from the encoder and the structs
 only (never a whole file), with a count guard, so a renamed function turns the
 check red instead of quietly comparing nothing.
+
+**`mcp.conf` is the same rule in the file that used to be the exception.**
+`src-elm/src/App/McpConfig.elm` owns the key list, the `---` block layout, the
+editor's draft + `draftProblems`, and `extras` for keys this build does not
+model. Escaping and block parsing are shared with `model.conf` through
+`src-elm/src/Conf.elm`, so both files use AlayaCore's four escapes — never
+JSON escaping. The backends only move bytes: `list_default_mcp` returns the
+file verbatim, `sync_default_mcp` writes the client's text atomically (0600,
+because OAuth client secrets and tokens live there). Why it moved: the codec
+existed TWICE (Rust `write_mcp_conf`, Go `writeMcpConf`) with no parity check,
+and Go's `json.Marshal` quoted values as `\u0026`/`\u003c`/`\u003e` for `&`,
+`<` and `>`, which AlayaCore's parser does not unescape — a URL with a query
+string was corrupted on save by one backend and not the other. The same path
+also dropped `auth-scopes`, a key the core reads, because neither backend
+modelled it. `tests/McpConfigTest.elm` pins the round trip, the escaping,
+`extras`, and every validation rule the backends used to enforce.
+`scripts/check-mcp-schema.sh` (run by `make check-schema`) diffs `modeledKeys`
+against AlayaCore's `ServerConfigFile` and refreshes
+`testdata/alayacore-mcp-fields.txt` — without it, a key the core adds would
+only ever be editable after someone remembered this file.
 
 **`session.label.json` is the same rule in a fourth file — one document per session.**
 `src-elm/src/Session/Labels.elm` owns the document (three keys `{v, label, auto}`,

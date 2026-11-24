@@ -222,10 +222,15 @@ func SetDefaultModel(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	}
 }
 
-// SyncDefaultModels replaces the model list in a preset's model.conf
-// (preset REQUIRED): spawns a temporary alayacore with that config dir
-// and sends model_sync, waiting for the CO result. Validation,
-// key-value serialization and persistence are all performed by alayacore.
+// SyncDefaultModels replaces a preset's model.conf with `config` (the whole
+// file, see Session.ModelConfig.encodeModels).
+//
+// Since AlayaCore v19 the wire has no model-list write path, so the adapter
+// writes the file — but it must not write a file the core would reject. The
+// candidate is therefore committed in a THROWAWAY config dir first and read
+// back with model_load; only a clean load is written to the preset. A rejected
+// candidate leaves the user's file untouched, which is what model_sync's
+// validate-then-persist used to guarantee.
 func SyncDefaultModels(h *Handler, w http.ResponseWriter, r *http.Request) error {
 	var args struct {
 		BinaryPath string `json:"binaryPath"`
@@ -243,40 +248,92 @@ func SyncDefaultModels(h *Handler, w http.ResponseWriter, r *http.Request) error
 	if err != nil {
 		return err
 	}
+	target := filepath.Join(configDir, "model.conf")
 	bin := ResolveBinary(args.BinaryPath)
 
-	commandID := uuid.NewString()
-	res, err := probe.RunTempProbe(bin, configDir, &probe.ProbeCmd{
-		CommandID: commandID,
-		Name:      "model_sync",
-		Args:      args.Config,
-	}, h.Cache)
+	// An empty list writes an empty file. There is nothing to validate (the
+	// core treats an empty model.conf as "no config" and would create its
+	// defaults in the probe, which is not this file's meaning), and the cache
+	// must say "no models" rather than keep the previous list.
+	if strings.TrimSpace(args.Config) == "" {
+		if err := dirs.WriteFileAtomicMode(target, []byte(""), 0o600); err != nil {
+			return err
+		}
+		h.Cache.Set([]json.RawMessage{})
+		return writeJSON(w, nil)
+	}
+
+	scratch, err := os.MkdirTemp("", "alayaface-model-probe-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(scratch)
+
+	// Copy runtime.conf so the probe resolves the SAME active model the preset
+	// would: model_load reinitializes it, and a keyless local model that is
+	// not active must not fail the candidate (the core refuses to switch to a
+	// model with no API key).
+	if runtime, err := os.ReadFile(filepath.Join(configDir, "runtime.conf")); err == nil {
+		if err := os.WriteFile(filepath.Join(scratch, "runtime.conf"), runtime, 0o600); err != nil {
+			return err
+		}
+	}
+
+	if err := os.WriteFile(filepath.Join(scratch, "model.conf"), []byte(args.Config), 0o600); err != nil {
+		return err
+	}
+	res, err := probe.RunTempProbe(bin, scratch, &probe.ProbeCmd{
+		CommandID: uuid.NewString(),
+		Name:      "model_load",
+		Args:      "",
+		// Do NOT let the scratch probe fill the real cache: its SM model_list
+		// can be the pre-load (default) list. The committed list is set below
+		// from the CO that answers model_load.
+	}, nil)
 	if err != nil {
 		return err
 	}
 
-	if res.CmdOutput != nil {
-		var v map[string]any
-		if err := json.Unmarshal(res.CmdOutput, &v); err != nil {
-			return err
+	if res.CmdOutput == nil {
+		switch res.End {
+		case probe.EndTimeout:
+			return fmt.Errorf("model_load timed out")
+		case probe.EndEOF:
+			return fmt.Errorf("alayacore exited before model_load completed")
+		default:
+			return fmt.Errorf("Failed to read from alayacore")
 		}
-		if isErr, _ := v["is_error"].(bool); isErr {
-			msg, _ := v["result"].(map[string]any)["message"].(string)
-			if msg == "" {
-				msg = "model_sync failed"
-			}
-			return fmt.Errorf("%s", msg)
-		}
-		out, _ := json.Marshal(v["result"])
-		return writeJSON(w, json.RawMessage(out))
 	}
 
-	switch res.End {
-	case probe.EndTimeout:
-		return fmt.Errorf("model_sync timed out")
-	case probe.EndEOF:
-		return fmt.Errorf("alayacore exited before model_sync completed")
-	default:
-		return fmt.Errorf("Failed to read from alayacore")
+	var co struct {
+		IsError bool `json:"is_error"`
+		Result  struct {
+			Message string            `json:"message"`
+			Models  []json.RawMessage `json:"models"`
+		} `json:"result"`
 	}
+	if err := json.Unmarshal(res.CmdOutput, &co); err != nil {
+		return err
+	}
+	if co.IsError {
+		msg := co.Result.Message
+		if msg == "" {
+			msg = "model_load failed"
+		}
+		return fmt.Errorf("%s", msg)
+	}
+
+	// Commit only after the core accepted the exact bytes.
+	if err := dirs.WriteFileAtomicMode(target, []byte(args.Config), 0o600); err != nil {
+		return err
+	}
+	models := co.Result.Models
+	if models == nil {
+		models = res.Models
+	}
+	if models == nil {
+		models = []json.RawMessage{}
+	}
+	h.Cache.Set(models)
+	return writeJSON(w, map[string]any{"models": models})
 }

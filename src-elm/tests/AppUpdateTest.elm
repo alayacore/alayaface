@@ -9,6 +9,8 @@ import App.Types as AT
 import App.Update
 import Session.Events
 import Session.Protocol as P
+import Session.Selector exposing (Page(..))
+import Session.Types as T
 import Plan.Update as PU
 import Test exposing (Test, describe, test)
 import TestHelpers exposing (initModelWithSession)
@@ -238,4 +240,86 @@ tests =
                     in
                     Expect.equal (Dict.size m1.pendingEvents) 1
             ]
+        , describe "the session model write result (writeSessionModels)"
+            [ test "success closes the editor for the session the write was for" <|
+                \_ ->
+                    let
+                        ( m, _ ) =
+                            App.Update.update (AT.SessionModelsWriteResult (writeResult "s1" True "")) syncingModel
+
+                        s =
+                            sessionOf m "s1"
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal False s.showModelSelector
+                        , \_ -> Expect.equal ModelSelList s.modelSelector.page
+                        ]
+                        ()
+            , test "a refusal keeps the editor open with the core's message" <|
+                \_ ->
+                    let
+                        ( m, _ ) =
+                            App.Update.update
+                                (AT.SessionModelsWriteResult (writeResult "s1" False "model_load: session is busy"))
+                                syncingModel
+
+                        s =
+                            sessionOf m "s1"
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal True s.showModelSelector
+                        , \_ -> Expect.equal ModelSelSyncFailed s.modelSelector.page
+                        , \_ -> Expect.equal (Just "model_load: session is busy") s.modelSelector.syncError
+                        ]
+                        ()
+            , test "an answer for a session that is gone changes nothing" <|
+                \_ ->
+                    let
+                        ( m, _ ) =
+                            App.Update.update (AT.SessionModelsWriteResult (writeResult "gone" True "")) syncingModel
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal ModelSelSyncing (sessionOf m "s1").modelSelector.page
+                        , \_ -> Expect.equal True (sessionOf m "s1").showModelSelector
+                        ]
+                        ()
+            ]
         ]
+
+
+{-| A session whose model editor is mid-save: the write RPC is in flight and
+the overlay is on its `Syncing` page. -}
+syncingModel : AT.Model
+syncingModel =
+    let
+        session =
+            T.emptySession "s1"
+
+        selector =
+            session.modelSelector
+    in
+    { initModelWithSession
+        | sessions =
+            Dict.insert "s1"
+                { session
+                    | showModelSelector = True
+                    , modelSelector = { selector | page = ModelSelSyncing }
+                }
+                Dict.empty
+    }
+
+
+{-| The port payload the backend sends: the work-copy id it echoed, plus the
+verdict. -}
+writeResult : String -> Bool -> String -> E.Value
+writeResult sessionId ok error =
+    E.object
+        [ ( "sessionId", E.string sessionId )
+        , ( "ok", E.bool ok )
+        , ( "error", E.string error )
+        ]
+
+
+sessionOf : AT.Model -> String -> T.SessionState
+sessionOf m id =
+    Dict.get id m.sessions |> Maybe.withDefault (T.emptySession id)

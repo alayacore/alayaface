@@ -1,6 +1,9 @@
 package session
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 // M5 (D6): the pending-commands registry must stay BOUNDED — a CO
 // reply that never arrives (protocol anomaly / killed core) must not
@@ -89,4 +92,28 @@ func TestPendingCmdsReinsertDoesNotDuplicateOrder(t *testing.T) {
 
 func idOf(i int) string {
 	return "call-" + string(rune('0'+i/100)) + string(rune('0'+(i/10)%10)) + string(rune('0'+i%10))
+}
+
+// SendCmdWait's half of the registry: the reader resolves the waiter with the
+// CO body, once, and a waiter a timed-out sender drops never receives anything.
+func TestPendingCmdsResolveWakesTheWaiterOnce(t *testing.T) {
+	p := newPendingCmds()
+	ch := p.Waiter("call-1")
+	p.Resolve("call-1", json.RawMessage(`{"is_error":false}`))
+
+	select {
+	case raw := <-ch:
+		if string(raw) != `{"is_error":false}` {
+			t.Fatalf("resolved with %q", raw)
+		}
+	default:
+		t.Fatal("Resolve did not wake the waiter")
+	}
+
+	// The entry is gone: a second CO for the same id must not block or panic.
+	p.Resolve("call-1", json.RawMessage(`{}`))
+
+	// A dropped waiter (timeout / write failure) is simply gone.
+	p.DropWaiter("call-2")
+	p.Resolve("call-2", json.RawMessage(`{}`))
 }

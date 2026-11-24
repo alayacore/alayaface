@@ -72,9 +72,23 @@ require_min() {
 # ─── The core's side (the authority) ────────────────────────────────
 
 core_version() {
-  [[ -f "$C_STATE" ]] || return 1
-  grep -vE '^[[:space:]]*//' "$C_STATE" |
-    sed -nE 's/^const messageVersion[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' | head -1
+  # The constant moved from internal/agent/session_types.go to
+  # internal/protocol/sm.go when the protocol took ownership of the number
+  # (AlayaCore 3892f2f0). Accept either home: an old core must still be
+  # readable, and a moved constant must not make the check silently fall back
+  # to the fixtures.
+  local f v
+  for f in "$C_STATE" "$CORE/internal/protocol/sm.go"; do
+    [[ -f "$f" ]] || continue
+    v=$(grep -vE '^[[:space:]]*//' "$f" |
+      sed -nE 's/^const (messageVersion|MessageVersion)[[:space:]]*=[[:space:]]*([0-9]+).*/\2/p' |
+      head -1)
+    if [[ -n "$v" ]]; then
+      printf '%s\n' "$v"
+      return 0
+    fi
+  done
+  return 1
 }
 
 # Every two-letter tag the core declares, in either direction.
@@ -350,7 +364,7 @@ fixture_header() {
 if (( REGEN )); then
   {
     fixture_header "message_version AlayaCore announces as its first boot frame" \
-      "agent/session_types.go (const messageVersion)"
+      "protocol/sm.go (const MessageVersion; it lived in agent/session_types.go before the protocol took ownership)"
     printf '%s\n' "$EXPECT_VERSION"
   } > "$FIX_VERSION"
   {

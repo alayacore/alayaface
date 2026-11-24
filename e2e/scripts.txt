@@ -19,3 +19,4 @@ model-fields
 solo
 label
 end-reason
+mcp-fields

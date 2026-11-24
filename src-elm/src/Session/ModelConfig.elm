@@ -18,11 +18,10 @@ module Session.ModelConfig exposing
 {-| AlayaCore's `model.conf` schema: the one place in AlayaFace that knows
 which keys a model entry has, and how each is decoded, encoded and edited.
 
-Why one module for all three: `:model_sync` REPLACES the whole list and
-AlayaCore rewrites `model.conf` from what comes back (`model_manager.go`
-`syncFromContent` -> `writeConfigFile`). AlayaFace therefore cannot know a
-model entry partially — every key it does not carry is a key it deletes
-from the user's config file, silently. That is a destructive round trip:
+Why one module for all three: AlayaFace writes `model.conf` as a whole file
+(since v19 there is no wire command that carries a model list any more), and
+AlayaCore reads the file back, so an entry this module cannot express is a
+line it deletes from the user's config. That is a destructive round trip:
 the model keeps answering, `reasoning_field` is gone, the REASONING window
 never appears again, and nothing anywhere reports it.
 
@@ -36,17 +35,16 @@ So these must agree, and ModelConfigTest asserts that they do:
     `scripts/check-model-schema.sh` compares the set against `validateModel` in
     both directions;
   * `modelInfoDecoder` /
-    `encodeModel`          — every key survives `model_list` -> `model_sync`;
+    `encodeModel`          — every key survives `model_list` -> `model.conf`;
   * `modeledKeys`          — the keys above; anything outside them is
     carried verbatim in `ModelInfo.extras`, so a key AlayaCore adds later
     survives an AlayaFace edit instead of vanishing until someone
     remembers to update this file.
 
 The limit of that: `extras` protects a key AlayaCore knows and this client
-build does not yet. A key NEITHER knows cannot be preserved — AlayaCore
-parses the payload into its own struct and writes model.conf from that, so
-it drops the line itself. AlayaFace must not invent a config line the core
-cannot parse.
+build does not yet. A key NEITHER knows cannot be preserved — AlayaCore reads
+`model.conf` into its own struct, so it drops the line itself. AlayaFace must
+not invent a config line the core cannot parse.
 
 Mirror of AlayaCore's `protocol.ModelInfo` (the `:model_list` payload) and
 `agent.modelConfig` (model.conf). A missing capability is never a reason to
@@ -54,6 +52,7 @@ modify AlayaCore: it is a config line, and this module is where AlayaFace
 carries them.
 -}
 
+import Conf
 import Dict exposing (Dict)
 import Json.Decode as D
 import Json.Encode as E
@@ -82,11 +81,12 @@ type alias Field =
     , hint : String
       -- Does AlayaCore's `validateModel` refuse an entry whose value is empty?
       -- It is data rather than a special case in `draftProblems` because the
-      -- consequence is per-field and severe: `:model_sync` REPLACES the list,
-      -- `syncFromContent` drops the entries that fail validation and then
-      -- `writeConfigFile` persists what is left — so saving a model missing one
-      -- of these DELETES it from the user's `model.conf`, and the
-      -- CONFIG_MODEL_INVALID error arrives only after the write.
+      -- consequence is per-field and severe: the file is replaced whole, and
+      -- `parseModelConfig` skips entries that fail validation, so a saved entry
+      -- missing one of these loads as absent and the CONFIG_MODEL_INVALID reply
+      -- is the only explanation. The backend verifies the candidate before
+      -- committing it (and rolls a live session back on refusal), but refusing
+      -- at Save is what keeps the form from handing the user that error at all.
       --
       -- Mirrored from `model_manager.go:validateModel` (the three are
       -- `protocol_type`, `base_url`, `model_name`). `name` is NOT required
@@ -608,56 +608,83 @@ extrasDecoder =
             )
 
 
--- CODEC: ITEM -> JSON (the :model_sync payload)
+-- CODEC: ITEM -> model.conf TEXT
+--
+-- This module writes the file AlayaCore reads, and since v19 it is the ONLY
+-- writer: the wire has no model-list write path left (`:model_sync` was
+-- removed), so the editor's Save is `write this text` + `:model_load`.
+--
+-- The format is AlayaCore's `config.FormatKeyValue`: one `key: value` line per
+-- field, blocks separated by a `---` line, strings double-quoted and escaped.
+-- The field order below follows `agent.modelConfig`'s struct order so a saved
+-- file looks like the one AlayaCore itself would write.
 
 
 encodeModels : List ModelInfo -> String
 encodeModels models =
-    E.encode 0 (E.list encodeModel models)
+    case models of
+        [] ->
+            -- An empty file, byte for byte what AlayaCore's `formatModelList`
+            -- returns for an empty list.
+            ""
+
+        _ ->
+            String.join "\n---\n" (List.map encodeModel models) ++ "\n"
 
 
-{-| Every modeled key is always written; `model_sync` replaces the list, so
-an omitted key is a deleted line.
+{-| One entry as a `model.conf` block (no trailing newline).
 
-The one exception is the raw `reasoning_N` blocks: an empty one would land
-in model.conf as an empty value where AlayaCore's own writer omits the key,
-so an empty block stays absent — which is also how the user clears one.
+Every modeled key is written, because the file REPLACES the list: an omitted
+key is a deleted line. The exceptions are the ones AlayaCore's own writer
+omits (`omitempty`), so an unchanged entry round-trips byte for byte:
 
-`serial_tool_calls` is always sent, matching AlayaCore, whose json tag drops
-`omitempty` for exactly this reason.
+  * `context_limit` / `max_tokens` when 0 (0 is the documented default);
+  * an empty `reasoning_N`, which is also how the user clears one;
+  * `reasoning_field` when empty (the provider default);
+  * `serial_tool_calls` when false.
+
+`id` is never written — AlayaCore assigns it at runtime (`config:"-"`).
 -}
-encodeModel : ModelInfo -> E.Value
+encodeModel : ModelInfo -> String
 encodeModel m =
-    E.object
-        ([ ( "id", E.int m.id )
-         , ( "name", E.string m.name )
-         , ( "protocol_type", E.string m.protocolType )
-         , ( "base_url", E.string m.baseUrl )
-         , ( "api_key", E.string m.apiKey )
-         , ( "model_name", E.string m.modelName )
-         , ( "context_limit", E.int m.contextLimit )
-         , ( "max_tokens", E.int m.maxTokens )
-         , ( "reasoning_field", E.string m.reasoningField )
-         , ( "serial_tool_calls", E.bool m.serialToolCalls )
-         ]
-            ++ List.filterMap jsonPair
+    String.join "\n"
+        (List.filterMap identity
+            [ Just (Conf.stringLine "name" m.name)
+            , Just (Conf.stringLine "protocol_type" m.protocolType)
+            , Just (Conf.stringLine "base_url" m.baseUrl)
+            , Just (Conf.stringLine "api_key" m.apiKey)
+            , Just (Conf.stringLine "model_name" m.modelName)
+            , intLine "context_limit" m.contextLimit
+            , intLine "max_tokens" m.maxTokens
+            ]
+            ++ List.filterMap (\( key, text ) -> Conf.rawLine key text)
                 [ ( "reasoning_0", m.reasoning0 )
                 , ( "reasoning_1", m.reasoning1 )
                 , ( "reasoning_2", m.reasoning2 )
                 ]
-            ++ List.filterMap jsonPair (Dict.toList m.extras)
+            ++ (if String.isEmpty m.reasoningField then
+                    []
+
+                else
+                    [ Conf.stringLine "reasoning_field" m.reasoningField ]
+               )
+            ++ (if m.serialToolCalls then
+                    [ "serial_tool_calls: true" ]
+
+                else
+                    []
+               )
+            -- Keys this build does not model (input_modalities today) are
+            -- carried verbatim in `extras`; a key NEITHER side knows cannot be
+            -- preserved, because AlayaCore drops it when it parses the file.
+            ++ List.filterMap (\( key, text ) -> Conf.rawLine key text) (Dict.toList m.extras)
         )
 
 
-{-| Re-attach a field that travels as raw JSON: a `reasoning_N` block or a
-carried-through extra. Empty or unparsable text yields nothing — unparsable
-text cannot reach here from a saved draft (see `draftProblems`), and
-`extras` text comes from `E.encode`, so it always parses.
--}
-jsonPair : ( String, String ) -> Maybe ( String, E.Value )
-jsonPair ( key, text ) =
-    if String.isEmpty (String.trim text) then
+intLine : String -> Int -> Maybe String
+intLine key value =
+    if value == 0 then
         Nothing
 
     else
-        Result.toMaybe (D.decodeString D.value text) |> Maybe.map (\value -> ( key, value ))
+        Just (key ++ ": " ++ String.fromInt value)

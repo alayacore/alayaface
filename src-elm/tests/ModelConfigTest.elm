@@ -2,13 +2,12 @@ module ModelConfigTest exposing (suite)
 
 {-| The `model.conf` round trip.
 
-AlayaCore's `:model_sync` replaces the entire model list and rewrites
-model.conf from what it receives, so every key AlayaFace does not carry is
-a key it deletes from the user's config file. The bug these tests pin is
-silent and destructive: edit one field, Save, and unrelated fields —
-`reasoning_field`, `serial_tool_calls`, `reasoning_0/1/2` — disappear, and
-the symptom is "the REASONING window never appears" or "tool calls overlapped
-again", with no error anywhere.
+AlayaFace writes the entire model list to model.conf, so every key it does
+not carry is a key it deletes from the user's config file. The bug these
+tests pin is silent and destructive: edit one field, Save, and unrelated
+fields — `reasoning_field`, `serial_tool_calls`, `reasoning_0/1/2` —
+disappear, and the symptom is "the REASONING window never appears" or "tool
+calls overlapped again", with no error anywhere.
 
 Five invariants, none of which held before Session.ModelConfig existed:
 
@@ -25,7 +24,6 @@ Five invariants, none of which held before Session.ModelConfig existed:
 import Dict exposing (Dict)
 import Expect
 import Json.Decode as D
-import Json.Encode as E
 import Session.ModelConfig as MC
 import Session.Types as T
 import Test exposing (..)
@@ -108,20 +106,38 @@ minimal =
     decodeEntry minimalEntry
 
 
-{-| The `:model_sync` payload for one item, as a dict of raw JSON values, so
-a test can ask "is this key stated at all, and with what value?" -}
-syncObject : T.ModelInfo -> Dict String E.Value
-syncObject m =
-    case D.decodeString (D.dict D.value) (E.encode 0 (MC.encodeModel m)) of
-        Ok dict ->
-            dict
+{-| The `model.conf` block for one item, as key → the value text as written
+(quotes included for strings), so a test can ask "is this key stated at all,
+and with what value?" -}
+confObject : T.ModelInfo -> Dict String String
+confObject m =
+    parseConfBlock (MC.encodeModel m)
 
-        Err _ ->
-            Debug.todo "encodeModel produced JSON that will not decode"
+
+{-| Split one `model.conf` block into its key/value lines.
+
+The first `": "` is the separator: a key never contains one, and the colons a
+JSON value carries come after it. Values keep their quotes, which is what lets
+an assertion read like the file (`Just "\"reasoning\""`).
+-}
+parseConfBlock : String -> Dict String String
+parseConfBlock text =
+    text
+        |> String.split "\n"
+        |> List.filterMap
+            (\line ->
+                case String.indexes ": " line |> List.head of
+                    Just i ->
+                        Just ( String.left i line, String.dropLeft (i + 2) line )
+
+                    Nothing ->
+                        Nothing
+            )
+        |> Dict.fromList
 
 
 {-| The three provider-JSON blocks: the only modelled keys that are absent
-from the :model_sync payload when unset (see `encodeModel`). -}
+from the block when unset (see `encodeModel`). -}
 reasoningBlocks : List String
 reasoningBlocks =
     [ "reasoning_0", "reasoning_1", "reasoning_2" ]
@@ -129,7 +145,7 @@ reasoningBlocks =
 
 stated : String -> T.ModelInfo -> Maybe String
 stated key m =
-    Dict.get key (syncObject m) |> Maybe.map (E.encode 0)
+    Dict.get key (confObject m)
 
 
 suite : Test
@@ -170,22 +186,24 @@ suite =
             , test "no reasoning blocks means unset, and nothing is invented for them on the way out" <|
                 \_ ->
                     minimal
-                        |> syncObject
+                        |> confObject
                         |> Dict.filter (\key _ -> List.member key reasoningBlocks)
                         |> Dict.keys
                         |> Expect.equal []
             ]
-        , describe "item -> :model_sync"
-            [ test "every modelled key is stated, never left to a default — bar an unset JSON block" <|
+        , describe "item -> model.conf"
+            [ test "every modelled key that is written is stated, never left to a default" <|
                 \_ ->
                     let
                         unset =
                             List.filter (\key -> String.isEmpty (blockText key entry)) reasoningBlocks
 
+                        -- `id` is runtime state (`config:"-"`), never a line.
                         mustBeStated =
-                            List.filter (\key -> not (List.member key unset)) MC.modeledKeys
+                            List.filter (\key -> key /= "id" && not (List.member key unset))
+                                MC.modeledKeys
                     in
-                    List.filterMap (\key -> if Dict.member key (syncObject entry) then Nothing else Just key) mustBeStated
+                    List.filterMap (\key -> if Dict.member key (confObject entry) then Nothing else Just key) mustBeStated
                         |> Expect.equal []
             , test "values are the ones model_list sent" <|
                 \_ -> Expect.equal (Just "\"reasoning\"") (stated "reasoning_field" entry)
@@ -193,12 +211,17 @@ suite =
                 \_ ->
                     Expect.equal (Just "{\"thinking\":{\"type\":\"disabled\"}}")
                         (stated "reasoning_0" entry)
-            , test "serial_tool_calls is stated even when false, as AlayaCore states it" <|
-                \_ -> Expect.equal (Just "false") (stated "serial_tool_calls" { entry | serialToolCalls = False })
+            , test "serial_tool_calls is written only when true, as AlayaCore omits a false one" <|
+                \_ ->
+                    Expect.equal
+                        ( Dict.member "serial_tool_calls" (confObject { entry | serialToolCalls = False })
+                        , stated "serial_tool_calls" entry
+                        )
+                        ( False, Just "true" )
             , test "an empty reasoning_N is omitted, which is how a block gets cleared" <|
                 \_ ->
                     { entry | reasoning0 = "" }
-                        |> syncObject
+                        |> confObject
                         |> Dict.member "reasoning_0"
                         |> Expect.equal False
             , test "the unknown key is written back verbatim" <|
@@ -206,8 +229,47 @@ suite =
             , test "an item untouched in the editor encodes identically (no phantom edit)" <|
                 \_ ->
                     Expect.equal
-                        (E.encode 0 (MC.encodeModel entry))
-                        (entry |> MC.draftFromModel |> MC.modelFromDraft |> MC.encodeModel |> E.encode 0)
+                        (MC.encodeModel entry)
+                        (entry |> MC.draftFromModel |> MC.modelFromDraft |> MC.encodeModel)
+            ]
+        , describe "the file format (AlayaCore's config.FormatKeyValue)"
+            [ test "an empty list is an empty file, as AlayaCore writes it" <|
+                \_ -> Expect.equal "" (MC.encodeModels [])
+            , test "entries are separated by a `---` line and the file ends with one newline" <|
+                \_ ->
+                    let
+                        text =
+                            MC.encodeModels [ entry, plainEntry ]
+                    in
+                    Expect.equal
+                        ( 2, True, False )
+                        ( List.length (String.split "\n---\n" text)
+                        , String.endsWith "\n" text
+                        , String.endsWith "\n\n" text
+                        )
+            , test "a string is double-quoted and escaped the way the core's parser reads it" <|
+                \_ ->
+                    Expect.equal (Just "\"a\\\"b\\\\c\\nd\\re\"")
+                        (stated "name" { entry | name = "a\"b\\c\nd\re" })
+            , test "a zero limit is omitted, because 0 is the documented default" <|
+                \_ ->
+                    Expect.equal
+                        ( False, False, True )
+                        ( Dict.member "context_limit" (confObject { entry | contextLimit = 0 })
+                        , Dict.member "max_tokens" (confObject { entry | maxTokens = 0 })
+                        , Dict.member "context_limit" (confObject entry)
+                        )
+            , test "an undeclared optional key (JSON null) writes no line" <|
+                \_ ->
+                    { entry | extras = Dict.fromList [ ( "input_modalities", "null" ) ] }
+                        |> confObject
+                        |> Dict.member "input_modalities"
+                        |> Expect.equal False
+            , test "an empty declaration (`[]`) is written, because absent and empty differ" <|
+                \_ ->
+                    { entry | extras = Dict.fromList [ ( "input_modalities", "[]" ) ] }
+                        |> stated "input_modalities"
+                        |> Expect.equal (Just "[]")
             ]
         , describe "the bug this change fixed: edit one field, lose the others"
             [ test "renaming a model keeps reasoning_field" <|
@@ -230,14 +292,17 @@ suite =
                 \_ ->
                     Expect.equal (Just "\"Renamed\"")
                         (entry |> rename |> MC.modelFromDraft |> stated "name")
-            , test "switching the tool-call mode is what reaches the wire" <|
+            , test "switching the tool-call mode is what reaches the file" <|
                 \_ ->
                     entry
                         |> MC.draftFromModel
                         |> MC.updateDraftField "serial_tool_calls" "false"
                         |> MC.modelFromDraft
                         |> stated "serial_tool_calls"
-                        |> Expect.equal (Just "false")
+                        -- Omitted, which is how AlayaCore writes `false`
+                        -- (`config:"serial_tool_calls,omitempty"`): reading it
+                        -- back as absent is reading it back as false.
+                        |> Expect.equal Nothing
             , test "typing a reasoning key is what reaches the wire" <|
                 \_ ->
                     entry

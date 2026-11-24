@@ -86,7 +86,7 @@ use crate::wire;
 /// reason is invisible in a GUI build (the core's stderr is not the terminal)
 /// unless this backend reads it — see `close_child_gracefully`'s twin, the
 /// disconnect path in `reader.rs`, for what reaches the user.
-pub const SUPPORTED_MESSAGE_VERSION: i64 = 17;
+pub const SUPPORTED_MESSAGE_VERSION: i64 = 19;
 
 /// How far into a session file its frontmatter is searched.
 ///
@@ -208,7 +208,16 @@ pub const STDERR_TAIL_MAX_CHARS: usize = 400;
 /// Lines are kept oldest-first and the buffer is bounded, so a verbose core
 /// cannot grow it without limit.
 #[derive(Clone, Default)]
-pub struct StderrTail(Arc<std::sync::Mutex<std::collections::VecDeque<String>>>);
+pub struct StderrTail {
+    lines: Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
+    /// Set (and notified) by the pump when stderr reaches EOF. stdout EOF and
+    /// stderr EOF are INDEPENDENT: a reader that composes its disconnect
+    /// message as soon as stdout ends can quote the tail before the pump has
+    /// drained the child's last line, which is exactly how a startup failure
+    /// ("session file version mismatch: …") lost its reason and read as a bare
+    /// "Connection closed". The reader waits on this, bounded, first.
+    finished: Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+}
 
 impl StderrTail {
     /// Record one line, dropping the oldest when full. Blank lines are skipped
@@ -223,7 +232,7 @@ impl StderrTail {
         if trimmed.trim().is_empty() {
             return;
         }
-        let Ok(mut guard) = self.0.lock() else {
+        let Ok(mut guard) = self.lines.lock() else {
             // A poisoned mutex means the pump panicked while holding it;
             // losing the tail must not take the session down with it.
             return;
@@ -238,10 +247,33 @@ impl StderrTail {
     /// the normal case, and one that must leave the status message exactly as
     /// it read before this existed.
     pub fn lines(&self) -> Vec<String> {
-        let Ok(guard) = self.0.lock() else {
+        let Ok(guard) = self.lines.lock() else {
             return Vec::new();
         };
         guard.iter().cloned().collect()
+    }
+
+    /// Called by the pump when stderr reaches EOF.
+    pub(crate) fn finish(&self) {
+        let (lock, cv) = &*self.finished;
+        if let Ok(mut done) = lock.lock() {
+            *done = true;
+            cv.notify_all();
+        }
+    }
+
+    /// Give the pump up to `timeout` to finish before the reader reads the
+    /// tail. Returns immediately once it has, so the normal child-exit path
+    /// costs nothing.
+    pub(crate) fn wait_finished(&self, timeout: std::time::Duration) {
+        let (lock, cv) = &*self.finished;
+        let Ok(guard) = lock.lock() else {
+            return;
+        };
+        if *guard {
+            return;
+        }
+        let _ = cv.wait_timeout(guard, timeout);
     }
 }
 
@@ -269,6 +301,7 @@ fn spawn_stderr_pump(stderr: std::process::ChildStderr, tail: StderrTail) {
                 }
             }
         }
+        tail.finish();
     });
 }
 
@@ -1522,6 +1555,24 @@ mod tests {
         tail.push("Error: failed to load session\r");
         tail.push("\n");
         assert_eq!(tail.lines(), vec!["Error: failed to load session"]);
+    }
+
+    // stdout EOF and stderr EOF are independent; the reader waits on the tail
+    // before quoting it. This pins the primitive that wait is built on: after
+    // wait_finished returns, the pump's LAST line is visible.
+    #[test]
+    fn stderr_tail_wait_sees_the_pump_finish() {
+        let tail = StderrTail::default();
+        let pump = tail.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(30));
+            pump.push("late reason");
+            pump.finish();
+        });
+        tail.wait_finished(Duration::from_secs(2));
+        assert_eq!(tail.lines(), vec!["late reason".to_string()]);
+        // Idempotent: a reaping path may finish it too.
+        tail.finish();
     }
 
     #[test]

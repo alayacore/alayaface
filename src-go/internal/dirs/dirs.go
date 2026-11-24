@@ -600,7 +600,16 @@ func copyDirExcluding(src, dst string, exclude []string) error {
 			if err != nil {
 				return err
 			}
-			if err := os.WriteFile(dstPath, data, 0o644); err != nil {
+			// PRESERVE the source mode. Preset files are not all 0644:
+			// model.conf (API key) and mcp.conf (OAuth secret) are 0600, and a
+			// copy that widened them would expose the secret in every session
+			// directory. Rust's fs::copy already preserves the bits, so a
+			// hard-coded 0644 was also backend drift.
+			mode := os.FileMode(0o644)
+			if info, err := e.Info(); err == nil {
+				mode = info.Mode().Perm()
+			}
+			if err := WriteFileAtomicMode(dstPath, data, mode); err != nil {
 				return err
 			}
 		}

@@ -1,23 +1,24 @@
 // Model-config E2E probe: proves AlayaFace carries EVERY model.conf field
-// through an edit+sync.
+// through an edit+save.
 //
-// Why this exists as its own suite: :model_sync replaces the whole list and
-// AlayaCore rewrites model.conf from what comes back, so a field the client
-// does not carry is a field deleted from the user's config file. Losing
-// `reasoning_field` reads as "the REASONING window never appears" and losing
-// `serial_tool_calls: true` as "tool calls overlapped again" — with no error
-// anywhere. Three things are asserted here, in order:
+// Why this exists as its own suite: the model editor writes the whole file and
+// AlayaCore reads it back, so a field the client does not carry is a field
+// deleted from the user's config file. Losing `reasoning_field` reads as "the
+// REASONING window never appears" and losing `serial_tool_calls: true` as
+// "tool calls overlapped again" — with no error anywhere. Three things are
+// asserted here, in order:
 //
 //   1. the editor presents a control for every field, prefilled from what
 //      fakecore's model_list sent (incl. an unset block and an absent key);
 //   2. a value the codec cannot encode (unparsable provider JSON) blocks
 //      Save instead of being dropped on save;
-//   3. after Sync, the payload AlayaCore received still carries every field
+//   3. after Save, the model.conf AlayaFace wrote still carries every field
 //      of BOTH entries — the one that was edited and the one that was not —
-//      including `quantization`, a key AlayaFace has never heard of.
+//      including `input_modalities`, a core-known key this build does not model.
 //
-// fakecore records each model_sync payload in <preset>/model_sync.last.json,
-// which is what step 3 reads.
+// Since AlayaCore v19 there is no model_sync payload to inspect: the preset's
+// model.conf IS the thing the backend wrote and the core reads, so step 3
+// parses that file.
 import puppeteer from "puppeteer-core";
 import { spawn } from "child_process";
 import { mkdtempSync, rmSync, readFileSync } from "fs";
@@ -43,7 +44,7 @@ const env = { ...process.env, HOME: home };
 console.log("HOME:", home, "port:", port);
 
 // Built here rather than inherited from whichever script ran first: this
-// suite asserts on fakecore's model_sync record, so it has to be THIS
+// suite asserts on the model.conf the backend writes, so it has to be THIS
 // checkout's fakecore, not a stale binary left in bin/.
 ({ fakecore: FAKECORE, server: SERVER } = buildGoBinaries(ROOT));
 
@@ -67,7 +68,7 @@ const waitFor = async (fn, timeout = 15000, what = "") => {
   }
 };
 
-const SYNC_FILE = join(home, ".alayaface", "presets", "Simple", "model_sync.last.json");
+const MODEL_CONF_FILE = join(home, ".alayaface", "presets", "Simple", "model.conf");
 const fieldId = (key) => `#model-editor-${key}-default`;
 const valueOf = (key) =>
   page.evaluate((sel) => {
@@ -159,8 +160,43 @@ async function clickButton(text) {
   }, text);
 }
 
-function readSynced() {
-  return JSON.parse(readFileSync(SYNC_FILE, "utf8"));
+// Parse the written model.conf into the per-entry objects the assertions
+// below read. Values keep the types the core would parse: strings unquoted,
+// true/false booleans, integers, JSON blocks as objects/arrays.
+function readModelConf() {
+  const text = readFileSync(MODEL_CONF_FILE, "utf8");
+  return text
+    .split("\n---\n")
+    .map((block) => {
+      const obj = {};
+      for (const line of block.split("\n")) {
+        const t = line.trim();
+        if (!t || t.startsWith("#")) continue;
+        const i = t.indexOf(":");
+        if (i < 0) continue;
+        const key = t.slice(0, i).trim();
+        let value = t.slice(i + 1).trim();
+        if (value.startsWith('"') && value.endsWith('"')) {
+          value = value
+            .slice(1, -1)
+            .replace(/\\\\/g, "\\")
+            .replace(/\\"/g, '"')
+            .replace(/\\n/g, "\n")
+            .replace(/\\r/g, "\r");
+        } else if (value === "true") {
+          value = true;
+        } else if (value === "false") {
+          value = false;
+        } else if (/^-?\d+$/.test(value)) {
+          value = parseInt(value, 10);
+        } else if (value.startsWith("{") || value.startsWith("[")) {
+          try { value = JSON.parse(value); } catch { /* leave the raw text */ }
+        }
+        obj[key] = value;
+      }
+      return obj;
+    })
+    .filter((obj) => Object.keys(obj).length > 0);
 }
 
 async function main() {
@@ -275,7 +311,7 @@ async function main() {
   console.log("row 2 title after save:", title);
   if (title !== "renamed-vllm") throw new Error("edited name not in the list: " + title);
 
-  // ── 3. sync, then read what AlayaCore actually received ──
+  // ── 3. save, then read the model.conf AlayaFace wrote ──
   // The Preset Manager overlay is still open underneath this one, so
   // `.card-close` is not unique: the LAST one is the model editor's (it
   // renders on top). Clicking the first closes the Preset Manager instead
@@ -286,23 +322,28 @@ async function main() {
   });
   await waitFor(() => page.evaluate(() => document.body.textContent.includes("Sync & Close")), 15000, "sync prompt");
   await clickButton("Sync & Close");
-  const synced = await waitFor(() => { try { return readSynced(); } catch { return null; } }, 15000, "fakecore to record model_sync");
-  console.log("synced payload:", JSON.stringify(synced));
+  const synced = await waitFor(() => {
+    try { return readModelConf(); } catch { return null; }
+  }, 15000, "the backend to write model.conf");
+  console.log("written model.conf:", JSON.stringify(synced));
 
   const edited = synced.find((m) => m.name === "renamed-vllm");
-  if (!edited) throw new Error("edited entry missing from the sync payload");
+  if (!edited) throw new Error("edited entry missing from model.conf");
   const untouched = synced.find((m) => m.name === "fake-model-1");
   if (!untouched) throw new Error("untouched entry missing from the sync payload");
 
   const check = (cond, msg) => { if (!cond) throw new Error(msg); };
   check(edited.reasoning_field === "reasoning_content", "edited reasoning_field lost");
-  check(edited.serial_tool_calls === false, "edited serial_tool_calls lost");
+  // AlayaCore's own writer omits a false serial_tool_calls (omitempty), and
+  // absent reads back as false — so the assertion is "not written as true",
+  // not "written as false".
+  check(edited.serial_tool_calls === undefined, "serial_tool_calls was not omitted when false");
   check(edited.reasoning_1 && edited.reasoning_1.thinking.type === "disabled", "fixed reasoning_1 lost");
   check(edited.reasoning_2 && edited.reasoning_2.effort === "max", "untouched reasoning_2 lost");
   check(edited.context_limit === 16384 && edited.max_tokens === 4096, "untouched numeric limits lost");
-  check(edited.quantization === "awq", "the un-modelled key quantization was deleted by the edit");
-  check(untouched.serial_tool_calls === false, "serial_tool_calls not stated for the untouched entry");
-  check(untouched.reasoning_field === "", "reasoning_field not stated for the untouched entry");
+  check(edited.input_modalities && edited.input_modalities[0] === "text", "the un-modelled key input_modalities was deleted by the edit");
+  check(untouched.serial_tool_calls === undefined, "serial_tool_calls not omitted for the untouched entry");
+  check(untouched.reasoning_field === undefined, "an empty reasoning_field was written for the untouched entry");
   console.log("ALL PASS");
 
   await browser.close();

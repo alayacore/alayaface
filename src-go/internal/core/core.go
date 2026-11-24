@@ -100,7 +100,7 @@ import (
 //
 // Must stay in sync with src-tauri/src/alayacore.rs::SUPPORTED_MESSAGE_VERSION
 // (AGENTS.md: "two backends must stay symmetric").
-const SupportedMessageVersion = 17
+const SupportedMessageVersion = 19
 
 // SessionHeaderWindow is how far into a session file its frontmatter is
 // searched. The block is eight short scalar lines, so this is generous by
@@ -228,6 +228,42 @@ const StderrTailMaxChars = 400
 type StderrTail struct {
 	mu    sync.Mutex
 	lines []string
+
+	// done is closed by the pump when stderr reaches EOF. stdout EOF and
+	// stderr EOF are INDEPENDENT: a reader that composes its disconnect
+	// message as soon as stdout ends can quote the tail before the pump has
+	// drained the child's last line, which is exactly how a startup failure
+	// ("session file version mismatch: …") lost its reason and read as a bare
+	// "Connection closed". The reader waits on this, bounded, first.
+	initOnce  sync.Once
+	closeOnce sync.Once
+	done      chan struct{}
+}
+
+// Finished returns the channel closed when the pump reaches EOF. Lazily
+// created so the zero value (used by tests and by any caller that builds a
+// tail without a pump) stays usable.
+func (t *StderrTail) Finished() <-chan struct{} {
+	t.initOnce.Do(func() { t.done = make(chan struct{}) })
+	return t.done
+}
+
+// Close is called by the pump at EOF. Idempotent.
+func (t *StderrTail) Close() {
+	t.closeOnce.Do(func() {
+		t.initOnce.Do(func() { t.done = make(chan struct{}) })
+		close(t.done)
+	})
+}
+
+// Wait gives the pump up to d to finish before the reader reads the tail.
+// It returns immediately once the pump has finished, so the normal child-exit
+// path costs nothing.
+func (t *StderrTail) Wait(d time.Duration) {
+	select {
+	case <-t.Finished():
+	case <-time.After(d):
+	}
 }
 
 // Push records one line, dropping the oldest when full. Blank lines are
@@ -289,6 +325,7 @@ func startStderrPump(stderr io.ReadCloser, tail *StderrTail) {
 		}
 		// scanner.Err() is deliberately not logged as an error: the pipe
 		// closing when the child exits is the normal end of this loop.
+		tail.Close()
 	}()
 }
 

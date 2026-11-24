@@ -185,6 +185,7 @@ subscriptions model =
         , Ports.onStatus (\raw -> StatusEvent raw)
         , Ports.onRpcError (\raw -> RpcError raw)
         , Ports.onDefaultModelsList (\raw -> DefaultModelsListResult raw)
+        , Ports.onSessionModelsWriteResult (\raw -> SessionModelsWriteResult raw)
         , Ports.onDefaultModelsSyncResult (\raw -> DefaultModelsSyncResult raw)
         , Ports.onDefaultModelSetResult (\raw -> DefaultModelsSetActiveResult raw)
         , Ports.onDefaultMcpList (\raw -> McpListResult raw)

@@ -169,6 +169,21 @@ pub fn read_preset_order() -> Vec<String> {
 ///
 /// Mirrors Go's dirs.WriteFileAtomic.
 pub fn write_file_atomic(path: &std::path::Path, text: &str) -> Result<(), String> {
+    write_file_atomic_mode(path, text, 0o644)
+}
+
+/// `write_file_atomic` with an explicit mode.
+///
+/// Config files that hold a secret are 0600 in AlayaCore (`model.conf` can be
+/// the only copy of an API key — `agent.writeConfigFile` writes it 0600), and
+/// this backend must not widen that: a file created 0644 would be readable by
+/// every local user. Everything AlayaFace owns (`ui.conf`, `settings.conf`,
+/// `mcp.conf`, the preset order) keeps the 0644 default.
+pub fn write_file_atomic_mode(
+    path: &std::path::Path,
+    text: &str,
+    mode: u32,
+) -> Result<(), String> {
     use std::io::Write;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -200,7 +215,7 @@ pub fn write_file_atomic(path: &std::path::Path, text: &str) -> Result<(), Strin
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o644));
+            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode));
         }
         std::fs::rename(&tmp, path).map_err(|e| format!("Cannot write {}: {e}", base))
     })();
@@ -802,6 +817,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn write_file_atomic_mode_sets_the_core_file_permission() {
+        let dir = std::env::temp_dir().join(format!(
+            "alayaface-mode-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("model.conf");
+
+        write_file_atomic_mode(&path, "name: \"x\"\n", 0o600).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "name: \"x\"\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "model.conf must stay 0600 (it can hold an API key)");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn preset_name_validation() {
         assert!(valid_preset_name("Default"));
         assert!(valid_preset_name("work-a_b2"));
@@ -892,6 +928,44 @@ mod tests {
             );
             assert!(!session_dir.join("config").join("settings.conf").exists());
         });
+    }
+
+    #[test]
+    fn session_dir_copy_preserves_config_modes() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            isolated_home(|| {
+                let sessions = ensure().unwrap();
+                let config = preset_dir("Simple");
+                // model.conf holds an API key and mcp.conf OAuth credentials;
+                // a copy that widened them would expose the secret in the
+                // session directory.
+                for (name, mode) in [
+                    ("model.conf", 0o600u32),
+                    ("mcp.conf", 0o600),
+                    ("public.conf", 0o644),
+                ] {
+                    let path = config.join(name);
+                    std::fs::write(&path, "x: 1\n").unwrap();
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+                }
+
+                let dir = create_session_dir_from(&sessions, "modes", "Simple").unwrap();
+                for (name, want) in [
+                    ("model.conf", 0o600u32),
+                    ("mcp.conf", 0o600),
+                    ("public.conf", 0o644),
+                ] {
+                    let got = std::fs::metadata(dir.join("config").join(name))
+                        .unwrap()
+                        .permissions()
+                        .mode()
+                        & 0o777;
+                    assert_eq!(got, want, "{name} mode");
+                }
+            });
+        }
     }
 
     #[test]

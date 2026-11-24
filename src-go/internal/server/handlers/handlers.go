@@ -39,13 +39,13 @@ func Registry() map[string]Command {
 		// io
 		"alayacore_send_prompt": SendPrompt,
 		// cmd
-		"alayacore_cancel":      CancelTask,
-		"alayacore_model_set":   ModelSet,
-		"alayacore_reason":      Reason,
-		"alayacore_model_sync":  ModelSync,
-		"alayacore_confirm":     ConfirmTool,
-		"alayacore_mcp_decline": McpDecline,
-		"alayacore_mcp_cancel":  McpCancel,
+		"alayacore_cancel":               CancelTask,
+		"alayacore_model_set":            ModelSet,
+		"alayacore_reason":               Reason,
+		"alayacore_write_session_models": WriteSessionModels,
+		"alayacore_confirm":              ConfirmTool,
+		"alayacore_mcp_decline":          McpDecline,
+		"alayacore_mcp_cancel":           McpCancel,
 		// startup check (frontend probes on init)
 		"check_alayacore": CheckAlayacore,
 		// models

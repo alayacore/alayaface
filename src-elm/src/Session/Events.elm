@@ -30,28 +30,20 @@ they are assertable; `grep -c 'Ports\.' src/Session/Events.elm` returns 0, and a
 test can say "this path warns once" instead of trusting a console.
 
 
-## The one thing here that re-enters the dispatcher
+## The one thing here that used to re-enter the dispatcher
 
-`FrameEvent` is the only inbound arm that can, and it does so in exactly one
-narrow case: a `model_sync` CO result (`decodeSyncOutcome`) that arrives while
-the session's model selector is on its `Syncing` page. That re-entry is
-`Defer Msg` — one of two places in this file where a `Msg` appears, the other
-being `PlanOffer`'s payload — and the mapper folds it by calling `update`.
+Nothing does any more, and that is worth knowing before adding a `Msg` back.
+`FrameEvent` used to, in exactly one case: a `model_sync` CO result that arrived
+while the session's model selector was on its `Syncing` page. The model editor's
+save is now a normal backend RPC whose result arrives on its own port
+(`onSessionModelsWriteResult`), so the verdict never rides a stream frame and
+this module stays pure data with no `Defer`.
 
-The alternative was to inject the dispatcher as a `Dispatch` argument, the way
-`Plan/Update.elm` does. Rejected on measurement: `Plan/Update` re-enters
-repeatedly and recurses, so threading a function through it earns its cost, and
-here the chain would have had to run through a module whose other 400 lines are
-pure data. `Defer` keeps that, at the price of one action the mapper must handle
-specially.
-
-**`Defer` also drops the frame's other effects, on purpose.** Before the move
-this branch returned `update (ForSession …) updatedModel3` and discarded the
-frame's own `cmds`/`runnerFrameCmd`/`autoOfferCmd`, so a sync-result CO frame
-never re-pinned the viewport. Emitting `[ Defer … ]` ALONE preserves that.
-It is questionable — a scroll re-pin may be wanted — but it is the behaviour
-under test, and a refactor does not quietly change it. If the drop is wrong, fix
-it in a commit of its own that can be argued about on its own.
+The old design also had a consequence worth keeping in mind: the re-entry
+branch dropped the frame's other effects on purpose, so a sync-result CO frame
+never re-pinned the viewport. That whole class of "handled as a frame, so its
+siblings are lost" is gone with it — the frame path no longer knows the model
+editor exists.
 
 
 ## The work-copy guard is the first thing, always
@@ -91,7 +83,7 @@ import Dict exposing (Dict)
 import Json.Decode as D
 import Json.Encode as E
 import Set exposing (Set)
-import App.Types exposing (Model, Msg(..))
+import App.Types exposing (Model)
 import Plan.Detect
 import Plan.Runner as R
 import Plan.Update as PU
@@ -130,9 +122,6 @@ the plan runner" are each one grep.
     message index. The `pendingPlanOffers` entry is written in the same action
     list's model half — the pair cannot be separated, which is what `D0` was
     about.
-  * `Defer`: re-enter the dispatcher with this message. The one place an inbound
-    event needs to, and the mapper is the only thing that can: see the note above
-    on `FrameEvent`'s sync-result CO.
 -}
 type Action
     = LogWarn String
@@ -140,7 +129,6 @@ type Action
     | RunnerEvent R.Event
     | SendPrompt String String
     | PlanOffer String Int
-    | Defer Msg
 
 
 {-| Why a malformed inbound event is reported instead of discarded.
@@ -404,9 +392,10 @@ statusEvent model raw =
                                     H.appendEndNotice ev.message updated
                         in
                         if not ev.connected && session.modelSelector.page == ModelSelSyncing then
-                            -- A disconnect means the model_sync CO will
-                            -- never arrive — fail the sync instead of
-                            -- leaving the overlay stuck.
+                            -- A disconnect means the write RPC will fail (or
+                            -- its answer will never reach us) — fail the sync
+                            -- now instead of leaving the overlay stuck on
+                            -- "Saving".
                             ( { model
                                 | sessions =
                                     Dict.insert sid
@@ -425,8 +414,7 @@ statusEvent model raw =
 
 
 {-| A complete frame: a finished message, a user echo, a tool result, an `SM`
-system message or a `CO` command output. The busiest inbound arm, and the only
-one that can re-enter the dispatcher — see `Defer` above.
+system message or a `CO` command output. The busiest inbound arm.
 -}
 frameEvent : Model -> E.Value -> ( Model, List Action )
 frameEvent model raw =
@@ -452,7 +440,7 @@ frameEvent model raw =
                         bufferPendingEvent model ev.sessionId raw
 
                     Just session ->
-                        frameForSession model session sid ev raw
+                        frameForSession model session sid ev
 
 
 {-| The frame arm's body, for a session that IS registered.
@@ -460,12 +448,12 @@ frameEvent model raw =
 These bindings were one `let` in the dispatcher, so their textual order means
 nothing — the dependency chain does, and it reads: `prevAccum → becamePlan`,
 `readyNow`, `newSession`, `userEchoNow` → `flush` / `follow` → `updatedModel` →
-`planOfferFromFrame` → `planEventFromFrame` → `decodeSyncOutcome`. Two of those
-take the model from the step before them and two take `updatedModel`
-specifically; the names carry that, so do not flatten them.
+`planOfferFromFrame` → `planEventFromFrame`. Two of those take the model from
+the step before them and two take `updatedModel` specifically; the names carry
+that, so do not flatten them.
 -}
-frameForSession : Model -> T.SessionState -> String -> P.FrameEvent -> E.Value -> ( Model, List Action )
-frameForSession model session sid ev raw =
+frameForSession : Model -> T.SessionState -> String -> P.FrameEvent -> ( Model, List Action )
+frameForSession model session sid ev =
     let
         -- M3/D4: incremental plan count — the accumulated content for this
         -- tag:historyId BEFORE the frame; if the frame's content crosses the
@@ -592,19 +580,7 @@ frameForSession model session sid ev raw =
         frameActions =
             flush ++ follow ++ runnerActions ++ offerActions
     in
-    -- model_sync completes asynchronously via CO: success closes the overlay,
-    -- failure keeps it open. In this branch ONLY, the frame's own effects are
-    -- dropped — see the module comment before changing it.
-    case decodeSyncOutcome raw of
-        Just ( isError, message ) ->
-            if newSession.modelSelector.page == ModelSelSyncing then
-                ( updatedModel3, [ Defer (ForSession sid (ModelSelectorSyncResult isError message)) ] )
-
-            else
-                ( updatedModel3, frameActions )
-
-        Nothing ->
-            ( updatedModel3, frameActions )
+    ( updatedModel3, frameActions )
 
 
 {-| Plan Mode (R2): when an assistant message completes with a fenced ```json
@@ -675,52 +651,6 @@ planOfferFromFrame updatedModel sid newSession ev =
 
     else
         ( updatedModel, [] )
-
-
-{-| Decode a model_sync CO result: `Just ( isError, message )` when the frame is
-a CO for the `model_sync` command, `Nothing` otherwise.
-
-Every field defaults rather than failing: a CO whose shape this client does not
-recognise must not take the transcript down with it, and the answer here only
-decides whether the model-selector overlay closes.
--}
-decodeSyncOutcome : E.Value -> Maybe ( Bool, String )
-decodeSyncOutcome raw =
-    case D.decodeValue P.frameEventDecoder raw of
-        Ok ev ->
-            if ev.tag == "CO" then
-                case ev.json of
-                    Just json ->
-                        let
-                            name =
-                                D.decodeValue (D.field "name" D.string) json
-                                    |> Result.toMaybe
-                                    |> Maybe.withDefault ""
-
-                            isError =
-                                D.decodeValue (D.field "is_error" D.bool) json
-                                    |> Result.toMaybe
-                                    |> Maybe.withDefault False
-
-                            message =
-                                D.decodeValue (D.field "result" (D.field "message" D.string)) json
-                                    |> Result.toMaybe
-                                    |> Maybe.withDefault ""
-                        in
-                        if name == "model_sync" then
-                            Just ( isError, message )
-
-                        else
-                            Nothing
-
-                    Nothing ->
-                        Nothing
-
-            else
-                Nothing
-
-        Err _ ->
-            Nothing
 
 
 {-| Apply a buffered frame/delta/status event to the sessions dict (the replay

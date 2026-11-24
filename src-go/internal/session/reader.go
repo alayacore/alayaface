@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"time"
 
 	"alayaface/src-go/internal/core"
 	"alayaface/src-go/internal/hub"
@@ -91,6 +92,14 @@ func (s *Session) startReader(h *hub.Hub, cache *ModelCache) {
 				base := "Connection closed"
 				if err != nil {
 					base = fmt.Sprintf("Read error: %v", err)
+				}
+				// stdout EOF and stderr EOF are independent: give the stderr
+				// pump a bounded moment to drain the child's last line before
+				// quoting the tail. Without this the startup reason races the
+				// EOF and the user sees a bare "Connection closed" (observed as
+				// a flaky end-reason e2e).
+				if s.StderrTail != nil {
+					s.StderrTail.Wait(500 * time.Millisecond)
 				}
 				s.disconnect(h, announced, disconnectMessage(base, s.StderrTail))
 				return
@@ -280,6 +289,12 @@ func (s *Session) handleCmdOutputFrame(h *hub.Hub, rawValue string) {
 		if id, ok := obj["command_id"].(string); ok {
 			if name, ok2 := s.PendingCmds.LoadAndDelete(id); ok2 {
 				obj["name"] = name
+			}
+			// Wake a sender blocked in SendCmdWait (the model write RPC waits
+			// on `model_load`'s CO). Resolved with the PARSED body so the
+			// caller reads is_error/result without re-parsing the frame.
+			if b, err := json.Marshal(obj); err == nil {
+				s.PendingCmds.Resolve(id, b)
 			}
 		}
 		if b, err := json.Marshal(obj); err == nil {

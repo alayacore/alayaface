@@ -45,6 +45,7 @@ import App.AsrConfig as AS
 import App.Presets as PS
 import App.SettingsConfig as SC
 import App.GlobalConfig as GC
+import App.McpConfig as MCP
 import App.Arch as Arch
 import Ports
 import Arch.Values as AV
@@ -1214,46 +1215,37 @@ applyGlobalActions actions =
 -- a decode failure or a dropped session can reach a port, so "what may write
 -- to the console" and "what may scroll a window" stay one grep.
 
-{-| One action, applied to a model. Takes and returns `Model` because
-`Defer` re-enters the dispatcher; every other `apply*Actions` mapper in this
-file is `List Action -> Cmd Msg`, and the difference is exactly this one action.
+{-| One action, as a command. The routing returns `Action` data; this is the
+only place a buffered frame, a decode failure or a dropped session can reach a
+port, so "what may write to the console" and "what may scroll a window" stay
+one grep.
 
-`Defer` is the whole reason an inbound event still needs the dispatcher: a
-`model_sync` CO that lands while the overlay is syncing is handled by the
-`ModelSelectorSyncResult` arm, and duplicating that arm here would put the model
-selector's rules in two places.
+Nothing here mutates the model — `Session/Events` has already done that — so
+this mapper and its sibling are `List Action -> Cmd Msg` like every other
+`apply*Actions` in this file.
 -}
-applyEventAction : Model -> EV.Action -> ( Model, Cmd Msg )
-applyEventAction model action =
+applyEventAction : EV.Action -> Cmd Msg
+applyEventAction action =
     case action of
         EV.LogWarn message ->
-            ( model, Ports.logWarn message )
+            Ports.logWarn message
 
         EV.ScrollToBottom sid ->
-            ( model, Ports.scrollToBottom { sessionId = sid } )
+            Ports.scrollToBottom { sessionId = sid }
 
         EV.RunnerEvent runnerEvent ->
-            ( model, Task.perform (\t -> PlanRunFrame (Time.posixToMillis t) runnerEvent) Time.now )
+            Task.perform (\t -> PlanRunFrame (Time.posixToMillis t) runnerEvent) Time.now
 
         EV.SendPrompt sid text ->
-            ( model, Ports.sendPrompt { sessionId = sid, text = text, media = [] } )
+            Ports.sendPrompt { sessionId = sid, text = text, media = [] }
 
         EV.PlanOffer sid planIndex ->
-            ( model, Task.perform (\_ -> PlanCreateOffer sid planIndex) Time.now )
-
-        EV.Defer msg ->
-            update msg model
+            Task.perform (\_ -> PlanCreateOffer sid planIndex) Time.now
 
 
-applyEventActions : Model -> List EV.Action -> ( Model, Cmd Msg )
-applyEventActions model actions =
-    List.foldl
-        (\action ( m, cmds ) ->
-            applyEventAction m action |> Tuple.mapSecond (\cmd -> cmds ++ [ cmd ])
-        )
-        ( model, [] )
-        actions
-        |> Tuple.mapSecond Cmd.batch
+applyEventActions : List EV.Action -> Cmd Msg
+applyEventActions actions =
+    Cmd.batch (List.map applyEventAction actions)
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -1535,21 +1527,21 @@ update msg model =
                 ( m, actions ) =
                     EV.deltaEvent model raw
             in
-            applyEventActions m actions
+            ( m, applyEventActions actions )
 
         FrameEvent raw ->
             let
                 ( m, actions ) =
                     EV.frameEvent model raw
             in
-            applyEventActions m actions
+            ( m, applyEventActions actions )
 
         StatusEvent raw ->
             let
                 ( m, actions ) =
                     EV.statusEvent model raw
             in
-            applyEventActions m actions
+            ( m, applyEventActions actions )
 
         -- Backend RPC failure (transport.js catches invoke rejections and
         -- forwards {kind, sessionId, message} via onRpcError). The
@@ -4133,6 +4125,23 @@ update msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
+        SessionModelsWriteResult raw ->
+            case D.decodeValue sessionModelsWriteResultDecoder raw of
+                Ok res ->
+                    -- The backend echoes the id it was given, which is the
+                    -- session's current WORK COPY (what commands address).
+                    -- Route it back to the stable Session.id before dispatching:
+                    -- the user can switch windows while the write is in flight,
+                    -- and a resume may have replaced the work copy since.
+                    update
+                        (ForSession (PU.sessionIdOfWorkCopy model res.sessionId)
+                            (ModelSelectorSyncResult (not res.ok) res.error)
+                        )
+                        model
+
+                Err _ ->
+                    ( model, Cmd.none )
+
         -- Default (global) Model List Editor (targets a specific preset)
         EditPresetModels preset ->
             ( { model
@@ -4350,9 +4359,10 @@ update msg model =
                         ed =
                             model.mcpEditor
 
-                        -- mcp.conf has no id field; assign stable unique ids here
+                        -- mcp.conf has no id field; `McpConfig.decode`
+                        -- assigns stable unique ids.
                         servers =
-                            List.indexedMap (\i s -> { s | id = i + 1 }) res.servers
+                            MCP.decode res.text
                     in
                     if res.ok then
                         ( { model
@@ -5863,119 +5873,6 @@ modelName m =
     m.name
 
 
-mcpServerName : T.McpInfo -> String
-mcpServerName s =
-    s.server
-
-
-draftFromMcp : T.McpInfo -> T.McpDraft
-draftFromMcp s =
-    { id = s.id
-    , type_ = s.type_
-    , server = s.server
-    , url = s.url
-    , command = s.command
-    , args = s.args
-    , env = s.env
-    , authType = s.authType
-    , authToken = s.authToken
-    , authClientId = s.authClientId
-    , authClientSecret = s.authClientSecret
-    , protoVersion =
-        -- Old configs may lack proto-version; default it to the latest so
-        -- the dropdown shows the real value instead of silently selecting
-        -- the first option while the draft stays empty.
-        if String.isEmpty (String.trim s.protoVersion) then
-            T.latestMcpProtoVersion
-
-        else
-            s.protoVersion
-    }
-
-
-mcpFromDraft : T.McpDraft -> T.McpInfo
-mcpFromDraft d =
-    { id = d.id
-    , type_ = d.type_
-    , server = String.trim d.server
-    , url = String.trim d.url
-    , command = String.trim d.command
-    , args = String.trim d.args
-    , env = String.trim d.env
-    , authType = String.trim d.authType
-    , authToken = String.trim d.authToken
-    , authClientId = String.trim d.authClientId
-    , authClientSecret = String.trim d.authClientSecret
-    , protoVersion = String.trim d.protoVersion
-    }
-
-
-updateMcpDraftField : String -> String -> T.McpDraft -> T.McpDraft
-updateMcpDraftField field value draft =
-    case field of
-        "type" ->
-            -- Switching kind clears the other kind's fields to avoid residue
-            if value == "http" then
-                { draft | type_ = value, command = "", args = "", env = "" }
-
-            else
-                { draft | type_ = value, url = "" }
-
-        "server" ->
-            { draft | server = value }
-
-        "url" ->
-            { draft | url = value }
-
-        "command" ->
-            { draft | command = value }
-
-        "args" ->
-            { draft | args = value }
-
-        "env" ->
-            { draft | env = value }
-
-        "auth-type" ->
-            { draft | authType = value }
-
-        "auth-token" ->
-            { draft | authToken = value }
-
-        "auth-client-id" ->
-            { draft | authClientId = value }
-
-        "auth-client-secret" ->
-            { draft | authClientSecret = value }
-
-        "proto-version" ->
-            { draft | protoVersion = value }
-
-        _ ->
-            draft
-
-
-encodeMcpServers : List T.McpInfo -> String
-encodeMcpServers servers =
-    E.encode 0 (E.list encodeMcpServer servers)
-
-
-encodeMcpServer : T.McpInfo -> E.Value
-encodeMcpServer s =
-    E.object
-        [ ( "server", E.string s.server )
-        , ( "url", E.string s.url )
-        , ( "command", E.string s.command )
-        , ( "args", E.string s.args )
-        , ( "env", E.string s.env )
-        , ( "auth_type", E.string s.authType )
-        , ( "auth_token", E.string s.authToken )
-        , ( "auth_client_id", E.string s.authClientId )
-        , ( "auth_client_secret", E.string s.authClientSecret )
-        , ( "proto_version", E.string s.protoVersion )
-        ]
-
-
 defaultModelsListResultDecoder : D.Decoder { ok : Bool, models : List T.ModelInfo, activeId : Maybe Int, error : String }
 defaultModelsListResultDecoder =
     D.map4
@@ -6003,39 +5900,25 @@ defaultModelsSyncResultDecoder =
         (D.field "error" D.string)
 
 
-mcpInfoDecoder : D.Decoder T.McpInfo
-mcpInfoDecoder =
-    D.succeed T.McpInfo
-        |> andMap (D.succeed 0)
-        |> andMap (optionalString "type")
-        |> andMap (D.field "server" D.string)
-        |> andMap (optionalString "url")
-        |> andMap (optionalString "command")
-        |> andMap (optionalString "args")
-        |> andMap (optionalString "env")
-        |> andMap (optionalString "auth_type")
-        |> andMap (optionalString "auth_token")
-        |> andMap (optionalString "auth_client_id")
-        |> andMap (optionalString "auth_client_secret")
-        |> andMap (optionalString "proto_version")
+{-| The answer to `writeSessionModels`. Carries the session id because the
+verdict is routed back to that session, not to whichever window is active when
+the backend replies (see the `SessionModelsWriteResult` arm).
+-}
+sessionModelsWriteResultDecoder : D.Decoder { sessionId : String, ok : Bool, error : String }
+sessionModelsWriteResultDecoder =
+    D.map3
+        (\sessionId ok error -> { sessionId = sessionId, ok = ok, error = error })
+        (D.field "sessionId" D.string)
+        (D.field "ok" D.bool)
+        (D.field "error" D.string)
 
 
-andMap : D.Decoder a -> D.Decoder (a -> b) -> D.Decoder b
-andMap dx df =
-    D.map2 (\f x -> f x) df dx
-
-
-optionalString : String -> D.Decoder String
-optionalString key =
-    D.oneOf [ D.field key D.string, D.succeed "" ]
-
-
-mcpListResultDecoder : D.Decoder { ok : Bool, servers : List T.McpInfo, error : String }
+mcpListResultDecoder : D.Decoder { ok : Bool, text : String, error : String }
 mcpListResultDecoder =
     D.map3
-        (\ok servers error -> { ok = ok, servers = servers, error = error })
+        (\ok text error -> { ok = ok, text = text, error = error })
         (D.field "ok" D.bool)
-        (D.field "servers" (D.list mcpInfoDecoder))
+        (D.field "text" D.string)
         (D.field "error" D.string)
 
 
@@ -6152,6 +6035,8 @@ sessionModelKit =
     , itemOfDraft = MC.modelFromDraft
     , updateDraftField = MC.updateDraftField
     , problems = MC.draftProblems
+    , listProblems = \_ _ -> []
+    , syncProblems = \_ -> []
     , inputId = \model ->
         case model.activeId of
             Just sid ->
@@ -6200,7 +6085,7 @@ sessionModelKit =
     , syncCmd = \model ->
         case getActiveSession model of
             Just s ->
-                Ports.modelSync
+                Ports.writeSessionModels
                     { sessionId = PU.workCopyId model s.id
                     , config = MC.encodeModels s.modelSelector.working
                     }
@@ -6239,6 +6124,8 @@ defaultModelsKit =
     , itemOfDraft = MC.modelFromDraft
     , updateDraftField = MC.updateDraftField
     , problems = MC.draftProblems
+    , listProblems = \_ _ -> []
+    , syncProblems = \_ -> []
     , inputId = \_ -> "model-selector-input-default"
     , editorId = \_ -> "model-editor-name-default"
     , scrollItemId = \_ id -> "model-selector-item-default-" ++ String.fromInt id
@@ -6286,35 +6173,22 @@ mcpKit =
                 model.mcpEditor
         in
         { model | mcpEditor = { ed | show = v } }
-    , nameOf = mcpServerName
+    , nameOf = MCP.serverName
     , idOf = \s -> s.id
     , setIdOf = \newId s -> { s | id = newId }
-    , draftOf = draftFromMcp
-    , emptyDraft = T.emptyMcpDraft
+    , draftOf = MCP.draftFromServer
+    , emptyDraft = MCP.emptyDraft
     , draftIdOf = \d -> d.id
-    , itemOfDraft = mcpFromDraft
-    , updateDraftField = updateMcpDraftField
-    -- Deliberately empty, and the reason is a comparison rather than an
-    -- omission. The model editor DOES validate here (`MC.draftProblems`), and
-    -- it has to: `model_sync` replaces the list, AlayaCore skips entries that
-    -- fail `validateModel` and then persists the SURVIVORS, so a bad entry is
-    -- deleted from the file and the error only arrives afterwards.
-    --
-    -- `sync_default_mcp` is not that shape. Both backends validate the WHOLE
-    -- payload and refuse the write before anything is stored
-    -- (`handlers/mcp.go` / `commands/mcp.rs`, whose error strings
-    -- `check-backend-parity.sh` compares), so one bad server costs every
-    -- server in the payload its save — nothing is silently dropped. And the
-    -- refusal reaches the user on a page of its own with Retry / Back /
-    -- Discard (`Overlay.Selector`'s `ModelSelSyncFailed`), not in a status line
-    -- they might miss.
-    --
-    -- So a client-side copy would add no safety, and would be the THIRD
-    -- implementation of one rule — the drift risk is the real cost, and it is
-    -- the reason `check-backend-parity.sh` exists at all. If MCP validation ever
-    -- becomes partial (per-server skip), this hook is the place it starts being
-    -- worth filling, and `Kit.problems` already wires it end to end.
-    , problems = \_ -> []
+    , itemOfDraft = MCP.serverFromDraft
+    , updateDraftField = MCP.updateDraftField
+    -- The backend writes the bytes `McpConfig.encode` produced and validates
+    -- nothing, so refusing here is the only gate: a server missing its command
+    -- or carrying unparsable `args`/`env` must not reach the file.
+    , problems = MCP.draftProblems
+    -- The one rule that spans items (duplicate names); `editSave` checks it
+    -- against the working list.
+    , listProblems = MCP.duplicateProblem
+    , syncProblems = MCP.syncProblems
     , inputId = \_ -> "mcp-selector-input-default"
     , editorId = \_ -> "mcp-editor-server-default"
     , scrollItemId = \_ id -> "mcp-selector-item-default-" ++ String.fromInt id
@@ -6326,7 +6200,7 @@ mcpKit =
         in
         case List.filter (\s -> s.id == id) ed.state.working |> List.head of
             Just s ->
-                ( { model | mcpEditor = { ed | state = Sel.openEdit (draftFromMcp s) ed.state } }
+                ( { model | mcpEditor = { ed | state = Sel.openEdit (MCP.draftFromServer s) ed.state } }
                 , Kit.focusAndCursor "mcp-editor-server-default"
                 )
 
@@ -6335,7 +6209,7 @@ mcpKit =
     , syncCmd = \model ->
         Ports.syncDefaultMcp
             { preset = model.mcpEditor.preset
-            , config = encodeMcpServers model.mcpEditor.state.working
+            , config = MCP.encode model.mcpEditor.state.working
             }
     , syncSuccess = \model ->
         ( { model | mcpEditor = emptyMcpEditor }
