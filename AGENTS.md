@@ -71,20 +71,27 @@ not). `scripts/check-backend-parity.sh` asserts the command names match
 spawn arguments (`--tool-confirm`, `--builtin-tools`, `--system`, work dir)
 and the config files (`model.conf`, `mcp.conf`, `settings.conf`, `global.conf`).
 
-**The protocol is a second thing AlayaCore owns, and this repo duplicates four
+**The protocol is a second thing AlayaCore owns, and this repo duplicates five
 facts about it**: the `message_version` pin (both backends), the frame tag
 alphabet (both `wire` modules), the session states AlayaCore broadcasts (read by
-`reader.rs`/`reader.go`, not by the client — see below), and the command names
-we send. `make check-protocol`
+`reader.rs`/`reader.go`, not by the client — see below), the command names we
+send, and the input modality vocabulary — the content kinds a user message may
+carry, which is the same closed set `model.conf`'s `input_modalities` is
+validated against. `make check-protocol`
 (`scripts/check-alayacore-protocol.sh`) is the guard: against the core when it
 is checked out next door, refreshing `testdata/alayacore-{message-version,wire-tags,
-session-states,commands}.txt`; against those fixtures in CI, where the core does
-not exist. It exists because v12 (`CE`, the `closed` state, the `quit` command,
+session-states,commands,input-modalities}.txt`; against those fixtures in CI,
+where the core does not exist. It exists because v12 (`CE`, the `closed` state, the `quit` command,
 prompts-held-before-ready) landed with the pin at 11 and nothing noticed — the
 only symptom was a home-screen banner telling users to *downgrade* their core,
 while sessions kept running against a format the adapter claimed not to know.
-The check is mutation-verified on all four axes; an extractor that finds nothing
-fails as "fix the extractor, do not delete the check".
+The check is mutation-verified on all five axes; an extractor that finds nothing
+fails as "fix the extractor, do not delete the check". That fifth axis is the
+one the config-side schema check structurally cannot cover: it diffs key NAMES,
+so `modalityVocabulary` could drift from `planeKinds[PlaneUser]` while every
+other check stayed green — and both directions of that drift are bugs (the
+client refusing a legal declaration at Save, or writing one the core skips the
+whole entry over).
 
 Two consequences of that split are worth knowing before you touch a reader. A
 session's END has one producer: the `core-status connected:false` emitted by the
@@ -277,7 +284,7 @@ cd src-tauri && cargo test          # (and cargo clippy --lib: no errors)
 ./scripts/check-backend-parity.sh
 make check-invariants               # windowPositions read path + JS-bridge freeze
 make check-schema                   # model.conf fields vs AlayaCore
-make check-protocol                 # message_version, tags, session states, commands
+make check-protocol                 # message_version, tags, session states, commands, modalities
 make check-css                      # stylesheets the browser can actually parse
 make e2e                            # every script in e2e/scripts.txt
 ```

@@ -883,9 +883,11 @@ closes stdin outright when it wants the process gone.
 
 ### 8.9 Keeping the wire facts current
 
-`make check-protocol` (`scripts/check-alayacore-protocol.sh`) compares the four
+`make check-protocol` (`scripts/check-alayacore-protocol.sh`) compares the five
 things AlayaFace duplicates from AlayaCore — `message_version`, the frame tag
-alphabet, the session states the core broadcasts, and the command names we send —
+alphabet, the session states the core broadcasts, the command names we send, and
+the content kinds a user message may carry (the vocabulary `model.conf`'s
+`input_modalities` draws from) —
 against the core when it is checked out next door (and refreshes
 `testdata/alayacore-*.txt`), against those fixtures otherwise. It is the twin of
 `make check-schema` for the protocol rather than the config, and it exists

@@ -57,7 +57,8 @@ jobs:
       - name: MCP schema check
         run: ./scripts/check-mcp-schema.sh
       # Protocol drift guard: message_version, the TLV tag alphabet, the session
-      # states AlayaCore broadcasts, the command names we send. Uses the
+      # states AlayaCore broadcasts, the command names we send, and the input
+      # modality vocabulary model.conf's input_modalities draws from. Uses the
       # testdata/alayacore-*.txt fixtures here (AlayaCore is a separate repo,
       # absent from CI) — the check that would have caught the v12 bump while
       # the adapter still pinned 11.

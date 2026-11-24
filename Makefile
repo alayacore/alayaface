@@ -77,9 +77,10 @@ check-schema:
 	./scripts/check-model-schema.sh
 	./scripts/check-mcp-schema.sh
 
-# Protocol drift check: the four facts about AlayaCore's wire format that this
+# Protocol drift check: the five facts about AlayaCore's wire format that this
 # repo duplicates — message_version, the TLV tag alphabet, the session states it
-# broadcasts, and the command names we send. Compares them against AlayaCore
+# broadcasts, the command names we send, and the input modality vocabulary
+# model.conf's input_modalities draws from. Compares them against AlayaCore
 # when it is checked out next door (refreshing testdata/alayacore-*.txt), and
 # against those fixtures otherwise, which is what CI has.
 .PHONY: check-protocol

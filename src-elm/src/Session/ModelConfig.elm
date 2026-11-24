@@ -112,8 +112,14 @@ carry, which is also the set `validateModel` checks against, so a value outside
 it makes the core SKIP the entry. There is no sixth: `reasoning` is an
 assistant-side output kind and not an input at all.
 
-This list is the one thing here the schema check cannot see — it diffs key
-NAMES, not value vocabularies — so it exists once, with its source named, and
+This list is a copy, and copies drift — but not unnoticed: the config-side
+schema check compares key NAMES and structurally cannot see a value vocabulary,
+so `make check-protocol` (`scripts/check-alayacore-protocol.sh`) compares this
+list against that `planeKinds` line, refreshing
+`testdata/alayacore-input-modalities.txt` for CI. Both directions are bugs: a
+kind the core adds is a legal declaration this client refuses at Save, and a
+kind the core drops is a declaration it skips the whole entry over.
+
 `modalitiesProblem` is the only reader.
 -}
 modalityVocabulary : List String

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Four facts about AlayaCore's wire protocol are duplicated inside AlayaFace, and
+# Five facts about AlayaCore's wire protocol are duplicated inside AlayaFace, and
 # every one of them goes stale silently when the core moves:
 #
 #   1. message_version   — the number this adapter pins and the core announces.
@@ -18,21 +18,31 @@
 #   4. the command
 #                       vocabulary — a command we send that the core renamed
 #                       comes back as a REQUEST_UNKNOWN_COMMAND CO at best.
+#   5. the input modality
+#       vocabulary      — the CONTENT KINDS a user message may carry, i.e. the
+#                       set `model.conf`'s `input_modalities` is validated
+#                       against. The config schema check compares key NAMES and
+#                       cannot see a value vocabulary, so a kind the core adds
+#                       is a declaration this client refuses as a typo — which
+#                       blocks a save the core accepts, the mirror image of the
+#                       rule that the client must not outdo `validateModel` —
+#                       and a kind the core drops is a declaration it skips the
+#                       whole entry over.
 #
 # This is the protocol-side twin of check-model-schema.sh, with the same two
 # modes:
 #
 #   ./scripts/check-alayacore-protocol.sh
 #
-#   * AlayaCore checked out next door (or $ALAYACORE_DIR): read the four facts
+#   * AlayaCore checked out next door (or $ALAYACORE_DIR): read the five facts
 #     from the authority, compare, and REFRESH the fixtures under testdata/.
 #   * otherwise (CI): compare against those fixtures — what the last such run
 #     left behind.
 #
-# When it goes red after an AlayaCore change, the fix is the four things the
+# When it goes red after an AlayaCore change, the fix is the five things the
 # list above names: bump both message_version constants, add the tag to both wire
-# modules, decide where the new state is read (or record why not), and mirror
-# the command name.
+# modules, decide where the new state is read (or record why not), mirror the
+# command name, and add the modality to `Session.ModelConfig.modalityVocabulary`.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -42,6 +52,7 @@ FIX_VERSION="$FIXDIR/alayacore-message-version.txt"
 FIX_TAGS="$FIXDIR/alayacore-wire-tags.txt"
 FIX_STATES="$FIXDIR/alayacore-session-states.txt"
 FIX_COMMANDS="$FIXDIR/alayacore-commands.txt"
+FIX_MODALITIES="$FIXDIR/alayacore-input-modalities.txt"
 
 R_CORE="$REPO/src-tauri/src/alayacore.rs"
 G_CORE="$REPO/src-go/internal/core/core.go"
@@ -52,6 +63,11 @@ C_STATE="$CORE/internal/agent/session_types.go"
 C_PROTO="$CORE/internal/protocol/protocol.go"
 C_SESSION="$CORE/internal/agent/session.go"
 C_COMMANDS="$CORE/internal/commands/commands.go"
+C_KINDS="$CORE/internal/protocol/kinds.go"
+# The content kinds' VALUES live in the wire package; protocol.go aliases them
+# (TypeImage = wire.KindImage), so resolving one takes two files, not one.
+C_MEDIA="$CORE/internal/wire/media.go"
+MC="$REPO/src-elm/src/Session/ModelConfig.elm"
 
 fail=0
 
@@ -169,11 +185,72 @@ core_commands() {
   } | grep -v '^$' | sort -u
 }
 
+# Map one content-kind constant to the wire string it names.
+#
+# `TypeText = "text"` is literal; `TypeImage = wire.KindImage` aliases the wire
+# package, whose `KindImage = "image"` is the value that actually travels. One
+# hop is followed and no more: an unresolved name prints nothing, which
+# require_min reports as a broken extractor rather than as agreement.
+resolve_kind() {
+  local name=$1 file value alias
+  for file in "$C_PROTO" "$C_KINDS"; do
+    [[ -f "$file" ]] || continue
+    value=$(sed -nE "s/^[[:space:]]*$name[[:space:]]*=[[:space:]]*\"([a-z_]+)\".*/\1/p" "$file" | head -1)
+    if [[ -n "$value" ]]; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+    alias=$(sed -nE "s/^[[:space:]]*$name[[:space:]]*=[[:space:]]*wire\.([A-Za-z]+).*/\1/p" "$file" | head -1)
+    if [[ -n "$alias" && -f "$C_MEDIA" ]]; then
+      value=$(sed -nE "s/^[[:space:]]*$alias[[:space:]]*=[[:space:]]*\"([a-z_]+)\".*/\1/p" "$C_MEDIA" | head -1)
+      if [[ -n "$value" ]]; then
+        printf '%s\n' "$value"
+        return 0
+      fi
+    fi
+  done
+  return 0
+}
+
+# The kinds a USER message may carry — `planeKinds[PlaneUser]`, which is also
+# what `model.conf`'s `input_modalities` draws from, so this is the authority for
+# the client's vocabulary. Sorted, because order is cosmetic here: the core's
+# error message lists them in declaration order and the client's hint lists its
+# own, and neither is a fact worth going red over.
+core_modalities() {
+  [[ -f "$C_KINDS" ]] || return 1
+  local line
+  # `|| true` on both pipelines: under `set -e -o pipefail` an extractor that
+  # finds nothing would ABORT the script before require_min can report it as a
+  # broken check — the silent-exit twin of the silent-pass this file exists to
+  # avoid.
+  line=$(grep -E '^[[:space:]]*PlaneUser:' "$C_KINDS" | head -1 || true)
+  [[ -n "$line" ]] || return 1
+  printf '%s\n' "$line" |
+    sed -nE 's/[^{]*\{([^}]*)\}.*/\1/p' |
+    tr ',' '\n' | tr -d ' ' |
+    while read -r const; do [[ -n "$const" ]] && resolve_kind "$const"; done |
+    grep -v '^$' | sort -u || true
+}
+
 # ─── Our side ───────────────────────────────────────────────────────
 
 face_version() { grep -vE '^[[:space:]]*//' "$1" | sed -nE "s/.*$2[^=]*=[[:space:]]*([0-9]+).*/\1/p" | head -1; }
 face_tags() { grep -oE 'TAG_[A-Z_]+: &str = "[A-Za-z]{2}"' "$R_WIRE" | sed -E 's/.*"([A-Za-z]{2})"/\1/' | sort -u; }
+
 go_tags() { grep -oE 'Tag[A-Za-z]+ += +"[A-Za-z]{2}"' "$G_WIRE" | sed -E 's/.*"([A-Za-z]{2})"/\1/' | sort -u; }
+
+# The Elm-side modality vocabulary. Anchored on the DEFINITION line and stopping
+# at the closing bracket, so the type annotation above it (`: List String`) and
+# any later list of strings cannot join in — a grep for quotes over the whole
+# file would collect half of `fields`.
+face_modalities() {
+  # `|| true` for the same reason as core_modalities above: with no match this
+  # pipeline fails, and `set -e` would kill the script before require_min says
+  # "fix the extractor" — the failure that reads as a check that ran.
+  sed -n '/^modalityVocabulary[[:space:]]*=/,/\]/p' "$MC" |
+    grep -oE '"[a-z_]+"' | tr -d '"' | sort -u || true
+}
 
 # Production source, with the test code removed. Rust's tests live in the same
 # file (below `#[cfg(test)]`), and they quote things production never does — a
@@ -267,9 +344,10 @@ if EXPECT_VERSION=$(core_version 2>/dev/null) && [[ -n "${EXPECT_VERSION:-}" ]];
   mapfile -t EXPECT_TAGS < <(core_tags)
   mapfile -t EXPECT_STATES < <(core_states)
   mapfile -t EXPECT_COMMANDS < <(core_commands)
+  mapfile -t EXPECT_MODALITIES < <(core_modalities)
 else
   echo "AlayaCore not found ($C_WIRE) — checking against the fixtures in $FIXDIR" >&2
-  for f in "$FIX_VERSION" "$FIX_TAGS" "$FIX_STATES" "$FIX_COMMANDS"; do
+  for f in "$FIX_VERSION" "$FIX_TAGS" "$FIX_STATES" "$FIX_COMMANDS" "$FIX_MODALITIES"; do
     [[ -f "$f" ]] || { echo "✗ no fixture at $f — run this script with AlayaCore checked out" >&2; exit 1; }
   done
   REGEN=0
@@ -277,12 +355,14 @@ else
   mapfile -t EXPECT_TAGS < <(grep -v '^[[:space:]]*#' "$FIX_TAGS" | grep -v '^[[:space:]]*$')
   mapfile -t EXPECT_STATES < <(grep -v '^[[:space:]]*#' "$FIX_STATES" | grep -v '^[[:space:]]*$')
   mapfile -t EXPECT_COMMANDS < <(grep -v '^[[:space:]]*#' "$FIX_COMMANDS" | grep -v '^[[:space:]]*$')
+  mapfile -t EXPECT_MODALITIES < <(grep -v '^[[:space:]]*#' "$FIX_MODALITIES" | grep -v '^[[:space:]]*$')
 fi
 
 [[ -n "$EXPECT_VERSION" ]] || { echo "✗ no message_version found in $C_STATE" >&2; exit 1; }
 require_min "wire tag" "${#EXPECT_TAGS[@]}" 10 || exit 1
 require_min "broadcast session state" "${#EXPECT_STATES[@]}" 2 || exit 1
 require_min "registered command" "${#EXPECT_COMMANDS[@]}" 10 || exit 1
+require_min "input modality" "${#EXPECT_MODALITIES[@]}" 3 || exit 1
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -346,6 +426,24 @@ if [[ -n "$unknown" ]]; then
   fail=1
 fi
 
+# 5. every input modality the core admits must be one the client declares, and
+#    the reverse. Both directions are errors, and they fail differently: a
+#    missing one is the client refusing a legal declaration at Save (blocking a
+#    save the core accepts — the mirror image of the `validateModel` rule), an
+#    extra one is a declaration the core skips the WHOLE entry over.
+face_modalities > "$tmp/modalities_face"
+require_min "input modality (this repo)" "$(wc -l < "$tmp/modalities_face")" 3 || fail=1
+printf '%s\n' "${EXPECT_MODALITIES[@]}" > "$tmp/modalities_core"
+if ! diff -q "$tmp/modalities_core" "$tmp/modalities_face" >/dev/null; then
+  echo "✗ the input-modality vocabulary differs from AlayaCore's planeKinds[PlaneUser]"
+  echo "  the core admits, AlayaFace does not declare: $(comm -23 "$tmp/modalities_core" "$tmp/modalities_face" | tr '\n' ' ')"
+  echo "  AlayaFace declares, the core does not admit: $(comm -13 "$tmp/modalities_core" "$tmp/modalities_face" | tr '\n' ' ')"
+  echo "  Both are model.conf bugs: the client refuses a value the core accepts at"
+  echo "  Save, or writes one the core SKIPs the whole model entry over."
+  echo "  Fix modalityVocabulary in $MC — do not widen it past the core."
+  fail=1
+fi
+
 # ─── Refresh the fixtures when the core was the authority ───────────
 #
 # Written unconditionally on a live-core run (not only on drift), so the
@@ -381,10 +479,15 @@ if (( REGEN )); then
       "commands/commands.go (CommandName* constants, shortForms)"
     printf '%s\n' "${EXPECT_COMMANDS[@]}"
   } > "$FIX_COMMANDS"
+  {
+    fixture_header "the content kinds a USER message may carry — planeKinds[PlaneUser], resolved through protocol.go's Type* aliases and wire/media.go's Kind* values. This is the vocabulary model.conf's input_modalities draws from, so Session.ModelConfig.modalityVocabulary must match it exactly" \
+      "protocol/kinds.go (planeKinds), protocol/protocol.go (Type*), wire/media.go (Kind*)"
+    printf '%s\n' "${EXPECT_MODALITIES[@]}"
+  } > "$FIX_MODALITIES"
 fi
 
 if (( fail )); then
   echo "✗ protocol drift — see the lines above"
   exit 1
 fi
-echo "✓ protocol OK — message_version $EXPECT_VERSION; ${#EXPECT_TAGS[@]} tags; states [${EXPECT_STATES[*]}]; $(wc -l < "$tmp/commands_face") sent commands all registered (of ${#EXPECT_COMMANDS[@]})"
+echo "✓ protocol OK — message_version $EXPECT_VERSION; ${#EXPECT_TAGS[@]} tags; states [${EXPECT_STATES[*]}]; $(wc -l < "$tmp/commands_face") sent commands all registered (of ${#EXPECT_COMMANDS[@]}); input modalities [$(tr '\n' ' ' < "$tmp/modalities_face" | sed 's/ *$//')]"
